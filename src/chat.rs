@@ -10,6 +10,7 @@ use std::sync::mpsc::Receiver;
 use std::time::Duration;
 
 use crate::api::{Client, ContentBlock, Llm, Message};
+use crate::attach;
 use crate::driver::{self, Controls, SlashUpdate, TurnKnobs};
 use crate::events::{Event, EventSink};
 use crate::ledger;
@@ -69,9 +70,6 @@ pub enum SlashCommand {
     /// Known command with malformed arguments.
     Usage(&'static str),
 }
-
-/// One activity-stream line listing every slash command (for `/help`).
-pub const HELP_LINE: &str = "/spec <path> (alone clears) · /goal <text> (alone clears) · /check <cmd> (alone clears) · /ledger · /model <id> · /budget <iters> <minutes> · /quit · /help";
 
 /// Parse a line into a slash command. Returns `None` when the line is not a
 /// slash command (after trimming leading whitespace). Never fails: unknown
@@ -179,10 +177,16 @@ fn run_chat_with(
         // Working, after this point.
         cfg.controls.abort.store(false, Ordering::SeqCst);
 
+        // SPEC-5 §1: expand `@file` mentions before the message reaches the
+        // driver. The model and the transcript (resume-safe history) get the
+        // expanded message; the activity stream, via TurnStart, gets the
+        // typed text with any `[file not found: ...]` notes inline — never
+        // the expanded file contents.
+        let expanded = attach::expand_message(&cfg.cwd, &objective);
         sink.emit(Event::TurnStart {
-            objective: objective.clone(),
+            objective: expanded.text_with_notes,
         });
-        let msg = Message::user(vec![ContentBlock::text_block(objective)]);
+        let msg = Message::user(vec![ContentBlock::text_block(expanded.llm_message)]);
         transcript::append(&cfg.cwd, &msg)?;
         messages.push(msg);
 
@@ -614,5 +618,86 @@ mod tests {
         assert_eq!(code, 0);
         assert!(events.is_empty());
         assert!(llm.calls.is_empty());
+    }
+
+    // ---------- @file expansion on the submit path (SPEC-5 §1) ----------
+
+    #[test]
+    fn objective_with_file_mention_expands_for_model_and_transcript() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("a.txt"), "hello\nworld\n").unwrap();
+        let h = harness(&tmp, vec![text_response("done")]);
+        let (code, events, llm, cwd) = run_session(h, |objective_tx, _| {
+            objective_tx.send("look at @a.txt please".into()).unwrap();
+        });
+        assert_eq!(code, 0);
+        assert_eq!(turn_ends(&events), vec![TurnEndReason::Completed]);
+
+        // The model-bound message carries the typed text plus the file block.
+        assert_eq!(llm.calls.len(), 1);
+        let sent = llm.calls[0].1[0].content[0].text().unwrap();
+        assert!(
+            sent.starts_with(
+                "look at @a.txt please\n\n<file path=\"a.txt\">\nhello\nworld\n</file>"
+            ),
+            "{sent}"
+        );
+
+        // The activity stream (TurnStart) shows the typed text only — never
+        // the expanded contents.
+        assert!(matches!(
+            events.iter().find(|e| matches!(e, Event::TurnStart { .. })),
+            Some(Event::TurnStart { objective }) if objective == "look at @a.txt please"
+        ));
+        assert!(!events.iter().any(
+            |e| matches!(e, Event::TurnStart { objective } if objective.contains("hello\nworld"))
+        ));
+
+        // The transcript stores the EXPANDED message (resume-safe history).
+        let saved = transcript::load(&cwd).unwrap();
+        let stored = saved[0].content[0].text().unwrap();
+        assert!(stored.contains("<file path=\"a.txt\">\nhello\nworld\n</file>"));
+    }
+
+    #[test]
+    fn objective_with_missing_file_gets_inline_note_not_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        let h = harness(&tmp, vec![text_response("ok")]);
+        let (code, events, llm, _) = run_session(h, |objective_tx, _| {
+            objective_tx.send("read @nope.txt please".into()).unwrap();
+        });
+        assert_eq!(code, 0);
+        // No error, no extra round-trip: exactly one LLM call, natural stop.
+        assert_eq!(llm.calls.len(), 1);
+        assert_eq!(turn_ends(&events), vec![TurnEndReason::Completed]);
+        // The note is inline in both the model-bound message and TurnStart.
+        let sent = llm.calls[0].1[0].content[0].text().unwrap();
+        assert_eq!(sent, "read [file not found: nope.txt] please");
+        assert!(matches!(
+            events.iter().find(|e| matches!(e, Event::TurnStart { .. })),
+            Some(Event::TurnStart { objective })
+                if objective == "read [file not found: nope.txt] please"
+        ));
+    }
+
+    #[test]
+    fn objective_with_multiple_mentions_expands_in_order_and_escape_rejected() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("a.txt"), "AAA").unwrap();
+        std::fs::write(tmp.path().join("b.txt"), "BBB").unwrap();
+        let h = harness(&tmp, vec![text_response("done")]);
+        let (code, _, llm, _) = run_session(h, |objective_tx, _| {
+            objective_tx
+                .send("compare @a.txt and @b.txt, then @../escape.txt".into())
+                .unwrap();
+        });
+        assert_eq!(code, 0);
+        let sent = llm.calls[0].1[0].content[0].text().unwrap();
+        assert_eq!(
+            sent,
+            "compare @a.txt and @b.txt, then [file not found: ../escape.txt]\
+             \n\n<file path=\"a.txt\">\nAAA\n</file>\
+             \n\n<file path=\"b.txt\">\nBBB\n</file>"
+        );
     }
 }
