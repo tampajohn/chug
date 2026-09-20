@@ -13,8 +13,44 @@ use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 use ratatui::{Frame, Terminal};
 
 use crate::chat::{self, ChatState, SlashCommand};
+use crate::complete::{self, CandidateStrip, FileIndex};
 use crate::driver::SlashUpdate;
 use crate::events::{Event, TurnEndReason};
+
+/// `/help` output (SPEC-5 §2): one activity entry whose embedded newlines
+/// the wrap path renders as separate rows.
+const HELP_TEXT: &str = concat!(
+    "/help — commands\n",
+    "  /spec <path>   load/replace spec file (/spec alone clears)\n",
+    "  /goal <text>   set persistent goal (/goal alone clears)\n",
+    "  /check <cmd>   verification command for goal_complete (/check clears)\n",
+    "  /model <id>    switch model\n",
+    "  /budget <i> <m> per-turn iteration/minute budgets\n",
+    "  /ledger        focus ledger pane\n",
+    "  /quit          exit\n",
+    "  @path          attach a file to your message\n",
+    "  Tab            complete /commands and @paths",
+);
+
+// `chat::HELP_LINE` (in chat.rs, untouchable this round) is superseded by
+// HELP_TEXT; keep it referenced so the dead-code lint stays quiet until a
+// later round removes it.
+const _: &str = chat::HELP_LINE;
+
+/// The open completion strip: the pure cycler plus the token span it is
+/// completing. Cycling the highlight rewrites the token in place, so its
+/// start and the originally-typed token (for Esc restore) are remembered.
+pub struct StripState {
+    pub strip: CandidateStrip,
+    /// Byte offset where the token being completed starts in `App::input`.
+    pub token_start: usize,
+    /// The token exactly as typed when the strip opened (includes sigil).
+    pub original: String,
+    /// Sigil prepended when a candidate replaces the token: "@" for file
+    /// tokens (candidates are bare paths), "" for slash tokens (candidates
+    /// already include the leading `/`).
+    pub prefix: &'static str,
+}
 
 /// Sink used by the driver thread: forwards events to the UI thread.
 pub struct TuiSink {
@@ -62,6 +98,11 @@ pub struct ChatUi {
     /// Reason string of the most recent Aborted event, used for the
     /// `─ turn interrupted: <reason> ─` banner.
     pub last_abort_reason: Option<String>,
+    /// Lazily-built path index for `@`-token Tab completion (SPEC-5 §3);
+    /// built on the first `@`-Tab and cached (30s TTL inside).
+    pub file_index: FileIndex,
+    /// The open candidate strip, if completion is ambiguous.
+    pub strip: Option<StripState>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -164,10 +205,12 @@ impl App {
             state: ChatState::Idle,
             objective: String::new(),
             budget: wiring.budget,
-            cwd: wiring.cwd,
+            cwd: wiring.cwd.clone(),
             objective_tx: wiring.objective_tx,
             update_tx: wiring.update_tx,
             last_abort_reason: None,
+            file_index: FileIndex::new(&wiring.cwd),
+            strip: None,
         });
         app
     }
@@ -408,6 +451,32 @@ impl App {
     /// printable characters go straight into it. Single-letter hotkeys only
     /// fire on an empty dock: `q` quits (Idle) or interrupts (Working).
     fn on_key_chat(&mut self, key: KeyEvent, abort: &AtomicBool) {
+        // While the candidate strip is open it owns the keyboard: Tab and
+        // Shift-Tab cycle the highlight (rewriting the token), Enter accepts
+        // the highlighted candidate WITHOUT submitting, Esc closes the strip
+        // restoring the original token, and any other key closes the strip
+        // and falls through to normal handling (SPEC-5 §3).
+        if self.chat.as_ref().is_some_and(|c| c.strip.is_some()) {
+            match key.code {
+                KeyCode::Tab => {
+                    self.strip_cycle(true);
+                    return;
+                }
+                KeyCode::BackTab => {
+                    self.strip_cycle(false);
+                    return;
+                }
+                KeyCode::Enter => {
+                    self.strip_accept();
+                    return;
+                }
+                KeyCode::Esc => {
+                    self.strip_cancel();
+                    return;
+                }
+                _ => self.strip_close(),
+            }
+        }
         let state = self.chat.as_ref().map(|c| c.state);
         match key.code {
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -452,6 +521,7 @@ impl App {
                 }
                 self.input.clear();
             }
+            KeyCode::Tab => self.complete_tab(),
             KeyCode::Backspace => {
                 self.input.pop();
             }
@@ -459,6 +529,88 @@ impl App {
             KeyCode::PageUp => self.scroll_back = self.scroll_back.saturating_add(10),
             KeyCode::PageDown => self.scroll_back = self.scroll_back.saturating_sub(10),
             _ => {}
+        }
+    }
+
+    /// Tab pressed with no strip open: complete the whitespace-delimited
+    /// token ending at the cursor (the dock cursor is always at the end).
+    /// `/`-tokens complete against slash commands, `@`-tokens against the
+    /// cached file index; any other token is a no-op (SPEC-5 §3).
+    fn complete_tab(&mut self) {
+        let (start, token) = complete::token_at_cursor(&self.input, self.input.len());
+        let (typed, prefix, candidates) = if let Some(query) = token.strip_prefix('@') {
+            let Some(chat) = &mut self.chat else { return };
+            let candidates = chat.file_index.candidates(query);
+            (query.to_string(), "@", candidates)
+        } else if token.starts_with('/') {
+            (token.to_string(), "", complete::slash_candidates(token))
+        } else {
+            return;
+        };
+        match complete::decide(&typed, candidates) {
+            complete::Decision::NoMatch => {}
+            // Single candidate, or a common prefix that extends the token:
+            // replace the token inline, done.
+            complete::Decision::Inline(with) | complete::Decision::Extend(with) => {
+                self.input.truncate(start);
+                self.input.push_str(prefix);
+                self.input.push_str(&with);
+            }
+            // Ambiguous and nothing to extend: open the candidate strip.
+            complete::Decision::OpenStrip(candidates) => {
+                if let (Some(chat), Some(strip)) =
+                    (&mut self.chat, CandidateStrip::new(candidates))
+                {
+                    chat.strip = Some(StripState {
+                        strip,
+                        token_start: start,
+                        original: token.to_string(),
+                        prefix,
+                    });
+                }
+            }
+        }
+    }
+
+    /// Tab/Shift-Tab with the strip open: cycle the highlight (with
+    /// wraparound); the newly highlighted candidate replaces the token.
+    fn strip_cycle(&mut self, forward: bool) {
+        let Some(chat) = &mut self.chat else { return };
+        let Some(state) = &mut chat.strip else { return };
+        if forward {
+            state.strip.next();
+        } else {
+            state.strip.prev();
+        }
+        let replacement = format!("{}{}", state.prefix, state.strip.highlighted());
+        self.input.truncate(state.token_start);
+        self.input.push_str(&replacement);
+    }
+
+    /// Enter with the strip open: the highlighted candidate replaces the
+    /// token and the strip closes — the line is NOT submitted.
+    fn strip_accept(&mut self) {
+        let Some(chat) = &mut self.chat else { return };
+        let Some(state) = chat.strip.take() else { return };
+        let replacement = format!("{}{}", state.prefix, state.strip.highlighted());
+        self.input.truncate(state.token_start);
+        self.input.push_str(&replacement);
+    }
+
+    /// Esc with the strip open: close without completing — the token goes
+    /// back to exactly what was typed when the strip opened.
+    fn strip_cancel(&mut self) {
+        let Some(chat) = &mut self.chat else { return };
+        let Some(state) = chat.strip.take() else { return };
+        self.input.truncate(state.token_start);
+        self.input.push_str(&state.original);
+    }
+
+    /// Any other key with the strip open: close it, keeping the input as
+    /// displayed; the key is then handled normally.
+    fn strip_close(&mut self) {
+        if let Some(chat) = &mut self.chat {
+            chat.strip = None;
         }
     }
 
@@ -577,7 +729,7 @@ impl App {
                 self.should_quit = true;
             }
             SlashCommand::Help => {
-                self.notice(chat::HELP_LINE.to_string(), Color::Cyan);
+                self.notice(HELP_TEXT.to_string(), Color::Cyan);
             }
             SlashCommand::Unknown(name) => {
                 self.notice(format!("unknown command: /{name} (see /help)"), Color::Yellow);
@@ -707,12 +859,36 @@ fn draw(f: &mut Frame, app: &App) {
     let inner = outer.inner(area);
     f.render_widget(outer, area);
 
-    let layout = Layout::vertical([
-        Constraint::Min(1),
-        Constraint::Length(1),
-        Constraint::Length(1),
-    ])
-    .split(inner);
+    // Chat mode with an open candidate strip gets a fourth row, drawn
+    // directly above the input dock (SPEC-5 §3).
+    let strip_open = app.chat.as_ref().is_some_and(|c| c.strip.is_some());
+    let (layout, strip_row, input_row): (Vec<ratatui::layout::Rect>, Option<usize>, usize) =
+        if strip_open {
+            (
+                Layout::vertical([
+                    Constraint::Min(1),
+                    Constraint::Length(1),
+                    Constraint::Length(1),
+                    Constraint::Length(1),
+                ])
+                .split(inner)
+                .to_vec(),
+                Some(2),
+                3,
+            )
+        } else {
+            (
+                Layout::vertical([
+                    Constraint::Min(1),
+                    Constraint::Length(1),
+                    Constraint::Length(1),
+                ])
+                .split(inner)
+                .to_vec(),
+                None,
+                2,
+            )
+        };
     let main = Layout::horizontal([
         Constraint::Percentage(62),
         Constraint::Percentage(38),
@@ -722,7 +898,51 @@ fn draw(f: &mut Frame, app: &App) {
     draw_activity(f, main[0], app);
     draw_ledger(f, main[1], app);
     draw_status(f, layout[1], app);
-    draw_input(f, layout[2], app);
+    if let Some(row) = strip_row {
+        draw_strip(f, layout[row], app);
+    }
+    draw_input(f, layout[input_row], app);
+}
+
+/// The one-row candidate strip (SPEC-5 §3): up to 8 candidates around the
+/// highlight, the highlighted one reversed, and a `(i/n)` scroll indicator
+/// when more candidates exist than fit.
+fn draw_strip(f: &mut Frame, area: ratatui::layout::Rect, app: &App) {
+    let Some(state) = app.chat.as_ref().and_then(|c| c.strip.as_ref()) else {
+        return;
+    };
+    f.render_widget(strip_line(state), area);
+}
+
+/// Build the strip's single display line (split out so tests can render it
+/// without a terminal).
+fn strip_line(state: &StripState) -> Line<'static> {
+    const WINDOW: usize = 8;
+    let candidates = state.strip.candidates();
+    let hi = state.strip.highlighted_index();
+    // The highlighted candidate stays visible: the window ends at it when it
+    // would otherwise fall off the right edge.
+    let start = if hi >= WINDOW { hi + 1 - WINDOW } else { 0 };
+    let end = (start + WINDOW).min(candidates.len());
+    let mut spans = vec![Span::styled(
+        if start > 0 { "… " } else { "  " },
+        Style::default().fg(Color::DarkGray),
+    )];
+    for (i, cand) in candidates[start..end].iter().enumerate() {
+        let style = if start + i == hi {
+            Style::default().add_modifier(Modifier::REVERSED)
+        } else {
+            Style::default()
+        };
+        spans.push(Span::styled(format!("{cand}  "), style));
+    }
+    if candidates.len() > WINDOW {
+        spans.push(Span::styled(
+            format!("({}/{})", hi + 1, candidates.len()),
+            Style::default().fg(Color::DarkGray),
+        ));
+    }
+    Line::from(spans)
 }
 
 fn draw_activity(f: &mut Frame, area: ratatui::layout::Rect, app: &App) {
@@ -1268,7 +1488,7 @@ mod tests {
         assert!(f.objective_rx.try_recv().is_err());
         assert!(f.steer_rx.try_recv().is_err());
         let notices = notice_texts(&f.app);
-        assert_eq!(notices, vec![chat::HELP_LINE]);
+        assert_eq!(notices, vec![HELP_TEXT]);
 
         type_text(&mut f.app, "/xyzzy", &abort);
         press(&mut f.app, KeyCode::Enter, &abort);
@@ -1460,5 +1680,270 @@ mod tests {
     fn run_mode_title_unchanged_by_chat_scope() {
         let a = app();
         assert!(a.title().starts_with(" chug ─ build the thing ─ model: test-model"));
+    }
+
+    // ---------- SPEC-5: /help layout ----------
+
+    /// Text of a rendered line (spans concatenated).
+    fn line_text(line: &Line) -> String {
+        line.spans.iter().map(|s| s.content.to_string()).collect()
+    }
+
+    #[test]
+    fn chat_help_is_one_entry_rendered_as_separate_rows() {
+        let mut f = chat_app();
+        let abort = Arc::clone(&f.abort);
+        type_text(&mut f.app, "/help", &abort);
+        press(&mut f.app, KeyCode::Enter, &abort);
+
+        // One activity entry carrying the whole spec-format block...
+        let notices = notice_texts(&f.app);
+        assert_eq!(notices, vec![HELP_TEXT]);
+        assert_eq!(HELP_TEXT.lines().count(), 10);
+
+        // ...which the draw path renders as separate rows (SPEC-5 §2).
+        let rows = activity_lines(&f.app, 100, 100);
+        let rendered: Vec<String> = rows.iter().map(line_text).collect();
+        assert_eq!(rendered.len(), 10);
+        for (got, want) in rendered.iter().zip(HELP_TEXT.lines()) {
+            assert_eq!(got.trim_start(), want.trim_start());
+        }
+        // The new @path and Tab rows are part of the format.
+        assert!(HELP_TEXT.lines().any(|l| l.trim_start().starts_with("@path")));
+        assert!(HELP_TEXT.lines().any(|l| l.trim_start().starts_with("Tab")));
+    }
+
+    // ---------- SPEC-5: Tab completion ----------
+
+    fn strip_candidates(app: &App) -> Vec<String> {
+        app.chat
+            .as_ref()
+            .and_then(|c| c.strip.as_ref())
+            .map(|s| s.strip.candidates().to_vec())
+            .unwrap_or_default()
+    }
+
+    fn strip_highlighted(app: &App) -> Option<String> {
+        app.chat
+            .as_ref()
+            .and_then(|c| c.strip.as_ref())
+            .map(|s| s.strip.highlighted().to_string())
+    }
+
+    fn strip_is_open(app: &App) -> bool {
+        app.chat.as_ref().is_some_and(|c| c.strip.is_some())
+    }
+
+    #[test]
+    fn tab_slash_single_candidate_completes_inline() {
+        let mut f = chat_app();
+        let abort = Arc::clone(&f.abort);
+        type_text(&mut f.app, "/he", &abort);
+        press(&mut f.app, KeyCode::Tab, &abort);
+        assert_eq!(f.app.input, "/help");
+        assert!(!strip_is_open(&f.app));
+        // Nothing was submitted: the line is still being edited.
+        assert!(f.objective_rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn tab_at_single_candidate_completes_inline_with_sigil() {
+        let mut f = chat_app();
+        let cwd = f.app.chat.as_ref().unwrap().cwd.clone();
+        std::fs::write(cwd.join("SPEC-4-interactive.md"), "spec").unwrap();
+        let abort = Arc::clone(&f.abort);
+        type_text(&mut f.app, "read @SPEC-4", &abort);
+        press(&mut f.app, KeyCode::Tab, &abort);
+        // The candidate replaces the token; the `@` sigil and the text
+        // before it stay put.
+        assert_eq!(f.app.input, "read @SPEC-4-interactive.md");
+        assert!(!strip_is_open(&f.app));
+    }
+
+    #[test]
+    fn tab_non_completion_tokens_are_noop() {
+        let mut f = chat_app();
+        let abort = Arc::clone(&f.abort);
+        // Neither / nor @: no-op Tab.
+        type_text(&mut f.app, "hello", &abort);
+        press(&mut f.app, KeyCode::Tab, &abort);
+        assert_eq!(f.app.input, "hello");
+        // Empty dock: no-op.
+        press(&mut f.app, KeyCode::Backspace, &abort);
+        press(&mut f.app, KeyCode::Backspace, &abort);
+        press(&mut f.app, KeyCode::Backspace, &abort);
+        press(&mut f.app, KeyCode::Backspace, &abort);
+        press(&mut f.app, KeyCode::Backspace, &abort);
+        press(&mut f.app, KeyCode::Tab, &abort);
+        assert_eq!(f.app.input, "");
+        // @ with no matching path: no-op.
+        type_text(&mut f.app, "@no-such-file-xyz", &abort);
+        press(&mut f.app, KeyCode::Tab, &abort);
+        assert_eq!(f.app.input, "@no-such-file-xyz");
+        assert!(!strip_is_open(&f.app));
+    }
+
+    /// Two files sharing a prefix: first Tab extends to the common prefix,
+    /// second Tab opens the strip. Returns the fixture mid-scenario.
+    fn open_driver_strip() -> ChatFixture {
+        let mut f = chat_app();
+        let cwd = f.app.chat.as_ref().unwrap().cwd.clone();
+        std::fs::create_dir_all(cwd.join("src")).unwrap();
+        std::fs::write(cwd.join("src/driver.rs"), "").unwrap();
+        std::fs::write(cwd.join("src/drill.rs"), "").unwrap();
+        let abort = Arc::clone(&f.abort);
+        type_text(&mut f.app, "@dri", &abort);
+        press(&mut f.app, KeyCode::Tab, &abort);
+        // Common prefix "src/dri" extends the typed "dri": inline extend.
+        assert_eq!(f.app.input, "@src/dri");
+        assert!(!strip_is_open(&f.app));
+        press(&mut f.app, KeyCode::Tab, &abort);
+        // Nothing left to extend: the strip opens, input unchanged.
+        assert!(strip_is_open(&f.app));
+        assert_eq!(f.app.input, "@src/dri");
+        assert_eq!(
+            strip_candidates(&f.app),
+            vec!["src/drill.rs".to_string(), "src/driver.rs".to_string()]
+        );
+        assert_eq!(strip_highlighted(&f.app).as_deref(), Some("src/drill.rs"));
+        f
+    }
+
+    #[test]
+    fn tab_at_extends_common_prefix_then_opens_strip() {
+        let _f = open_driver_strip();
+    }
+
+    #[test]
+    fn strip_tab_cycles_and_replaces_token_with_wraparound() {
+        let mut f = open_driver_strip();
+        let abort = Arc::clone(&f.abort);
+        press(&mut f.app, KeyCode::Tab, &abort);
+        assert_eq!(strip_highlighted(&f.app).as_deref(), Some("src/driver.rs"));
+        assert_eq!(f.app.input, "@src/driver.rs");
+        // Wraparound at the end.
+        press(&mut f.app, KeyCode::Tab, &abort);
+        assert_eq!(strip_highlighted(&f.app).as_deref(), Some("src/drill.rs"));
+        assert_eq!(f.app.input, "@src/drill.rs");
+        // Shift-Tab cycles backwards, wrapping at the start.
+        press(&mut f.app, KeyCode::BackTab, &abort);
+        assert_eq!(strip_highlighted(&f.app).as_deref(), Some("src/driver.rs"));
+        assert_eq!(f.app.input, "@src/driver.rs");
+    }
+
+    #[test]
+    fn strip_esc_closes_and_restores_original_token() {
+        let mut f = open_driver_strip();
+        let abort = Arc::clone(&f.abort);
+        press(&mut f.app, KeyCode::Tab, &abort);
+        assert_eq!(f.app.input, "@src/driver.rs");
+        press(&mut f.app, KeyCode::Esc, &abort);
+        assert!(!strip_is_open(&f.app));
+        // Closed WITHOUT completing: the token is back as typed.
+        assert_eq!(f.app.input, "@src/dri");
+        // Esc did not fall through to the interrupt/quit path.
+        assert!(!abort.load(std::sync::atomic::Ordering::SeqCst));
+        assert!(!f.app.should_quit);
+    }
+
+    #[test]
+    fn strip_enter_accepts_highlight_without_submitting() {
+        let mut f = open_driver_strip();
+        let abort = Arc::clone(&f.abort);
+        press(&mut f.app, KeyCode::Tab, &abort);
+        press(&mut f.app, KeyCode::Enter, &abort);
+        // Strip closed, highlighted candidate kept, line NOT submitted.
+        assert!(!strip_is_open(&f.app));
+        assert_eq!(f.app.input, "@src/driver.rs");
+        assert!(f.objective_rx.try_recv().is_err());
+        assert!(f.steer_rx.try_recv().is_err());
+        // Enter with the strip closed submits as today.
+        press(&mut f.app, KeyCode::Enter, &abort);
+        assert_eq!(f.objective_rx.try_recv().unwrap(), "@src/driver.rs");
+        assert!(f.app.input.is_empty());
+    }
+
+    #[test]
+    fn strip_other_key_closes_and_falls_through() {
+        let mut f = open_driver_strip();
+        let abort = Arc::clone(&f.abort);
+        type_text(&mut f.app, "x", &abort);
+        assert!(!strip_is_open(&f.app));
+        // The key was handled normally after closing the strip.
+        assert_eq!(f.app.input, "@src/drix");
+    }
+
+    #[test]
+    fn tab_bare_slash_opens_strip_of_all_commands() {
+        let mut f = chat_app();
+        let abort = Arc::clone(&f.abort);
+        type_text(&mut f.app, "/", &abort);
+        press(&mut f.app, KeyCode::Tab, &abort);
+        assert!(strip_is_open(&f.app));
+        assert_eq!(f.app.input, "/");
+        assert_eq!(
+            strip_candidates(&f.app),
+            complete::SLASH_COMMANDS
+                .iter()
+                .map(|c| format!("/{c}"))
+                .collect::<Vec<_>>()
+        );
+        // Cycling rewrites the token with the command.
+        press(&mut f.app, KeyCode::Tab, &abort);
+        assert_eq!(f.app.input, "/goal");
+        // Esc restores the bare "/".
+        press(&mut f.app, KeyCode::Esc, &abort);
+        assert_eq!(f.app.input, "/");
+    }
+
+    #[test]
+    fn strip_line_windows_eight_and_shows_scroll_indicator() {
+        // More candidates than the window: lead marker + 8 + (i/n).
+        let strip =
+            CandidateStrip::new((0..10).map(|n| format!("cand{n:02}")).collect()).unwrap();
+        let mut state = StripState {
+            strip,
+            token_start: 0,
+            original: "@c".to_string(),
+            prefix: "@",
+        };
+        let line = strip_line(&state);
+        let spans: Vec<String> = line.spans.iter().map(|s| s.content.to_string()).collect();
+        assert_eq!(spans.len(), 10);
+        assert_eq!(spans[0], "  ");
+        assert_eq!(spans[1], "cand00  ");
+        assert_eq!(spans[8], "cand07  ");
+        assert_eq!(spans[9], "(1/10)");
+        // The highlighted candidate is reversed.
+        assert!(line.spans[1].style.add_modifier.contains(Modifier::REVERSED));
+        assert!(!line.spans[2].style.add_modifier.contains(Modifier::REVERSED));
+
+        // Highlight near the end: the window slides, lead becomes "… ".
+        for _ in 0..9 {
+            state.strip.next();
+        }
+        let line = strip_line(&state);
+        let spans: Vec<String> = line.spans.iter().map(|s| s.content.to_string()).collect();
+        assert_eq!(spans[0], "… ");
+        assert_eq!(spans[1], "cand02  ");
+        assert_eq!(spans[8], "cand09  ");
+        assert_eq!(spans[9], "(10/10)");
+        assert!(line.spans[8].style.add_modifier.contains(Modifier::REVERSED));
+    }
+
+    #[test]
+    fn strip_line_within_window_shows_no_indicator() {
+        let strip =
+            CandidateStrip::new(vec!["a".to_string(), "b".to_string(), "c".to_string()])
+                .unwrap();
+        let state = StripState {
+            strip,
+            token_start: 0,
+            original: "/".to_string(),
+            prefix: "",
+        };
+        let line = strip_line(&state);
+        let spans: Vec<String> = line.spans.iter().map(|s| s.content.to_string()).collect();
+        assert_eq!(spans, vec!["  ", "a  ", "b  ", "c  "]);
     }
 }
