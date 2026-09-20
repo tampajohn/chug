@@ -43,6 +43,8 @@ pub struct RunConfig {
     /// When true, every bash command is classified by the laya risk gate
     /// before execution.
     pub risk_gate: bool,
+    /// Per-command wall-clock budget for the `bash` tool.
+    pub bash_timeout: Duration,
 }
 
 /// Operator controls the driver honors at each iteration boundary:
@@ -136,6 +138,7 @@ struct LoopCtx<'a> {
     mode: Mode,
     controls: &'a Controls,
     updates: &'a Receiver<SlashUpdate>,
+    bash_timeout: Duration,
 }
 
 enum VerifyOutcome {
@@ -195,6 +198,7 @@ fn run_loop(
         mode: Mode::Autonomous,
         controls: &cfg.controls,
         updates: &update_rx,
+        bash_timeout: cfg.bash_timeout,
     };
     match drive_loop(
         &ctx,
@@ -233,6 +237,7 @@ pub fn run_turn(
     controls: &Controls,
     updates: &Receiver<SlashUpdate>,
     knobs: &mut TurnKnobs,
+    bash_timeout: Duration,
     sink: &mut dyn EventSink,
 ) -> anyhow::Result<TurnEndReason> {
     let ctx = LoopCtx {
@@ -240,6 +245,7 @@ pub fn run_turn(
         mode: Mode::Chat,
         controls,
         updates,
+        bash_timeout,
     };
     match drive_loop(&ctx, knobs, client, gate, messages, None, sink)? {
         DriveOutcome::TurnEnded(reason) => Ok(reason),
@@ -266,6 +272,7 @@ fn drive_loop(
     let tool_schemas = tools::tool_schemas();
     let tool_ctx = ToolCtx {
         cwd: ctx.cwd.to_path_buf(),
+        bash_timeout: ctx.bash_timeout,
     };
     // Budgets are per invocation: per run in autonomous mode, per turn in chat.
     let start = Instant::now();
@@ -935,6 +942,7 @@ mod tests {
             resume: false,
             controls,
             risk_gate: false,
+            bash_timeout: Duration::from_secs(tools::BASH_TIMEOUT_SECS),
         };
         let client = Client::new_without_credentials("test-model").unwrap();
         let mut sink = RecordingSink::default();

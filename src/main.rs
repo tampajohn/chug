@@ -57,6 +57,10 @@ enum CliCommand {
         /// (blocks destructive commands; fails open when the judge is down).
         #[arg(long)]
         risk_gate: bool,
+        /// Per-command bash timeout in seconds. Overrides $CHUG_BASH_TIMEOUT
+        /// (default 120).
+        #[arg(long)]
+        bash_timeout: Option<u64>,
     },
     /// Print the current LEDGER.md.
     Ledger {
@@ -86,6 +90,10 @@ enum CliCommand {
         /// (blocks destructive commands; fails open when the judge is down).
         #[arg(long)]
         risk_gate: bool,
+        /// Per-command bash timeout in seconds. Overrides $CHUG_BASH_TIMEOUT
+        /// (default 120).
+        #[arg(long)]
+        bash_timeout: Option<u64>,
     },
 }
 
@@ -100,7 +108,16 @@ fn main() -> ExitCode {
             max_minutes,
             resume,
             risk_gate,
-        } => cmd_chat(cwd, model, max_iters, max_minutes, resume, risk_gate),
+            bash_timeout,
+        } => cmd_chat(
+            cwd,
+            model,
+            max_iters,
+            max_minutes,
+            resume,
+            risk_gate,
+            bash_timeout,
+        ),
         CliCommand::Run {
             spec,
             goal,
@@ -111,6 +128,7 @@ fn main() -> ExitCode {
             resume,
             tui,
             risk_gate,
+            bash_timeout,
         } => cmd_run(
             spec,
             goal,
@@ -121,6 +139,7 @@ fn main() -> ExitCode {
             resume,
             tui,
             risk_gate,
+            bash_timeout,
         ),
     };
     match result {
@@ -130,6 +149,37 @@ fn main() -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+/// Bash timeout precedence: `--bash-timeout` flag > `$CHUG_BASH_TIMEOUT` env
+/// > the 120s tool default. Rejects zero and unparseable values.
+fn bash_timeout_secs(flag: Option<u64>, env: Option<&str>) -> anyhow::Result<u64> {
+    fn parse(source: &str, raw: &str) -> anyhow::Result<u64> {
+        let secs: u64 = raw
+            .parse()
+            .map_err(|_| anyhow!("{source} must be a number of seconds, got {raw:?}"))?;
+        if secs == 0 {
+            anyhow::bail!("{source} must be a positive number of seconds");
+        }
+        Ok(secs)
+    }
+    match flag {
+        Some(secs) => {
+            if secs == 0 {
+                anyhow::bail!("--bash-timeout must be a positive number of seconds");
+            }
+            Ok(secs)
+        }
+        None => match env.map(str::trim).filter(|v| !v.is_empty()) {
+            Some(raw) => parse("$CHUG_BASH_TIMEOUT", raw),
+            None => Ok(tools::BASH_TIMEOUT_SECS),
+        },
+    }
+}
+
+fn resolve_bash_timeout(flag: Option<u64>) -> anyhow::Result<std::time::Duration> {
+    let env = std::env::var("CHUG_BASH_TIMEOUT").ok();
+    Ok(std::time::Duration::from_secs(bash_timeout_secs(flag, env.as_deref())?))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -143,8 +193,10 @@ fn cmd_run(
     resume: bool,
     tui: bool,
     risk_gate: bool,
+    bash_timeout: Option<u64>,
 ) -> anyhow::Result<i32> {
     let cwd = resolve_cwd(cwd)?;
+    let bash_timeout = resolve_bash_timeout(bash_timeout)?;
     let spec = spec
         .canonicalize()
         .with_context(|| format!("spec file {} not found", spec.display()))?;
@@ -156,6 +208,7 @@ fn cmd_run(
     if tui {
         run_with_tui(
             spec, goal, cwd, model, max_iters, max_minutes, resume, risk_gate,
+            bash_timeout,
         )
     } else {
         let cfg = driver::RunConfig {
@@ -168,6 +221,7 @@ fn cmd_run(
             resume,
             controls: driver::Controls::detached(),
             risk_gate,
+            bash_timeout,
         };
         let mut sink = events::ConsoleSink::new(cfg.cwd.clone());
         driver::run(cfg, &mut sink)
@@ -185,6 +239,7 @@ fn run_with_tui(
     max_minutes: u64,
     resume: bool,
     risk_gate: bool,
+    bash_timeout: std::time::Duration,
 ) -> anyhow::Result<i32> {
     let (event_tx, event_rx) = mpsc::channel::<events::Event>();
     let (steer_tx, steer_rx) = mpsc::channel::<String>();
@@ -200,6 +255,7 @@ fn run_with_tui(
         max_minutes,
         resume,
         risk_gate,
+        bash_timeout,
         controls: driver::Controls {
             abort: Arc::clone(&abort),
             steering_rx: steer_rx,
@@ -245,8 +301,10 @@ fn cmd_chat(
     max_minutes: u64,
     resume: bool,
     risk_gate: bool,
+    bash_timeout: Option<u64>,
 ) -> anyhow::Result<i32> {
     let cwd = resolve_cwd(cwd)?;
+    let bash_timeout = resolve_bash_timeout(bash_timeout)?;
     let model = model
         .filter(|m| !m.trim().is_empty())
         .or_else(|| std::env::var("CHUG_MODEL").ok().filter(|m| !m.trim().is_empty()))
@@ -266,6 +324,7 @@ fn cmd_chat(
         max_minutes,
         resume,
         risk_gate,
+        bash_timeout,
         controls: driver::Controls {
             abort: Arc::clone(&abort),
             steering_rx: steer_rx,
@@ -320,4 +379,42 @@ fn resolve_cwd(cwd: Option<PathBuf>) -> anyhow::Result<PathBuf> {
     given
         .canonicalize()
         .with_context(|| format!("resolving --cwd {}", given.display()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn bash_timeout_precedence_flag_over_env_over_default() {
+        // Flag wins over env; env wins over the 120s default.
+        assert_eq!(bash_timeout_secs(Some(7), Some("5")).unwrap(), 7);
+        assert_eq!(bash_timeout_secs(None, Some("5")).unwrap(), 5);
+        assert_eq!(
+            bash_timeout_secs(None, None).unwrap(),
+            tools::BASH_TIMEOUT_SECS
+        );
+        // Env whitespace is trimmed; a blank env falls through to the default.
+        assert_eq!(bash_timeout_secs(None, Some(" 9 ")).unwrap(), 9);
+        assert_eq!(
+            bash_timeout_secs(None, Some("   ")).unwrap(),
+            tools::BASH_TIMEOUT_SECS
+        );
+    }
+
+    #[test]
+    fn bash_timeout_rejects_zero_and_garbage() {
+        assert!(bash_timeout_secs(Some(0), None).is_err());
+        assert!(bash_timeout_secs(None, Some("0")).is_err());
+        assert!(bash_timeout_secs(None, Some("abc")).is_err());
+        assert!(bash_timeout_secs(None, Some("-3")).is_err());
+        // Zero from the flag beats a valid env (flag is consulted first).
+        assert!(bash_timeout_secs(Some(0), Some("5")).is_err());
+    }
+
+    #[test]
+    fn resolve_bash_timeout_wraps_secs_in_duration() {
+        assert_eq!(resolve_bash_timeout(Some(1)).unwrap(), Duration::from_secs(1));
+    }
 }

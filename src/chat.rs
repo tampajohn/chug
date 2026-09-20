@@ -7,6 +7,7 @@
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 use std::sync::mpsc::Receiver;
+use std::time::Duration;
 
 use crate::api::{Client, ContentBlock, Llm, Message};
 use crate::driver::{self, Controls, SlashUpdate, TurnKnobs};
@@ -120,6 +121,8 @@ pub struct ChatConfig {
     pub max_minutes: u64,
     pub resume: bool,
     pub risk_gate: bool,
+    /// Per-command wall-clock budget for the `bash` tool.
+    pub bash_timeout: Duration,
     /// Abort flag + steering channel shared with the UI.
     pub controls: Controls,
     /// User objectives submitted while idle.
@@ -191,6 +194,7 @@ fn run_chat_with(
             &cfg.controls,
             &cfg.update_rx,
             &mut knobs,
+            cfg.bash_timeout,
             sink,
         )?;
         sink.emit(Event::TurnEnd { reason });
@@ -315,6 +319,7 @@ mod tests {
             max_minutes: 120,
             resume: false,
             risk_gate: false,
+            bash_timeout: Duration::from_secs(crate::tools::BASH_TIMEOUT_SECS),
             controls: Controls {
                 abort: Arc::clone(&abort),
                 steering_rx,

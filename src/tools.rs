@@ -23,6 +23,8 @@ const LIST_DIR_MAX: usize = 500;
 #[derive(Debug, Clone)]
 pub struct ToolCtx {
     pub cwd: PathBuf,
+    /// Per-command wall-clock budget for the `bash` tool.
+    pub bash_timeout: Duration,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -280,7 +282,7 @@ fn apply_edit_all(content: &str, old: &str, new: &str) -> Result<(String, usize)
 
 fn bash(ctx: &ToolCtx, input: &Value) -> anyhow::Result<ToolResult> {
     let command = get_str(input, "command")?;
-    let outcome = run_shell(&ctx.cwd, command, Duration::from_secs(BASH_TIMEOUT_SECS))?;
+    let outcome = run_shell(&ctx.cwd, command, ctx.bash_timeout)?;
     let body = truncate_middle(&outcome.output, OUTPUT_KEEP_HEAD, OUTPUT_KEEP_TAIL);
     let exit_label = match outcome.exit_code {
         Some(code) => code.to_string(),
@@ -726,7 +728,7 @@ mod tests {
     fn edit_file_dispatch_replace_all_returns_count() {
         let tmp = tempfile::tempdir().unwrap();
         fs::write(tmp.path().join("f.txt"), "x y x y x").unwrap();
-        let ctx = ToolCtx { cwd: tmp.path().to_path_buf() };
+        let ctx = ToolCtx { cwd: tmp.path().to_path_buf(), bash_timeout: Duration::from_secs(BASH_TIMEOUT_SECS) };
         let result = dispatch(
             &ctx,
             "edit_file",
@@ -738,10 +740,30 @@ mod tests {
     }
 
     #[test]
+    fn bash_dispatch_honors_ctx_bash_timeout() {
+        // The override path must reach run_shell: a 1s ToolCtx timeout kills a
+        // 5s sleep at ~1s (not the 120s default), reporting a timeout error.
+        let tmp = tempfile::tempdir().unwrap();
+        let ctx = ToolCtx {
+            cwd: tmp.path().to_path_buf(),
+            bash_timeout: Duration::from_secs(1),
+        };
+        let start = Instant::now();
+        let result = dispatch(&ctx, "bash", &json!({"command": "sleep 5"}));
+        let elapsed = start.elapsed();
+        assert!(result.is_error);
+        assert!(result.content.contains("timed out after 1s"));
+        assert!(
+            elapsed < Duration::from_secs(4),
+            "override not honored: took {elapsed:?}"
+        );
+    }
+
+    #[test]
     fn edit_file_dispatch_default_still_errors_on_multi_match() {
         let tmp = tempfile::tempdir().unwrap();
         fs::write(tmp.path().join("f.txt"), "x y x y x").unwrap();
-        let ctx = ToolCtx { cwd: tmp.path().to_path_buf() };
+        let ctx = ToolCtx { cwd: tmp.path().to_path_buf(), bash_timeout: Duration::from_secs(BASH_TIMEOUT_SECS) };
         let result = dispatch(
             &ctx,
             "edit_file",
@@ -764,7 +786,7 @@ mod tests {
         fs::write(tmp.path().join("src/a.rs"), "").unwrap();
         fs::write(tmp.path().join("src/deep/c.rs"), "").unwrap();
         fs::write(tmp.path().join("src/other.txt"), "").unwrap();
-        let ctx = ToolCtx { cwd: tmp.path().to_path_buf() };
+        let ctx = ToolCtx { cwd: tmp.path().to_path_buf(), bash_timeout: Duration::from_secs(BASH_TIMEOUT_SECS) };
         let result = dispatch(&ctx, "glob", &json!({"pattern": "**/*.rs"}));
         assert!(!result.is_error, "{}", result.content);
         let lines: Vec<&str> = result.content.lines().collect();
@@ -774,7 +796,7 @@ mod tests {
     #[test]
     fn glob_rejects_path_escape() {
         let tmp = tempfile::tempdir().unwrap();
-        let ctx = ToolCtx { cwd: tmp.path().to_path_buf() };
+        let ctx = ToolCtx { cwd: tmp.path().to_path_buf(), bash_timeout: Duration::from_secs(BASH_TIMEOUT_SECS) };
         let result = dispatch(&ctx, "glob", &json!({"pattern": "../../etc/*"}));
         assert!(result.is_error);
         assert!(result.content.contains("escapes cwd"), "{}", result.content);
@@ -806,7 +828,7 @@ mod tests {
         fs::write(tmp.path().join("afile.txt"), "").unwrap();
         fs::create_dir_all(tmp.path().join("zdir")).unwrap();
         fs::create_dir_all(tmp.path().join("adir")).unwrap();
-        let ctx = ToolCtx { cwd: tmp.path().to_path_buf() };
+        let ctx = ToolCtx { cwd: tmp.path().to_path_buf(), bash_timeout: Duration::from_secs(BASH_TIMEOUT_SECS) };
         let result = dispatch(&ctx, "list_dir", &json!({}));
         assert!(!result.is_error, "{}", result.content);
         let lines: Vec<&str> = result.content.lines().collect();
@@ -818,7 +840,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         fs::create_dir_all(tmp.path().join("sub")).unwrap();
         fs::write(tmp.path().join("sub/f.txt"), "").unwrap();
-        let ctx = ToolCtx { cwd: tmp.path().to_path_buf() };
+        let ctx = ToolCtx { cwd: tmp.path().to_path_buf(), bash_timeout: Duration::from_secs(BASH_TIMEOUT_SECS) };
         let result = dispatch(&ctx, "list_dir", &json!({"path": "sub"}));
         assert!(!result.is_error, "{}", result.content);
         assert_eq!(result.content, "f.txt");
