@@ -9,8 +9,9 @@ check: cargo test
 
 - `LANGFUSE_HOST` (e.g. `http://127.0.0.1:3002`), `LANGFUSE_PUBLIC_KEY`,
   `LANGFUSE_SECRET_KEY` from process env.
-- Fallback file `~/.langfuse-keys` (same philosophy as the auth defaults):
-  parse `pk-lf-…` and `sk-lf-…` tokens from it. Host comes from env only.
+- Fallback files (first found): `~/.langfuse-keys-chug` (dedicated chug
+  project — PREFERRED), then `~/.langfuse-keys`. Parse `pk-lf-…` and
+  `sk-lf-…` tokens, and `LANGFUSE_HOST=` line if present (env still wins).
 - Never log keys; never fail a run because observability is misconfigured —
   a one-line stderr note and OFF.
 
