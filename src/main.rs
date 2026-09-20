@@ -1,4 +1,5 @@
 mod api;
+mod attach;
 mod auth;
 mod chat;
 mod driver;
