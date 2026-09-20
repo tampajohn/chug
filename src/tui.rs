@@ -213,6 +213,28 @@ impl App {
                     color: Color::Yellow,
                 });
             }
+            Event::RiskVerdict {
+                blocked,
+                choice,
+                p,
+                ..
+            } => {
+                let (text, color) = if blocked {
+                    (
+                        format!("✗ risk gate: {choice} (p={p:.2}) — command blocked"),
+                        Color::Red,
+                    )
+                } else {
+                    (format!("▸ risk gate: {choice} (p={p:.2})"), Color::Yellow)
+                };
+                self.push_activity(Activity::Notice { text, color });
+            }
+            Event::RiskGateDisabled => {
+                self.push_activity(Activity::Notice {
+                    text: "▸ risk gate disabled by operator".to_string(),
+                    color: Color::Yellow,
+                });
+            }
         }
     }
 

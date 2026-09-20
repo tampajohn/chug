@@ -12,6 +12,7 @@ use serde_json::{Value, json};
 use crate::api::{Client, ContentBlock, KnownBlock, Message};
 use crate::events::{Event, EventSink};
 use crate::ledger;
+use crate::riskgate::{GateDecision, LayaJudge, RiskGate};
 use crate::tools::{self, ToolCtx, ToolResult};
 use crate::transcript;
 
@@ -36,6 +37,9 @@ pub struct RunConfig {
     pub resume: bool,
     /// Shared controls checked at every iteration boundary.
     pub controls: Controls,
+    /// When true, every bash command is classified by the laya risk gate
+    /// before execution.
+    pub risk_gate: bool,
 }
 
 /// Operator controls the driver honors at each iteration boundary:
@@ -72,12 +76,18 @@ enum VerifyOutcome {
 
 pub fn run(cfg: RunConfig, sink: &mut dyn EventSink) -> anyhow::Result<i32> {
     let client = Client::new(&cfg.model)?;
-    run_loop(cfg, client, sink)
+    let gate = if cfg.risk_gate {
+        Some(RiskGate::new(Box::new(LayaJudge::from_env()?), &cfg.cwd))
+    } else {
+        None
+    };
+    run_loop(cfg, client, gate, sink)
 }
 
 fn run_loop(
     cfg: RunConfig,
     client: Client,
+    mut gate: Option<RiskGate>,
     sink: &mut dyn EventSink,
 ) -> anyhow::Result<i32> {
     let tool_schemas = tools::tool_schemas();
@@ -127,6 +137,13 @@ fn run_loop(
         let notes = drain_steering(&cfg.controls.steering_rx);
         if !notes.is_empty() {
             append_steering_notes(&cfg.cwd, &mut messages, &notes, sink)?;
+            // Operator override: `allow destructive` disables the risk gate
+            // for the remainder of the run.
+            if notes.iter().any(|n| is_allow_destructive(n))
+                && let Some(gate) = gate.as_mut()
+            {
+                gate.disable(sink);
+            }
         }
 
         // Re-read spec every iteration: the user may edit it mid-run. Keep the
@@ -176,7 +193,26 @@ fn run_loop(
             sink.emit(Event::ToolStart {
                 name: name.to_string(),
             });
-            let result = tools::dispatch(&ctx, name, input);
+            let result = if name == "bash" {
+                if let Some(gate) = gate.as_mut() {
+                    match input
+                        .get("command")
+                        .and_then(Value::as_str)
+                        .map(|command| gate.check(command, sink))
+                    {
+                        Some(GateDecision::Blocked(msg)) => ToolResult {
+                            content: msg,
+                            is_error: true,
+                        },
+                        // Allowed, no command field, or no gate: execute.
+                        _ => tools::dispatch(&ctx, name, input),
+                    }
+                } else {
+                    tools::dispatch(&ctx, name, input)
+                }
+            } else {
+                tools::dispatch(&ctx, name, input)
+            };
             sink.emit(Event::ToolResult {
                 name: name.to_string(),
                 ok: !result.is_error,
@@ -251,6 +287,11 @@ fn drain_steering(rx: &Receiver<String>) -> Vec<String> {
         notes.push(note);
     }
     notes
+}
+
+/// The exact operator override phrase recognized by the risk gate.
+fn is_allow_destructive(note: &str) -> bool {
+    note.trim().to_lowercase() == "allow destructive"
 }
 
 /// Append each note as a user message `[operator] <note>` to the transcript.
@@ -632,6 +673,14 @@ mod tests {
     }
 
     #[test]
+    fn allow_destructive_note_matching() {
+        assert!(is_allow_destructive("allow destructive"));
+        assert!(is_allow_destructive("  ALLOW DESTRUCTIVE  "));
+        assert!(!is_allow_destructive("allow destructively"));
+        assert!(!is_allow_destructive("please allow destructive commands"));
+    }
+
+    #[test]
     fn abort_flag_aborts_at_boundary_like_budget_abort() {
         let tmp = tempfile::tempdir().unwrap();
         let spec = tmp.path().join("s.md");
@@ -652,10 +701,11 @@ mod tests {
             max_minutes: 10,
             resume: false,
             controls,
+            risk_gate: false,
         };
         let client = Client::new_without_credentials("test-model").unwrap();
         let mut sink = RecordingSink::default();
-        let code = run_loop(cfg, client, &mut sink).unwrap();
+        let code = run_loop(cfg, client, None, &mut sink).unwrap();
 
         assert_eq!(code, 1);
         assert!(matches!(

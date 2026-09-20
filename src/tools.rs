@@ -14,6 +14,8 @@ pub const CHECK_TIMEOUT_SECS: u64 = 600;
 const READ_MAX_LINES: usize = 2000;
 const OUTPUT_KEEP_HEAD: usize = 20_000;
 const OUTPUT_KEEP_TAIL: usize = 10_000;
+const GLOB_MAX: usize = 200;
+const LIST_DIR_MAX: usize = 500;
 
 #[derive(Debug, Clone)]
 pub struct ToolCtx {
@@ -26,7 +28,7 @@ pub struct ToolResult {
     pub is_error: bool,
 }
 
-/// JSON schemas for the 7 tools, in registration order.
+/// JSON schemas for the tools, in registration order.
 pub fn tool_schemas() -> Vec<Value> {
     vec![
         json!({
@@ -54,13 +56,14 @@ pub fn tool_schemas() -> Vec<Value> {
         }),
         json!({
             "name": "edit_file",
-            "description": "Exact string replacement in a file. `old` must occur exactly once.",
+            "description": "Exact string replacement in a file. `old` must occur exactly once unless `replace_all` is true, which replaces every occurrence.",
             "input_schema": {
                 "type": "object",
                 "properties": {
                     "path": {"type": "string", "description": "File path relative to cwd"},
                     "old": {"type": "string", "description": "Exact text to replace"},
-                    "new": {"type": "string", "description": "Replacement text"}
+                    "new": {"type": "string", "description": "Replacement text"},
+                    "replace_all": {"type": "boolean", "description": "Replace every occurrence (default false)"}
                 },
                 "required": ["path", "old", "new"]
             }
@@ -86,6 +89,28 @@ pub fn tool_schemas() -> Vec<Value> {
                     "path": {"type": "string", "description": "Optional file or directory to search (default: cwd)"}
                 },
                 "required": ["pattern"]
+            }
+        }),
+        json!({
+            "name": "glob",
+            "description": "Match file paths under the working directory with a glob pattern (e.g. src/**/*.rs). Returns sorted relative paths, capped at 200 with a truncation note.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "pattern": {"type": "string", "description": "Glob pattern, relative to `path` (or cwd)"},
+                    "path": {"type": "string", "description": "Optional base directory relative to cwd (must stay inside cwd)"}
+                },
+                "required": ["pattern"]
+            }
+        }),
+        json!({
+            "name": "list_dir",
+            "description": "List the immediate entries of a directory (default cwd), one per line, directories suffixed with `/`, directories first, sorted. Capped at 500 with a truncation note.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Directory relative to cwd (default: cwd)"}
+                }
             }
         }),
         json!({
@@ -132,6 +157,8 @@ fn inner(ctx: &ToolCtx, name: &str, input: &Value) -> anyhow::Result<ToolResult>
         "edit_file" => edit_file(ctx, input),
         "bash" => bash(ctx, input),
         "grep" => grep(ctx, input),
+        "glob" => glob_tool(ctx, input),
+        "list_dir" => list_dir(ctx, input),
         "update_ledger" => update_ledger(ctx, input),
         "goal_complete" => Ok(ToolResult {
             content: "goal_complete acknowledged. Verification will run; do not assume acceptance until the loop confirms it.".to_string(),
@@ -194,15 +221,33 @@ fn edit_file(ctx: &ToolCtx, input: &Value) -> anyhow::Result<ToolResult> {
     let path = get_path(ctx, input)?;
     let old = get_str(input, "old")?;
     let new = get_str(input, "new")?;
+    let replace_all = input
+        .get("replace_all")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     let data =
         fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
-    let updated = apply_edit(&data, old, new)
-        .map_err(|e| anyhow!("edit_file {}: {e}", path.display()))?;
-    fs::write(&path, &updated).with_context(|| format!("writing {}", path.display()))?;
-    Ok(ToolResult {
-        content: format!("edited {}", path.display()),
-        is_error: false,
-    })
+    if replace_all {
+        let (updated, count) = apply_edit_all(&data, old, new)
+            .map_err(|e| anyhow!("edit_file {}: {e}", path.display()))?;
+        fs::write(&path, &updated).with_context(|| format!("writing {}", path.display()))?;
+        Ok(ToolResult {
+            content: format!(
+                "edited {} (replaced {count} occurrence{})",
+                path.display(),
+                if count == 1 { "" } else { "s" }
+            ),
+            is_error: false,
+        })
+    } else {
+        let updated = apply_edit(&data, old, new)
+            .map_err(|e| anyhow!("edit_file {}: {e}", path.display()))?;
+        fs::write(&path, &updated).with_context(|| format!("writing {}", path.display()))?;
+        Ok(ToolResult {
+            content: format!("edited {}", path.display()),
+            is_error: false,
+        })
+    }
 }
 
 /// Pure string-replacement logic: `old` must match exactly once.
@@ -216,6 +261,18 @@ fn apply_edit(content: &str, old: &str, new: &str) -> Result<String, String> {
         1 => Ok(content.replacen(old, new, 1)),
         n => Err(format!("`old` found {n} times; must match exactly once")),
     }
+}
+
+/// Replace every occurrence, returning the updated text and the count.
+fn apply_edit_all(content: &str, old: &str, new: &str) -> Result<(String, usize), String> {
+    if old.is_empty() {
+        return Err("`old` must not be empty".to_string());
+    }
+    let count = content.matches(old).count();
+    if count == 0 {
+        return Err("`old` not found in file".to_string());
+    }
+    Ok((content.replace(old, new), count))
 }
 
 fn bash(ctx: &ToolCtx, input: &Value) -> anyhow::Result<ToolResult> {
@@ -260,6 +317,97 @@ fn grep(ctx: &ToolCtx, input: &Value) -> anyhow::Result<ToolResult> {
         }
         Err(e) => bail!("spawning rg: {e}"),
     }
+}
+
+fn glob_tool(ctx: &ToolCtx, input: &Value) -> anyhow::Result<ToolResult> {
+    let pattern = get_str(input, "pattern")?;
+    let base: PathBuf = match input.get("path").and_then(Value::as_str) {
+        Some(p) => resolve_safe(&ctx.cwd, p).map_err(|e| anyhow!("{e}"))?,
+        None => ctx.cwd.clone(),
+    };
+    let joined = base.join(pattern);
+    // Same path-safety rules as the other file tools: rejects `..` traversal
+    // and absolute paths outside cwd, lexically, before any globbing happens.
+    resolve_safe(&ctx.cwd, &joined.to_string_lossy()).map_err(|e| anyhow!("{e}"))?;
+    let matched = glob::glob(&joined.to_string_lossy())
+        .map_err(|e| anyhow!("invalid glob pattern: {e}"))?
+        .collect::<Result<Vec<PathBuf>, _>>()
+        .map_err(|e| anyhow!("glob error: {e}"))?;
+    // Safety net: keep only entries lexically inside cwd, reported relative.
+    let relative: Vec<String> = matched
+        .into_iter()
+        .filter(|p| p.starts_with(&ctx.cwd))
+        .filter_map(|p| {
+            p.strip_prefix(&ctx.cwd)
+                .ok()
+                .map(|rel| rel.to_string_lossy().into_owned())
+        })
+        .collect();
+    Ok(ToolResult {
+        content: format_sorted_capped(relative, GLOB_MAX, "matches"),
+        is_error: false,
+    })
+}
+
+fn list_dir(ctx: &ToolCtx, input: &Value) -> anyhow::Result<ToolResult> {
+    let path: PathBuf = match input.get("path").and_then(Value::as_str) {
+        Some(p) => resolve_safe(&ctx.cwd, p).map_err(|e| anyhow!("{e}"))?,
+        None => ctx.cwd.clone(),
+    };
+    let mut entries: Vec<(bool, String)> = Vec::new();
+    for entry in fs::read_dir(&path).with_context(|| format!("reading {}", path.display()))? {
+        let entry = entry.with_context(|| format!("reading {}", path.display()))?;
+        let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
+        entries.push((
+            is_dir,
+            entry.file_name().to_string_lossy().into_owned(),
+        ));
+    }
+    // Directories first, then names, within each group.
+    entries.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+    let names: Vec<String> = entries
+        .into_iter()
+        .map(|(is_dir, name)| if is_dir { format!("{name}/") } else { name })
+        .collect();
+    Ok(ToolResult {
+        content: cap_lines(names, LIST_DIR_MAX),
+        is_error: false,
+    })
+}
+
+/// Sort, cap, and format path/entry listings with a truncation note.
+pub fn format_sorted_capped(mut items: Vec<String>, cap: usize, label: &str) -> String {
+    items.sort();
+    if items.len() <= cap {
+        return if items.is_empty() {
+            format!("no {label}")
+        } else {
+            items.join("\n")
+        };
+    }
+    let total = items.len();
+    items.truncate(cap);
+    format!(
+        "{}\n[truncated: showing first {cap} of {total}]",
+        items.join("\n")
+    )
+}
+
+/// Cap an already-ordered line list, keeping order, with a truncation note.
+pub fn cap_lines(mut lines: Vec<String>, cap: usize) -> String {
+    if lines.len() <= cap {
+        return if lines.is_empty() {
+            "(empty directory)".to_string()
+        } else {
+            lines.join("\n")
+        };
+    }
+    let total = lines.len();
+    lines.truncate(cap);
+    format!(
+        "{}\n[truncated: showing first {cap} of {total} entries]",
+        lines.join("\n")
+    )
 }
 
 fn grep_result(stdout: Vec<u8>, stderr: Vec<u8>, exit_code: Option<i32>) -> ToolResult {
@@ -486,6 +634,132 @@ mod tests {
     #[test]
     fn edit_file_empty_old_errors() {
         assert!(apply_edit("abc", "", "X").is_err());
+    }
+
+    #[test]
+    fn edit_file_replace_all_replaces_every_occurrence() {
+        let (out, count) = apply_edit_all("a-b-c-b", "b", "X").unwrap();
+        assert_eq!(out, "a-X-c-X");
+        assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn edit_file_replace_all_missing_errors() {
+        assert!(apply_edit_all("abc", "zzz", "X").is_err());
+    }
+
+    #[test]
+    fn edit_file_replace_all_empty_old_errors() {
+        assert!(apply_edit_all("abc", "", "X").is_err());
+    }
+
+    #[test]
+    fn edit_file_dispatch_replace_all_returns_count() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("f.txt"), "x y x y x").unwrap();
+        let ctx = ToolCtx { cwd: tmp.path().to_path_buf() };
+        let result = dispatch(
+            &ctx,
+            "edit_file",
+            &json!({"path": "f.txt", "old": "y", "new": "z", "replace_all": true}),
+        );
+        assert!(!result.is_error, "{}", result.content);
+        assert!(result.content.contains("replaced 2 occurrences"));
+        assert_eq!(fs::read_to_string(tmp.path().join("f.txt")).unwrap(), "x z x z x");
+    }
+
+    #[test]
+    fn edit_file_dispatch_default_still_errors_on_multi_match() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("f.txt"), "x y x y x").unwrap();
+        let ctx = ToolCtx { cwd: tmp.path().to_path_buf() };
+        let result = dispatch(
+            &ctx,
+            "edit_file",
+            &json!({"path": "f.txt", "old": "y", "new": "z"}),
+        );
+        assert!(result.is_error);
+        assert!(result.content.contains("found 2 times"));
+        // File untouched.
+        assert_eq!(
+            fs::read_to_string(tmp.path().join("f.txt")).unwrap(),
+            "x y x y x"
+        );
+    }
+
+    #[test]
+    fn glob_matches_nested_patterns_sorted() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::create_dir_all(tmp.path().join("src/deep")).unwrap();
+        fs::write(tmp.path().join("b.rs"), "").unwrap();
+        fs::write(tmp.path().join("src/a.rs"), "").unwrap();
+        fs::write(tmp.path().join("src/deep/c.rs"), "").unwrap();
+        fs::write(tmp.path().join("src/other.txt"), "").unwrap();
+        let ctx = ToolCtx { cwd: tmp.path().to_path_buf() };
+        let result = dispatch(&ctx, "glob", &json!({"pattern": "**/*.rs"}));
+        assert!(!result.is_error, "{}", result.content);
+        let lines: Vec<&str> = result.content.lines().collect();
+        assert_eq!(lines, vec!["b.rs", "src/a.rs", "src/deep/c.rs"]);
+    }
+
+    #[test]
+    fn glob_rejects_path_escape() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ctx = ToolCtx { cwd: tmp.path().to_path_buf() };
+        let result = dispatch(&ctx, "glob", &json!({"pattern": "../../etc/*"}));
+        assert!(result.is_error);
+        assert!(result.content.contains("escapes cwd"), "{}", result.content);
+        // Absolute pattern outside cwd is rejected too.
+        let result = dispatch(&ctx, "glob", &json!({"pattern": "/etc/*"}));
+        assert!(result.is_error);
+        assert!(result.content.contains("escapes cwd"), "{}", result.content);
+    }
+
+    #[test]
+    fn glob_cap_truncation_note() {
+        let items: Vec<String> = (0..250).map(|i| format!("f{i:03}.txt")).collect();
+        let out = format_sorted_capped(items, GLOB_MAX, "matches");
+        let lines: Vec<&str> = out.lines().collect();
+        assert_eq!(lines.len(), GLOB_MAX + 1);
+        assert_eq!(lines[GLOB_MAX], "[truncated: showing first 200 of 250]");
+        assert_eq!(lines[0], "f000.txt");
+        // Under the cap: no note.
+        let out = format_sorted_capped(vec!["a".into()], GLOB_MAX, "matches");
+        assert_eq!(out, "a");
+        let out = format_sorted_capped(Vec::new(), GLOB_MAX, "matches");
+        assert_eq!(out, "no matches");
+    }
+
+    #[test]
+    fn list_dir_dirs_first_with_suffix() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("zfile.txt"), "").unwrap();
+        fs::write(tmp.path().join("afile.txt"), "").unwrap();
+        fs::create_dir_all(tmp.path().join("zdir")).unwrap();
+        fs::create_dir_all(tmp.path().join("adir")).unwrap();
+        let ctx = ToolCtx { cwd: tmp.path().to_path_buf() };
+        let result = dispatch(&ctx, "list_dir", &json!({}));
+        assert!(!result.is_error, "{}", result.content);
+        let lines: Vec<&str> = result.content.lines().collect();
+        assert_eq!(lines, vec!["adir/", "zdir/", "afile.txt", "zfile.txt"]);
+    }
+
+    #[test]
+    fn list_dir_subdirectory_and_cap() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::create_dir_all(tmp.path().join("sub")).unwrap();
+        fs::write(tmp.path().join("sub/f.txt"), "").unwrap();
+        let ctx = ToolCtx { cwd: tmp.path().to_path_buf() };
+        let result = dispatch(&ctx, "list_dir", &json!({"path": "sub"}));
+        assert!(!result.is_error, "{}", result.content);
+        assert_eq!(result.content, "f.txt");
+
+        let lines: Vec<String> = (0..600).map(|i| format!("e{i:03}")).collect();
+        let out = cap_lines(lines, LIST_DIR_MAX);
+        let shown: Vec<&str> = out.lines().collect();
+        assert_eq!(shown.len(), LIST_DIR_MAX + 1);
+        assert!(shown[LIST_DIR_MAX].contains("showing first 500 of 600"));
+        assert_eq!(cap_lines(Vec::new(), LIST_DIR_MAX), "(empty directory)");
     }
 
     #[test]

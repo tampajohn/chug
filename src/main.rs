@@ -1,6 +1,7 @@
 mod api;
 mod driver;
 mod events;
+mod riskgate;
 mod ledger;
 mod tools;
 mod transcript;
@@ -51,6 +52,10 @@ enum CliCommand {
         /// Run the live dashboard UI instead of headless logging.
         #[arg(long)]
         tui: bool,
+        /// Classify every bash command with the laya risk judge before executing
+        /// (blocks destructive commands; fails open when the judge is down).
+        #[arg(long)]
+        risk_gate: bool,
     },
     /// Print the current LEDGER.md.
     Ledger {
@@ -73,7 +78,18 @@ fn main() -> ExitCode {
             max_minutes,
             resume,
             tui,
-        } => cmd_run(spec, goal, cwd, model, max_iters, max_minutes, resume, tui),
+            risk_gate,
+        } => cmd_run(
+            spec,
+            goal,
+            cwd,
+            model,
+            max_iters,
+            max_minutes,
+            resume,
+            tui,
+            risk_gate,
+        ),
     };
     match result {
         Ok(code) => ExitCode::from(code as u8),
@@ -94,6 +110,7 @@ fn cmd_run(
     max_minutes: u64,
     resume: bool,
     tui: bool,
+    risk_gate: bool,
 ) -> anyhow::Result<i32> {
     let cwd = resolve_cwd(cwd)?;
     let spec = spec
@@ -105,7 +122,9 @@ fn cmd_run(
         .unwrap_or_else(|| driver::DEFAULT_MODEL.to_string());
 
     if tui {
-        run_with_tui(spec, goal, cwd, model, max_iters, max_minutes, resume)
+        run_with_tui(
+            spec, goal, cwd, model, max_iters, max_minutes, resume, risk_gate,
+        )
     } else {
         let cfg = driver::RunConfig {
             cwd,
@@ -116,6 +135,7 @@ fn cmd_run(
             max_minutes,
             resume,
             controls: driver::Controls::detached(),
+            risk_gate,
         };
         let mut sink = events::ConsoleSink::new(cfg.cwd.clone());
         driver::run(cfg, &mut sink)
@@ -123,6 +143,7 @@ fn cmd_run(
 }
 
 /// `--tui` mode: worker thread runs the driver, main thread runs the UI.
+#[allow(clippy::too_many_arguments)]
 fn run_with_tui(
     spec: PathBuf,
     goal: String,
@@ -131,6 +152,7 @@ fn run_with_tui(
     max_iters: u32,
     max_minutes: u64,
     resume: bool,
+    risk_gate: bool,
 ) -> anyhow::Result<i32> {
     let (event_tx, event_rx) = mpsc::channel::<events::Event>();
     let (steer_tx, steer_rx) = mpsc::channel::<String>();
@@ -145,6 +167,7 @@ fn run_with_tui(
         max_iters,
         max_minutes,
         resume,
+        risk_gate,
         controls: driver::Controls {
             abort: Arc::clone(&abort),
             steering_rx: steer_rx,
