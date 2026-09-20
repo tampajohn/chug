@@ -10,6 +10,7 @@ mod ledger;
 mod tools;
 mod transcript;
 mod tui;
+mod mcp;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -64,6 +65,12 @@ enum CliCommand {
         /// (default 120).
         #[arg(long)]
         bash_timeout: Option<u64>,
+        /// Path to MCP config JSON. Overrides discovery.
+        #[arg(long)]
+        mcp_config: Option<PathBuf>,
+        /// Disable MCP servers even if config exists.
+        #[arg(long, default_value_t = false)]
+        mcp_off: bool,
     },
     /// Print the current LEDGER.md.
     Ledger {
@@ -97,6 +104,12 @@ enum CliCommand {
         /// (default 120).
         #[arg(long)]
         bash_timeout: Option<u64>,
+        /// Path to MCP config JSON. Overrides discovery.
+        #[arg(long)]
+        mcp_config: Option<PathBuf>,
+        /// Disable MCP servers even if config exists.
+        #[arg(long, default_value_t = false)]
+        mcp_off: bool,
     },
 }
 
@@ -112,6 +125,8 @@ fn main() -> ExitCode {
             resume,
             risk_gate,
             bash_timeout,
+            mcp_config,
+            mcp_off,
         } => cmd_chat(
             cwd,
             model,
@@ -120,6 +135,8 @@ fn main() -> ExitCode {
             resume,
             risk_gate,
             bash_timeout,
+            mcp_config,
+            mcp_off,
         ),
         CliCommand::Run {
             spec,
@@ -132,6 +149,8 @@ fn main() -> ExitCode {
             tui,
             risk_gate,
             bash_timeout,
+            mcp_config,
+            mcp_off,
         } => cmd_run(
             spec,
             goal,
@@ -143,6 +162,8 @@ fn main() -> ExitCode {
             tui,
             risk_gate,
             bash_timeout,
+            mcp_config,
+            mcp_off,
         ),
     };
     match result {
@@ -197,6 +218,8 @@ fn cmd_run(
     tui: bool,
     risk_gate: bool,
     bash_timeout: Option<u64>,
+    mcp_config: Option<PathBuf>,
+    mcp_off: bool,
 ) -> anyhow::Result<i32> {
     let cwd = resolve_cwd(cwd)?;
     let bash_timeout = resolve_bash_timeout(bash_timeout)?;
@@ -211,7 +234,7 @@ fn cmd_run(
     if tui {
         run_with_tui(
             spec, goal, cwd, model, max_iters, max_minutes, resume, risk_gate,
-            bash_timeout,
+            bash_timeout, mcp_config, mcp_off,
         )
     } else {
         let cfg = driver::RunConfig {
@@ -243,6 +266,8 @@ fn run_with_tui(
     resume: bool,
     risk_gate: bool,
     bash_timeout: std::time::Duration,
+    mcp_config: Option<PathBuf>,
+    mcp_off: bool,
 ) -> anyhow::Result<i32> {
     let (event_tx, event_rx) = mpsc::channel::<events::Event>();
     let (steer_tx, steer_rx) = mpsc::channel::<String>();
@@ -305,6 +330,8 @@ fn cmd_chat(
     resume: bool,
     risk_gate: bool,
     bash_timeout: Option<u64>,
+    mcp_config: Option<PathBuf>,
+    mcp_off: bool,
 ) -> anyhow::Result<i32> {
     let cwd = resolve_cwd(cwd)?;
     let bash_timeout = resolve_bash_timeout(bash_timeout)?;
