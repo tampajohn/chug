@@ -1,7 +1,10 @@
 use std::fs;
 use std::io::Read;
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -479,64 +482,130 @@ pub struct ShellOutcome {
     pub timed_out: bool,
 }
 
+/// Grace period for the pipe-reader threads after the process exits or is
+/// killed. A grandchild that escaped the process group (e.g. via setsid) can
+/// hold the pipes open forever; leaking the reader thread is acceptable,
+/// blocking the driver is not.
+const READER_GRACE: Duration = Duration::from_secs(5);
+
 /// Run `sh -c <command>` in `cwd`, capturing stdout+stderr and the exit code.
-/// Drains both pipes on background threads to avoid pipe-buffer deadlock; kills
-/// the child when `timeout` elapses.
+/// Drains both pipes on background threads to avoid pipe-buffer deadlock.
+///
+/// The shell runs in its own process group; when `timeout` elapses the whole
+/// group is SIGKILLed (a plain `child.kill()` would orphan grandchildren that
+/// keep the pipes open and wedge the caller on join). Reader threads are never
+/// joined without a deadline: if a reader has not seen EOF after the grace
+/// period, whatever output was captured is returned with a truncation note.
 pub fn run_shell(cwd: &Path, command: &str, timeout: Duration) -> anyhow::Result<ShellOutcome> {
-    let mut child = Command::new("sh")
+    let mut shell_cmd = Command::new("sh");
+    shell_cmd
         .arg("-c")
         .arg(command)
         .current_dir(cwd)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stderr(Stdio::piped());
+    #[cfg(unix)]
+    shell_cmd.process_group(0);
+    let mut child = shell_cmd
         .spawn()
         .with_context(|| format!("spawning sh -c {command}"))?;
+
+    // Readers hand their buffers over a channel instead of being joined, so a
+    // stuck reader (orphan holding the pipe) can never block the caller.
+    let (out_tx, out_rx) = mpsc::channel::<Vec<u8>>();
+    let (err_tx, err_rx) = mpsc::channel::<Vec<u8>>();
     let mut out_pipe = child.stdout.take().context("stdout not captured")?;
     let mut err_pipe = child.stderr.take().context("stderr not captured")?;
-    let out_handle = thread::spawn(move || {
+    thread::spawn(move || {
         let mut buf = Vec::new();
         let _ = out_pipe.read_to_end(&mut buf);
-        buf
+        let _ = out_tx.send(buf);
     });
-    let err_handle = thread::spawn(move || {
+    thread::spawn(move || {
         let mut buf = Vec::new();
         let _ = err_pipe.read_to_end(&mut buf);
-        buf
+        let _ = err_tx.send(buf);
     });
 
     let deadline = Instant::now() + timeout;
+    let mut timed_out = false;
+    let exit_code;
     loop {
         match child.try_wait()? {
             Some(status) => {
-                let stdout = out_handle.join().unwrap_or_default();
-                let stderr = err_handle.join().unwrap_or_default();
-                return Ok(ShellOutcome {
-                    exit_code: status.code(),
-                    output: combine_out_err(&stdout, &stderr),
-                    timed_out: false,
-                });
+                exit_code = status.code();
+                break;
             }
             None => {
                 if Instant::now() >= deadline {
-                    let _ = child.kill();
+                    kill_process_group(&mut child);
                     let _ = child.wait();
-                    let stdout = out_handle.join().unwrap_or_default();
-                    let stderr = err_handle.join().unwrap_or_default();
-                    return Ok(ShellOutcome {
-                        exit_code: None,
-                        output: format!(
-                            "timed out after {}s\n{}",
-                            timeout.as_secs(),
-                            combine_out_err(&stdout, &stderr)
-                        ),
-                        timed_out: true,
-                    });
-                } else {
-                    thread::sleep(Duration::from_millis(50));
+                    exit_code = None;
+                    timed_out = true;
+                    break;
                 }
+                thread::sleep(Duration::from_millis(50));
             }
         }
+    }
+
+    // Both capped waits run concurrently so total wait <= READER_GRACE.
+    let out_waiter = thread::spawn(move || recv_capped(out_rx));
+    let err_waiter = thread::spawn(move || recv_capped(err_rx));
+    let (stdout, out_drained) = out_waiter.join().unwrap_or((Vec::new(), true));
+    let (stderr, err_drained) = err_waiter.join().unwrap_or((Vec::new(), true));
+    let mut body = combine_out_err(&stdout, &stderr);
+    if !out_drained || !err_drained {
+        let note = if timed_out {
+            "(output truncated: reader did not drain after kill)"
+        } else {
+            "(output truncated: reader did not drain)"
+        };
+        if !body.is_empty() {
+            body.push('\n');
+        }
+        body.push_str(note);
+    }
+    let output = if timed_out {
+        format!(
+            "timed out after {}s (process group killed)\n{body}",
+            timeout.as_secs()
+        )
+    } else {
+        body
+    };
+    Ok(ShellOutcome {
+        exit_code,
+        output,
+        timed_out,
+    })
+}
+
+/// Kill the child's whole process group (the child is the group leader via
+/// `process_group(0)`), falling back to killing just the direct child on
+/// platforms without process groups.
+fn kill_process_group(child: &mut std::process::Child) {
+    #[cfg(unix)]
+    {
+        let pgid = child.id() as i32;
+        // Negative pid targets the entire process group.
+        unsafe {
+            libc::kill(-pgid, libc::SIGKILL);
+        }
+    }
+    // Belt and braces: also kill the direct child (no-op if the group kill got it).
+    let _ = child.kill();
+}
+
+/// Wait up to [`READER_GRACE`] for one reader buffer; never blocks longer.
+/// Returns `(buffer, drained)` where `drained` is false when the grace period
+/// expired with the pipe still held open by an escaped process.
+fn recv_capped(rx: mpsc::Receiver<Vec<u8>>) -> (Vec<u8>, bool) {
+    match rx.recv_timeout(READER_GRACE) {
+        Ok(buf) => (buf, true),
+        Err(mpsc::RecvTimeoutError::Timeout) => (Vec::new(), false),
+        Err(mpsc::RecvTimeoutError::Disconnected) => (Vec::new(), true),
     }
 }
 
@@ -773,5 +842,92 @@ mod tests {
     #[test]
     fn truncate_middle_noop_under_cap() {
         assert_eq!(truncate_middle("short", 100, 50), "short");
+    }
+
+    /// Regression: a backgrounded grandchild in the shell's own process group
+    /// must be killed with the GROUP at timeout — before the fix only the
+    /// direct `sh` child died, the orphan held the stdout pipe, and the reader
+    /// join blocked the driver forever. The call must return shortly after
+    /// timeout + reader grace, with a timeout error.
+    #[test]
+    fn run_shell_timeout_kills_process_group_and_returns() {
+        let tmp = tempfile::tempdir().unwrap();
+        let timeout = Duration::from_secs(1);
+        let start = Instant::now();
+        let outcome = run_shell(tmp.path(), "sleep 300 & wait", timeout).unwrap();
+        let elapsed = start.elapsed();
+
+        assert!(outcome.timed_out);
+        assert!(outcome.exit_code.is_none());
+        assert!(
+            outcome.output.contains("timed out after 1s (process group killed)"),
+            "output: {}",
+            outcome.output
+        );
+        // Well under the 300s the orphan would have kept us blocked for; the
+        // group kill closed the pipes, so the readers drained immediately
+        // (well inside timeout + grace + slack).
+        assert!(
+            elapsed < timeout + READER_GRACE + Duration::from_secs(5),
+            "run_shell blocked for {elapsed:?}"
+        );
+    }
+
+    /// Regression: a setsid-escaped grandchild keeps the stdout pipe open after
+    /// the process group is killed, so the reader never sees EOF. run_shell must
+    /// still return (capped reader wait), reporting partial output plus a
+    /// truncation note. (macOS ships no `setsid` binary, so the escapee detaches
+    /// via python's os.setsid(); the mechanism under test — a session leader
+    /// outside the killed group holding the inherited pipe — is identical.)
+    #[test]
+    fn run_shell_returns_when_setsid_grandchild_holds_pipe() {
+        let tmp = tempfile::tempdir().unwrap();
+        let timeout = Duration::from_secs(1);
+        let escapee = "python3 -c \"import os, time; os.setsid(); print('held'); time.sleep(60)\"";
+        let command = format!("{escapee} & sleep 300");
+        let start = Instant::now();
+        let outcome = run_shell(tmp.path(), &command, timeout).unwrap();
+        let elapsed = start.elapsed();
+
+        assert!(outcome.timed_out);
+        assert!(
+            outcome
+                .output
+                .contains("timed out after 1s (process group killed)"),
+            "output: {}",
+            outcome.output
+        );
+        // The shell (foreground `sleep 300`) stayed alive past the timeout — the
+        // group kill fired — and the setsid escapee kept the pipe open, so the
+        // readers hit the grace cap instead of EOF. Must return right around
+        // timeout + grace, not hang for the escapee's lifetime.
+        assert!(
+            elapsed >= timeout,
+            "returned before the timeout fired: {elapsed:?}"
+        );
+        assert!(
+            elapsed < timeout + READER_GRACE + Duration::from_secs(3),
+            "run_shell blocked for {elapsed:?}"
+        );
+        assert!(
+            outcome
+                .output
+                .contains("(output truncated: reader did not drain after kill)"),
+            "output: {}",
+            outcome.output
+        );
+    }
+
+    /// Fast path sanity: a normal command still completes with its real exit
+    /// code and full output (readers drain via the channel without EOF issues).
+    #[test]
+    fn run_shell_normal_path_unchanged() {
+        let tmp = tempfile::tempdir().unwrap();
+        let outcome = run_shell(tmp.path(), "echo hi; exit 3", Duration::from_secs(10)).unwrap();
+        assert!(!outcome.timed_out);
+        assert_eq!(outcome.exit_code, Some(3));
+        // run_shell returns the raw combined output (the bash tool wrapper
+        // appends the exit-code line); stdout keeps its trailing newline.
+        assert_eq!(outcome.output, "hi\n");
     }
 }
