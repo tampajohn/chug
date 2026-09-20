@@ -1,4 +1,3 @@
-use std::env;
 use std::thread;
 use std::time::Duration;
 
@@ -9,7 +8,6 @@ use serde_json::{Value, json};
 const MAX_TOKENS: u32 = 8192;
 const READ_TIMEOUT_SECS: u64 = 600;
 const ANTHROPIC_VERSION: &str = "2023-06-01";
-const DEFAULT_BASE_URL: &str = "https://api.anthropic.com";
 /// Exponential backoff between failed attempts: 1s, 2s, 4s, 8s (4 attempts total).
 const RETRY_DELAYS_SECS: [u64; 4] = [1, 2, 4, 8];
 
@@ -192,12 +190,10 @@ impl Response {
 
 impl Client {
     pub fn new(model: &str) -> anyhow::Result<Self> {
-        let base_url = env_nonempty("ANTHROPIC_BASE_URL").unwrap_or_else(|| DEFAULT_BASE_URL.to_string());
-        let api_key = env_nonempty("ANTHROPIC_API_KEY");
-        let auth_token = env_nonempty("ANTHROPIC_AUTH_TOKEN");
-        if api_key.is_none() && auth_token.is_none() {
-            bail!("no API credentials: set ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN");
-        }
+        // Endpoint + credentials: process env first, then the `env` block of
+        // ~/.claude/settings.json, then the api.anthropic.com default
+        // (base URL only). Resolution lives in auth.rs.
+        let ep = crate::auth::resolve_endpoint()?;
         let http = reqwest::blocking::Client::builder()
             .timeout(Duration::from_secs(READ_TIMEOUT_SECS))
             .use_rustls_tls()
@@ -205,9 +201,9 @@ impl Client {
             .context("building HTTP client")?;
         Ok(Self {
             http,
-            base_url,
-            api_key,
-            auth_token,
+            base_url: ep.base_url,
+            api_key: ep.api_key,
+            auth_token: ep.auth_token,
             model: model.to_string(),
         })
     }
@@ -222,7 +218,7 @@ impl Client {
                 .use_rustls_tls()
                 .build()
                 .context("building HTTP client")?,
-            base_url: DEFAULT_BASE_URL.to_string(),
+            base_url: crate::auth::DEFAULT_BASE_URL.to_string(),
             api_key: None,
             auth_token: None,
             model: model.to_string(),
@@ -299,10 +295,6 @@ impl Client {
         }
         Ok(req.json(body).send()?)
     }
-}
-
-fn env_nonempty(name: &str) -> Option<String> {
-    env::var(name).ok().filter(|v| !v.trim().is_empty())
 }
 
 fn preview(s: &str, max_chars: usize) -> String {
