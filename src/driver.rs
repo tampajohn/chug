@@ -6,11 +6,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
 
-use anyhow::Context;
+use anyhow::{Context, bail};
 use serde_json::{Value, json};
 
-use crate::api::{Client, ContentBlock, KnownBlock, Message};
-use crate::events::{Event, EventSink};
+use crate::api::{Client, ContentBlock, KnownBlock, Llm, Message};
+use crate::events::{Event, EventSink, TurnEndReason};
 use crate::ledger;
 use crate::riskgate::{GateDecision, LayaJudge, RiskGate};
 use crate::tools::{self, ToolCtx, ToolResult};
@@ -19,6 +19,9 @@ use crate::transcript;
 pub const DEFAULT_MODEL: &str = "claude-sonnet-4-6";
 
 const PREAMBLE: &str = "You are chug, an autonomous coding agent driven by a code loop, not a conversation. Work in small, verified steps. After each step, update LEDGER.md with the update_ledger tool (what is done, what is next, any blockers). Verify your work by running builds/tests before claiming success. Never declare the goal complete without running the relevant checks. When the goal is fully met and verified, call the goal_complete tool with a short summary.";
+
+/// Chat-mode harness preamble: the user is present and drives turn by turn.
+const CHAT_PREAMBLE: &str = "You are chug in an interactive session; work the user's current objective; when it is done, stop — the user will give the next objective. Work in small, verified steps. After each step, update LEDGER.md with the update_ledger tool (what is done, what is next, any blockers). Verify your work by running builds/tests before claiming success. When the objective is fully met and verified, call the goal_complete tool with a short summary; otherwise simply stop.";
 
 const KICK: &str = "Ledger and goal are above. You have not called goal_complete. Continue with the next ledger item, or update the ledger if the plan changed.";
 
@@ -68,6 +71,73 @@ impl Default for Controls {
     }
 }
 
+/// The two loop personalities: `run` (process exits on completion) and `chat`
+/// (a turn ends, control returns to the user).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Mode {
+    Autonomous,
+    Chat,
+}
+
+/// Live-tunable session knobs a chat turn re-reads at every iteration
+/// boundary; slash commands mutate these mid-turn. In autonomous mode they
+/// are fixed for the whole run.
+pub struct TurnKnobs {
+    /// Spec file injected into the system prompt (re-read every iteration).
+    pub spec_path: Option<PathBuf>,
+    /// Persistent goal injected into the system prompt (chat: `/goal`).
+    pub goal: Option<String>,
+    /// Verification command gating `goal_complete` (chat: `/check`; run mode
+    /// parses the spec's `check:` line instead).
+    pub check_cmd: Option<String>,
+    /// Per-turn (or per-run) iteration budget.
+    pub max_iters: u32,
+    /// Per-turn (or per-run) wall-clock budget in minutes.
+    pub max_minutes: u64,
+}
+
+/// Mid-turn session updates, parsed from slash commands UI-side and applied
+/// by the loop at the next iteration boundary.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SlashUpdate {
+    Spec(Option<PathBuf>),
+    Goal(Option<String>),
+    Check(Option<String>),
+    Model(String),
+    Budget { iters: u32, minutes: u64 },
+}
+
+/// Apply one slash-command update to the session knobs (and the API client
+/// for model switches, which affect subsequent calls only).
+pub fn apply_slash_update(knobs: &mut TurnKnobs, client: &mut dyn Llm, update: SlashUpdate) {
+    match update {
+        SlashUpdate::Spec(path) => knobs.spec_path = path,
+        SlashUpdate::Goal(goal) => knobs.goal = goal,
+        SlashUpdate::Check(cmd) => knobs.check_cmd = cmd,
+        SlashUpdate::Model(model) => client.set_model(&model),
+        SlashUpdate::Budget { iters, minutes } => {
+            knobs.max_iters = iters;
+            knobs.max_minutes = minutes;
+        }
+    }
+}
+
+/// What a finished drive_loop invocation produced.
+enum DriveOutcome {
+    /// Autonomous run finished; value is the process exit code.
+    RunFinished(i32),
+    /// Chat turn ended; the chat loop returns to idle.
+    TurnEnded(TurnEndReason),
+}
+
+/// Shared, mode-independent context for one drive_loop invocation.
+struct LoopCtx<'a> {
+    cwd: &'a Path,
+    mode: Mode,
+    controls: &'a Controls,
+    updates: &'a Receiver<SlashUpdate>,
+}
+
 enum VerifyOutcome {
     Accepted,
     Failed(String),
@@ -90,13 +160,11 @@ fn run_loop(
     mut gate: Option<RiskGate>,
     sink: &mut dyn EventSink,
 ) -> anyhow::Result<i32> {
-    let tool_schemas = tools::tool_schemas();
-    let ctx = ToolCtx { cwd: cfg.cwd.clone() };
-
+    let mut client = client;
     ledger::ensure_seeded(&cfg.cwd)?;
 
     let mut messages: Vec<Message> = if cfg.resume {
-        transcript::load(&cfg.cwd)?
+        resume_messages(&cfg.cwd)?
     } else {
         Vec::new()
     };
@@ -108,35 +176,136 @@ fn run_loop(
         transcript::append(&cfg.cwd, &first)?;
         messages.push(first);
     }
-    // On resume, trim before continuing so an over-large transcript starts compact.
-    if cfg.resume && transcript_trim(&mut messages) {
-        transcript::rewrite(&cfg.cwd, &messages)?;
-    }
 
-    let mut spec_text = fs::read_to_string(&cfg.spec_path)
+    // The spec must be readable at startup; afterwards the loop keeps the last
+    // good copy if it becomes unreadable mid-run.
+    let initial_spec = fs::read_to_string(&cfg.spec_path)
         .with_context(|| format!("reading spec {}", cfg.spec_path.display()))?;
 
+    let mut knobs = TurnKnobs {
+        spec_path: Some(cfg.spec_path.clone()),
+        goal: Some(cfg.goal.clone()),
+        check_cmd: None, // autonomous mode parses the spec's `check:` line
+        max_iters: cfg.max_iters,
+        max_minutes: cfg.max_minutes,
+    };
+    let (_update_tx, update_rx) = mpsc::channel::<SlashUpdate>();
+    let ctx = LoopCtx {
+        cwd: &cfg.cwd,
+        mode: Mode::Autonomous,
+        controls: &cfg.controls,
+        updates: &update_rx,
+    };
+    match drive_loop(
+        &ctx,
+        &mut knobs,
+        &mut client,
+        &mut gate,
+        &mut messages,
+        Some(initial_spec),
+        sink,
+    )? {
+        DriveOutcome::RunFinished(code) => Ok(code),
+        DriveOutcome::TurnEnded(_) => bail!("chat turn outcome in autonomous mode"),
+    }
+}
+
+/// Load the transcript for a resumed session, trimming it first if it is over
+/// the token budget so an over-large transcript starts compact.
+pub fn resume_messages(cwd: &Path) -> anyhow::Result<Vec<Message>> {
+    let mut messages = transcript::load(cwd)?;
+    if !messages.is_empty() && transcript_trim(&mut messages) {
+        transcript::rewrite(cwd, &messages)?;
+    }
+    Ok(messages)
+}
+
+/// Run one chat turn: iterate until a natural stop, an accepted
+/// `goal_complete`, an operator interrupt, or an exhausted per-turn budget.
+/// Budgets reset on every call; `messages` (and the transcript on disk)
+/// persist across turns.
+#[allow(clippy::too_many_arguments)]
+pub fn run_turn(
+    cwd: &Path,
+    client: &mut dyn Llm,
+    gate: &mut Option<RiskGate>,
+    messages: &mut Vec<Message>,
+    controls: &Controls,
+    updates: &Receiver<SlashUpdate>,
+    knobs: &mut TurnKnobs,
+    sink: &mut dyn EventSink,
+) -> anyhow::Result<TurnEndReason> {
+    let ctx = LoopCtx {
+        cwd,
+        mode: Mode::Chat,
+        controls,
+        updates,
+    };
+    match drive_loop(&ctx, knobs, client, gate, messages, None, sink)? {
+        DriveOutcome::TurnEnded(reason) => Ok(reason),
+        DriveOutcome::RunFinished(_) => bail!("autonomous run outcome in chat mode"),
+    }
+}
+
+/// The iteration loop shared by `run` and chat turns. Behavior differences:
+/// - Autonomous: natural stop triggers the anti-stall kick; aborts return a
+///   process exit code. Chat: natural stop ends the turn; aborts return a
+///   `TurnEndReason`.
+/// - `goal_complete` verification: autonomous parses the spec's `check:` line,
+///   chat uses the `/check` command configured in the knobs.
+#[allow(clippy::too_many_arguments)]
+fn drive_loop(
+    ctx: &LoopCtx,
+    knobs: &mut TurnKnobs,
+    client: &mut dyn Llm,
+    gate: &mut Option<RiskGate>,
+    messages: &mut Vec<Message>,
+    initial_spec: Option<String>,
+    sink: &mut dyn EventSink,
+) -> anyhow::Result<DriveOutcome> {
+    let tool_schemas = tools::tool_schemas();
+    let tool_ctx = ToolCtx {
+        cwd: ctx.cwd.to_path_buf(),
+    };
+    // Budgets are per invocation: per run in autonomous mode, per turn in chat.
     let start = Instant::now();
     let mut iteration: u32 = 0;
+    let mut spec_text = initial_spec;
     let mut recent: VecDeque<ToolResult> = VecDeque::with_capacity(STUCK_WINDOW);
     let (mut usage_in, mut usage_out) = (0u64, 0u64);
 
     loop {
-        if iteration >= cfg.max_iters {
-            return abort_run(&cfg.cwd, "iteration budget exceeded", 1, sink);
+        if iteration >= knobs.max_iters {
+            return abort_exit(
+                ctx,
+                "iteration budget exceeded",
+                TurnEndReason::BudgetExceeded,
+                1,
+                sink,
+            );
         }
-        if start.elapsed() >= Duration::from_secs(cfg.max_minutes.saturating_mul(60)) {
-            return abort_run(&cfg.cwd, "time budget exceeded", 1, sink);
+        if start.elapsed() >= Duration::from_secs(knobs.max_minutes.saturating_mul(60)) {
+            return abort_exit(
+                ctx,
+                "time budget exceeded",
+                TurnEndReason::BudgetExceeded,
+                1,
+                sink,
+            );
         }
-        if cfg.controls.abort.load(Ordering::SeqCst) {
-            return abort_run(&cfg.cwd, "operator abort", 1, sink);
+        if ctx.controls.abort.load(Ordering::SeqCst) {
+            let reason = match ctx.mode {
+                Mode::Autonomous => "operator abort",
+                Mode::Chat => "operator interrupt",
+            };
+            return abort_exit(ctx, reason, TurnEndReason::Interrupted, 1, sink);
         }
 
         // Steering notes queued by the operator are consumed here, at the
         // iteration boundary, before the next LLM call.
-        let notes = drain_steering(&cfg.controls.steering_rx);
+        let notes = drain_steering(&ctx.controls.steering_rx);
         if !notes.is_empty() {
-            append_steering_notes(&cfg.cwd, &mut messages, &notes, sink)?;
+            append_steering_notes(ctx.cwd, messages, &notes, sink)?;
             // Operator override: `allow destructive` disables the risk gate
             // for the remainder of the run.
             if notes.iter().any(|n| is_allow_destructive(n))
@@ -146,21 +315,40 @@ fn run_loop(
             }
         }
 
+        // Slash-command updates queued by the UI are applied here, so model /
+        // budget / spec / goal / check changes affect subsequent API calls.
+        while let Ok(update) = ctx.updates.try_recv() {
+            apply_slash_update(knobs, client, update);
+        }
+
         // Re-read spec every iteration: the user may edit it mid-run. Keep the
         // last good copy if it becomes unreadable.
-        if let Ok(text) = fs::read_to_string(&cfg.spec_path) {
-            spec_text = text;
+        if let Some(spec_path) = &knobs.spec_path
+            && let Ok(text) = fs::read_to_string(spec_path)
+        {
+            spec_text = Some(text);
         }
-        let ledger_text = ledger::read(&cfg.cwd)?;
-        let system = build_system_prompt(&spec_text, &cfg.goal, &ledger_text);
+        let ledger_text = ledger::read(ctx.cwd)?;
+        let system = match ctx.mode {
+            Mode::Autonomous => build_system_prompt(
+                spec_text.as_deref().unwrap_or_default(),
+                knobs.goal.as_deref().unwrap_or_default(),
+                &ledger_text,
+            ),
+            Mode::Chat => build_chat_system_prompt(
+                spec_text.as_deref(),
+                knobs.goal.as_deref(),
+                &ledger_text,
+            ),
+        };
 
         sink.emit(Event::LedgerChanged(ledger_text.clone()));
         sink.emit(Event::Iteration {
             n: iteration + 1,
-            max: cfg.max_iters,
+            max: knobs.max_iters,
             messages: messages.len() as u32,
         });
-        let resp = client.complete(&system, &messages, &tool_schemas)?;
+        let resp = client.complete(&system, messages, &tool_schemas)?;
 
         let usage = resp.body.get("usage").cloned().unwrap_or(Value::Null);
         usage_in += usage
@@ -179,7 +367,7 @@ fn run_loop(
         // Store the assistant message verbatim (text, thinking, tool_use, and
         // any unknown block types) so multi-turn echo stays valid.
         let assistant = Message::assistant(resp.content_blocks());
-        transcript::append(&cfg.cwd, &assistant)?;
+        transcript::append(ctx.cwd, &assistant)?;
         let model_text = resp.text();
         if !model_text.is_empty() {
             sink.emit(Event::ModelText(model_text));
@@ -205,13 +393,13 @@ fn run_loop(
                             is_error: true,
                         },
                         // Allowed, no command field, or no gate: execute.
-                        _ => tools::dispatch(&ctx, name, input),
+                        _ => tools::dispatch(&tool_ctx, name, input),
                     }
                 } else {
-                    tools::dispatch(&ctx, name, input)
+                    tools::dispatch(&tool_ctx, name, input)
                 }
             } else {
-                tools::dispatch(&ctx, name, input)
+                tools::dispatch(&tool_ctx, name, input)
             };
             sink.emit(Event::ToolResult {
                 name: name.to_string(),
@@ -240,17 +428,33 @@ fn run_loop(
         }
 
         if tool_count == 0 {
+            if ctx.mode == Mode::Chat {
+                // Natural stop ends the turn: the user is present and judges
+                // completeness. The assistant message stays the last entry.
+                messages.push(assistant);
+                return Ok(DriveOutcome::TurnEnded(TurnEndReason::Completed));
+            }
             // Model stopped talking without finishing — the anti-stall kick.
             user_blocks.push(ContentBlock::text_block(KICK));
-        } else if goal_summary.is_some() {
-            match verify(&cfg.cwd, &spec_text, sink)? {
+        } else if let Some(summary) = goal_summary {
+            // Autonomous: the spec's `check:` line. Chat: the `/check` command.
+            let check_cmd = match ctx.mode {
+                Mode::Autonomous => spec_text.as_deref().and_then(parse_check_command),
+                Mode::Chat => knobs.check_cmd.clone(),
+            };
+            match verify(ctx.cwd, check_cmd.as_deref(), sink)? {
                 VerifyOutcome::NoCheck | VerifyOutcome::Accepted => {
                     let user_msg = Message::user(user_blocks);
-                    transcript::append(&cfg.cwd, &user_msg)?;
-                    sink.emit(Event::GoalAccepted {
-                        summary: goal_summary.unwrap_or_default(),
-                    });
-                    return Ok(0);
+                    transcript::append(ctx.cwd, &user_msg)?;
+                    sink.emit(Event::GoalAccepted { summary });
+                    if ctx.mode == Mode::Chat {
+                        // Keep full history so the next turn continues the
+                        // same conversation.
+                        messages.push(assistant);
+                        messages.push(user_msg);
+                        return Ok(DriveOutcome::TurnEnded(TurnEndReason::GoalAccepted));
+                    }
+                    return Ok(DriveOutcome::RunFinished(0));
                 }
                 VerifyOutcome::Failed(output) => {
                     sink.emit(Event::GoalRejected {
@@ -265,15 +469,15 @@ fn run_loop(
 
         messages.push(assistant);
         let user_msg = Message::user(user_blocks);
-        transcript::append(&cfg.cwd, &user_msg)?;
+        transcript::append(ctx.cwd, &user_msg)?;
         messages.push(user_msg);
 
         if is_stuck(recent.make_contiguous()) {
-            return abort_run(&cfg.cwd, "stuck: repeated error", 2, sink);
+            return abort_exit(ctx, "stuck: repeated error", TurnEndReason::Interrupted, 2, sink);
         }
 
-        if transcript_trim(&mut messages) {
-            transcript::rewrite(&cfg.cwd, &messages)?;
+        if transcript_trim(messages) {
+            transcript::rewrite(ctx.cwd, messages)?;
         }
 
         iteration += 1;
@@ -310,19 +514,21 @@ fn append_steering_notes(
     Ok(())
 }
 
-/// Verification on `goal_complete`: run the spec's `check:` command if present.
+/// Verification on `goal_complete`: run the configured check command, if any.
+/// Autonomous mode parses the command from the spec's `check:` line; chat mode
+/// uses the `/check` setting. No configured command means unverified accept.
 fn verify(
     cwd: &Path,
-    spec_text: &str,
+    check_cmd: Option<&str>,
     sink: &mut dyn EventSink,
 ) -> anyhow::Result<VerifyOutcome> {
-    let Some(command) = parse_check_command(spec_text) else {
+    let Some(command) = check_cmd else {
         return Ok(VerifyOutcome::NoCheck);
     };
     sink.emit(Event::Verifying {
-        cmd: command.clone(),
+        cmd: command.to_string(),
     });
-    let outcome = tools::run_shell(cwd, &command, Duration::from_secs(tools::CHECK_TIMEOUT_SECS))?;
+    let outcome = tools::run_shell(cwd, command, Duration::from_secs(tools::CHECK_TIMEOUT_SECS))?;
     if !outcome.timed_out && outcome.exit_code == Some(0) {
         return Ok(VerifyOutcome::Accepted);
     }
@@ -414,20 +620,47 @@ pub fn build_system_prompt(spec: &str, goal: &str, ledger_text: &str) -> String 
     format!("{PREAMBLE}\n\n## Spec\n\n{spec}\n\n## Goal\n\n{goal}\n\n## Ledger\n\n{ledger_text}")
 }
 
-fn abort_run(
-    cwd: &Path,
+/// Chat-mode system prompt: interactive preamble, optional spec and goal
+/// sections (only when configured), ledger as today. The current objective is
+/// the final user message, never part of the system prompt.
+pub fn build_chat_system_prompt(
+    spec: Option<&str>,
+    goal: Option<&str>,
+    ledger_text: &str,
+) -> String {
+    let mut prompt = CHAT_PREAMBLE.to_string();
+    if let Some(spec) = spec {
+        prompt.push_str(&format!("\n\n## Spec\n\n{spec}"));
+    }
+    if let Some(goal) = goal {
+        prompt.push_str(&format!("\n\n## Goal\n\n{goal}"));
+    }
+    prompt.push_str(&format!("\n\n## Ledger\n\n{ledger_text}"));
+    prompt
+}
+
+/// Shared abort tail: push the freshest ledger, then the Aborted event, then
+/// map to the mode-appropriate outcome (exit code for `run`, turn-end for
+/// chat). `turn_reason` is only used in chat mode.
+fn abort_exit(
+    ctx: &LoopCtx,
     reason: &str,
+    turn_reason: TurnEndReason,
     code: i32,
     sink: &mut dyn EventSink,
-) -> anyhow::Result<i32> {
+) -> anyhow::Result<DriveOutcome> {
     // Push the freshest ledger before the abort event so the sink prints the
     // same contents a direct read would (ConsoleSink caches from events).
-    let ledger_text = ledger::read(cwd).unwrap_or_else(|_| "(ledger unavailable)".to_string());
+    let ledger_text =
+        ledger::read(ctx.cwd).unwrap_or_else(|_| "(ledger unavailable)".to_string());
     sink.emit(Event::LedgerChanged(ledger_text));
     sink.emit(Event::Aborted {
         reason: reason.to_string(),
     });
-    Ok(code)
+    Ok(match ctx.mode {
+        Mode::Autonomous => DriveOutcome::RunFinished(code),
+        Mode::Chat => DriveOutcome::TurnEnded(turn_reason),
+    })
 }
 
 #[cfg(test)]

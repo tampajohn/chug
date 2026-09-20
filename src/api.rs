@@ -127,6 +127,34 @@ pub struct Client {
     model: String,
 }
 
+/// The driver-facing slice of the Messages API client. A trait so driver and
+/// chat tests can script responses without any network. `&mut self` so test
+/// doubles can consume scripted responses.
+pub trait Llm {
+    fn complete(
+        &mut self,
+        system: &str,
+        messages: &[Message],
+        tools: &[Value],
+    ) -> anyhow::Result<Response>;
+    fn set_model(&mut self, model: &str);
+}
+
+impl Llm for Client {
+    fn complete(
+        &mut self,
+        system: &str,
+        messages: &[Message],
+        tools: &[Value],
+    ) -> anyhow::Result<Response> {
+        Client::complete(self, system, messages, tools)
+    }
+
+    fn set_model(&mut self, model: &str) {
+        Client::set_model(self, model);
+    }
+}
+
 #[derive(Debug)]
 pub struct Response {
     pub body: Value,
@@ -199,6 +227,16 @@ impl Client {
             auth_token: None,
             model: model.to_string(),
         })
+    }
+
+    /// Swap the model id used by subsequent `complete` calls (chat `/model`).
+    pub fn set_model(&mut self, model: &str) {
+        self.model = model.to_string();
+    }
+
+    #[cfg(test)]
+    pub fn model(&self) -> &str {
+        &self.model
     }
 
     /// One non-streaming Messages API call with retry/backoff on non-200.
@@ -276,6 +314,54 @@ fn preview(s: &str, max_chars: usize) -> String {
     }
 }
 
+/// Test double: replays scripted response bodies and records every call, so
+/// driver/chat state-machine tests run without network.
+#[cfg(test)]
+pub struct ScriptedLlm {
+    pub responses: std::collections::VecDeque<Value>,
+    pub calls: Vec<(String, Vec<Message>)>,
+    pub model: String,
+    /// When set, every `complete` call raises this flag before returning —
+    /// lets tests trigger a deterministic mid-turn operator interrupt.
+    pub abort_on_call: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+}
+
+#[cfg(test)]
+impl ScriptedLlm {
+    pub fn new(responses: Vec<Value>) -> Self {
+        ScriptedLlm {
+            responses: responses.into(),
+            calls: Vec::new(),
+            model: "scripted-model".to_string(),
+            abort_on_call: None,
+        }
+    }
+}
+
+#[cfg(test)]
+impl Llm for ScriptedLlm {
+    fn complete(
+        &mut self,
+        system: &str,
+        messages: &[Message],
+        _tools: &[Value],
+    ) -> anyhow::Result<Response> {
+        self.calls.push((system.to_string(), messages.to_vec()));
+        if let Some(flag) = &self.abort_on_call {
+            flag.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+        let body = self
+            .responses
+            .pop_front()
+            .ok_or_else(|| anyhow::anyhow!("ScriptedLlm: no scripted response left"))?;
+        Ok(Response { body })
+    }
+
+    fn set_model(&mut self, model: &str) {
+        self.model = model.to_string();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -318,6 +404,14 @@ mod tests {
         assert_eq!(tool_uses[0].2["command"], "ls");
         assert_eq!(resp.text(), "hello");
         assert_eq!(resp.stop_reason().as_deref(), Some("tool_use"));
+    }
+
+    #[test]
+    fn set_model_swaps_the_model_id() {
+        let mut client = Client::new_without_credentials("first-model").unwrap();
+        assert_eq!(client.model(), "first-model");
+        client.set_model("second-model");
+        assert_eq!(client.model(), "second-model");
     }
 
     #[test]

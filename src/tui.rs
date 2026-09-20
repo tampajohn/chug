@@ -12,7 +12,9 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 use ratatui::{Frame, Terminal};
 
-use crate::events::Event;
+use crate::chat::{self, ChatState, SlashCommand};
+use crate::driver::SlashUpdate;
+use crate::events::{Event, TurnEndReason};
 
 /// Sink used by the driver thread: forwards events to the UI thread.
 pub struct TuiSink {
@@ -34,6 +36,32 @@ pub struct TuiConfig {
     pub steering_tx: Sender<String>,
     /// Set by the worker thread when the driver loop returns.
     pub driver_done: Arc<AtomicBool>,
+    /// Chat-mode wiring; `None` in `run` mode.
+    pub chat: Option<ChatWiring>,
+}
+
+/// Channels + session constants the chat-mode UI needs.
+pub struct ChatWiring {
+    pub cwd: std::path::PathBuf,
+    /// Current per-turn budgets (iters, minutes); updated by `/budget`.
+    pub budget: (u32, u64),
+    pub objective_tx: Sender<String>,
+    pub update_tx: Sender<SlashUpdate>,
+}
+
+/// Chat-mode UI state: the Idle/Working state machine plus the channels used
+/// to submit objectives and slash-command updates to the worker.
+pub struct ChatUi {
+    pub state: ChatState,
+    /// The objective of the turn in flight (shown in the status bar).
+    pub objective: String,
+    pub budget: (u32, u64),
+    pub cwd: std::path::PathBuf,
+    pub objective_tx: Sender<String>,
+    pub update_tx: Sender<SlashUpdate>,
+    /// Reason string of the most recent Aborted event, used for the
+    /// `─ turn interrupted: <reason> ─` banner.
+    pub last_abort_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -103,6 +131,8 @@ pub struct App {
     pub input: String,
     pub should_quit: bool,
     pub steering_tx: Sender<String>,
+    /// Chat-mode state; `None` in `run` mode (the run TUI is unchanged).
+    pub chat: Option<ChatUi>,
 }
 
 impl App {
@@ -123,7 +153,23 @@ impl App {
             input: String::new(),
             should_quit: false,
             steering_tx,
+            chat: None,
         }
+    }
+
+    /// Chat-mode app: input dock always focused, Idle/Working state machine.
+    pub fn new_chat(model: String, steering_tx: Sender<String>, wiring: ChatWiring) -> Self {
+        let mut app = App::new(String::new(), model, steering_tx);
+        app.chat = Some(ChatUi {
+            state: ChatState::Idle,
+            objective: String::new(),
+            budget: wiring.budget,
+            cwd: wiring.cwd,
+            objective_tx: wiring.objective_tx,
+            update_tx: wiring.update_tx,
+            last_abort_reason: None,
+        });
+        app
     }
 
     /// Event reducer: maps a driver event onto UI state.
@@ -175,28 +221,40 @@ impl App {
                 self.ledger_changed_at = Some(Instant::now());
             }
             Event::Verifying { cmd } => {
-                self.status = Status::Verifying;
+                if self.chat.is_none() {
+                    self.status = Status::Verifying;
+                }
                 self.push_activity(Activity::Notice {
                     text: format!("▸ check: {cmd}"),
                     color: Color::Yellow,
                 });
             }
             Event::GoalRejected { reason } => {
-                self.status = Status::Running;
+                if self.chat.is_none() {
+                    self.status = Status::Running;
+                }
                 self.push_activity(Activity::Notice {
                     text: format!("✗ goal rejected: {reason}"),
                     color: Color::Red,
                 });
             }
             Event::GoalAccepted { summary } => {
-                self.status = Status::Done;
+                if self.chat.is_none() {
+                    self.status = Status::Done;
+                }
                 self.push_activity(Activity::Notice {
                     text: format!("✓ {summary}"),
                     color: Color::Green,
                 });
             }
             Event::Aborted { reason } => {
-                self.status = Status::Aborted;
+                if let Some(chat) = &mut self.chat {
+                    // Chat mode: the turn (not the app) is over; TurnEnd
+                    // follows and drives the state machine back to Idle.
+                    chat.last_abort_reason = Some(reason.clone());
+                } else {
+                    self.status = Status::Aborted;
+                }
                 self.push_activity(Activity::Notice {
                     text: format!("✗ aborted: {reason}"),
                     color: Color::Red,
@@ -235,6 +293,40 @@ impl App {
                     color: Color::Yellow,
                 });
             }
+            Event::TurnStart { objective } => {
+                if let Some(chat) = &mut self.chat {
+                    chat.state = ChatState::Working;
+                    chat.last_abort_reason = None;
+                    let truncated: String = objective.chars().take(80).collect();
+                    chat.objective = objective;
+                    self.push_activity(Activity::Notice {
+                        text: format!("─ objective: {truncated} ─"),
+                        color: Color::Cyan,
+                    });
+                }
+            }
+            Event::TurnEnd { reason } => {
+                if let Some(chat) = &mut self.chat {
+                    chat.state = ChatState::Idle;
+                    chat.objective.clear();
+                    let (text, color) = match reason {
+                        TurnEndReason::Completed | TurnEndReason::GoalAccepted => {
+                            ("─ turn complete ─".to_string(), Color::Cyan)
+                        }
+                        TurnEndReason::Interrupted | TurnEndReason::BudgetExceeded => {
+                            let detail = chat
+                                .last_abort_reason
+                                .take()
+                                .unwrap_or_else(|| reason.label().to_string());
+                            (
+                                format!("─ turn interrupted: {detail} ─"),
+                                Color::Yellow,
+                            )
+                        }
+                    };
+                    self.push_activity(Activity::Notice { text, color });
+                }
+            }
         }
     }
 
@@ -244,6 +336,10 @@ impl App {
 
     pub fn on_key(&mut self, key: KeyEvent, abort: &AtomicBool) {
         if key.kind != KeyEventKind::Press {
+            return;
+        }
+        if self.chat.is_some() {
+            self.on_key_chat(key, abort);
             return;
         }
         match self.input_mode {
@@ -293,14 +389,209 @@ impl App {
         let elapsed = self.started.elapsed();
         let mins = elapsed.as_secs() / 60;
         let secs = elapsed.as_secs() % 60;
+        let scope = if self.chat.is_some() {
+            "chug chat".to_string()
+        } else {
+            format!("chug ─ {goal}")
+        };
         format!(
-            " chug ─ {goal} ─ model: {} ─ iter {}/{} ─ {mins:02}:{secs:02} ─ in {} / out {} tok ",
+            " {scope} ─ model: {} ─ iter {}/{} ─ {mins:02}:{secs:02} ─ in {} / out {} tok ",
             self.model,
             self.iter.0,
             self.iter.1,
             fmt_k(self.input_tokens),
             fmt_k(self.output_tokens)
         )
+    }
+
+    /// Chat-mode key handling. The input dock is always focused, so
+    /// printable characters go straight into it. Single-letter hotkeys only
+    /// fire on an empty dock: `q` quits (Idle) or interrupts (Working).
+    fn on_key_chat(&mut self, key: KeyEvent, abort: &AtomicBool) {
+        let state = self.chat.as_ref().map(|c| c.state);
+        match key.code {
+            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                match state {
+                    Some(ChatState::Working) | Some(ChatState::Interrupting) => {
+                        // Interrupt the turn; the app stays up.
+                        abort.store(true, std::sync::atomic::Ordering::SeqCst);
+                        self.set_chat_state(ChatState::Interrupting);
+                    }
+                    _ => {
+                        abort.store(true, std::sync::atomic::Ordering::SeqCst);
+                        self.should_quit = true;
+                    }
+                }
+            }
+            KeyCode::Char('q') if self.input.is_empty() => match state {
+                Some(ChatState::Working) => {
+                    abort.store(true, std::sync::atomic::Ordering::SeqCst);
+                    self.set_chat_state(ChatState::Interrupting);
+                }
+                Some(ChatState::Interrupting) => {
+                    // Second `q`: force the UI closed (same as run mode).
+                    self.should_quit = true;
+                }
+                _ => {
+                    abort.store(true, std::sync::atomic::Ordering::SeqCst);
+                    self.should_quit = true;
+                }
+            },
+            KeyCode::Esc => match state {
+                Some(ChatState::Working) => {
+                    abort.store(true, std::sync::atomic::Ordering::SeqCst);
+                    self.set_chat_state(ChatState::Interrupting);
+                }
+                Some(ChatState::Interrupting) => {}
+                _ => self.input.clear(),
+            },
+            KeyCode::Enter => {
+                let line = self.input.trim().to_string();
+                if !line.is_empty() {
+                    self.submit_chat_line(&line, abort);
+                }
+                self.input.clear();
+            }
+            KeyCode::Backspace => {
+                self.input.pop();
+            }
+            KeyCode::Char(c) => self.input.push(c),
+            KeyCode::PageUp => self.scroll_back = self.scroll_back.saturating_add(10),
+            KeyCode::PageDown => self.scroll_back = self.scroll_back.saturating_sub(10),
+            _ => {}
+        }
+    }
+
+    fn set_chat_state(&mut self, state: ChatState) {
+        if let Some(chat) = &mut self.chat {
+            chat.state = state;
+        }
+    }
+
+    /// Route a submitted dock line: slash commands are handled locally, idle
+    /// submissions become objectives, working submissions become steering
+    /// notes (the existing `[operator]` mechanism).
+    fn submit_chat_line(&mut self, line: &str, abort: &AtomicBool) {
+        if line.trim_start().starts_with('/')
+            && let Some(cmd) = chat::parse_slash(line)
+        {
+            self.handle_slash(cmd, abort);
+            return;
+        }
+        let Some(chat) = &self.chat else { return };
+        match chat.state {
+            ChatState::Idle => {
+                // The worker emits TurnStart, which flips the state machine.
+                let _ = chat.objective_tx.send(line.to_string());
+            }
+            ChatState::Working | ChatState::Interrupting => {
+                let _ = self.steering_tx.send(line.to_string());
+            }
+        }
+    }
+
+    fn notice(&mut self, text: String, color: Color) {
+        self.push_activity(Activity::Notice { text, color });
+    }
+
+    /// Slash commands never reach the LLM; they either update session state
+    /// (forwarded to the worker) or produce a local activity-stream line.
+    fn handle_slash(&mut self, cmd: SlashCommand, abort: &AtomicBool) {
+        match cmd {
+            SlashCommand::Spec(Some(path)) => {
+                let Some(chat) = &self.chat else { return };
+                let candidate = if std::path::Path::new(&path).is_absolute() {
+                    std::path::PathBuf::from(&path)
+                } else {
+                    chat.cwd.join(&path)
+                };
+                match candidate.canonicalize() {
+                    Ok(resolved) => {
+                        let _ = chat
+                            .update_tx
+                            .send(SlashUpdate::Spec(Some(resolved.clone())));
+                        self.notice(format!("spec: {}", resolved.display()), Color::Cyan);
+                    }
+                    Err(e) => {
+                        self.notice(format!("✗ spec {path}: {e}"), Color::Red);
+                    }
+                }
+            }
+            SlashCommand::Spec(None) => {
+                self.send_update(SlashUpdate::Spec(None));
+                self.notice("spec cleared".to_string(), Color::Cyan);
+            }
+            SlashCommand::Goal(Some(text)) => {
+                self.send_update(SlashUpdate::Goal(Some(text.clone())));
+                self.notice(format!("goal: {text}"), Color::Cyan);
+            }
+            SlashCommand::Goal(None) => {
+                self.send_update(SlashUpdate::Goal(None));
+                self.notice("goal cleared".to_string(), Color::Cyan);
+            }
+            SlashCommand::Check(Some(cmd)) => {
+                self.send_update(SlashUpdate::Check(Some(cmd.clone())));
+                self.notice(format!("check: {cmd}"), Color::Cyan);
+            }
+            SlashCommand::Check(None) => {
+                self.send_update(SlashUpdate::Check(None));
+                self.notice(
+                    "check cleared — goal_complete ends the turn unverified".to_string(),
+                    Color::Cyan,
+                );
+            }
+            SlashCommand::Ledger => {
+                // The ledger panel is already live; "refocus" = flash the
+                // freshness border and reset activity scroll to the bottom.
+                self.ledger_changed_at = Some(Instant::now());
+                self.scroll_back = 0;
+            }
+            SlashCommand::Model(Some(id)) => {
+                self.model = id.clone();
+                self.send_update(SlashUpdate::Model(id.clone()));
+                self.notice(format!("model: {id}"), Color::Cyan);
+            }
+            SlashCommand::Model(None) => {
+                self.notice(format!("current model: {}", self.model), Color::Cyan);
+            }
+            SlashCommand::Budget(Some((iters, minutes))) => {
+                if let Some(chat) = &mut self.chat {
+                    chat.budget = (iters, minutes);
+                }
+                self.send_update(SlashUpdate::Budget { iters, minutes });
+                self.notice(
+                    format!("budget: {iters} iters / {minutes} min per turn"),
+                    Color::Cyan,
+                );
+            }
+            SlashCommand::Budget(None) => {
+                let budget = self.chat.as_ref().map(|c| c.budget).unwrap_or((0, 0));
+                self.notice(
+                    format!("budget: {} iters / {} min per turn", budget.0, budget.1),
+                    Color::Cyan,
+                );
+            }
+            SlashCommand::Quit => {
+                // Same as `q` in Idle: graceful quit on the normal exit path.
+                abort.store(true, std::sync::atomic::Ordering::SeqCst);
+                self.should_quit = true;
+            }
+            SlashCommand::Help => {
+                self.notice(chat::HELP_LINE.to_string(), Color::Cyan);
+            }
+            SlashCommand::Unknown(name) => {
+                self.notice(format!("unknown command: /{name} (see /help)"), Color::Yellow);
+            }
+            SlashCommand::Usage(usage) => {
+                self.notice(format!("usage: {usage}"), Color::Yellow);
+            }
+        }
+    }
+
+    fn send_update(&mut self, update: SlashUpdate) {
+        if let Some(chat) = &self.chat {
+            let _ = chat.update_tx.send(update);
+        }
     }
 }
 
@@ -377,7 +668,10 @@ fn restore_terminal() {
 fn ui_loop(cfg: TuiConfig) -> std::io::Result<()> {
     let backend = CrosstermBackend::new(std::io::stdout());
     let mut terminal = Terminal::new(backend)?;
-    let mut app = App::new(cfg.goal.clone(), cfg.model.clone(), cfg.steering_tx.clone());
+    let mut app = match cfg.chat {
+        Some(wiring) => App::new_chat(cfg.model.clone(), cfg.steering_tx.clone(), wiring),
+        None => App::new(cfg.goal.clone(), cfg.model.clone(), cfg.steering_tx.clone()),
+    };
 
     loop {
         while let Ok(e) = cfg.events.try_recv() {
@@ -489,6 +783,37 @@ fn draw_ledger(f: &mut Frame, area: ratatui::layout::Rect, app: &App) {
 }
 
 fn draw_status(f: &mut Frame, area: ratatui::layout::Rect, app: &App) {
+    if let Some(chat) = &app.chat {
+        let (label, color, hints) = match chat.state {
+            ChatState::Idle => (
+                format!("{} — type a request", chat.state.label()),
+                Color::Cyan,
+                " ─ Enter: send · /help · q: quit · PgUp/PgDn: scroll",
+            ),
+            ChatState::Working => {
+                let objective: String = chat.objective.chars().take(50).collect();
+                (
+                    format!("{} — {objective}", chat.state.label()),
+                    Color::Yellow,
+                    " ─ Enter: steer · Esc: interrupt · PgUp/PgDn: scroll",
+                )
+            }
+            ChatState::Interrupting => (
+                chat.state.label().to_string(),
+                Color::Red,
+                " ─ waiting for the turn to stop · q: force quit",
+            ),
+        };
+        let line = Line::from(vec![
+            Span::styled(
+                format!("status: {label}"),
+                Style::default().fg(color).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(hints, Style::default().fg(Color::DarkGray)),
+        ]);
+        f.render_widget(line, area);
+        return;
+    }
     let status_span = Span::styled(
         format!("status: {}", app.status.label()),
         Style::default()
@@ -507,6 +832,19 @@ fn draw_status(f: &mut Frame, area: ratatui::layout::Rect, app: &App) {
 }
 
 fn draw_input(f: &mut Frame, area: ratatui::layout::Rect, app: &App) {
+    if let Some(chat) = &app.chat {
+        // Chat mode: the input dock is always visible and focused.
+        let (glyph, color) = match chat.state {
+            ChatState::Idle => ("❯", Color::Cyan),
+            ChatState::Working | ChatState::Interrupting => ("…", Color::Yellow),
+        };
+        let line = Line::from(Span::styled(
+            format!("{glyph} {}_", app.input),
+            Style::default().fg(color),
+        ));
+        f.render_widget(line, area);
+        return;
+    }
     if app.input_mode != InputMode::Editing {
         return;
     }
@@ -736,5 +1074,391 @@ mod tests {
         // Multi-line input produces one entry per line.
         let rows = wrap_rows("a\nb", 10, Style::default());
         assert_eq!(rows.len(), 2);
+    }
+
+    // ---------- chat mode ----------
+
+    struct ChatFixture {
+        app: App,
+        objective_rx: mpsc::Receiver<String>,
+        update_rx: mpsc::Receiver<SlashUpdate>,
+        steer_rx: mpsc::Receiver<String>,
+        abort: Arc<AtomicBool>,
+        _tmp: tempfile::TempDir,
+    }
+
+    fn chat_app() -> ChatFixture {
+        let tmp = tempfile::tempdir().unwrap();
+        let (steer_tx, steer_rx) = mpsc::channel::<String>();
+        let (objective_tx, objective_rx) = mpsc::channel::<String>();
+        let (update_tx, update_rx) = mpsc::channel::<SlashUpdate>();
+        let abort = Arc::new(AtomicBool::new(false));
+        let app = App::new_chat(
+            "test-model".into(),
+            steer_tx,
+            ChatWiring {
+                cwd: tmp.path().to_path_buf(),
+                budget: (40, 120),
+                objective_tx,
+                update_tx,
+            },
+        );
+        ChatFixture {
+            app,
+            objective_rx,
+            update_rx,
+            steer_rx,
+            abort,
+            _tmp: tmp,
+        }
+    }
+
+    fn press(app: &mut App, code: KeyCode, abort: &AtomicBool) {
+        app.on_key(KeyEvent::new(code, KeyModifiers::NONE), abort);
+    }
+
+    fn type_text(app: &mut App, text: &str, abort: &AtomicBool) {
+        for c in text.chars() {
+            press(app, KeyCode::Char(c), abort);
+        }
+    }
+
+    fn notice_texts(app: &App) -> Vec<String> {
+        app.activity
+            .iter()
+            .filter_map(|a| match a {
+                Activity::Notice { text, .. } => Some(text.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn chat_turn_start_sets_working_and_objective_banner() {
+        let mut f = chat_app();
+        assert_eq!(f.app.chat.as_ref().unwrap().state, ChatState::Idle);
+        f.app.apply(Event::TurnStart {
+            objective: "build the thing".into(),
+        });
+        let chat = f.app.chat.as_ref().unwrap();
+        assert_eq!(chat.state, ChatState::Working);
+        assert_eq!(chat.objective, "build the thing");
+        let notices = notice_texts(&f.app);
+        assert_eq!(notices, vec!["─ objective: build the thing ─"]);
+    }
+
+    #[test]
+    fn chat_objective_banner_truncates_at_80_chars() {
+        let mut f = chat_app();
+        let long = "x".repeat(100);
+        f.app.apply(Event::TurnStart {
+            objective: long.clone(),
+        });
+        let notices = notice_texts(&f.app);
+        assert_eq!(notices, vec![format!("─ objective: {} ─", "x".repeat(80))]);
+    }
+
+    #[test]
+    fn chat_turn_end_completed_returns_idle_with_banner() {
+        let mut f = chat_app();
+        f.app.apply(Event::TurnStart {
+            objective: "work".into(),
+        });
+        f.app.apply(Event::TurnEnd {
+            reason: TurnEndReason::Completed,
+        });
+        let chat = f.app.chat.as_ref().unwrap();
+        assert_eq!(chat.state, ChatState::Idle);
+        assert!(chat.objective.is_empty());
+        let notices = notice_texts(&f.app);
+        assert_eq!(notices.last().unwrap(), "─ turn complete ─");
+    }
+
+    #[test]
+    fn chat_turn_end_interrupted_uses_abort_reason_in_banner() {
+        let mut f = chat_app();
+        f.app.apply(Event::TurnStart {
+            objective: "work".into(),
+        });
+        f.app.apply(Event::Aborted {
+            reason: "operator interrupt".into(),
+        });
+        f.app.apply(Event::TurnEnd {
+            reason: TurnEndReason::Interrupted,
+        });
+        let notices = notice_texts(&f.app);
+        assert_eq!(
+            notices.last().unwrap(),
+            "─ turn interrupted: operator interrupt ─"
+        );
+        // Chat mode never latches the run-mode Aborted status.
+        assert_ne!(f.app.status, Status::Aborted);
+        assert_eq!(f.app.chat.as_ref().unwrap().state, ChatState::Idle);
+    }
+
+    #[test]
+    fn chat_turn_end_budget_exceeded_banner() {
+        let mut f = chat_app();
+        f.app.apply(Event::TurnStart {
+            objective: "work".into(),
+        });
+        f.app.apply(Event::Aborted {
+            reason: "iteration budget exceeded".into(),
+        });
+        f.app.apply(Event::TurnEnd {
+            reason: TurnEndReason::BudgetExceeded,
+        });
+        let notices = notice_texts(&f.app);
+        assert_eq!(
+            notices.last().unwrap(),
+            "─ turn interrupted: iteration budget exceeded ─"
+        );
+    }
+
+    #[test]
+    fn chat_goal_accepted_prints_summary_without_latching_status() {
+        let mut f = chat_app();
+        f.app.apply(Event::TurnStart {
+            objective: "work".into(),
+        });
+        f.app.apply(Event::GoalAccepted {
+            summary: "did it".into(),
+        });
+        f.app.apply(Event::TurnEnd {
+            reason: TurnEndReason::GoalAccepted,
+        });
+        assert_ne!(f.app.status, Status::Done);
+        let notices = notice_texts(&f.app);
+        assert!(notices.iter().any(|t| t == "✓ did it"));
+        assert_eq!(notices.last().unwrap(), "─ turn complete ─");
+        assert_eq!(f.app.chat.as_ref().unwrap().state, ChatState::Idle);
+    }
+
+    #[test]
+    fn chat_submit_in_idle_becomes_objective() {
+        let mut f = chat_app();
+        type_text(&mut f.app, "create hello.py", &f.abort.clone());
+        let abort = Arc::clone(&f.abort);
+        press(&mut f.app, KeyCode::Enter, &abort);
+        assert_eq!(f.objective_rx.try_recv().unwrap(), "create hello.py");
+        assert!(f.steer_rx.try_recv().is_err());
+        assert!(f.app.input.is_empty());
+    }
+
+    #[test]
+    fn chat_submit_in_working_becomes_operator_steering() {
+        let mut f = chat_app();
+        f.app.apply(Event::TurnStart {
+            objective: "work".into(),
+        });
+        let abort = Arc::clone(&f.abort);
+        type_text(&mut f.app, "focus on tests", &abort);
+        press(&mut f.app, KeyCode::Enter, &abort);
+        // Steering carries the raw note; the worker prefixes [operator].
+        assert_eq!(f.steer_rx.try_recv().unwrap(), "focus on tests");
+        assert!(f.objective_rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn chat_slash_lines_never_reach_objective_or_steering_channels() {
+        let mut f = chat_app();
+        let abort = Arc::clone(&f.abort);
+        type_text(&mut f.app, "/help", &abort);
+        press(&mut f.app, KeyCode::Enter, &abort);
+        assert!(f.objective_rx.try_recv().is_err());
+        assert!(f.steer_rx.try_recv().is_err());
+        let notices = notice_texts(&f.app);
+        assert_eq!(notices, vec![chat::HELP_LINE]);
+
+        type_text(&mut f.app, "/xyzzy", &abort);
+        press(&mut f.app, KeyCode::Enter, &abort);
+        let notices = notice_texts(&f.app);
+        assert_eq!(notices.last().unwrap(), "unknown command: /xyzzy (see /help)");
+    }
+
+    #[test]
+    fn chat_slash_with_leading_whitespace_still_parses() {
+        let mut f = chat_app();
+        let abort = Arc::clone(&f.abort);
+        type_text(&mut f.app, "  /goal ship it", &abort);
+        press(&mut f.app, KeyCode::Enter, &abort);
+        assert_eq!(
+            f.update_rx.try_recv().unwrap(),
+            SlashUpdate::Goal(Some("ship it".into()))
+        );
+    }
+
+    #[test]
+    fn chat_slash_spec_goal_check_model_budget_updates() {
+        let mut f = chat_app();
+        let abort = Arc::clone(&f.abort);
+        let tmp_spec = f.app.chat.as_ref().unwrap().cwd.join("SPEC.md");
+        std::fs::write(&tmp_spec, "spec body").unwrap();
+
+        type_text(&mut f.app, "/spec SPEC.md", &abort);
+        press(&mut f.app, KeyCode::Enter, &abort);
+        assert_eq!(
+            f.update_rx.try_recv().unwrap(),
+            SlashUpdate::Spec(Some(tmp_spec.canonicalize().unwrap()))
+        );
+
+        type_text(&mut f.app, "/spec", &abort);
+        press(&mut f.app, KeyCode::Enter, &abort);
+        assert_eq!(f.update_rx.try_recv().unwrap(), SlashUpdate::Spec(None));
+
+        type_text(&mut f.app, "/check cargo test", &abort);
+        press(&mut f.app, KeyCode::Enter, &abort);
+        assert_eq!(
+            f.update_rx.try_recv().unwrap(),
+            SlashUpdate::Check(Some("cargo test".into()))
+        );
+
+        type_text(&mut f.app, "/model opus-4", &abort);
+        press(&mut f.app, KeyCode::Enter, &abort);
+        assert_eq!(
+            f.update_rx.try_recv().unwrap(),
+            SlashUpdate::Model("opus-4".into())
+        );
+        assert_eq!(f.app.model, "opus-4");
+
+        type_text(&mut f.app, "/budget 5 15", &abort);
+        press(&mut f.app, KeyCode::Enter, &abort);
+        assert_eq!(
+            f.update_rx.try_recv().unwrap(),
+            SlashUpdate::Budget {
+                iters: 5,
+                minutes: 15
+            }
+        );
+        assert_eq!(f.app.chat.as_ref().unwrap().budget, (5, 15));
+
+        // Malformed budget: usage line, nothing forwarded.
+        type_text(&mut f.app, "/budget 5", &abort);
+        press(&mut f.app, KeyCode::Enter, &abort);
+        assert!(f.update_rx.try_recv().is_err());
+        let notices = notice_texts(&f.app);
+        assert_eq!(notices.last().unwrap(), "usage: /budget <iters> <minutes>");
+    }
+
+    #[test]
+    fn chat_slash_spec_missing_file_echoes_error_and_sends_nothing() {
+        let mut f = chat_app();
+        let abort = Arc::clone(&f.abort);
+        type_text(&mut f.app, "/spec nope.md", &abort);
+        press(&mut f.app, KeyCode::Enter, &abort);
+        assert!(f.update_rx.try_recv().is_err());
+        let notices = notice_texts(&f.app);
+        assert!(notices.last().unwrap().starts_with("✗ spec nope.md:"));
+    }
+
+    #[test]
+    fn chat_slash_quit_quits_like_q_in_idle() {
+        let mut f = chat_app();
+        let abort = Arc::clone(&f.abort);
+        type_text(&mut f.app, "/quit", &abort);
+        press(&mut f.app, KeyCode::Enter, &abort);
+        assert!(f.app.should_quit);
+        assert!(abort.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
+    #[test]
+    fn chat_esc_in_working_interrupts_but_app_stays_up() {
+        let mut f = chat_app();
+        f.app.apply(Event::TurnStart {
+            objective: "work".into(),
+        });
+        let abort = Arc::clone(&f.abort);
+        press(&mut f.app, KeyCode::Esc, &abort);
+        assert!(abort.load(std::sync::atomic::Ordering::SeqCst));
+        assert!(!f.app.should_quit);
+        assert_eq!(f.app.chat.as_ref().unwrap().state, ChatState::Interrupting);
+        // Turn end returns to Idle.
+        f.app.apply(Event::Aborted {
+            reason: "operator interrupt".into(),
+        });
+        f.app.apply(Event::TurnEnd {
+            reason: TurnEndReason::Interrupted,
+        });
+        assert_eq!(f.app.chat.as_ref().unwrap().state, ChatState::Idle);
+    }
+
+    #[test]
+    fn chat_q_empty_input_quits_in_idle_interrupts_in_working() {
+        let mut f = chat_app();
+        let abort = Arc::clone(&f.abort);
+        // Working: q = interrupt, not quit.
+        f.app.apply(Event::TurnStart {
+            objective: "work".into(),
+        });
+        press(&mut f.app, KeyCode::Char('q'), &abort);
+        assert!(!f.app.should_quit);
+        assert_eq!(f.app.chat.as_ref().unwrap().state, ChatState::Interrupting);
+        // Second q while interrupting: force quit (same as run mode).
+        press(&mut f.app, KeyCode::Char('q'), &abort);
+        assert!(f.app.should_quit);
+
+        // Idle: q quits.
+        let mut f2 = chat_app();
+        let abort2 = Arc::clone(&f2.abort);
+        press(&mut f2.app, KeyCode::Char('q'), &abort2);
+        assert!(f2.app.should_quit);
+        assert!(abort2.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
+    #[test]
+    fn chat_q_with_text_in_dock_is_just_text() {
+        let mut f = chat_app();
+        let abort = Arc::clone(&f.abort);
+        type_text(&mut f.app, "select ", &abort);
+        press(&mut f.app, KeyCode::Char('q'), &abort);
+        assert!(!f.app.should_quit);
+        assert_eq!(f.app.input, "select q");
+        assert!(!abort.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
+    #[test]
+    fn chat_ctrl_c_idle_quits_working_interrupts() {
+        let mut f = chat_app();
+        let abort = Arc::clone(&f.abort);
+        f.app.apply(Event::TurnStart {
+            objective: "work".into(),
+        });
+        f.app.on_key(
+            KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
+            &abort,
+        );
+        assert!(!f.app.should_quit);
+        assert_eq!(f.app.chat.as_ref().unwrap().state, ChatState::Interrupting);
+
+        let mut f2 = chat_app();
+        let abort2 = Arc::clone(&f2.abort);
+        f2.app.on_key(
+            KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
+            &abort2,
+        );
+        assert!(f2.app.should_quit);
+    }
+
+    #[test]
+    fn chat_i_does_not_open_run_mode_input_line() {
+        let mut f = chat_app();
+        let abort = Arc::clone(&f.abort);
+        press(&mut f.app, KeyCode::Char('i'), &abort);
+        // The dock is always focused: `i` is literal text, never a mode flip.
+        assert_eq!(f.app.input_mode, InputMode::Normal);
+        assert_eq!(f.app.input, "i");
+    }
+
+    #[test]
+    fn chat_title_uses_chat_scope() {
+        let f = chat_app();
+        let title = f.app.title();
+        assert!(title.starts_with(" chug chat ─ model: test-model ─ iter 0/0 ─ "));
+    }
+
+    #[test]
+    fn run_mode_title_unchanged_by_chat_scope() {
+        let a = app();
+        assert!(a.title().starts_with(" chug ─ build the thing ─ model: test-model"));
     }
 }

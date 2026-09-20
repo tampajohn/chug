@@ -48,6 +48,39 @@ pub enum Event {
     },
     /// An `allow destructive` operator note disabled the gate for this run.
     RiskGateDisabled,
+    /// Chat mode: the user submitted a new objective and a turn is starting.
+    TurnStart {
+        objective: String,
+    },
+    /// Chat mode: the active turn ended; the app returns to idle.
+    TurnEnd {
+        reason: TurnEndReason,
+    },
+}
+
+/// Why a chat-mode turn ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TurnEndReason {
+    /// Natural stop: the assistant answered without any tool call.
+    Completed,
+    /// `goal_complete` was accepted (verified by `/check` when configured).
+    GoalAccepted,
+    /// Operator interrupt (Esc/q) or the stuck tripwire fired.
+    Interrupted,
+    /// A per-turn budget (iterations or wall-clock) was exceeded.
+    BudgetExceeded,
+}
+
+impl TurnEndReason {
+    /// Human label used by the UI for the turn-boundary banner.
+    pub fn label(self) -> &'static str {
+        match self {
+            TurnEndReason::Completed => "completed",
+            TurnEndReason::GoalAccepted => "goal accepted",
+            TurnEndReason::Interrupted => "interrupted",
+            TurnEndReason::BudgetExceeded => "budget exceeded",
+        }
+    }
 }
 
 pub trait EventSink {
@@ -139,6 +172,8 @@ impl EventSink for ConsoleSink {
             Event::RiskGateDisabled => {
                 let _ = writeln!(self.err, "[chug] risk gate disabled by operator note");
             }
+            // No headless chat: turn-boundary events are TUI-only.
+            Event::TurnStart { .. } | Event::TurnEnd { .. } => {}
         }
     }
 }
@@ -304,6 +339,27 @@ mod tests {
              [chug] risk gate disabled by operator note\n"
         );
         assert_eq!(out_bytes(&out), "");
+    }
+
+    #[test]
+    fn console_sink_turn_events_are_silent() {
+        let (mut sink, out, err) = sink("/w");
+        sink.emit(Event::TurnStart {
+            objective: "do the thing".into(),
+        });
+        sink.emit(Event::TurnEnd {
+            reason: TurnEndReason::Completed,
+        });
+        assert_eq!(out_bytes(&err), "");
+        assert_eq!(out_bytes(&out), "");
+    }
+
+    #[test]
+    fn turn_end_reason_labels() {
+        assert_eq!(TurnEndReason::Completed.label(), "completed");
+        assert_eq!(TurnEndReason::GoalAccepted.label(), "goal accepted");
+        assert_eq!(TurnEndReason::Interrupted.label(), "interrupted");
+        assert_eq!(TurnEndReason::BudgetExceeded.label(), "budget exceeded");
     }
 
     #[test]

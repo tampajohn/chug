@@ -1,4 +1,5 @@
 mod api;
+mod chat;
 mod driver;
 mod events;
 mod riskgate;
@@ -63,12 +64,43 @@ enum CliCommand {
         #[arg(long)]
         cwd: Option<PathBuf>,
     },
+    /// Start an interactive chat session in the TUI: type a request, chug
+    /// works it with tools, returns to idle, repeat.
+    Chat {
+        /// Working directory; all file/bash tools are sandboxed here. Defaults to `.`.
+        #[arg(long)]
+        cwd: Option<PathBuf>,
+        /// Model id. Order: --model, $CHUG_MODEL, claude-sonnet-4-6.
+        #[arg(long)]
+        model: Option<String>,
+        /// Per-turn iteration budget.
+        #[arg(long, default_value_t = 40)]
+        max_iters: u32,
+        /// Per-turn wall-clock budget in minutes.
+        #[arg(long, default_value_t = 120)]
+        max_minutes: u64,
+        /// Resume from <cwd>/.chug/transcript.jsonl.
+        #[arg(long)]
+        resume: bool,
+        /// Classify every bash command with the laya risk judge before executing
+        /// (blocks destructive commands; fails open when the judge is down).
+        #[arg(long)]
+        risk_gate: bool,
+    },
 }
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
     let result = match cli.command {
         CliCommand::Ledger { cwd } => cmd_ledger(cwd),
+        CliCommand::Chat {
+            cwd,
+            model,
+            max_iters,
+            max_minutes,
+            resume,
+            risk_gate,
+        } => cmd_chat(cwd, model, max_iters, max_minutes, resume, risk_gate),
         CliCommand::Run {
             spec,
             goal,
@@ -194,11 +226,85 @@ fn run_with_tui(
         events: event_rx,
         steering_tx: steer_tx,
         driver_done,
+        chat: None,
     });
 
     let code = worker
         .join()
         .map_err(|e| anyhow!("driver thread panicked: {e:?}"))??;
+    ui?;
+    Ok(code)
+}
+
+/// `chat` mode: worker thread runs the chat session, main thread runs the UI.
+/// The TUI is the interface; there is no headless chat.
+fn cmd_chat(
+    cwd: Option<PathBuf>,
+    model: Option<String>,
+    max_iters: u32,
+    max_minutes: u64,
+    resume: bool,
+    risk_gate: bool,
+) -> anyhow::Result<i32> {
+    let cwd = resolve_cwd(cwd)?;
+    let model = model
+        .filter(|m| !m.trim().is_empty())
+        .or_else(|| std::env::var("CHUG_MODEL").ok().filter(|m| !m.trim().is_empty()))
+        .unwrap_or_else(|| driver::DEFAULT_MODEL.to_string());
+
+    let (event_tx, event_rx) = mpsc::channel::<events::Event>();
+    let (steer_tx, steer_rx) = mpsc::channel::<String>();
+    let (objective_tx, objective_rx) = mpsc::channel::<String>();
+    let (update_tx, update_rx) = mpsc::channel::<driver::SlashUpdate>();
+    let abort = Arc::new(AtomicBool::new(false));
+    let driver_done = Arc::new(AtomicBool::new(false));
+
+    let cfg = chat::ChatConfig {
+        cwd: cwd.clone(),
+        model: model.clone(),
+        max_iters,
+        max_minutes,
+        resume,
+        risk_gate,
+        controls: driver::Controls {
+            abort: Arc::clone(&abort),
+            steering_rx: steer_rx,
+        },
+        objective_rx,
+        update_rx,
+    };
+
+    let worker = {
+        let done = Arc::clone(&driver_done);
+        thread::Builder::new()
+            .name("chug-chat".into())
+            .spawn(move || {
+                let mut sink = tui::TuiSink { tx: event_tx };
+                let result = chat::run_chat(cfg, &mut sink);
+                done.store(true, std::sync::atomic::Ordering::SeqCst);
+                result
+            })
+            .context("spawning chat thread")?
+    };
+
+    let ui = tui::run_tui(tui::TuiConfig {
+        goal: String::new(),
+        model,
+        abort: Arc::clone(&abort),
+        events: event_rx,
+        steering_tx: steer_tx,
+        driver_done,
+        chat: Some(tui::ChatWiring {
+            cwd,
+            budget: (max_iters, max_minutes),
+            objective_tx,
+            update_tx,
+        }),
+    });
+
+    let code = worker
+        .join()
+        .map_err(|e| anyhow!("chat thread panicked: {e:?}"))??;
     ui?;
     Ok(code)
 }
