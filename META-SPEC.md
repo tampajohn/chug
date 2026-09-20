@@ -18,7 +18,20 @@ check: cd /Users/jadams/workspace/chug && cargo test
   `LEDGER.md` under cwd, and a child in your cwd would corrupt your own
   transcript. Therefore every child round runs in its own **git worktree**.
 - The child binary: `/Users/jadams/workspace/chug/target/debug/chug`.
-  Children use model `anthropic-system.ai.kimi-k3`.
+  Implementation children use `muse-glimmer-30b`, validation children
+  use `anthropic-system.ai.kimi-k3` (see Models below).
+
+## Models (default: muse implements, kimi validates)
+
+- **Implementation children**: `muse-glimmer-30b` (spark SGLang endpoint —
+  env already in your process, children inherit it).
+- **Validation children**: `anthropic-system.ai.kimi-k3` via tools-proxy.
+  Launch them with the muse env STRIPPED so they fall back to
+  ~/.claude/settings.json: prefix the command with
+  `env -u ANTHROPIC_BASE_URL -u ANTHROPIC_AUTH_TOKEN`.
+- **Fallback**: if the muse endpoint is unreachable (connection refused on
+  the child's first iteration), rerun that round's implementation child on
+  kimi-k3 too (same env-strip) and note the fallback in your ledger.
 
 ## Round protocol (round N, scoped sub-goal G)
 
@@ -36,7 +49,7 @@ check: cd /Users/jadams/workspace/chug && cargo test
      --spec SPEC-5-chat-input-ux.md \
      --goal "ROUND GOAL: <G>. Implement ONLY this slice. Keep cargo build and
              cargo test green. Do not touch unrelated files." \
-     --model anthropic-system.ai.kimi-k3 --max-iters 40 --max-minutes 35
+     --model muse-glimmer-30b --max-iters 40 --max-minutes 35
    ```
 5. **Review.** `git -C /tmp/chug-round-N diff main...round-N --stat` (children
    may not commit — then inspect `git -C /tmp/chug-round-N status` + the
@@ -44,14 +57,30 @@ check: cd /Users/jadams/workspace/chug && cargo test
    `.chug/transcript.jsonl` if the outcome is ambiguous. Run
    `cd /tmp/chug-round-N && cargo test` yourself — never trust a claim of
    green without seeing it.
-6. **Merge gate.** Green AND on-spec → land it in the main tree. If the child
-   committed: `git -C /Users/jadams/workspace/chug merge round-N`. If not:
-   replicate the diff into the main tree (checkout the changed files:
+6. **Validate (kimi-k3, REQUIRED).** Before merging any round, launch a
+   validation child on kimi-k3 (env-stripped, see Models):
+   ```
+   cd /tmp/chug-round-N && env -u ANTHROPIC_BASE_URL -u ANTHROPIC_AUTH_TOKEN \
+     /Users/jadams/workspace/chug/target/debug/chug run \
+     --spec <the round's feature spec, e.g. SPEC-N-*.md> \
+     --goal "VALIDATION ONLY — do not implement. Review the uncommitted/committed
+             diff in this worktree against the spec: correctness bugs, missing
+             spec requirements, weak tests. Run cargo build + clippy + test
+             yourself. End with a verdict line VERDICT: PASS or VERDICT: FAIL
+             plus a numbered findings list." \
+     --model anthropic-system.ai.kimi-k3 --max-iters 25 --max-minutes 20
+   ```
+   Read the verdict. PASS → merge. FAIL → round N+1 with the findings pasted
+   into the implementation goal as feedback. Do not merge on your own review
+   alone — the whole point is a second model on a second proxy.
+7. **Merge gate.** Validated AND on-spec → land it in the main tree. If the
+   child committed: `git -C /Users/jadams/workspace/chug merge round-N`. If
+   not: replicate the diff into the main tree (checkout the changed files:
    `git -C /Users/jadams/workspace/chug checkout round-N -- <files>` when the
    child committed; otherwise copy the files) and `cargo test` in the main
    tree before calling it landed. Red or off-spec → either fix trivially
    yourself or run round N+1 with the failure as feedback in the goal.
-7. **Ledger.** Record round outcome in YOUR LEDGER.md: scope, verdict, what
+8. **Ledger.** Record round outcome in YOUR LEDGER.md: scope, verdict, what
    remains.
 
 ## Suggested round split (adjust as you learn)
