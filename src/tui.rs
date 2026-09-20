@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, atomic::AtomicBool};
 use std::time::{Duration, Instant};
@@ -12,6 +13,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 use ratatui::{Frame, Terminal};
 
+use crate::attach;
 use crate::chat::{self, ChatState, SlashCommand};
 use crate::complete::{self, CandidateStrip, FileIndex};
 use crate::driver::SlashUpdate;
@@ -31,11 +33,6 @@ const HELP_TEXT: &str = concat!(
     "  @path          attach a file to your message\n",
     "  Tab            complete /commands and @paths",
 );
-
-// `chat::HELP_LINE` (in chat.rs, untouchable this round) is superseded by
-// HELP_TEXT; keep it referenced so the dead-code lint stays quiet until a
-// later round removes it.
-const _: &str = chat::HELP_LINE;
 
 /// The open completion strip: the pure cycler plus the token span it is
 /// completing. Cycling the highlight rewrites the token in place, so its
@@ -103,6 +100,11 @@ pub struct ChatUi {
     pub file_index: FileIndex,
     /// The open candidate strip, if completion is ambiguous.
     pub strip: Option<StripState>,
+    /// Steering notes the UI expanded (`@file` mentions, SPEC-5 §1) before
+    /// sending the `llm_message` to the driver, FIFO-paired with the
+    /// driver's `SteeringQueued` echoes so the activity stream shows the
+    /// typed text only: `(text_with_notes, attached paths)` per sent note.
+    pub pending_steer: VecDeque<(String, Vec<String>)>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -211,6 +213,7 @@ impl App {
             last_abort_reason: None,
             file_index: FileIndex::new(&wiring.cwd),
             strip: None,
+            pending_steer: VecDeque::new(),
         });
         app
     }
@@ -309,10 +312,23 @@ impl App {
                 self.output_tokens = output;
             }
             Event::SteeringQueued(note) => {
+                // Chat mode: the UI sent the expanded `llm_message`; the
+                // echo shows the typed text only, plus a dim `attached:`
+                // line when `@file` mentions expanded (SPEC-5 §1). Run mode
+                // (and any unpaired echo) shows the note verbatim.
+                let (text, attached) = match self
+                    .chat
+                    .as_mut()
+                    .and_then(|c| c.pending_steer.pop_front())
+                {
+                    Some((text, attached)) => (text, attached),
+                    None => (note, Vec::new()),
+                };
                 self.push_activity(Activity::Notice {
-                    text: format!("▸ [operator] {note}"),
+                    text: format!("▸ [operator] {text}"),
                     color: Color::Yellow,
                 });
+                self.push_attached(attached);
             }
             Event::RiskVerdict {
                 blocked,
@@ -337,15 +353,26 @@ impl App {
                 });
             }
             Event::TurnStart { objective } => {
-                if let Some(chat) = &mut self.chat {
+                let cwd = if let Some(chat) = &mut self.chat {
                     chat.state = ChatState::Working;
                     chat.last_abort_reason = None;
+                    chat.objective = objective.clone();
+                    Some(chat.cwd.clone())
+                } else {
+                    None
+                };
+                if let Some(cwd) = cwd {
                     let truncated: String = objective.chars().take(80).collect();
-                    chat.objective = objective;
                     self.push_activity(Activity::Notice {
                         text: format!("─ objective: {truncated} ─"),
                         color: Color::Cyan,
                     });
+                    // Dim `attached:` line when the objective's `@file`
+                    // mentions expanded (SPEC-5 §1). The worker expanded the
+                    // same text for the model; this read-only re-expansion
+                    // derives the display list.
+                    let attached = attach::expand_message(&cwd, &objective).attached;
+                    self.push_attached(attached);
                 }
             }
             Event::TurnEnd { reason } => {
@@ -375,6 +402,18 @@ impl App {
 
     fn push_activity(&mut self, entry: Activity) {
         self.activity.push(entry);
+    }
+
+    /// Push the dim `attached: a.rs, b.py` indicator line (SPEC-5 §1);
+    /// a no-op when no `@file` mention expanded.
+    fn push_attached(&mut self, attached: Vec<String>) {
+        if attached.is_empty() {
+            return;
+        }
+        self.push_activity(Activity::Notice {
+            text: format!("attached: {}", attached.join(", ")),
+            color: Color::DarkGray,
+        });
     }
 
     pub fn on_key(&mut self, key: KeyEvent, abort: &AtomicBool) {
@@ -630,14 +669,23 @@ impl App {
             self.handle_slash(cmd, abort);
             return;
         }
-        let Some(chat) = &self.chat else { return };
+        let Some(chat) = &mut self.chat else { return };
         match chat.state {
             ChatState::Idle => {
-                // The worker emits TurnStart, which flips the state machine.
+                // The worker expands `@file` mentions and emits TurnStart,
+                // which flips the state machine.
                 let _ = chat.objective_tx.send(line.to_string());
             }
             ChatState::Working | ChatState::Interrupting => {
-                let _ = self.steering_tx.send(line.to_string());
+                // The driver appends steering notes verbatim, so `@file`
+                // mentions are expanded HERE — before the driver sees them
+                // (SPEC-5 §1). The typed text is stashed so the
+                // SteeringQueued echo shows it instead of the expansion.
+                let expanded = attach::expand_message(&chat.cwd, line);
+                if self.steering_tx.send(expanded.llm_message).is_ok() {
+                    chat.pending_steer
+                        .push_back((expanded.text_with_notes, expanded.attached));
+                }
             }
         }
     }
@@ -1945,5 +1993,157 @@ mod tests {
         let line = strip_line(&state);
         let spans: Vec<String> = line.spans.iter().map(|s| s.content.to_string()).collect();
         assert_eq!(spans, vec!["  ", "a  ", "b  ", "c  "]);
+    }
+
+    // ---------- SPEC-5 §1: @file attachment display ----------
+
+    /// Color of the activity notice whose text matches exactly, if present.
+    fn notice_color(app: &App, text: &str) -> Option<Color> {
+        app.activity.iter().find_map(|a| match a {
+            Activity::Notice { text: t, color } if t == text => Some(*color),
+            _ => None,
+        })
+    }
+
+    #[test]
+    fn chat_turn_start_with_attachments_shows_dim_attached_line() {
+        let mut f = chat_app();
+        let cwd = f.app.chat.as_ref().unwrap().cwd.clone();
+        std::fs::write(cwd.join("a.txt"), "AAA").unwrap();
+        std::fs::write(cwd.join("b.txt"), "BBB").unwrap();
+
+        f.app.apply(Event::TurnStart {
+            objective: "compare @a.txt and @b.txt".into(),
+        });
+        // The banner shows the typed text only; the dim line lists the
+        // expanded paths, in order — never the file contents.
+        assert_eq!(
+            notice_texts(&f.app),
+            vec![
+                "─ objective: compare @a.txt and @b.txt ─".to_string(),
+                "attached: a.txt, b.txt".to_string(),
+            ]
+        );
+        assert_eq!(
+            notice_color(&f.app, "attached: a.txt, b.txt"),
+            Some(Color::DarkGray)
+        );
+    }
+
+    #[test]
+    fn chat_turn_start_attached_line_appears_exactly_when_expansion_occurred() {
+        // No mention -> no line (existing banner test covers this too).
+        let mut f = chat_app();
+        f.app.apply(Event::TurnStart {
+            objective: "plain objective".into(),
+        });
+        assert_eq!(notice_texts(&f.app), vec!["─ objective: plain objective ─"]);
+
+        // A mention that did NOT resolve -> no line either (the not-found
+        // note is already inline in the banner text).
+        let mut f2 = chat_app();
+        f2.app.apply(Event::TurnStart {
+            objective: "read [file not found: nope.txt]".into(),
+        });
+        assert_eq!(
+            notice_texts(&f2.app),
+            vec!["─ objective: read [file not found: nope.txt] ─"]
+        );
+    }
+
+    #[test]
+    fn chat_submit_in_working_expands_mentions_before_driver() {
+        let mut f = chat_app();
+        let cwd = f.app.chat.as_ref().unwrap().cwd.clone();
+        std::fs::write(cwd.join("a.txt"), "contents here").unwrap();
+        f.app.apply(Event::TurnStart {
+            objective: "work".into(),
+        });
+        let abort = Arc::clone(&f.abort);
+        type_text(&mut f.app, "check @a.txt now", &abort);
+        press(&mut f.app, KeyCode::Enter, &abort);
+
+        // The driver-bound steering note is the EXPANDED message.
+        let sent = f.steer_rx.try_recv().unwrap();
+        assert_eq!(
+            sent,
+            "check @a.txt now\n\n<file path=\"a.txt\">\ncontents here\n</file>"
+        );
+        assert!(f.objective_rx.try_recv().is_err());
+        assert!(f.app.input.is_empty());
+
+        // The driver's echo (carrying the expanded note) renders as the
+        // typed text plus the dim attached line — never the contents.
+        f.app.apply(Event::SteeringQueued(sent));
+        let notices = notice_texts(&f.app);
+        assert!(notices.iter().any(|t| t == "▸ [operator] check @a.txt now"));
+        assert!(notices.iter().any(|t| t == "attached: a.txt"));
+        assert!(!notices.iter().any(|t| t.contains("contents here")));
+        assert_eq!(
+            notice_color(&f.app, "attached: a.txt"),
+            Some(Color::DarkGray)
+        );
+    }
+
+    #[test]
+    fn chat_steering_missing_file_echoes_note_with_no_attached_line() {
+        let mut f = chat_app();
+        f.app.apply(Event::TurnStart {
+            objective: "work".into(),
+        });
+        let abort = Arc::clone(&f.abort);
+        type_text(&mut f.app, "read @nope.txt", &abort);
+        press(&mut f.app, KeyCode::Enter, &abort);
+
+        // Missing file: the inline note rides to the driver; nothing else.
+        let sent = f.steer_rx.try_recv().unwrap();
+        assert_eq!(sent, "read [file not found: nope.txt]");
+        f.app.apply(Event::SteeringQueued(sent));
+        let notices = notice_texts(&f.app);
+        assert!(
+            notices
+                .iter()
+                .any(|t| t == "▸ [operator] read [file not found: nope.txt]")
+        );
+        assert!(!notices.iter().any(|t| t.starts_with("attached:")));
+    }
+
+    #[test]
+    fn chat_steering_plain_note_round_trips_unchanged() {
+        let mut f = chat_app();
+        f.app.apply(Event::TurnStart {
+            objective: "work".into(),
+        });
+        let abort = Arc::clone(&f.abort);
+        type_text(&mut f.app, "focus on tests", &abort);
+        press(&mut f.app, KeyCode::Enter, &abort);
+        let sent = f.steer_rx.try_recv().unwrap();
+        assert_eq!(sent, "focus on tests");
+        f.app.apply(Event::SteeringQueued(sent));
+        let notices = notice_texts(&f.app);
+        assert!(notices.iter().any(|t| t == "▸ [operator] focus on tests"));
+        assert!(!notices.iter().any(|t| t.starts_with("attached:")));
+    }
+
+    #[test]
+    fn chat_steering_echo_without_stash_falls_back_to_raw_note() {
+        let mut f = chat_app();
+        // No UI submission paired with this echo: show the note verbatim.
+        f.app.apply(Event::SteeringQueued("external note".into()));
+        let notices = notice_texts(&f.app);
+        assert_eq!(notices, vec!["▸ [operator] external note"]);
+    }
+
+    #[test]
+    fn run_mode_steering_echo_unchanged() {
+        let mut a = app();
+        a.apply(Event::SteeringQueued("note with <file path=\"x\">block</file>".into()));
+        match &a.activity[0] {
+            Activity::Notice { text, color } => {
+                assert_eq!(text, "▸ [operator] note with <file path=\"x\">block</file>");
+                assert_eq!(*color, Color::Yellow);
+            }
+            _ => panic!("expected notice"),
+        }
     }
 }
