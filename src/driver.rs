@@ -1,12 +1,16 @@
 use std::collections::VecDeque;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
 
 use anyhow::Context;
 use serde_json::{Value, json};
 
 use crate::api::{Client, ContentBlock, KnownBlock, Message};
+use crate::events::{Event, EventSink};
 use crate::ledger;
 use crate::tools::{self, ToolCtx, ToolResult};
 use crate::transcript;
@@ -30,6 +34,34 @@ pub struct RunConfig {
     pub max_iters: u32,
     pub max_minutes: u64,
     pub resume: bool,
+    /// Shared controls checked at every iteration boundary.
+    pub controls: Controls,
+}
+
+/// Operator controls the driver honors at each iteration boundary:
+/// `q` sets the abort flag; steering notes are drained into the transcript.
+pub struct Controls {
+    pub abort: Arc<AtomicBool>,
+    pub steering_rx: Receiver<String>,
+}
+
+impl Controls {
+    /// Controls nothing can ever trigger (headless default): a never-set flag
+    /// and a steering channel whose sender has been dropped.
+    pub fn detached() -> Self {
+        let (tx, rx) = mpsc::channel();
+        drop(tx);
+        Controls {
+            abort: Arc::new(AtomicBool::new(false)),
+            steering_rx: rx,
+        }
+    }
+}
+
+impl Default for Controls {
+    fn default() -> Self {
+        Self::detached()
+    }
 }
 
 enum VerifyOutcome {
@@ -38,8 +70,16 @@ enum VerifyOutcome {
     NoCheck,
 }
 
-pub fn run(cfg: RunConfig) -> anyhow::Result<i32> {
+pub fn run(cfg: RunConfig, sink: &mut dyn EventSink) -> anyhow::Result<i32> {
     let client = Client::new(&cfg.model)?;
+    run_loop(cfg, client, sink)
+}
+
+fn run_loop(
+    cfg: RunConfig,
+    client: Client,
+    sink: &mut dyn EventSink,
+) -> anyhow::Result<i32> {
     let tool_schemas = tools::tool_schemas();
     let ctx = ToolCtx { cwd: cfg.cwd.clone() };
 
@@ -69,13 +109,24 @@ pub fn run(cfg: RunConfig) -> anyhow::Result<i32> {
     let start = Instant::now();
     let mut iteration: u32 = 0;
     let mut recent: VecDeque<ToolResult> = VecDeque::with_capacity(STUCK_WINDOW);
+    let (mut usage_in, mut usage_out) = (0u64, 0u64);
 
     loop {
         if iteration >= cfg.max_iters {
-            return abort_run(&cfg.cwd, "iteration budget exceeded", 1);
+            return abort_run(&cfg.cwd, "iteration budget exceeded", 1, sink);
         }
         if start.elapsed() >= Duration::from_secs(cfg.max_minutes.saturating_mul(60)) {
-            return abort_run(&cfg.cwd, "time budget exceeded", 1);
+            return abort_run(&cfg.cwd, "time budget exceeded", 1, sink);
+        }
+        if cfg.controls.abort.load(Ordering::SeqCst) {
+            return abort_run(&cfg.cwd, "operator abort", 1, sink);
+        }
+
+        // Steering notes queued by the operator are consumed here, at the
+        // iteration boundary, before the next LLM call.
+        let notes = drain_steering(&cfg.controls.steering_rx);
+        if !notes.is_empty() {
+            append_steering_notes(&cfg.cwd, &mut messages, &notes, sink)?;
         }
 
         // Re-read spec every iteration: the user may edit it mid-run. Keep the
@@ -86,13 +137,27 @@ pub fn run(cfg: RunConfig) -> anyhow::Result<i32> {
         let ledger_text = ledger::read(&cfg.cwd)?;
         let system = build_system_prompt(&spec_text, &cfg.goal, &ledger_text);
 
-        eprintln!(
-            "[chug] iteration {} / {} ({} messages)",
-            iteration + 1,
-            cfg.max_iters,
-            messages.len()
-        );
+        sink.emit(Event::LedgerChanged(ledger_text.clone()));
+        sink.emit(Event::Iteration {
+            n: iteration + 1,
+            max: cfg.max_iters,
+            messages: messages.len() as u32,
+        });
         let resp = client.complete(&system, &messages, &tool_schemas)?;
+
+        let usage = resp.body.get("usage").cloned().unwrap_or(Value::Null);
+        usage_in += usage
+            .get("input_tokens")
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
+        usage_out += usage
+            .get("output_tokens")
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
+        sink.emit(Event::Usage {
+            input: usage_in,
+            output: usage_out,
+        });
 
         // Store the assistant message verbatim (text, thinking, tool_use, and
         // any unknown block types) so multi-turn echo stays valid.
@@ -100,13 +165,7 @@ pub fn run(cfg: RunConfig) -> anyhow::Result<i32> {
         transcript::append(&cfg.cwd, &assistant)?;
         let model_text = resp.text();
         if !model_text.is_empty() {
-            eprintln!("[chug] model: {}", preview(&model_text, 200));
-        }
-        if let Some(reason) = resp.stop_reason()
-            && reason != "end_turn"
-            && reason != "tool_use"
-        {
-            eprintln!("[chug] stop_reason: {reason}");
+            sink.emit(Event::ModelText(model_text));
         }
 
         let mut user_blocks: Vec<ContentBlock> = Vec::new();
@@ -114,11 +173,15 @@ pub fn run(cfg: RunConfig) -> anyhow::Result<i32> {
         let mut goal_summary: Option<String> = None;
 
         for (id, name, input) in assistant.content.iter().filter_map(ContentBlock::tool_use) {
+            sink.emit(Event::ToolStart {
+                name: name.to_string(),
+            });
             let result = tools::dispatch(&ctx, name, input);
-            eprintln!(
-                "[chug] tool {name} -> {}",
-                if result.is_error { "error" } else { "ok" }
-            );
+            sink.emit(Event::ToolResult {
+                name: name.to_string(),
+                ok: !result.is_error,
+                preview: result.content.chars().take(500).collect(),
+            });
             if name == "goal_complete" {
                 goal_summary = Some(
                     input
@@ -144,18 +207,19 @@ pub fn run(cfg: RunConfig) -> anyhow::Result<i32> {
             // Model stopped talking without finishing — the anti-stall kick.
             user_blocks.push(ContentBlock::text_block(KICK));
         } else if goal_summary.is_some() {
-            match verify(&cfg.cwd, &spec_text)? {
+            match verify(&cfg.cwd, &spec_text, sink)? {
                 VerifyOutcome::NoCheck | VerifyOutcome::Accepted => {
                     let user_msg = Message::user(user_blocks);
                     transcript::append(&cfg.cwd, &user_msg)?;
-                    println!("chug: goal complete");
-                    println!("summary: {}", goal_summary.unwrap_or_default());
-                    println!("\n--- LEDGER.md ---");
-                    println!("{ledger_text}");
+                    sink.emit(Event::GoalAccepted {
+                        summary: goal_summary.unwrap_or_default(),
+                    });
                     return Ok(0);
                 }
                 VerifyOutcome::Failed(output) => {
-                    eprintln!("[chug] goal_complete rejected: check command failed");
+                    sink.emit(Event::GoalRejected {
+                        reason: "check command failed".to_string(),
+                    });
                     user_blocks.push(ContentBlock::text_block(format!(
                         "goal_complete rejected: the spec check command failed. Output:\n\n{output}\n\nFix the failure and try again. Update the ledger to reflect the current state."
                     )));
@@ -169,7 +233,7 @@ pub fn run(cfg: RunConfig) -> anyhow::Result<i32> {
         messages.push(user_msg);
 
         if is_stuck(recent.make_contiguous()) {
-            return abort_run(&cfg.cwd, "stuck: repeated error", 2);
+            return abort_run(&cfg.cwd, "stuck: repeated error", 2, sink);
         }
 
         if transcript_trim(&mut messages) {
@@ -180,11 +244,43 @@ pub fn run(cfg: RunConfig) -> anyhow::Result<i32> {
     }
 }
 
+/// Drain ALL pending steering notes, FIFO.
+fn drain_steering(rx: &Receiver<String>) -> Vec<String> {
+    let mut notes = Vec::new();
+    while let Ok(note) = rx.try_recv() {
+        notes.push(note);
+    }
+    notes
+}
+
+/// Append each note as a user message `[operator] <note>` to the transcript.
+fn append_steering_notes(
+    cwd: &Path,
+    messages: &mut Vec<Message>,
+    notes: &[String],
+    sink: &mut dyn EventSink,
+) -> anyhow::Result<()> {
+    for note in notes {
+        let msg = Message::user(vec![ContentBlock::text_block(format!("[operator] {note}"))]);
+        transcript::append(cwd, &msg)?;
+        messages.push(msg);
+        sink.emit(Event::SteeringQueued(note.clone()));
+    }
+    Ok(())
+}
+
 /// Verification on `goal_complete`: run the spec's `check:` command if present.
-fn verify(cwd: &Path, spec_text: &str) -> anyhow::Result<VerifyOutcome> {
+fn verify(
+    cwd: &Path,
+    spec_text: &str,
+    sink: &mut dyn EventSink,
+) -> anyhow::Result<VerifyOutcome> {
     let Some(command) = parse_check_command(spec_text) else {
         return Ok(VerifyOutcome::NoCheck);
     };
+    sink.emit(Event::Verifying {
+        cmd: command.clone(),
+    });
     let outcome = tools::run_shell(cwd, &command, Duration::from_secs(tools::CHECK_TIMEOUT_SECS))?;
     if !outcome.timed_out && outcome.exit_code == Some(0) {
         return Ok(VerifyOutcome::Accepted);
@@ -277,28 +373,20 @@ pub fn build_system_prompt(spec: &str, goal: &str, ledger_text: &str) -> String 
     format!("{PREAMBLE}\n\n## Spec\n\n{spec}\n\n## Goal\n\n{goal}\n\n## Ledger\n\n{ledger_text}")
 }
 
-fn abort_run(cwd: &Path, reason: &str, code: i32) -> anyhow::Result<i32> {
-    eprintln!("chug: abort: {reason}");
-    println!("--- LEDGER.md ---");
-    println!(
-        "{}",
-        ledger::read(cwd).unwrap_or_else(|_| "(ledger unavailable)".to_string())
-    );
-    println!("---");
-    println!(
-        "resume with: chug run --spec <spec> --goal \"<goal>\" --cwd {} --resume",
-        cwd.display()
-    );
+fn abort_run(
+    cwd: &Path,
+    reason: &str,
+    code: i32,
+    sink: &mut dyn EventSink,
+) -> anyhow::Result<i32> {
+    // Push the freshest ledger before the abort event so the sink prints the
+    // same contents a direct read would (ConsoleSink caches from events).
+    let ledger_text = ledger::read(cwd).unwrap_or_else(|_| "(ledger unavailable)".to_string());
+    sink.emit(Event::LedgerChanged(ledger_text));
+    sink.emit(Event::Aborted {
+        reason: reason.to_string(),
+    });
     Ok(code)
-}
-
-fn preview(s: &str, max_chars: usize) -> String {
-    if s.chars().count() <= max_chars {
-        s.to_string()
-    } else {
-        let head: String = s.chars().take(max_chars).collect();
-        format!("{head}...")
-    }
 }
 
 #[cfg(test)]
@@ -488,5 +576,101 @@ mod tests {
         assert_eq!(uses.len(), 1);
         assert_eq!(uses[0].0, "tu_1");
         assert_eq!(uses[0].1, "bash");
+    }
+
+    #[derive(Default)]
+    struct RecordingSink(Vec<Event>);
+
+    impl EventSink for RecordingSink {
+        fn emit(&mut self, e: Event) {
+            self.0.push(e);
+        }
+    }
+
+    #[test]
+    fn steering_drains_fifo_into_transcript() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (tx, rx) = mpsc::channel();
+        tx.send("note one".to_string()).unwrap();
+        tx.send("note two".to_string()).unwrap();
+        drop(tx);
+
+        let notes = drain_steering(&rx);
+        assert_eq!(notes, vec!["note one".to_string(), "note two".to_string()]);
+
+        let mut messages = vec![Message::user(vec![ContentBlock::text_block("start")])];
+        let mut sink = RecordingSink::default();
+        append_steering_notes(tmp.path(), &mut messages, &notes, &mut sink).unwrap();
+
+        assert_eq!(messages.len(), 3);
+        for (i, expected) in ["[operator] note one", "[operator] note two"]
+            .into_iter()
+            .enumerate()
+        {
+            assert_eq!(messages[1 + i].role, "user");
+            assert_eq!(messages[1 + i].content[0].text(), Some(expected));
+        }
+        // transcript file round-trips exactly what the driver holds
+        assert_eq!(transcript::load(tmp.path()).unwrap(), messages[1..]);
+        // SteeringQueued emitted in FIFO order
+        let queued: Vec<String> = sink
+            .0
+            .iter()
+            .filter_map(|e| match e {
+                Event::SteeringQueued(n) => Some(n.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(queued, notes);
+    }
+
+    #[test]
+    fn steering_drain_ignores_disconnected_channel() {
+        let (tx, rx) = mpsc::channel::<String>();
+        drop(tx);
+        assert!(drain_steering(&rx).is_empty());
+    }
+
+    #[test]
+    fn abort_flag_aborts_at_boundary_like_budget_abort() {
+        let tmp = tempfile::tempdir().unwrap();
+        let spec = tmp.path().join("s.md");
+        std::fs::write(&spec, "spec text\ncheck: true\n").unwrap();
+
+        let (stx, srx) = mpsc::channel();
+        drop(stx);
+        let controls = Controls {
+            abort: Arc::new(AtomicBool::new(true)),
+            steering_rx: srx,
+        };
+        let cfg = RunConfig {
+            cwd: tmp.path().to_path_buf(),
+            spec_path: spec,
+            goal: "x".to_string(),
+            model: "test-model".to_string(),
+            max_iters: 5,
+            max_minutes: 10,
+            resume: false,
+            controls,
+        };
+        let client = Client::new_without_credentials("test-model").unwrap();
+        let mut sink = RecordingSink::default();
+        let code = run_loop(cfg, client, &mut sink).unwrap();
+
+        assert_eq!(code, 1);
+        assert!(matches!(
+            sink.0.iter().find(|e| matches!(e, Event::Aborted { .. })),
+            Some(Event::Aborted { reason }) if reason == "operator abort"
+        ));
+        // identical abort path to budgets: freshest ledger pushed, then abort
+        let aborted_idx = sink
+            .0
+            .iter()
+            .position(|e| matches!(e, Event::Aborted { .. }))
+            .unwrap();
+        assert!(matches!(&sink.0[aborted_idx - 1], Event::LedgerChanged(_)));
+        // aborted at the boundary before any LLM call
+        assert!(!sink.0.iter().any(|e| matches!(e, Event::ModelText(_))));
+        assert!(!sink.0.iter().any(|e| matches!(e, Event::Iteration { .. })));
     }
 }

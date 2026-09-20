@@ -143,6 +143,9 @@ impl Response {
         }
     }
 
+    /// Stop reason (`end_turn`, `tool_use`, ...). Used by tests and diagnostics;
+    /// the driver loop itself keys off tool_use blocks rather than this field.
+    #[allow(dead_code)]
     pub fn stop_reason(&self) -> Option<String> {
         self.body
             .get("stop_reason")
@@ -177,6 +180,23 @@ impl Client {
             base_url,
             api_key,
             auth_token,
+            model: model.to_string(),
+        })
+    }
+
+    /// Test-only constructor that skips credential checks (no network is ever
+    /// attempted by the constructor itself).
+    #[cfg(test)]
+    pub fn new_without_credentials(model: &str) -> anyhow::Result<Self> {
+        Ok(Self {
+            http: reqwest::blocking::Client::builder()
+                .timeout(Duration::from_secs(READ_TIMEOUT_SECS))
+                .use_rustls_tls()
+                .build()
+                .context("building HTTP client")?,
+            base_url: DEFAULT_BASE_URL.to_string(),
+            api_key: None,
+            auth_token: None,
             model: model.to_string(),
         })
     }
