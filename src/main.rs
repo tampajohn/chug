@@ -2,6 +2,7 @@ mod api;
 mod attach;
 mod auth;
 mod chat;
+mod complete;
 mod driver;
 mod events;
 mod riskgate;
