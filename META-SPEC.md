@@ -78,3 +78,9 @@ check: cd /Users/jadams/workspace/chug && cargo test
   `cargo build`, `cargo clippy --all-targets -- -D warnings`, and
   `cargo test` are all clean there → `goal_complete` with a summary of the
   rounds.
+- **README gate (added mid-run, applies from now): the repo is PUBLIC —
+  before `goal_complete`, README.md must document the SPEC-5 features
+  (`@file` attachments, `/help` list, Tab completion) AND be accurate about
+  everything else chug already does (`chug chat`, `--risk-gate`,
+  `--bash-timeout`, settings.json auth fallback, glob/list_dir tools).
+  README drift is a blocker, not an afterthought.**

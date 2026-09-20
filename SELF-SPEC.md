@@ -50,6 +50,10 @@ Status: todo | in-progress | blocked | done. Pri: 1 = highest.
   losing hand.
 4. **Commit each green item**: `git add -A && git commit -m
   "self(T<id>): <title>"`. One item per commit. (Do NOT push.)
+   **README rule (repo is public):** if the item changes anything
+   user-visible — CLI flags, tools, output, behavior — the README update is
+   part of the SAME commit. An item is not green until the README tells the
+   truth about it.
 5. **Close the row**: status `done` + commit hash in notes.
 
 ## Wrap-up rule (hard)
