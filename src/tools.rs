@@ -1,3 +1,4 @@
+use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::io::Read;
 #[cfg(unix)]
@@ -264,8 +265,49 @@ fn apply_edit(content: &str, old: &str, new: &str) -> Result<String, String> {
     match count {
         0 => Err("`old` not found in file".to_string()),
         1 => Ok(content.replacen(old, new, 1)),
-        n => Err(format!("`old` found {n} times; must match exactly once")),
+        n => Err(format!(
+            "`old` found {n} times; must match exactly once.\n{}",
+            describe_matches(content, old)
+        )),
     }
+}
+
+/// Where `old` occurs in `content`, for the non-unique-match error (T5): the
+/// 1-based line number of every match (capped) plus a few lines of context
+/// around the first matches, so the model can disambiguate with a longer
+/// `old` instead of reverting the file.
+fn describe_matches(content: &str, old: &str) -> String {
+    const LINE_CAP: usize = 20;
+    const CONTEXT_MATCHES: usize = 5;
+    const CONTEXT_RADIUS: usize = 2;
+
+    let lines: Vec<&str> = content.lines().collect();
+    let match_lines: Vec<usize> = content
+        .match_indices(old)
+        .map(|(offset, _)| content[..offset].bytes().filter(|&b| b == b'\n').count() + 1)
+        .collect();
+
+    let shown = &match_lines[..match_lines.len().min(LINE_CAP)];
+    let list = shown
+        .iter()
+        .map(|ln| ln.to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let mut out = format!("matches at lines: {list}");
+    if match_lines.len() > LINE_CAP {
+        out.push_str(&format!(" (and {} more)", match_lines.len() - LINE_CAP));
+    }
+    out.push_str("\ncontext around the first matches:");
+    for &ln in match_lines.iter().take(CONTEXT_MATCHES) {
+        out.push_str(&format!("\n-- around line {ln} --"));
+        let start = ln.saturating_sub(CONTEXT_RADIUS).max(1);
+        let end = (ln + CONTEXT_RADIUS).min(lines.len());
+        for l in start..=end {
+            let marker = if l == ln { '>' } else { ' ' };
+            out.push_str(&format!("\n{marker} {l} | {}", lines[l - 1]));
+        }
+    }
+    out
 }
 
 /// Replace every occurrence, returning the updated text and the count.
@@ -493,6 +535,12 @@ const READER_GRACE: Duration = Duration::from_secs(5);
 /// Run `sh -c <command>` in `cwd`, capturing stdout+stderr and the exit code.
 /// Drains both pipes on background threads to avoid pipe-buffer deadlock.
 ///
+/// The child's PATH gets `~/.cargo/bin` prepended when that directory exists
+/// (T4: cargo is chug's own toolchain; children should never have to discover
+/// `cargo: command not found` themselves). An existing PATH is inherited
+/// verbatim — the prepend never removes or reorders entries, and a PATH that
+/// already contains `~/.cargo/bin` is left untouched.
+///
 /// The shell runs in its own process group; when `timeout` elapses the whole
 /// group is SIGKILLed (a plain `child.kill()` would orphan grandchildren that
 /// keep the pipes open and wedge the caller on join). Reader threads are never
@@ -509,6 +557,12 @@ pub fn run_shell(cwd: &Path, command: &str, timeout: Duration) -> anyhow::Result
         .stderr(Stdio::piped());
     #[cfg(unix)]
     shell_cmd.process_group(0);
+    if let Some(home) = std::env::var_os("HOME").map(PathBuf::from)
+        && let Some(cargo_bin) = cargo_bin_dir(&home)
+    {
+        let inherited = std::env::var_os("PATH").unwrap_or_default();
+        shell_cmd.env("PATH", child_path(&inherited, &cargo_bin));
+    }
     let mut child = shell_cmd
         .spawn()
         .with_context(|| format!("spawning sh -c {command}"))?;
@@ -582,6 +636,29 @@ pub fn run_shell(cwd: &Path, command: &str, timeout: Duration) -> anyhow::Result
         output,
         timed_out,
     })
+}
+
+/// The cargo toolchain directory to prepend to bash-tool children (`T4`),
+/// when it exists under `home`.
+fn cargo_bin_dir(home: &Path) -> Option<PathBuf> {
+    let dir = home.join(".cargo").join("bin");
+    dir.is_dir().then_some(dir)
+}
+
+/// The child's PATH value: `cargo_bin` prepended to `inherited`, unless
+/// `inherited` already contains it. Never removes or reorders existing
+/// entries, so an explicitly-set PATH is preserved.
+fn child_path(inherited: &OsStr, cargo_bin: &Path) -> OsString {
+    let cargo_str = cargo_bin.to_string_lossy();
+    if inherited.to_string_lossy().split(':').any(|p| p == cargo_str) {
+        return inherited.to_os_string();
+    }
+    let mut path = OsString::from(cargo_str.as_ref());
+    if !inherited.is_empty() {
+        path.push(":");
+        path.push(inherited);
+    }
+    path
 }
 
 /// Kill the child's whole process group (the child is the group leader via
@@ -776,6 +853,108 @@ mod tests {
         assert_eq!(
             fs::read_to_string(tmp.path().join("f.txt")).unwrap(),
             "x y x y x"
+        );
+    }
+
+    /// T5: a 2-way non-unique match must report both match line numbers (and
+    /// context), so the model can re-anchor instead of reverting the file.
+    #[test]
+    fn edit_file_multi_match_error_lists_match_lines_with_context() {
+        let content = "alpha\nbar\nmid\nbar\nend\n";
+        let err = apply_edit(content, "bar", "X").unwrap_err();
+        assert!(err.contains("found 2 times"), "{err}");
+        assert!(err.contains("matches at lines: 2, 4"), "{err}");
+        assert!(err.contains("-- around line 2 --"), "{err}");
+        assert!(err.contains("-- around line 4 --"), "{err}");
+        // Context shows numbered lines with the match marked.
+        assert!(err.contains("> 2 | bar"), "{err}");
+        assert!(err.contains("  1 | alpha"), "{err}");
+    }
+
+    /// T5: with more matches than the cap, the line list stops at 20 and says
+    /// how many were omitted; context still covers only the first 5.
+    #[test]
+    fn edit_file_multi_match_error_caps_line_list_at_20() {
+        let content: String = (0..25)
+            .map(|i| format!("line with x here {i}\n"))
+            .collect();
+        let err = apply_edit(&content, "x", "X").unwrap_err();
+        assert!(err.contains("found 25 times"), "{err}");
+        assert!(
+            err.contains("matches at lines: 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20 (and 5 more)"),
+            "{err}"
+        );
+        assert!(!err.contains(" 25,"), "{err}");
+        assert!(err.contains("-- around line 5 --"), "{err}");
+        assert!(!err.contains("-- around line 6 --"), "{err}");
+    }
+
+    /// T4 helper: cargo bin dir must exist on disk to be prepended.
+    #[test]
+    fn cargo_bin_dir_only_when_exists() {
+        let tmp = tempfile::tempdir().unwrap();
+        assert!(cargo_bin_dir(tmp.path()).is_none());
+        fs::create_dir_all(tmp.path().join(".cargo/bin")).unwrap();
+        assert_eq!(
+            cargo_bin_dir(tmp.path()).unwrap(),
+            tmp.path().join(".cargo/bin")
+        );
+    }
+
+    /// T4: the prepend keeps every existing PATH entry (nothing is clobbered).
+    #[test]
+    fn child_path_prepends_and_preserves_inherited() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cargo_bin = tmp.path().join(".cargo/bin");
+        fs::create_dir_all(&cargo_bin).unwrap();
+        let out = child_path(OsStr::new("/usr/bin:/bin"), &cargo_bin);
+        assert_eq!(out, OsString::from(format!("{}:/usr/bin:/bin", cargo_bin.display())));
+        // Empty inherited PATH: just the cargo dir.
+        assert_eq!(child_path(OsStr::new(""), &cargo_bin), OsString::from(cargo_bin.to_string_lossy().as_ref()));
+    }
+
+    /// T4: a PATH that already contains ~/.cargo/bin is left untouched.
+    #[test]
+    fn child_path_noop_when_already_present() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cargo_bin = tmp.path().join(".cargo/bin");
+        let inherited = format!("{}:/usr/bin", cargo_bin.display());
+        let out = child_path(OsStr::new(&inherited), &cargo_bin);
+        assert_eq!(out, OsString::from(inherited));
+    }
+
+    /// T4 regression: a bash tool call for `cargo --version` must succeed with
+    /// no PATH prefix in the command — run_shell prepends ~/.cargo/bin itself.
+    /// (Skipped on hosts without a cargo checkout, e.g. hermetic CI sandboxes.)
+    #[test]
+    fn bash_tool_finds_cargo_without_path_prefix() {
+        let home = match std::env::var_os("HOME").map(PathBuf::from) {
+            Some(h) => h,
+            None => return,
+        };
+        if cargo_bin_dir(&home).is_none() {
+            eprintln!("skipping: no ~/.cargo/bin on this host");
+            return;
+        }
+        let tmp = tempfile::tempdir().unwrap();
+        let ctx = ToolCtx {
+            cwd: tmp.path().to_path_buf(),
+            bash_timeout: Duration::from_secs(BASH_TIMEOUT_SECS),
+        };
+        let result = dispatch(&ctx, "bash", &json!({"command": "cargo --version"}));
+        assert!(!result.is_error, "{}", result.content);
+        assert!(
+            result.content.contains("cargo "),
+            "unexpected output: {}",
+            result.content
+        );
+        // The child actually sees the prepended PATH.
+        let result = dispatch(&ctx, "bash", &json!({"command": "echo $PATH"}));
+        assert!(!result.is_error, "{}", result.content);
+        assert!(
+            result.content.contains(".cargo/bin"),
+            "PATH not prepended: {}",
+            result.content
         );
     }
 

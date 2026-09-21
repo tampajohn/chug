@@ -1,3 +1,5 @@
+use std::io::Read;
+use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, SystemTime};
 
@@ -7,9 +9,16 @@ use serde_json::{Value, json};
 
 const MAX_TOKENS: u32 = 8192;
 const READ_TIMEOUT_SECS: u64 = 600;
+/// Abort an attempt when the response body delivers no bytes for this long
+/// (T2: a stalled connection is distinct from the 600s total read timeout).
+/// The attempt then fails as a connection error and T1's retry applies.
+const ACTIVITY_TIMEOUT_SECS: u64 = 180;
 const ANTHROPIC_VERSION: &str = "2023-06-01";
-/// Exponential backoff between failed attempts: 1s, 2s, 4s, 8s (4 attempts total).
-const RETRY_DELAYS_SECS: [u64; 4] = [1, 2, 4, 8];
+/// Connection-level retry backoff (T1): 1s..240s — 9 retries (10 attempts),
+/// ~8 min total, enough to outlive a real endpoint restart (30-60s+).
+const RETRY_DELAYS_SECS: [u64; 9] = [1, 2, 4, 8, 16, 32, 64, 120, 240];
+/// A `retry-after` header is honored but never longer than this.
+const RETRY_AFTER_CAP_SECS: u64 = 120;
 
 /// One content block of a message.
 ///
@@ -116,13 +125,208 @@ impl Message {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct Client {
+/// A raw HTTP response handed back by the transport layer, before any status
+/// handling. `headers` preserves (name, value) pairs as received.
+pub(crate) struct RawResponse {
+    pub status: u16,
+    pub headers: Vec<(String, String)>,
+    pub body: String,
+}
+
+impl RawResponse {
+    fn header(&self, name: &str) -> Option<&str> {
+        self.headers
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case(name))
+            .map(|(_, v)| v.as_str())
+    }
+}
+
+/// Why a transport attempt failed (T1).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum TransportError {
+    /// Connection-level failure: connect error, connection reset/broken pipe,
+    /// read or activity timeout. Safe to retry.
+    Connection(String),
+    /// Anything else (TLS misuse, unsupported scheme, ...). Fail fast.
+    Fatal(String),
+}
+
+/// The HTTP boundary of [`Client`], split out so tests can inject a fake
+/// transport that scripts connection failures, statuses and stalled bodies.
+pub(crate) trait Transport: Send + Sync {
+    fn send(
+        &self,
+        url: &str,
+        headers: &[(String, String)],
+        body: &str,
+    ) -> Result<RawResponse, TransportError>;
+}
+
+/// Production transport: reqwest blocking, with a read-side activity watchdog.
+struct ReqwestTransport {
     http: reqwest::blocking::Client,
+    activity_timeout: Duration,
+}
+
+impl Transport for ReqwestTransport {
+    fn send(
+        &self,
+        url: &str,
+        headers: &[(String, String)],
+        body: &str,
+    ) -> Result<RawResponse, TransportError> {
+        let mut req = self.http.post(url);
+        for (name, value) in headers {
+            req = req.header(name, value);
+        }
+        let resp = req
+            .body(body.to_string())
+            .send()
+            .map_err(classify_reqwest)?;
+        let status = resp.status().as_u16();
+        let resp_headers: Vec<(String, String)> = resp
+            .headers()
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string()))
+            .collect();
+        let body = read_body_with_watchdog(resp, self.activity_timeout)?;
+        Ok(RawResponse {
+            status,
+            headers: resp_headers,
+            body,
+        })
+    }
+}
+
+/// Classify a reqwest failure: timeouts, connect errors and anything wrapping
+/// an io error of the connection-reset family are connection-level (retryable
+/// under T1); everything else fails fast.
+fn classify_reqwest(e: reqwest::Error) -> TransportError {
+    if e.is_timeout() || e.is_connect() {
+        return TransportError::Connection(e.to_string());
+    }
+    let mut source: Option<&(dyn std::error::Error + 'static)> = Some(&e);
+    while let Some(err) = source {
+        if let Some(io) = err.downcast_ref::<std::io::Error>()
+            && is_connection_io_error(io.kind())
+        {
+            return TransportError::Connection(io.to_string());
+        }
+        source = err.source();
+    }
+    // Belt and braces: hyper surfaces some resets as plain display strings
+    // without an io error anywhere in the chain.
+    let text = e.to_string().to_ascii_lowercase();
+    if text.contains("connection reset")
+        || text.contains("broken pipe")
+        || text.contains("connection closed")
+    {
+        return TransportError::Connection(e.to_string());
+    }
+    TransportError::Fatal(e.to_string())
+}
+
+/// Classify a raw io failure from the body reader (connection-reset family is
+/// retryable under T1; anything else fails fast).
+fn classify_io(e: &std::io::Error) -> TransportError {
+    if is_connection_io_error(e.kind()) {
+        TransportError::Connection(e.to_string())
+    } else {
+        TransportError::Fatal(e.to_string())
+    }
+}
+
+fn is_connection_io_error(kind: std::io::ErrorKind) -> bool {
+    use std::io::ErrorKind as K;
+    matches!(
+        kind,
+        K::ConnectionReset
+            | K::ConnectionAborted
+            | K::BrokenPipe
+            | K::TimedOut
+            | K::UnexpectedEof
+    )
+}
+
+/// Read the response body with a per-chunk activity watchdog (T2): if no bytes
+/// arrive for `activity_timeout`, the attempt is aborted with a connection
+/// error so T1's retry schedule applies. Distinct from the client-wide 600s
+/// total read timeout.
+///
+/// Blocking `Read` offers no deadlines, so the read runs on a worker thread
+/// that signals progress per chunk. If the watchdog fires, that thread is left
+/// blocked until the client's total read timeout errs it out — a bounded
+/// leak, never a hung caller.
+fn read_body_with_watchdog<R: Read + Send + 'static>(
+    mut reader: R,
+    activity_timeout: Duration,
+) -> Result<String, TransportError> {
+    enum BodyMsg {
+        Progress,
+        Done(Result<String, TransportError>),
+    }
+    let (tx, rx) = std::sync::mpsc::channel::<BodyMsg>();
+    thread::spawn(move || {
+        let mut buf = Vec::new();
+        let mut chunk = [0u8; 8192];
+        loop {
+            match reader.read(&mut chunk) {
+                Ok(0) => break,
+                Ok(n) => {
+                    buf.extend_from_slice(&chunk[..n]);
+                    if tx.send(BodyMsg::Progress).is_err() {
+                        // Consumer gone (activity timeout): stop reading.
+                        return;
+                    }
+                }
+                Err(e) => {
+                    let _ = tx.send(BodyMsg::Done(Err(classify_io(&e))));
+                    return;
+                }
+            }
+        }
+        let _ = tx.send(BodyMsg::Done(Ok(
+            String::from_utf8_lossy(&buf).into_owned()
+        )));
+    });
+
+    loop {
+        match rx.recv_timeout(activity_timeout) {
+            Ok(BodyMsg::Progress) => continue,
+            Ok(BodyMsg::Done(result)) => return result,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                return Err(TransportError::Connection(format!(
+                    "no response bytes for {}s (activity timeout)",
+                    activity_timeout.as_secs()
+                )));
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                return Err(TransportError::Fatal(
+                    "body reader thread died unexpectedly".to_string(),
+                ));
+            }
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct Client {
+    transport: Arc<dyn Transport>,
+    retry_delays: Vec<Duration>,
     base_url: String,
     api_key: Option<String>,
     auth_token: Option<String>,
     model: String,
+}
+
+impl std::fmt::Debug for Client {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Client")
+            .field("base_url", &self.base_url)
+            .field("model", &self.model)
+            .finish_non_exhaustive()
+    }
 }
 
 /// The driver-facing slice of the Messages API client. A trait so driver and
@@ -281,13 +485,12 @@ impl Client {
         // ~/.claude/settings.json, then the api.anthropic.com default
         // (base URL only). Resolution lives in auth.rs.
         let ep = crate::auth::resolve_endpoint()?;
-        let http = reqwest::blocking::Client::builder()
-            .timeout(Duration::from_secs(READ_TIMEOUT_SECS))
-            .use_rustls_tls()
-            .build()
-            .context("building HTTP client")?;
         Ok(Self {
-            http,
+            transport: Arc::new(ReqwestTransport {
+                http: build_http_client()?,
+                activity_timeout: Duration::from_secs(ACTIVITY_TIMEOUT_SECS),
+            }),
+            retry_delays: default_retry_delays(),
             base_url: ep.base_url,
             api_key: ep.api_key,
             auth_token: ep.auth_token,
@@ -300,11 +503,11 @@ impl Client {
     #[cfg(test)]
     pub fn new_without_credentials(model: &str) -> anyhow::Result<Self> {
         Ok(Self {
-            http: reqwest::blocking::Client::builder()
-                .timeout(Duration::from_secs(READ_TIMEOUT_SECS))
-                .use_rustls_tls()
-                .build()
-                .context("building HTTP client")?,
+            transport: Arc::new(ReqwestTransport {
+                http: build_http_client()?,
+                activity_timeout: Duration::from_secs(ACTIVITY_TIMEOUT_SECS),
+            }),
+            retry_delays: default_retry_delays(),
             base_url: crate::auth::DEFAULT_BASE_URL.to_string(),
             api_key: None,
             auth_token: None,
@@ -322,7 +525,9 @@ impl Client {
         &self.model
     }
 
-    /// One non-streaming Messages API call with retry/backoff on non-200.
+    /// One non-streaming Messages API call with T1 retry semantics: connection
+    /// failures and the gateway/overload statuses retry with exponential
+    /// backoff (honoring `retry-after`, capped); other HTTP errors fail fast.
     pub fn complete(
         &self,
         system: &str,
@@ -338,50 +543,93 @@ impl Client {
             "tools": tools,
             "tool_choice": { "type": "auto" },
         });
+        let body = serde_json::to_string(&body).context("serializing request body")?;
 
+        let mut headers = vec![(
+            "anthropic-version".to_string(),
+            ANTHROPIC_VERSION.to_string(),
+        )];
+        if let Some(key) = &self.api_key {
+            headers.push(("x-api-key".to_string(), key.clone()));
+        }
+        if let Some(token) = &self.auth_token {
+            headers.push(("Authorization".to_string(), format!("Bearer {token}")));
+        }
+
+        let total_attempts = self.retry_delays.len() + 1;
         let mut last_error = String::new();
-        let total_attempts = RETRY_DELAYS_SECS.len();
-        for (attempt, backoff) in RETRY_DELAYS_SECS.iter().enumerate() {
-            let resp = self.post(&url, &body)?;
-            let status = resp.status();
-            if status.is_success() {
-                let text = resp.text().context("reading response body")?;
-                let parsed: Value = serde_json::from_str(&text)
-                    .with_context(|| format!("parsing response JSON: {}", preview(&text, 500)))?;
-                return Ok(Response { body: parsed });
+        let mut attempts = 0;
+        for attempt in 0..total_attempts {
+            attempts += 1;
+            match self.transport.send(&url, &headers, &body) {
+                Ok(raw) => {
+                    if (200..300).contains(&raw.status) {
+                        let parsed: Value = serde_json::from_str(&raw.body).with_context(|| {
+                            format!("parsing response JSON: {}", preview(&raw.body, 500))
+                        })?;
+                        return Ok(Response { body: parsed });
+                    }
+                    let status = raw.status;
+                    last_error = format!("HTTP {status}: {}", preview(&raw.body, 1000));
+                    // Only the overload/gateway classes retry (T1); 4xx auth,
+                    // model and request errors stay fail-fast.
+                    if !is_retryable_status(status) {
+                        bail!("LLM request failed: {last_error}");
+                    }
+                    if attempt + 1 == total_attempts {
+                        break;
+                    }
+                    let retry_after = raw.header("retry-after");
+                    thread::sleep(self.delay_for(attempt, retry_after));
+                }
+                Err(TransportError::Connection(msg)) => {
+                    last_error = format!("connection error: {msg}");
+                    if attempt + 1 == total_attempts {
+                        break;
+                    }
+                    thread::sleep(self.retry_delays[attempt]);
+                }
+                Err(TransportError::Fatal(msg)) => {
+                    bail!("LLM request failed: {msg}");
+                }
             }
-            let retry_after = resp
-                .headers()
-                .get("retry-after")
-                .and_then(|v| v.to_str().ok())
-                .and_then(|s| s.trim().parse::<u64>().ok());
-            let err_text = resp.text().unwrap_or_default();
-            last_error = format!("HTTP {status}: {}", preview(&err_text, 1000));
-            if attempt == total_attempts - 1 {
-                break;
-            }
-            let delay = retry_after.unwrap_or(*backoff);
-            thread::sleep(Duration::from_secs(delay));
         }
         bail!(
-            "LLM request failed after {} attempts; last error: {last_error}",
-            RETRY_DELAYS_SECS.len()
+            "LLM request failed after {attempts} attempts; last error: {last_error}"
         );
     }
 
-    fn post(&self, url: &str, body: &Value) -> anyhow::Result<reqwest::blocking::Response> {
-        let mut req = self
-            .http
-            .post(url)
-            .header("anthropic-version", ANTHROPIC_VERSION);
-        if let Some(key) = &self.api_key {
-            req = req.header("x-api-key", key);
-        }
-        if let Some(token) = &self.auth_token {
-            req = req.header("Authorization", format!("Bearer {token}"));
-        }
-        Ok(req.json(body).send()?)
+    /// Delay before the retry following `attempt`: an explicit `retry-after`
+    /// header wins, capped at [`RETRY_AFTER_CAP_SECS`]; otherwise the
+    /// scheduled backoff for that attempt.
+    fn delay_for(&self, attempt: usize, retry_after: Option<&str>) -> Duration {
+        retry_after
+            .and_then(|s| s.trim().parse::<u64>().ok())
+            .map(|secs| Duration::from_secs(secs.min(RETRY_AFTER_CAP_SECS)))
+            .unwrap_or(self.retry_delays[attempt])
     }
+}
+
+fn build_http_client() -> anyhow::Result<reqwest::blocking::Client> {
+    reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(READ_TIMEOUT_SECS))
+        .use_rustls_tls()
+        .build()
+        .context("building HTTP client")
+}
+
+fn default_retry_delays() -> Vec<Duration> {
+    RETRY_DELAYS_SECS
+        .iter()
+        .map(|&secs| Duration::from_secs(secs))
+        .collect()
+}
+
+/// T1: the only HTTP statuses worth retrying — overload and gateway classes.
+/// Auth/model errors (401/403/404...), bad requests and unexpected server
+/// errors fail fast.
+fn is_retryable_status(status: u16) -> bool {
+    matches!(status, 429 | 502 | 503 | 504 | 529)
 }
 
 fn preview(s: &str, max_chars: usize) -> String {
@@ -596,5 +844,273 @@ mod tests {
         assert!(text.contains("\"type\":\"tool_result\""));
         assert!(text.contains("\"tool_use_id\":\"tu_1\""));
         assert!(text.contains("\"is_error\":true"));
+    }
+
+    // ---- T1/T2: retry + watchdog regression tests on a fake transport ----
+
+    struct FakeTransport {
+        responses: std::sync::Mutex<std::collections::VecDeque<Result<RawResponse, TransportError>>>,
+        calls: std::sync::Mutex<usize>,
+    }
+
+    impl FakeTransport {
+        fn new(responses: Vec<Result<RawResponse, TransportError>>) -> Arc<Self> {
+            Arc::new(FakeTransport {
+                responses: std::sync::Mutex::new(responses.into()),
+                calls: std::sync::Mutex::new(0),
+            })
+        }
+
+        fn calls(&self) -> usize {
+            *self.calls.lock().unwrap()
+        }
+    }
+
+    impl Transport for FakeTransport {
+        fn send(
+            &self,
+            _url: &str,
+            _headers: &[(String, String)],
+            _body: &str,
+        ) -> Result<RawResponse, TransportError> {
+            *self.calls.lock().unwrap() += 1;
+            self.responses
+                .lock()
+                .unwrap()
+                .pop_front()
+                .expect("fake transport script exhausted")
+        }
+    }
+
+    fn ok_raw(body: Value) -> Result<RawResponse, TransportError> {
+        Ok(RawResponse {
+            status: 200,
+            headers: Vec::new(),
+            body: body.to_string(),
+        })
+    }
+
+    fn status_raw(status: u16, headers: Vec<(String, String)>) -> Result<RawResponse, TransportError> {
+        Ok(RawResponse {
+            status,
+            headers,
+            body: json!({"error": {"message": "synthetic"}}).to_string(),
+        })
+    }
+
+    fn conn_err(msg: &str) -> Result<RawResponse, TransportError> {
+        Err(TransportError::Connection(msg.to_string()))
+    }
+
+    fn client_with(transport: Arc<dyn Transport>, delays: &[u64]) -> Client {
+        Client {
+            transport,
+            retry_delays: delays.iter().map(|&s| Duration::from_secs(s)).collect(),
+            base_url: "http://fake.local".to_string(),
+            api_key: None,
+            auth_token: None,
+            model: "test-model".to_string(),
+        }
+    }
+
+    fn run_complete(client: &Client) -> anyhow::Result<Response> {
+        client.complete(
+            "sys",
+            &[Message::user(vec![ContentBlock::text_block("hi")])],
+            &[],
+        )
+    }
+
+    /// T1: connection resets retry; the run survives once the endpoint comes
+    /// back (here: on attempt 3, as after a real endpoint restart).
+    #[test]
+    fn connection_error_retries_and_succeeds_on_attempt_3() {
+        let ft = FakeTransport::new(vec![
+            conn_err("connection reset by peer"),
+            conn_err("connection reset by peer"),
+            ok_raw(json!({"content": [{"type": "text", "text": "back"}]})),
+        ]);
+        let client = client_with(ft.clone(), &[0, 0, 0, 0, 0, 0, 0, 0, 0]);
+        let resp = run_complete(&client).unwrap();
+        assert_eq!(resp.text(), "back");
+        assert_eq!(ft.calls(), 3);
+    }
+
+    /// T1: HTTP 400 (auth/model/request errors) never retries.
+    #[test]
+    fn http_400_fails_immediately() {
+        let ft = FakeTransport::new(vec![status_raw(400, Vec::new())]);
+        let client = client_with(ft.clone(), &[0, 0, 0, 0, 0, 0, 0, 0, 0]);
+        let err = run_complete(&client).unwrap_err();
+        assert!(err.to_string().contains("HTTP 400"), "{err}");
+        assert_eq!(ft.calls(), 1);
+    }
+
+    /// T1: retryable statuses (429/502/503/504/529) follow the schedule; a
+    /// plain 500 does not.
+    #[test]
+    fn retryable_status_follows_schedule_and_500_fails_fast() {
+        let ft = FakeTransport::new((0..50).map(|_| status_raw(503, Vec::new())).collect());
+        let client = client_with(ft.clone(), &[0, 0, 0]);
+        let err = run_complete(&client).unwrap_err();
+        assert_eq!(ft.calls(), 4, "schedule of 3 delays = 4 attempts: {err}");
+        assert!(err.to_string().contains("after 4 attempts"), "{err}");
+
+        let ft = FakeTransport::new(vec![status_raw(500, Vec::new())]);
+        let client = client_with(ft.clone(), &[0, 0, 0]);
+        let err = run_complete(&client).unwrap_err();
+        assert!(err.to_string().contains("HTTP 500"), "{err}");
+        assert_eq!(ft.calls(), 1);
+    }
+
+    /// T1: the schedule bounds the retries on persistent connection failures.
+    #[test]
+    fn connection_retries_stop_after_schedule() {
+        let ft = FakeTransport::new(
+            (0..50)
+                .map(|_| conn_err("connection reset"))
+                .collect(),
+        );
+        let client = client_with(ft.clone(), &[0, 0]);
+        let err = run_complete(&client).unwrap_err();
+        assert_eq!(ft.calls(), 3, "schedule of 2 delays = 3 attempts");
+        assert!(err.to_string().contains("after 3 attempts"), "{err}");
+    }
+
+    /// T1: `retry-after` wins over the scheduled delay, capped at 120s; a
+    /// non-numeric header falls back to the schedule.
+    #[test]
+    fn retry_after_is_honored_and_capped() {
+        let client = client_with(FakeTransport::new(Vec::new()), &[1, 2, 4]);
+        assert_eq!(client.delay_for(0, Some("5")), Duration::from_secs(5));
+        assert_eq!(
+            client.delay_for(0, Some("300")),
+            Duration::from_secs(RETRY_AFTER_CAP_SECS)
+        );
+        assert_eq!(client.delay_for(1, None), Duration::from_secs(2));
+        assert_eq!(
+            client.delay_for(0, Some("not-a-number")),
+            Duration::from_secs(1)
+        );
+        // End-to-end: a 429 with retry-after: 0 retries without stalling.
+        let ft = FakeTransport::new(vec![
+            status_raw(429, vec![("retry-after".to_string(), "0".to_string())]),
+            ok_raw(json!({"content": []})),
+        ]);
+        let client = client_with(ft.clone(), &[0, 0, 0, 0, 0, 0, 0, 0, 0]);
+        run_complete(&client).unwrap();
+        assert_eq!(ft.calls(), 2);
+    }
+
+    /// A reader that delivers one byte then goes silent for the rest of the
+    /// test (simulating a stalled connection mid-body).
+    struct SilentAfterFirst {
+        sent_first: bool,
+    }
+
+    impl Read for SilentAfterFirst {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            if !self.sent_first {
+                self.sent_first = true;
+                buf[0] = b'a';
+                return Ok(1);
+            }
+            // Stall well past the watchdog, then report EOF so the worker
+            // thread (which outlives the abandoned attempt) also exits.
+            thread::sleep(Duration::from_secs(2));
+            Ok(0)
+        }
+    }
+
+    /// T2: a body stream that goes silent aborts the attempt at the activity
+    /// timeout (injected: 1s instead of the production 180s) as a connection
+    /// error — which T1's retry then treats as retryable.
+    #[test]
+    fn body_watchdog_aborts_silent_stream() {
+        let start = std::time::Instant::now();
+        let err = read_body_with_watchdog(
+            SilentAfterFirst { sent_first: false },
+            Duration::from_secs(1),
+        )
+        .unwrap_err();
+        let elapsed = start.elapsed();
+        match err {
+            TransportError::Connection(msg) => {
+                assert!(msg.contains("activity timeout"), "{msg}")
+            }
+            other => panic!("expected connection error, got {other:?}"),
+        }
+        // Fired at ~1s (the injected activity timeout), not the 600s total
+        // read timeout and not instantly.
+        assert!(elapsed >= Duration::from_millis(900), "{elapsed:?}");
+        assert!(elapsed < Duration::from_millis(1900), "{elapsed:?}");
+    }
+
+    /// A reader that dribbles chunks at a steady pace slower than the total
+    /// time budget but faster than the activity timeout.
+    struct SteadyReader {
+        interval: Duration,
+        chunks: usize,
+        sent: usize,
+        next_at: std::time::Instant,
+    }
+
+    impl Read for SteadyReader {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            if self.sent >= self.chunks {
+                return Ok(0);
+            }
+            let now = std::time::Instant::now();
+            if now < self.next_at {
+                thread::sleep(self.next_at - now);
+            }
+            self.next_at = std::time::Instant::now() + self.interval;
+            buf[0] = b'x';
+            self.sent += 1;
+            Ok(1)
+        }
+    }
+
+    /// T2: the watchdog is per-chunk activity, not a total read deadline — a
+    /// slow-but-steady stream (1.25s total > 1s activity) completes.
+    #[test]
+    fn body_watchdog_allows_slow_steady_stream() {
+        let reader = SteadyReader {
+            interval: Duration::from_millis(250),
+            chunks: 5,
+            sent: 0,
+            next_at: std::time::Instant::now(),
+        };
+        let body = read_body_with_watchdog(reader, Duration::from_secs(1)).unwrap();
+        assert_eq!(body, "xxxxx");
+    }
+
+    /// A mid-body connection reset is connection-level (retryable under T1);
+    /// an unexpected io error is fatal (fail fast).
+    #[test]
+    fn body_read_error_classification() {
+        struct ResetReader;
+        impl Read for ResetReader {
+            fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::ConnectionReset,
+                    "connection reset by peer",
+                ))
+            }
+        }
+        let err = read_body_with_watchdog(ResetReader, Duration::from_secs(1)).unwrap_err();
+        assert_eq!(err, TransportError::Connection("connection reset by peer".to_string()));
+
+        struct DeniedReader;
+        impl Read for DeniedReader {
+            fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "denied",
+                ))
+            }
+        }
+        let err = read_body_with_watchdog(DeniedReader, Duration::from_secs(1)).unwrap_err();
+        assert_eq!(err, TransportError::Fatal("denied".to_string()));
     }
 }
