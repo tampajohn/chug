@@ -53,6 +53,9 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 /// Append one line to the per-server mcp log. Best effort: logging must never
 /// break the protocol path.
 fn log_line(path: &Path, line: &str) {
+    if let Some(parent) = path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
     if let Ok(mut f) = fs::OpenOptions::new().create(true).append(true).open(path) {
         let _ = writeln!(f, "{line}");
     }
@@ -1087,6 +1090,77 @@ for line in sys.stdin:
     }
 
     #[test]
+    fn validate_config_missing_env_var() {
+        use std::collections::HashMap;
+        let raw = McpServerConfigRaw {
+            command: None,
+            args: None,
+            env: None,
+            url: Some("https://example.com/mcp".to_string()),
+            transport: Some("http".to_string()),
+            headers: Some({
+                let mut m = HashMap::new();
+                m.insert("Authorization".to_string(), "Bearer ${MISSING_VAR}".to_string());
+                m
+            }),
+        };
+        let err = validate_config(&raw).expect("should error");
+        assert!(err.contains("missing env var in header Authorization"));
+    }
+
+    #[test]
+    fn validate_config_bad_transport() {
+        let raw = McpServerConfigRaw {
+            command: None,
+            args: None,
+            env: None,
+            url: Some("https://example.com/mcp".to_string()),
+            transport: Some("ws".to_string()),
+            headers: None,
+        };
+        let err = validate_config(&raw).expect("should error");
+        assert_eq!(err, "unsupported transport: ws");
+    }
+
+    #[test]
+    fn validate_config_url_and_command_conflict() {
+        let raw = McpServerConfigRaw {
+            command: Some("python3".to_string()),
+            args: None,
+            env: None,
+            url: Some("https://example.com/mcp".to_string()),
+            transport: None,
+            headers: None,
+        };
+        let err = validate_config(&raw).expect("should error");
+        assert_eq!(err, "server cannot be both remote and stdio");
+    }
+
+    #[test]
+    fn validate_config_neither_url_nor_command() {
+        let raw = McpServerConfigRaw {
+            command: None,
+            args: None,
+            env: None,
+            url: None,
+            transport: None,
+            headers: None,
+        };
+        let err = validate_config(&raw).expect("should error");
+        assert_eq!(err, "stdio server requires command");
+    }
+
+    #[test]
+    fn expand_env_vars_direct() {
+        unsafe { std::env::set_var("X", "abc123"); }
+        assert_eq!(expand_env_vars("Bearer ${X}"), Some("Bearer abc123".to_string()));
+        unsafe { std::env::set_var("A", "1"); std::env::set_var("B", "2"); }
+        assert_eq!(expand_env_vars("${A}-${B}"), Some("1-2".to_string()));
+        assert_eq!(expand_env_vars("literal $ not braces"), Some("literal $ not braces".to_string()));
+        assert_eq!(expand_env_vars("${MISSING}"), None);
+    }
+
+    #[test]
     fn missing_env_var_skips_only_that_server() {
         let tmp = TempDir::new().unwrap();
         // Create a stdio server
@@ -1108,6 +1182,10 @@ for line in sys.stdin:
         // remote skipped due to missing env var, stdio loaded
         assert_eq!(reg.servers.len(), 1);
         assert_eq!(reg.servers[0].name, "stdio-srv");
+        // verify log contains config error
+        let log_path = tmp.path().join(".chug").join("mcp-remote-srv.log");
+        let content = fs::read_to_string(&log_path).unwrap_or_default();
+        assert!(content.contains("missing env var in header Authorization"));
     }
 
     #[test]
@@ -1130,6 +1208,9 @@ for line in sys.stdin:
         let reg = McpRegistry::new(tmp.path(), false, None).unwrap();
         assert_eq!(reg.servers.len(), 1);
         assert_eq!(reg.servers[0].name, "stdio-srv");
+        let log_path = tmp.path().join(".chug").join("mcp-remote-srv.log");
+        let content = fs::read_to_string(&log_path).unwrap_or_default();
+        assert!(content.contains("unsupported transport: ws"));
     }
 
     #[test]

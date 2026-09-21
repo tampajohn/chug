@@ -1,7 +1,7 @@
 //! SSE line parsing and reconnect/retry backoff schedules for the MCP
 //! streamable-HTTP transport (SPEC-9). Wired up in round 2 — until then the
 //! items here are exercised only by unit tests.
-#![allow(dead_code)]
+#![allow(dead_code, clippy::empty_line_after_doc_comments)]
 
 use std::time::Duration;
 
@@ -18,7 +18,8 @@ pub struct SseParser {
     event: Option<String>,
     id: Option<String>,
     data: String,
-    seen_empty: bool,
+    has_data: bool,
+    buffer: String,
 }
 
 impl SseParser {
@@ -27,7 +28,8 @@ impl SseParser {
             event: None,
             id: None,
             data: String::new(),
-            seen_empty: false,
+            has_data: false,
+            buffer: String::new(),
         }
     }
 
@@ -36,8 +38,8 @@ impl SseParser {
         // Trim trailing CR
         let line = raw.strip_suffix('\r').unwrap_or(raw);
         if line.is_empty() {
-            // blank line dispatches
-            if self.data.is_empty() && self.event.is_none() && self.id.is_none() {
+            // blank line dispatches only if we saw data
+            if !self.has_data {
                 return None;
             }
             let ev = SseEvent {
@@ -45,7 +47,8 @@ impl SseParser {
                 data: std::mem::take(&mut self.data),
                 id: self.id.take(),
             };
-            self.seen_empty = false;
+            self.has_data = false;
+            self.data.clear();
             return Some(ev);
         }
 
@@ -58,8 +61,9 @@ impl SseParser {
             self.event = Some(rest.trim_start().to_string());
         } else if let Some(rest) = line.strip_prefix("data:") {
             let val = rest.trim_start().to_string();
-            if self.data.is_empty() {
+            if !self.has_data {
                 self.data = val;
+                self.has_data = true;
             } else {
                 self.data.push('\n');
                 self.data.push_str(&val);
@@ -73,12 +77,21 @@ impl SseParser {
     /// Convenience: feed a whole chunk split on lines.
     pub fn feed(&mut self, chunk: &str) -> Vec<SseEvent> {
         let mut out = Vec::new();
-        for line in chunk.split_inclusive('\n') {
-            let line = line.trim_end_matches(&['\n', '\r'][..]);
-            if let Some(ev) = self.feed_line(line) {
-                out.push(ev);
+        // prepend leftover from previous feed
+        let mut data = std::mem::take(&mut self.buffer);
+        data.push_str(chunk);
+        let mut start = 0;
+        for (i, b) in data.bytes().enumerate() {
+            if b == b'\n' {
+                let line = &data[start..i];
+                if let Some(ev) = self.feed_line(line) {
+                    out.push(ev);
+                }
+                start = i + 1;
             }
         }
+        // keep remainder for next call
+        self.buffer = data[start..].to_string();
         out
     }
 }
@@ -99,6 +112,15 @@ mod tests {
         assert_eq!(p.feed_line(": comment"), None);
         let ev = p.feed_line("");
         assert_eq!(ev, Some(SseEvent { event: None, data: "hello\nworld".to_string(), id: None }));
+    }
+
+    #[test]
+    fn parser_multi_line_data_empty_first() {
+        let mut p = SseParser::new();
+        assert_eq!(p.feed_line("data:"), None);
+        assert_eq!(p.feed_line("data: x"), None);
+        let ev = p.feed_line("").unwrap();
+        assert_eq!(ev.data, "\nx");
     }
 
     #[test]
@@ -131,27 +153,37 @@ mod tests {
         // a blank line with nothing pending dispatches nothing
         assert!(p.feed_line("").is_none());
     }
+
+    #[test]
+    fn parser_id_only_no_dispatch() {
+        let mut p = SseParser::new();
+        assert!(p.feed_line("id: 1").is_none());
+        assert!(p.feed_line("event: e").is_none());
+        assert!(p.feed_line("").is_none());
+    }
+
+    #[test]
+    fn parser_feed_chunk_split() {
+        let mut p = SseParser::new();
+        let evs = p.feed("data: a\n");
+        assert!(evs.is_empty());
+        let evs = p.feed("data: b\n\n");
+        assert_eq!(evs.len(), 1);
+        assert_eq!(evs[0].data, "a\nb");
+    }
+
+    #[test]
+    fn parser_feed_split_across_chunks() {
+        let mut p = SseParser::new();
+        let evs = p.feed("data: hel");
+        assert!(evs.is_empty());
+        let evs = p.feed("lo\ndata: world\n\n");
+        assert_eq!(evs.len(), 1);
+        assert_eq!(evs[0].data, "hello\nworld");
+    }
 }
 
 /// Backoff helpers for SSE reconnect and POST retries.
-pub struct Backoff {
-    base: Duration,
-    max: Duration,
-}
-
-impl Backoff {
-    pub fn new(base: Duration, max: Duration) -> Self {
-        Self { base, max }
-    }
-
-    /// Next delay with jitter injectable. jitter_fn returns a factor in (0,1] used as multiplier? Spec: jitter stays within [base/2, base] or similar.
-    /// We'll implement classic jitter: delay = base * jitter_factor where jitter_factor in [0.5, 1.0]
-    pub fn next(&self, current: Duration, jitter: f64) -> Duration {
-        let jittered = (current.as_secs_f64() * jitter).max(self.base.as_secs_f64() / 2.0);
-        // cap not applied here
-        Duration::from_secs_f64(jittered)
-    }
-}
 
 /// SSE reconnect backoff schedule with injectable clock/jitter.
 pub struct SseReconnectBackoff {
