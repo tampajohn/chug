@@ -1,5 +1,5 @@
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use anyhow::{Context, bail};
 use serde::{Deserialize, Serialize};
@@ -128,14 +128,31 @@ pub struct Client {
 /// The driver-facing slice of the Messages API client. A trait so driver and
 /// chat tests can script responses without any network. `&mut self` so test
 /// doubles can consume scripted responses.
+///
+/// `obs` carries the SPEC-8 observability context for this call: when
+/// `trace_id` is set, every successful response emits one Langfuse
+/// generation (model, usage incl. cache reads, latency, stop reason,
+/// iteration) via the global sink. `trace_id: None` → no emission, and the
+/// call behaves exactly as before.
 pub trait Llm {
     fn complete(
         &mut self,
         system: &str,
         messages: &[Message],
         tools: &[Value],
+        obs: &ObsCtx<'_>,
     ) -> anyhow::Result<Response>;
     fn set_model(&mut self, model: &str);
+}
+
+/// Observability context for one `complete` call, supplied by the driver.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ObsCtx<'a> {
+    /// Langfuse trace id for the enclosing run/chat session (`None` when
+    /// observability is off or no trace exists).
+    pub trace_id: Option<&'a str>,
+    /// Zero-based iteration the call belongs to.
+    pub iteration: u32,
 }
 
 impl Llm for Client {
@@ -144,8 +161,22 @@ impl Llm for Client {
         system: &str,
         messages: &[Message],
         tools: &[Value],
+        obs: &ObsCtx<'_>,
     ) -> anyhow::Result<Response> {
-        Client::complete(self, system, messages, tools)
+        let start = SystemTime::now();
+        let result = Client::complete(self, system, messages, tools);
+        if let (Some(trace_id), Ok(resp)) = (&obs.trace_id, &result) {
+            emit_generation(
+                crate::observ::global(),
+                trace_id,
+                &self.model,
+                resp,
+                start,
+                SystemTime::now(),
+                obs.iteration,
+            );
+        }
+        result
     }
 
     fn set_model(&mut self, model: &str) {
@@ -169,14 +200,19 @@ impl Response {
         }
     }
 
-    /// Stop reason (`end_turn`, `tool_use`, ...). Used by tests and diagnostics;
-    /// the driver loop itself keys off tool_use blocks rather than this field.
-    #[allow(dead_code)]
+    /// Stop reason (`end_turn`, `tool_use`, ...). Used by generation events,
+    /// tests and diagnostics; the driver loop itself keys off tool_use blocks
+    /// rather than this field.
     pub fn stop_reason(&self) -> Option<String> {
         self.body
             .get("stop_reason")
             .and_then(Value::as_str)
             .map(str::to_string)
+    }
+
+    /// Token usage mapped from the response body (SPEC-8 generation events).
+    pub fn usage(&self) -> crate::observ::Usage {
+        usage_from(&self.body)
     }
 
     pub fn text(&self) -> String {
@@ -186,6 +222,57 @@ impl Response {
             .collect::<Vec<_>>()
             .join("\n")
     }
+}
+
+/// Map a Messages API `usage` object onto the Langfuse [`Usage`] shape.
+/// `total_tokens` wins when the provider sends one; otherwise input+output.
+/// Absent fields default to zero; `cache_read_input_tokens` maps through
+/// only when present.
+fn usage_from(body: &Value) -> crate::observ::Usage {
+    let usage = body.get("usage").cloned().unwrap_or(Value::Null);
+    let input = usage
+        .get("input_tokens")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let output = usage
+        .get("output_tokens")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    crate::observ::Usage {
+        input,
+        output,
+        total: usage
+            .get("total_tokens")
+            .and_then(Value::as_u64)
+            .unwrap_or(input + output),
+        cache_read_input_tokens: usage
+            .get("cache_read_input_tokens")
+            .and_then(Value::as_u64),
+    }
+}
+
+/// SPEC-8: hand one LLM response to the sink as a generation — model,
+/// usage (incl. `cache_read_input_tokens`), start/end latency, stop reason,
+/// iteration. A no-op on a disabled sink.
+pub(crate) fn emit_generation(
+    sink: &crate::observ::Sink,
+    trace_id: &str,
+    model: &str,
+    resp: &Response,
+    start: SystemTime,
+    end: SystemTime,
+    iteration: u32,
+) {
+    sink.generation(
+        trace_id,
+        model,
+        MAX_TOKENS,
+        &resp.usage(),
+        start,
+        end,
+        iteration,
+        resp.stop_reason().as_deref(),
+    );
 }
 
 impl Client {
@@ -337,6 +424,7 @@ impl Llm for ScriptedLlm {
         system: &str,
         messages: &[Message],
         _tools: &[Value],
+        _obs: &ObsCtx<'_>,
     ) -> anyhow::Result<Response> {
         self.calls.push((system.to_string(), messages.to_vec()));
         if let Some(flag) = &self.abort_on_call {
@@ -396,6 +484,93 @@ mod tests {
         assert_eq!(tool_uses[0].2["command"], "ls");
         assert_eq!(resp.text(), "hello");
         assert_eq!(resp.stop_reason().as_deref(), Some("tool_use"));
+    }
+
+    #[test]
+    fn usage_maps_input_output_total_and_cache_read() {
+        let resp = Response {
+            body: json!({
+                "stop_reason": "tool_use",
+                "usage": {
+                    "input_tokens": 100,
+                    "output_tokens": 20,
+                    "cache_read_input_tokens": 64,
+                },
+            }),
+        };
+        assert_eq!(
+            resp.usage(),
+            crate::observ::Usage {
+                input: 100,
+                output: 20,
+                total: 120,
+                cache_read_input_tokens: Some(64),
+            }
+        );
+
+        // total_tokens wins when the provider sends one; cache read absent.
+        let resp = Response {
+            body: json!({
+                "usage": {"input_tokens": 5, "output_tokens": 6, "total_tokens": 11},
+            }),
+        };
+        assert_eq!(
+            resp.usage(),
+            crate::observ::Usage {
+                input: 5,
+                output: 6,
+                total: 11,
+                cache_read_input_tokens: None,
+            }
+        );
+
+        // No usage object at all: zeros, never a panic.
+        let resp = Response { body: json!({"content": []}) };
+        assert_eq!(
+            resp.usage(),
+            crate::observ::Usage {
+                input: 0,
+                output: 0,
+                total: 0,
+                cache_read_input_tokens: None,
+            }
+        );
+    }
+
+    #[test]
+    fn emit_generation_hands_the_response_to_the_sink() {
+        let transport = crate::observ::testing::CountingTransport::new();
+        let sink = crate::observ::testing::test_sink(transport.clone());
+        let resp = Response {
+            body: json!({
+                "stop_reason": "tool_use",
+                "usage": {"input_tokens": 10, "output_tokens": 5, "cache_read_input_tokens": 3},
+            }),
+        };
+        emit_generation(
+            &sink,
+            "chug-test0001",
+            "scripted-model",
+            &resp,
+            SystemTime::UNIX_EPOCH,
+            SystemTime::now(),
+            7,
+        );
+        sink.shutdown();
+
+        let events = transport.events();
+        assert_eq!(events.len(), 1);
+        let event = &events[0];
+        assert_eq!(event["type"], "generation-create");
+        assert_eq!(event["body"]["traceId"], "chug-test0001");
+        assert_eq!(event["body"]["model"], "scripted-model");
+        assert_eq!(event["body"]["modelParameters"]["maxTokens"], MAX_TOKENS);
+        assert_eq!(event["body"]["usage"]["input"], 10);
+        assert_eq!(event["body"]["usage"]["output"], 5);
+        assert_eq!(event["body"]["usage"]["total"], 15);
+        assert_eq!(event["body"]["usage"]["cache_read_input_tokens"], 3);
+        assert_eq!(event["body"]["metadata"]["iteration"], 7);
+        assert_eq!(event["body"]["metadata"]["stop_reason"], "tool_use");
     }
 
     #[test]

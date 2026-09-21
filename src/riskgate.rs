@@ -142,6 +142,12 @@ impl RiskGate {
         }
     }
 
+    /// True once `disable` has been called (operator override active);
+    /// used to skip observability gate events that would just be noise.
+    pub fn is_disabled(&self) -> bool {
+        self.disabled
+    }
+
     /// Check a bash command before execution. Never hard-fails: judge failures
     /// are logged and the command is allowed (fail-open).
     pub fn check(&mut self, command: &str, sink: &mut dyn EventSink) -> GateDecision {

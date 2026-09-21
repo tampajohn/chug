@@ -14,6 +14,7 @@ use crate::attach;
 use crate::driver::{self, Controls, SlashUpdate, TurnKnobs};
 use crate::events::{Event, EventSink};
 use crate::ledger;
+use crate::observ;
 use crate::riskgate::{LayaJudge, RiskGate};
 use crate::transcript;
 
@@ -138,20 +139,29 @@ pub fn run_chat(cfg: ChatConfig, sink: &mut dyn EventSink) -> anyhow::Result<i32
     } else {
         None
     };
-    run_chat_with(cfg, &mut client, gate, sink)
+    run_chat_with(cfg, &mut client, gate, sink, observ::global())
 }
 
 /// The chat session loop. Idle: block for the next objective. Working: run
 /// one turn via the shared driver loop. The UI quitting (dropping its
 /// senders) ends the session gracefully. Split from [`run_chat`] so tests
 /// can inject a scripted LLM and no gate.
+///
+/// SPEC-8: one trace per chat SESSION (not per turn) — created here, finished
+/// with the outcome metadata when the session ends gracefully. Individual
+/// turns attach their generations / spans / events to the same trace.
 fn run_chat_with(
     cfg: ChatConfig,
     client: &mut dyn Llm,
     mut gate: Option<RiskGate>,
     sink: &mut dyn EventSink,
+    obs: &observ::Sink,
 ) -> anyhow::Result<i32> {
     ledger::ensure_seeded(&cfg.cwd)?;
+    // No goal text at session start (objectives arrive turn by turn); the
+    // trace is identified by its id, mode metadata, and tags.
+    let trace = obs.trace_started("", &cfg.model, &cfg.cwd.display().to_string(), "chat", None);
+    let mut turns: u64 = 0;
     let mut messages: Vec<Message> = if cfg.resume {
         driver::resume_messages(&cfg.cwd)?
     } else {
@@ -167,10 +177,15 @@ fn run_chat_with(
 
     loop {
         // Idle: wait for the next objective. A closed channel means the UI
-        // has quit — exit the process gracefully.
+        // has quit — exit the session (and finish its trace) gracefully.
         let objective = match cfg.objective_rx.recv() {
             Ok(objective) => objective,
-            Err(_) => return Ok(0),
+            Err(_) => {
+                if let Some(trace) = &trace {
+                    obs.trace_finished(trace, observ::outcome::COMPLETED, turns);
+                }
+                return Ok(0);
+            }
         };
         // Clear any abort flag left over from keys pressed between turns so
         // the new turn starts fresh. A genuine interrupt arrives only while
@@ -199,8 +214,11 @@ fn run_chat_with(
             &cfg.update_rx,
             &mut knobs,
             cfg.bash_timeout,
+            trace.as_deref(),
+            obs,
             sink,
         )?;
+        turns += 1;
         sink.emit(Event::TurnEnd { reason });
     }
 }
@@ -364,8 +382,11 @@ mod tests {
     ) -> (i32, Vec<Event>, ScriptedLlm, PathBuf) {
         let cwd = h.cfg.cwd.clone();
         let worker = std::thread::spawn(move || {
-            let code = run_chat_with(h.cfg, &mut h.llm, None, &mut h.sink)
-                .expect("chat session failed");
+            // Noop observability sink: tests that assert on Langfuse events
+            // build their own live test sink (see the trace-lifecycle test).
+            let code =
+                run_chat_with(h.cfg, &mut h.llm, None, &mut h.sink, &crate::observ::Sink::Noop)
+                    .expect("chat session failed");
             (code, h.sink.0, h.llm)
         });
         script(&h.objective_tx, &h.update_tx);
@@ -618,6 +639,65 @@ mod tests {
         assert_eq!(code, 0);
         assert!(events.is_empty());
         assert!(llm.calls.is_empty());
+    }
+
+    // ---------- session trace lifecycle (SPEC-8) ----------
+
+    #[test]
+    fn one_trace_per_session_finished_on_quit_not_per_turn() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (objective_tx, objective_rx) = mpsc::channel();
+        let (update_tx, update_rx) = mpsc::channel();
+        let (_steer_tx, steering_rx) = mpsc::channel();
+        let cfg = ChatConfig {
+            cwd: tmp.path().to_path_buf(),
+            model: "scripted-model".into(),
+            max_iters: 40,
+            max_minutes: 120,
+            resume: false,
+            risk_gate: false,
+            bash_timeout: Duration::from_secs(crate::tools::BASH_TIMEOUT_SECS),
+            controls: Controls {
+                abort: Arc::new(AtomicBool::new(false)),
+                steering_rx,
+            },
+            objective_rx,
+            update_rx,
+        };
+        let mut llm = ScriptedLlm::new(vec![text_response("one"), text_response("two")]);
+        let transport = crate::observ::testing::CountingTransport::new();
+        let obs = crate::observ::testing::test_sink(transport.clone());
+        let mut sink = RecordingSink::default();
+        let worker = std::thread::spawn(move || {
+            run_chat_with(cfg, &mut llm, None, &mut sink, &obs).expect("chat session failed")
+        });
+        objective_tx.send("first".into()).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        objective_tx.send("second".into()).unwrap();
+        drop(objective_tx);
+        drop(update_tx);
+        assert_eq!(worker.join().unwrap(), 0);
+        // The sink moved into the worker thread; its Drop drains on join.
+
+        let events = transport.events();
+        // Exactly two trace-create upserts — session start + graceful finish —
+        // sharing one id. NOT one trace per turn.
+        let trace_creates: Vec<&Value> = events
+            .iter()
+            .filter(|e| e["type"] == "trace-create")
+            .collect();
+        assert_eq!(trace_creates.len(), 2);
+        assert_eq!(trace_creates[0]["body"]["id"], trace_creates[1]["body"]["id"]);
+        assert_eq!(trace_creates[0]["body"]["metadata"]["mode"], "chat");
+        assert_eq!(trace_creates[1]["body"]["metadata"]["outcome"], "completed");
+        assert_eq!(trace_creates[1]["body"]["metadata"]["iterations"], 2);
+        // A session is not a run: no categorical outcome score is emitted.
+        assert!(events.iter().all(|e| e["type"] != "score-create"));
+        // Everything ties back to the same trace id.
+        let trace_id = trace_creates[0]["body"]["id"].as_str().unwrap();
+        assert!(events
+            .iter()
+            .all(|e| e["type"] == "trace-create" || e["body"]["traceId"] == trace_id));
     }
 
     // ---------- @file expansion on the submit path (SPEC-5 §1) ----------
