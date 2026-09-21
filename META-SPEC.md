@@ -49,8 +49,10 @@ check: cd /Users/jadams/workspace/chug && cargo test
    /tmp/chug-round-N -b round-N`
 4. **Launch child (foreground, one at a time):**
    ```
-   cd /tmp/chug-round-N && /Users/jadams/workspace/chug/target/debug/chug run \
-     --spec SPEC-5-chat-input-ux.md \
+   cd /tmp/chug-round-N && ANTHROPIC_BASE_URL=http://spark-2e89.tail6a8e24.ts.net:8080 \
+     ANTHROPIC_AUTH_TOKEN=$(cat ~/.muse-glimmer-key) \
+     /Users/jadams/workspace/chug/target/debug/chug run \
+     --spec <your feature spec file> \
      --goal "ROUND GOAL: <G>. Implement ONLY this slice. Keep cargo build and
              cargo test green. Do not touch unrelated files." \
      --model muse-glimmer-30b --max-iters 40 --max-minutes 35
@@ -64,8 +66,7 @@ check: cd /Users/jadams/workspace/chug && cargo test
 6. **Validate (kimi-k3, REQUIRED).** Before merging any round, launch a
    validation child on kimi-k3 (env-stripped, see Models):
    ```
-   cd /tmp/chug-round-N && env -u ANTHROPIC_BASE_URL -u ANTHROPIC_AUTH_TOKEN \
-     /Users/jadams/workspace/chug/target/debug/chug run \
+   cd /tmp/chug-round-N && /Users/jadams/workspace/chug/target/debug/chug run \
      --spec <the round's feature spec, e.g. SPEC-N-*.md> \
      --goal "VALIDATION ONLY — do not implement. Review the uncommitted/committed
              diff in this worktree against the spec: correctness bugs, missing
