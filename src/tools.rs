@@ -586,8 +586,9 @@ pub fn run_shell(cwd: &Path, command: &str, timeout: Duration) -> anyhow::Result
 
 /// Kill the child's whole process group (the child is the group leader via
 /// `process_group(0)`), falling back to killing just the direct child on
-/// platforms without process groups.
-fn kill_process_group(child: &mut std::process::Child) {
+/// platforms without process groups. Shared with `mcp.rs`, which must honor
+/// the same no-orphan discipline.
+pub(crate) fn kill_process_group(child: &mut std::process::Child) {
     #[cfg(unix)]
     {
         let pgid = child.id() as i32;
