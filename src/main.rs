@@ -7,6 +7,7 @@ mod driver;
 mod events;
 mod riskgate;
 mod ledger;
+mod observ;
 mod tools;
 mod transcript;
 mod tui;
