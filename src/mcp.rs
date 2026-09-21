@@ -511,6 +511,8 @@ impl McpServer {
                     continue;
                 };
                 let is_request = v.get("method").is_some();
+                // v1 limitation: a STRING id fails as_u64 and falls to the
+                // notification arm (dropped without a -32601 reply).
                 match v.get("id").and_then(Value::as_u64) {
                     // Server→client request: v1 implements nothing on the
                     // server-initiated surface, but the server MUST get a

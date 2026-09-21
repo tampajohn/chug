@@ -35,6 +35,10 @@ const CALL_TIMEOUT: Duration = Duration::from_secs(60);
 /// has left the process. The 10s connect timeout nests inside this budget.
 const FIRST_BYTE_TIMEOUT: Duration = Duration::from_secs(30);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+/// Bounded TOTAL timeout for fire-and-forget `-32601` reply POSTs — the one
+/// client that keeps a reqwest-level timeout, so a hung reply target cannot
+/// park a helper thread forever.
+const REPLY_TIMEOUT: Duration = Duration::from_secs(30);
 /// Defensive cap on registered tools per server (a broken server must not
 /// flood the model's tool list).
 const MAX_MCP_TOOLS: usize = 200;
@@ -62,6 +66,15 @@ pub struct HttpMcpServer {
     /// listen connection never shares (or starves) the POST pool's
     /// keep-alive connections.
     listen_client: reqwest::blocking::Client,
+    /// Bounded-timeout client used ONLY for fire-and-forget `-32601` reply
+    /// POSTs (the main clients deliberately carry no blanket timeout).
+    reply_client: reqwest::blocking::Client,
+    /// First-byte deadline for POSTs (default FIRST_BYTE_TIMEOUT); a field
+    /// so tests can shrink it instead of burning real time.
+    first_byte_timeout: Duration,
+    /// Total tools/call budget (default CALL_TIMEOUT); overridable in tests
+    /// for the same reason.
+    call_timeout: Duration,
     session_id: Arc<Mutex<Option<String>>>,
     next_id: u64,
     tools: Vec<McpTool>,
@@ -137,20 +150,37 @@ impl HttpMcpServer {
     ) -> anyhow::Result<Self> {
         let client = reqwest::blocking::Client::builder()
             .connect_timeout(CONNECT_TIMEOUT)
-            // No blanket timeout: SSE bodies may legitimately stream up to
-            // the per-call deadline, which the caller enforces per line.
+            // No blanket timeout: reqwest's default (30s per body read)
+            // would kill silent listen streams and late-arriving SSE call
+            // answers — the explicit deadlines (connect 10s, first-byte
+            // 30s, per-call total 60s) are enforced by the caller via
+            // channel recv_timeout, so they alone govern.
+            .timeout(None)
             .build()
             .context("building http client")?;
         let listen_client = reqwest::blocking::Client::builder()
             .connect_timeout(CONNECT_TIMEOUT)
+            // Same: a healthy listen stream may stay silent for hours.
+            .timeout(None)
             .build()
             .context("building http listen client")?;
+        // Fire-and-forget method-not-found replies ride a dedicated client
+        // with a BOUNDED total timeout: the main clients have none, and a
+        // hung reply target must not park a helper thread forever.
+        let reply_client = reqwest::blocking::Client::builder()
+            .connect_timeout(CONNECT_TIMEOUT)
+            .timeout(REPLY_TIMEOUT)
+            .build()
+            .context("building http reply client")?;
         Ok(Self {
             name,
             url,
             headers,
             client,
             listen_client,
+            reply_client,
+            first_byte_timeout: FIRST_BYTE_TIMEOUT,
+            call_timeout: CALL_TIMEOUT,
             session_id: Arc::new(Mutex::new(None)),
             next_id: 0,
             tools: Vec::new(),
@@ -238,8 +268,9 @@ impl HttpMcpServer {
         Ok(())
     }
 
-    /// Call an MCP tool (60s budget). Errors are returned as `is_error` tool
-    /// results, never as driver-level failures — same contract as stdio.
+    /// Call an MCP tool (`call_timeout` budget, 60s by default). Errors are
+    /// returned as `is_error` tool results, never as driver-level failures —
+    /// same contract as stdio.
     pub fn call(&mut self, tool_name: &str, arguments: Value) -> anyhow::Result<ToolResult> {
         if !self.is_alive() {
             return Ok(ToolResult {
@@ -248,7 +279,7 @@ impl HttpMcpServer {
             });
         }
         let params = json!({ "name": tool_name, "arguments": arguments });
-        match self.send_request("tools/call", params, CALL_TIMEOUT) {
+        match self.send_request("tools/call", params, self.call_timeout) {
             Ok(resp) => Ok(parse_call_response(&resp)),
             Err(e) => Ok(ToolResult {
                 content: format!("mcp tool {tool_name} failed: {e:#}"),
@@ -332,7 +363,7 @@ impl HttpMcpServer {
             Arc::clone(&cancel),
         );
         // Phase 1: response head within the first-byte budget.
-        let first_byte = FIRST_BYTE_TIMEOUT.min(timeout);
+        let first_byte = self.first_byte_timeout.min(timeout);
         let (status, headers) = match rx.recv_timeout(first_byte) {
             Ok(WireMsg::Head(status, headers)) => (status, headers),
             Ok(WireMsg::ConnectFailed(e)) => {
@@ -488,6 +519,8 @@ impl HttpMcpServer {
                 ));
             }
         };
+        // v1 limitation: a STRING id fails as_u64 and is classified as a
+        // notification (dropped, no -32601) — parity with stdio, by design.
         let id = v.get("id").and_then(Value::as_u64);
         let is_request = v.get("method").is_some();
         match (id, is_request) {
@@ -506,9 +539,10 @@ impl HttpMcpServer {
 
     /// Best-effort JSON-RPC `method not found` reply to a server→client
     /// request, as its own POST (fire-and-forget on a helper thread so a
-    /// slow server cannot stall the in-flight call).
+    /// slow server cannot stall the in-flight call). Rides the bounded-
+    /// timeout reply client: a hung reply target must not park the helper.
     fn reply_method_not_found(&self, req_id: u64) {
-        post_method_not_found_reply(self.client.clone(), self.url.clone(), self.all_headers(), req_id);
+        post_method_not_found_reply(self.reply_client.clone(), self.url.clone(), self.all_headers(), req_id);
     }
 
     /// Spawn the listen manager thread: one GET listen stream per remote
@@ -519,7 +553,7 @@ impl HttpMcpServer {
             name: self.name.clone(),
             url: self.url.clone(),
             headers: self.headers.clone(),
-            post_client: self.client.clone(),
+            post_client: self.reply_client.clone(),
             get_client: self.listen_client.clone(),
             session_id: Arc::clone(&self.session_id),
             shutdown: Arc::clone(&self.shutdown),
@@ -896,6 +930,8 @@ fn handle_listen_message(cfg: &ListenConfig, data: &str) {
             return;
         }
     };
+    // v1 limitation: a STRING id fails as_u64 and is classified as a
+    // notification (dropped, no -32601) — parity with stdio, by design.
     let id = v.get("id").and_then(Value::as_u64);
     let is_request = v.get("method").is_some();
     match (id, is_request) {
@@ -1604,11 +1640,15 @@ mod tests {
 
     /// A dropped listen stream is reconnected (fast, through the injected
     /// sleeper), and the reconnect GET carries Last-Event-ID from the last
-    /// id-bearing event plus the session header.
+    /// id-bearing event plus the session header. Across two consecutive
+    /// drop→reconnect cycles the backoff schedule RESETS after each
+    /// successfully opened stream: the second wait starts at ~1s again
+    /// instead of climbing to 2s.
     #[test]
     fn listen_stream_reconnects_with_last_event_id_after_drop() {
         let (listener, url) = bind_stub();
         let (seen_tx, seen_rx) = mpsc::channel::<()>();
+        let (ack_tx, ack_rx) = mpsc::channel::<()>();
         let (release_tx, release_rx) = mpsc::channel::<()>();
         let stub = thread::spawn(move || {
             let (mut c1, _) = listener.accept().unwrap();
@@ -1631,15 +1671,47 @@ mod tests {
             assert_eq!(get2.header("mcp-session-id"), Some("sess-R"));
             write_sse_head(&mut c3);
             seen_tx.send(()).unwrap();
-            // Hold the second stream open until the server is dropped (a
+            // Wait for the test's ack so it can snapshot the sleeper
+            // recording BEFORE the second cycle adds to it.
+            ack_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+            // Second cycle: another id-bearing event, then dropped again.
+            c3.write_all(b"id: evt-43\r\ndata: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\"}\r\n\r\n").unwrap();
+            c3.flush().unwrap();
+            drop(c3);
+            // Third GET: Last-Event-ID advanced to the second stream's id.
+            let (mut c4, _) = listener.accept().unwrap();
+            let get3 = read_request(&mut c4);
+            assert!(get3.is_get());
+            assert_eq!(get3.header("last-event-id"), Some("evt-43"));
+            assert_eq!(get3.header("mcp-session-id"), Some("sess-R"));
+            write_sse_head(&mut c4);
+            seen_tx.send(()).unwrap();
+            // Hold the third stream open until the server is dropped (a
             // reconnect loop against a closed listener would spin on the
             // no-op sleeper).
             release_rx.recv_timeout(Duration::from_secs(10)).unwrap();
         });
-        let (sleeper, _slept) = no_sleep();
+        let (sleeper, slept) = no_sleep();
         let mut srv = HttpMcpServer::with_sleeper("remote".to_string(), url, vec![], sleeper).unwrap();
         srv.initialize().unwrap();
+        // Backoff #1 ran (in ≤100ms chunks through the injected sleeper)
+        // before GET#2 was opened.
         seen_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+        let first: Duration = slept.lock().unwrap().iter().sum();
+        ack_tx.send(()).unwrap();
+        // Backoff #2 ran between GET#2's drop and GET#3.
+        seen_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+        let total: Duration = slept.lock().unwrap().iter().sum();
+        let second = total - first;
+        // Both waits started at the jittered 1s floor ([0.5s, 1s)) — a
+        // schedule that kept climbing would make the second wait ≥ 1s
+        // (2s × jitter).
+        for (label, d) in [("first", first), ("second", second)] {
+            assert!(
+                d >= Duration::from_millis(500) && d < Duration::from_secs(1),
+                "{label} reconnect backoff must restart at ~1s after an open stream, got {d:?}"
+            );
+        }
         drop(srv);
         release_tx.send(()).unwrap();
         stub.join().unwrap();
@@ -1720,6 +1792,169 @@ mod tests {
         );
         release_tx.send(()).unwrap();
         stub.join().unwrap();
+    }
+
+    /// A healthy but SILENT listen stream must sit open without churn: no
+    /// reconnect (no second GET) and no backoff sleeps while no events
+    /// arrive. Guards the `.timeout(None)` fix — a reqwest-level read
+    /// timeout would kill the stream and trigger spurious reconnects.
+    #[test]
+    fn silent_listen_stream_is_not_reconnected() {
+        let (listener, url) = bind_stub();
+        let (seen_tx, seen_rx) = mpsc::channel::<()>();
+        let (watch_done_tx, watch_done_rx) = mpsc::channel::<()>();
+        let (release_tx, release_rx) = mpsc::channel::<()>();
+        let stub = thread::spawn(move || {
+            let (mut c1, _) = listener.accept().unwrap();
+            serve_handshake_close(&mut c1, None);
+            let (mut c2, _) = listener.accept().unwrap();
+            let get = read_request(&mut c2);
+            assert!(get.is_get(), "expected listen GET, got {}", get.request_line);
+            write_sse_head(&mut c2);
+            seen_tx.send(()).unwrap();
+            // Storm watch: while the established stream sits silent, no
+            // second connection may arrive.
+            listener.set_nonblocking(true).unwrap();
+            let mut extra = 0;
+            let t0 = Instant::now();
+            while t0.elapsed() < Duration::from_millis(1500) {
+                match listener.accept() {
+                    Ok((mut s, _)) => {
+                        extra += 1;
+                        let _ = read_request(&mut s);
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(e) => panic!("accept failed: {e}"),
+                }
+            }
+            assert_eq!(extra, 0, "silent listen stream must not be reconnected");
+            watch_done_tx.send(()).unwrap();
+            release_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+        });
+        let (sleeper, slept) = no_sleep();
+        let mut srv = HttpMcpServer::with_sleeper("remote".to_string(), url, vec![], sleeper).unwrap();
+        srv.initialize().unwrap();
+        // The listen stream is established; the stub watches for extra
+        // connections during a 1.5s silent window.
+        seen_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+        watch_done_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+        // No reconnect cycle ran: the injected sleeper never saw a backoff.
+        assert!(slept.lock().unwrap().is_empty(), "silent stream must not back off");
+        drop(srv);
+        release_tx.send(()).unwrap();
+        stub.join().unwrap();
+    }
+
+    /// An SSE-framed tools/call response arriving after a multi-second
+    /// silence still succeeds: only the explicit per-call total deadline
+    /// (60s) governs — no reqwest-level read timeout may fire first.
+    #[test]
+    fn sse_call_response_after_delayed_gap_succeeds() {
+        let (listener, url) = bind_stub();
+        let stub = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            serve_handshake(&mut stream, None);
+            let req = read_request(&mut stream);
+            assert_eq!(req.json()["method"], "tools/call");
+            write_sse_head(&mut stream);
+            // Multi-second gap before the answer: legal under the 60s
+            // per-call budget.
+            thread::sleep(Duration::from_secs(2));
+            write_sse_event(&mut stream, r#"{"jsonrpc":"2.0","id":3,"result":{"content":[{"type":"text","text":"late ok"}],"isError":false}}"#);
+        });
+        let mut srv = new_server("remote", url);
+        srv.initialize().unwrap();
+        let res = srv.call("echo", json!({})).unwrap();
+        assert!(!res.is_error, "{}", res.content);
+        assert_eq!(res.content, "late ok");
+        stub.join().unwrap();
+        drop(srv);
+    }
+
+    /// A fully-stalled SSE response (head arrived, body never) still fails
+    /// the call at the per-call total deadline: the caller-side deadline
+    /// governs even while the worker thread stays parked on the stalled
+    /// read (the clients carry no reqwest-level timeout to rely on).
+    #[test]
+    fn stalled_call_fails_at_overridden_total_deadline() {
+        let (listener, url) = bind_stub();
+        let (release_tx, release_rx) = mpsc::channel::<()>();
+        let stub = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            serve_handshake(&mut stream, None);
+            let req = read_request(&mut stream);
+            assert_eq!(req.json()["method"], "tools/call");
+            write_sse_head(&mut stream);
+            // Fully stalled body until released.
+            release_rx.recv_timeout(Duration::from_secs(30)).unwrap();
+        });
+        let mut srv = new_server("remote", url);
+        srv.initialize().unwrap();
+        srv.call_timeout = Duration::from_millis(600);
+        let t0 = Instant::now();
+        let res = srv.call("echo", json!({})).unwrap();
+        let elapsed = t0.elapsed();
+        assert!(res.is_error, "stalled call must fail: {}", res.content);
+        assert!(res.content.contains("timed out"), "{}", res.content);
+        assert!(
+            elapsed < Duration::from_secs(5),
+            "call must fail near the overridden 600ms deadline, took {elapsed:?}"
+        );
+        release_tx.send(()).unwrap();
+        stub.join().unwrap();
+        drop(srv);
+    }
+
+    /// Drop while the listen manager is mid-backoff must be prompt: the
+    /// interruptible sleep notices the shutdown flag between chunks instead
+    /// of sleeping out the remaining delay (which would eat the join grace).
+    #[test]
+    fn drop_during_listen_backoff_is_prompt() {
+        let (listener, url) = bind_stub();
+        let stub = thread::spawn(move || {
+            let (mut c1, _) = listener.accept().unwrap();
+            serve_handshake_close(&mut c1, None);
+            let (mut c2, _) = listener.accept().unwrap();
+            let get = read_request(&mut c2);
+            assert!(get.is_get());
+            // Refuse the listen stream: FailedToOpen → backoff sleep.
+            write_response_close(&mut c2, 500, &[("content-type", "text/plain")], b"nope");
+            // Nothing more: the manager must now be parked in its backoff.
+        });
+        // Gated sleeper: reports each chunk, then parks until the test
+        // releases it — so the manager is provably INSIDE a backoff sleep.
+        let (calls_tx, calls_rx) = mpsc::channel::<Duration>();
+        let (release_tx, release_rx) = mpsc::channel::<()>();
+        let release_rx = Arc::new(Mutex::new(release_rx));
+        let sleeper: Sleeper = Arc::new(move |d| {
+            let _ = calls_tx.send(d);
+            let _ = release_rx.lock().unwrap().recv();
+        });
+        let mut srv = HttpMcpServer::with_sleeper("remote".to_string(), url, vec![], sleeper).unwrap();
+        srv.initialize().unwrap();
+        stub.join().unwrap();
+        // The manager is parked inside the first backoff chunk.
+        calls_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+        let shutdown = Arc::clone(&srv.shutdown);
+        let t0 = Instant::now();
+        let dropper = thread::spawn(move || drop(srv));
+        // Wait until Drop has signalled shutdown, then let the in-flight
+        // chunk return — the manager must exit right after it.
+        for _ in 0..1000 {
+            if shutdown.load(Ordering::Relaxed) {
+                break;
+            }
+            thread::sleep(Duration::from_millis(1));
+        }
+        release_tx.send(()).unwrap();
+        dropper.join().unwrap();
+        let elapsed = t0.elapsed();
+        assert!(
+            elapsed < Duration::from_secs(3),
+            "Drop during backoff took {elapsed:?} (interruptible_sleep missed shutdown)"
+        );
     }
 
     /// SSE call-response demux: events carrying a WRONG id (a foreign
