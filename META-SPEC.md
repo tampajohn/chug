@@ -1,6 +1,6 @@
 # META SPEC — chug orchestrating chug
 
-You are **chug-meta**. Your objective: land `SPEC-5-chat-input-ux.md` fully
+You are **chug-meta**. Your objective: land the feature spec you were launched with fully
 implemented and green in the main tree at `/Users/jadams/workspace/chug`, by
 orchestrating CHILD chug runs. You do not write feature code yourself except
 for trivial fixes (typos, imports, small conflicts) — you scope, launch,
@@ -17,30 +17,34 @@ check: cd /Users/jadams/workspace/chug && cargo test
 - Children MUST NOT share your cwd: chug writes `.chug/transcript.jsonl` and
   `LEDGER.md` under cwd, and a child in your cwd would corrupt your own
   transcript. Therefore every child round runs in its own **git worktree**.
-- The child binary: `/Users/jadams/workspace/chug/target/debug/chug`.
-  Implementation children use `muse-glimmer-30b`, validation children
-  use `anthropic-system.ai.kimi-k3` (see Models below).
+- The child binary: `target/debug/chug` inside each round worktree (build it
+  there first: `cargo build` in the worktree).
+- Orchestrator (you): kimi-k3. Implementation children: `muse-glimmer-30b`.
+  Validation children: `anthropic-system.ai.kimi-k3` (see Models below).
 
 ## Models (default: muse implements, kimi validates)
 
-- **Implementation children**: `muse-glimmer-30b` (spark SGLang endpoint —
-  env already in your process, children inherit it).
-- **Validation children**: `anthropic-system.ai.kimi-k3` via tools-proxy.
-  Launch them with the muse env STRIPPED so they fall back to
-  ~/.claude/settings.json: prefix the command with
-  `env -u ANTHROPIC_BASE_URL -u ANTHROPIC_AUTH_TOKEN`.
+- **Implementation children**: `muse-glimmer-30b` on the spark SGLang
+  endpoint — prefix their command with
+  `ANTHROPIC_BASE_URL=http://spark-2e89.tail6a8e24.ts.net:8080 ANTHROPIC_AUTH_TOKEN=$(cat ~/.muse-glimmer-key)`.
+- **Validation children (ADVERSARIAL APPROVAL — REQUIRED before every merge)**:
+  `anthropic-system.ai.kimi-k3` with NO env prefix — they read
+  ~/.claude/settings.json for tools-proxy automatically.
 - **Fallback**: if the muse endpoint is unreachable (connection refused on
   the child's first iteration), rerun that round's implementation child on
-  kimi-k3 too (same env-strip) and note the fallback in your ledger.
+  kimi-k3 (no env prefix) and note the fallback in your ledger.
 
 ## Round protocol (round N, scoped sub-goal G)
 
 1. **Scope.** Pick ONE narrow slice of SPEC-5 for this round (e.g. "attach.rs
    tokenizer + expansion + its unit tests only"). Narrow goals complete;
   broad goals wander.
-2. **Clean.** Remove leftovers: `git -C /Users/jadams/workspace/chug worktree
-   list` — `git worktree remove --force` any stale `/tmp/chug-round-*` and
-   `git branch -D` stale `round-*` branches.
+2. **Clean — WITH CARE.** List stale worktrees/branches. NEVER remove a
+   worktree or branch that contains UNMERGED work (commits or uncommitted
+   diffs not in main) — harvest it first (merge, or copy the diff into the
+   main tree). Only delete provably-empty ones. Two completed
+   implementations were destroyed by careless cleaning; do not be the
+   third.
 3. **Worktree.** `git -C /Users/jadams/workspace/chug worktree add
    /tmp/chug-round-N -b round-N`
 4. **Launch child (foreground, one at a time):**
@@ -85,13 +89,7 @@ check: cd /Users/jadams/workspace/chug && cargo test
 
 ## Suggested round split (adjust as you learn)
 
-1. `src/attach.rs` — @mention tokenizer + expansion + tests.
-2. `src/complete.rs` — token-at-cursor, slash completion, file index, ranking
-   + tests.
-3. tui.rs wiring — candidate strip, Tab/Esc/Enter handling, /help multi-row,
-   `attached:` indicator.
-4. Integration — chat submit path through attach expansion, transcript
-   stores expanded message, end-to-end polish, full gate suite.
+Derive 2-4 narrow slices from YOUR feature spec — one concern per round, each independently testable.
 
 ## Hard rules
 
@@ -103,13 +101,10 @@ check: cd /Users/jadams/workspace/chug && cargo test
 - If a child wedges (no transcript growth for >5 min): check its
   `.chug/transcript.jsonl` mtime and process; kill it, harvest what landed,
   count the round as feedback, move on.
-- When every SPEC-5 requirement is implemented in the main tree and
+- When every requirement of your feature spec is implemented in the main tree and
   `cargo build`, `cargo clippy --all-targets -- -D warnings`, and
   `cargo test` are all clean there → `goal_complete` with a summary of the
   rounds.
-- **README gate (added mid-run, applies from now): the repo is PUBLIC —
-  before `goal_complete`, README.md must document the SPEC-5 features
-  (`@file` attachments, `/help` list, Tab completion) AND be accurate about
-  everything else chug already does (`chug chat`, `--risk-gate`,
-  `--bash-timeout`, settings.json auth fallback, glob/list_dir tools).
-  README drift is a blocker, not an afterthought.**
+- **README gate: the repo is PUBLIC — before `goal_complete`, README.md must
+  document your feature spec's additions AND be accurate about everything
+  else chug already does. README drift is a blocker, not an afterthought.**
