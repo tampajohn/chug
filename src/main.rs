@@ -7,6 +7,7 @@ mod driver;
 mod events;
 mod riskgate;
 mod ledger;
+mod observ;
 mod tools;
 mod transcript;
 mod tui;
@@ -115,7 +116,10 @@ enum CliCommand {
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
-    let result = match cli.command {
+    // SPEC-8: the observability sink must drain on EVERY exit path —
+    // including a panic unwinding out of command dispatch, caught here so
+    // the queued events still flush before the process exits.
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match cli.command {
         CliCommand::Ledger { cwd } => cmd_ledger(cwd),
         CliCommand::Chat {
             cwd,
@@ -165,11 +169,16 @@ fn main() -> ExitCode {
             mcp_config,
             mcp_off,
         ),
-    };
+    }));
+    observ::shutdown_global();
     match result {
-        Ok(code) => ExitCode::from(code as u8),
-        Err(e) => {
+        Ok(Ok(code)) => ExitCode::from(code as u8),
+        Ok(Err(e)) => {
             eprintln!("chug: error: {e:#}");
+            ExitCode::FAILURE
+        }
+        Err(panic) => {
+            eprintln!("chug: panicked: {panic:?}");
             ExitCode::FAILURE
         }
     }
