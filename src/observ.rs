@@ -370,16 +370,10 @@ fn drain_and_exit(
     batch: &mut Vec<Value>,
 ) {
     let deadline = Instant::now() + opts.drain_cap;
-    loop {
-        match rx.try_recv() {
-            Ok(event) => {
-                batch.push(event);
-                if batch.len() >= opts.batch_size && !flush_within(transport, stats, batch, deadline)
-                {
-                    return;
-                }
-            }
-            Err(_) => break,
+    while let Ok(event) = rx.try_recv() {
+        batch.push(event);
+        if batch.len() >= opts.batch_size && !flush_within(transport, stats, batch, deadline) {
+            return;
         }
     }
     if !batch.is_empty() {
@@ -505,10 +499,10 @@ impl LiveSink {
         if let Ok(mut guard) = self.tx.lock() {
             guard.take(); // disconnect the channel
         }
-        if let Ok(mut guard) = self.flusher.lock() {
-            if let Some(handle) = guard.take() {
-                let _ = handle.join();
-            }
+        if let Ok(mut guard) = self.flusher.lock()
+            && let Some(handle) = guard.take()
+        {
+            let _ = handle.join();
         }
     }
 }
