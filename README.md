@@ -80,17 +80,37 @@ logged to `.chug/risk_verdicts.jsonl`.
 
 ## MCP servers (`mcp.json`)
 
-chug consumes tools from MCP servers (stdio, tools capability). Claude
-Code-compatible config, first found wins: `--mcp-config <path>` →
-`./mcp.json` → `~/.config/chug/mcp.json` (`--mcp-off` disables).
+chug consumes tools from MCP servers (tools capability) over **stdio** or
+**streamable HTTP**. Claude Code-compatible config, first found wins:
+`--mcp-config <path>` → `./mcp.json` → `~/.config/chug/mcp.json`
+(`--mcp-off` disables).
 
 ```json
-{"mcpServers": {"<name>": {"command": "...", "args": ["..."], "env": {"K": "V"}}}}
+{"mcpServers": {
+  "<name>":   {"command": "...", "args": ["..."], "env": {"K": "V"}},
+  "<remote>": {"url": "https://mcp.example.com/mcp", "transport": "http",
+               "headers": {"Authorization": "Bearer ${MCP_TOKEN}"}}
+}}
 ```
 
+An entry with `url` is remote (streamable HTTP); `transport` defaults to
+`"http"`. `${VAR}` in header values expands from the process env at load
+time. Per-server fail-soft: a bad entry (missing `${VAR}`, unknown
+transport, unreachable server) is skipped with a note in
+`.chug/mcp-<name>.log` — it never aborts the run.
+
 Server tools appear as `mcp__<name>__<tool>` alongside the builtins.
-Per-server fail-soft: a server that dies mid-run errors its calls without
-killing the run; servers spawn in their own process groups and are
+Per-server fail-soft at runtime too: a stdio server that dies mid-run errors
+its calls without killing the run; a remote server that refuses connection
+retries 3× (1s, 2s, 4s) then returns a tool error. Timeouts mirror stdio:
+connect 10s, first-byte 30s, per-call total 60s.
+
+Remote specifics (SPEC-9): JSON-RPC over POST; `Mcp-Session-Id` captured and
+replayed; notifications expect `202`; SSE response streams are read until the
+matching-id response; a server-pushed request gets a JSON-RPC
+`method not found` reply and notifications are dropped; the GET listen stream
+reconnects with jittered backoff (1s→30s cap) and `Last-Event-ID` replay for
+the life of the run. Stdio servers spawn in their own process groups and are
 group-killed on every exit path. MCP tools bypass the laya risk gate (which
 judges bash only). No config anywhere = byte-identical behavior.
 
@@ -126,4 +146,5 @@ cargo build && cargo clippy --all-targets -- -D warnings && cargo test
 ```
 
 All three must stay green. Layout: `src/{api,driver,events,tools,tui,chat,
-attach,complete,riskgate,mcp,observ,auth,ledger,transcript}.rs` (+ `main.rs`).
+attach,complete,riskgate,mcp,mcp_http,sse,observ,auth,ledger,transcript}.rs`
+(+ `main.rs`).
