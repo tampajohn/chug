@@ -12,6 +12,7 @@ mod tools;
 mod transcript;
 mod tui;
 mod mcp;
+mod mcp_http;
 mod sse;
 
 use std::path::PathBuf;

@@ -3,6 +3,7 @@
 //! items here are exercised only by unit tests.
 #![allow(dead_code, clippy::empty_line_after_doc_comments)]
 
+use std::sync::Arc;
 use std::time::Duration;
 
 /// SSE event emitted by the parser.
@@ -213,13 +214,26 @@ impl Default for SseReconnectBackoff {
     fn default() -> Self { Self::new() }
 }
 
-/// POST connection retry schedule (exactly 3 attempts with delays 1s,2s,4s)
+/// POST connection retry schedule (exactly 3 retries with delays 1s,2s,4s).
+/// The sleep between retries is injectable so tests never really sleep.
 pub struct PostRetrySchedule {
     attempts: usize,
+    sleeper: Arc<dyn Fn(Duration) + Send + Sync>,
 }
 
 impl PostRetrySchedule {
-    pub fn new() -> Self { Self { attempts: 0 } }
+    pub fn new() -> Self {
+        Self {
+            attempts: 0,
+            sleeper: Arc::new(std::thread::sleep),
+        }
+    }
+
+    /// Schedule whose sleeps run `sleeper` instead of `thread::sleep`.
+    pub fn with_sleeper(sleeper: Arc<dyn Fn(Duration) + Send + Sync>) -> Self {
+        Self { attempts: 0, sleeper }
+    }
+
     pub fn next_delay(&mut self) -> Option<Duration> {
         self.attempts += 1;
         match self.attempts {
@@ -227,6 +241,18 @@ impl PostRetrySchedule {
             2 => Some(Duration::from_secs(2)),
             3 => Some(Duration::from_secs(4)),
             _ => None,
+        }
+    }
+
+    /// Sleep for the next retry delay. Returns false (and does not sleep)
+    /// once the schedule is exhausted — i.e. the POST has had its 3 retries.
+    pub fn sleep_next(&mut self) -> bool {
+        match self.next_delay() {
+            Some(d) => {
+                (self.sleeper)(d);
+                true
+            }
+            None => false,
         }
     }
 }
@@ -254,6 +280,30 @@ mod backoff_tests {
         assert_eq!(s.next_delay(), Some(Duration::from_secs(2)));
         assert_eq!(s.next_delay(), Some(Duration::from_secs(4)));
         assert_eq!(s.next_delay(), None);
+    }
+
+    /// The injected sleeper receives exactly the 1s/2s/4s schedule and the
+    /// schedule then reports exhaustion — tests use this to never really sleep.
+    #[test]
+    fn post_retry_injected_sleeper() {
+        use std::sync::Mutex;
+        let slept = Arc::new(Mutex::new(Vec::new()));
+        let record = Arc::clone(&slept);
+        let mut s = PostRetrySchedule::with_sleeper(Arc::new(move |d| {
+            record.lock().unwrap().push(d);
+        }));
+        assert!(s.sleep_next());
+        assert!(s.sleep_next());
+        assert!(s.sleep_next());
+        assert!(!s.sleep_next());
+        assert_eq!(
+            slept.lock().unwrap().as_slice(),
+            &[
+                Duration::from_secs(1),
+                Duration::from_secs(2),
+                Duration::from_secs(4)
+            ]
+        );
     }
 
     #[test]

@@ -30,6 +30,19 @@ pub struct McpTool {
     pub input_schema: Value,
 }
 
+/// Transport-agnostic view of one MCP server (stdio child process or remote
+/// streamable-HTTP endpoint). The registry routes purely by server name; the
+/// transport is an implementation detail of each backend.
+pub trait McpBackend {
+    fn name(&self) -> &str;
+    /// Part of the backend contract (both transports implement it); the
+    /// registry itself routes by name and lets `call` handle down servers.
+    #[allow(dead_code)]
+    fn is_alive(&self) -> bool;
+    fn tools(&self) -> &[McpTool];
+    fn call(&mut self, tool_name: &str, arguments: Value) -> anyhow::Result<ToolResult>;
+}
+
 #[derive(Debug)]
 pub struct McpServer {
     name: String,
@@ -148,6 +161,22 @@ impl McpServer {
     }
 }
 
+impl McpBackend for McpServer {
+    fn name(&self) -> &str {
+        &self.name
+    }
+    fn is_alive(&self) -> bool {
+        McpServer::is_alive(self)
+    }
+    fn tools(&self) -> &[McpTool] {
+        &self.tools
+    }
+    fn call(&mut self, tool_name: &str, arguments: Value) -> anyhow::Result<ToolResult> {
+        // Delegate to the inherent method: identical wire behavior.
+        McpServer::call(self, tool_name, arguments)
+    }
+}
+
 impl Drop for McpServer {
     fn drop(&mut self) {
         // Kill the WHOLE process group, not just the direct child: a plain
@@ -173,9 +202,8 @@ impl Drop for McpServer {
     }
 }
 
-#[derive(Debug)]
 pub struct McpRegistry {
-    servers: Vec<McpServer>,
+    servers: Vec<Box<dyn McpBackend>>,
 }
 
 impl McpRegistry {
@@ -221,7 +249,7 @@ impl McpRegistry {
                 return Ok(Self { servers: Vec::new() });
             }
         };
-        let mut servers = Vec::new();
+        let mut servers: Vec<Box<dyn McpBackend>> = Vec::new();
         for (name, raw) in config.mcp_servers {
             if !is_valid_name(&name) {
                 eprintln!("chug: warning: invalid mcp server name {name}");
@@ -234,18 +262,24 @@ impl McpRegistry {
                 eprintln!("chug: warning: mcp server {name} config error: {msg}");
                 continue;
             }
-            // Remote HTTP transport is not wired in round 1
+            // Remote entry: streamable-HTTP transport. Fail-soft like stdio:
+            // any handshake error skips this server, the run continues.
             if raw.url.is_some() {
-                let log = cwd.join(".chug").join(format!("mcp-{name}.log"));
-                log_line(&log, &format!("chug: mcp server {name} is remote; remote http transport lands in round 2"));
-                eprintln!("chug: warning: mcp server {name} is remote; remote http transport lands in round 2");
+                match spawn_remote(&name, &raw) {
+                    Ok(srv) => servers.push(Box::new(srv)),
+                    Err(e) => {
+                        let log = cwd.join(".chug").join(format!("mcp-{name}.log"));
+                        log_line(&log, &format!("chug: mcp server {name} failed to start: {e:#}"));
+                        eprintln!("chug: warning: mcp server {name} failed to start: {e:#}");
+                    }
+                }
                 continue;
             }
             match McpServer::spawn(cwd, &name, raw).and_then(|mut s| {
                 s.initialize()?;
                 Ok(s)
             }) {
-                Ok(srv) => servers.push(srv),
+                Ok(srv) => servers.push(Box::new(srv)),
                 Err(e) => {
                     let log = cwd.join(".chug").join(format!("mcp-{name}.log"));
                     log_line(&log, &format!("chug: mcp server {name} failed to start: {e:#}"));
@@ -261,9 +295,9 @@ impl McpRegistry {
     pub fn tool_schemas(&self) -> Vec<Value> {
         let mut out = Vec::new();
         for srv in &self.servers {
-            for tool in &srv.tools {
+            for tool in srv.tools() {
                 out.push(json!({
-                    "name": format!("mcp__{}__{}", srv.name, tool.name),
+                    "name": format!("mcp__{}__{}", srv.name(), tool.name),
                     "description": tool.description,
                     "input_schema": tool.input_schema
                 }));
@@ -282,7 +316,7 @@ impl McpRegistry {
                 is_error: true,
             };
         };
-        let Some(srv) = self.servers.iter_mut().find(|s| s.name == srv_name) else {
+        let Some(srv) = self.servers.iter_mut().find(|s| s.name() == srv_name) else {
             return ToolResult {
                 content: format!("mcp server {srv_name} not found"),
                 is_error: true,
@@ -296,6 +330,26 @@ impl McpRegistry {
             },
         }
     }
+}
+
+/// Build and handshake a remote (streamable-HTTP) MCP server from an already
+/// validated config: `url` is present, `transport` is "http", and every
+/// `${VAR}` in the headers expands (validate_config ran first). Fail-soft:
+/// any error here skips the server; the caller logs and continues the run.
+fn spawn_remote(name: &str, raw: &McpServerConfigRaw) -> anyhow::Result<crate::mcp_http::HttpMcpServer> {
+    let url = raw.url.clone().context("remote server requires url")?;
+    let mut headers = Vec::new();
+    if let Some(hdrs) = &raw.headers {
+        for (k, v) in hdrs {
+            let expanded = expand_env_vars(v)
+                .with_context(|| format!("missing env var in header {k}"))?;
+            headers.push((k.clone(), expanded));
+        }
+    }
+    let mut srv = crate::mcp_http::HttpMcpServer::new(name.to_string(), url, headers)
+        .context("building http mcp client")?;
+    srv.initialize()?;
+    Ok(srv)
 }
 
 fn find_config(cwd: &Path) -> Option<PathBuf> {
@@ -379,19 +433,19 @@ struct McpConfig {
 }
 
 #[derive(Debug, serde::Deserialize)]
-struct McpServerConfigRaw {
+pub struct McpServerConfigRaw {
     #[serde(default)]
-    command: Option<String>,
+    pub command: Option<String>,
     #[serde(default)]
-    args: Option<Vec<String>>,
+    pub args: Option<Vec<String>>,
     #[serde(default)]
-    env: Option<HashMap<String, String>>,
+    pub env: Option<HashMap<String, String>>,
     #[serde(default)]
-    url: Option<String>,
+    pub url: Option<String>,
     #[serde(default)]
-    transport: Option<String>,
+    pub transport: Option<String>,
     #[serde(default)]
-    headers: Option<HashMap<String, String>>,
+    pub headers: Option<HashMap<String, String>>,
 }
 
 impl McpServer {
@@ -711,7 +765,7 @@ for line in sys.stdin:
 
         let reg = McpRegistry::new(tmp.path(), false, Some(flag_path)).unwrap();
         assert_eq!(reg.servers.len(), 1);
-        assert_eq!(reg.servers[0].name, "flagserver");
+        assert_eq!(reg.servers[0].name(), "flagserver");
         assert!(reg.tool_schemas()[0]["name"] == "mcp__flagserver__echo");
     }
 
@@ -748,8 +802,10 @@ for line in sys.stdin:
         // MCP. It must be a loud user error instead.
         let tmp = TempDir::new().unwrap();
         let missing = tmp.path().join("no-such-mcp.json");
-        let err = McpRegistry::new(tmp.path(), false, Some(missing)).unwrap_err();
-        assert!(err.to_string().contains("no such file"), "{err}");
+        match McpRegistry::new(tmp.path(), false, Some(missing)) {
+            Ok(_) => panic!("missing explicit config must be a loud error"),
+            Err(err) => assert!(err.to_string().contains("no such file"), "{err}"),
+        }
     }
 
     #[test]
@@ -1181,7 +1237,7 @@ for line in sys.stdin:
         let reg = McpRegistry::new(tmp.path(), false, None).unwrap();
         // remote skipped due to missing env var, stdio loaded
         assert_eq!(reg.servers.len(), 1);
-        assert_eq!(reg.servers[0].name, "stdio-srv");
+        assert_eq!(reg.servers[0].name(), "stdio-srv");
         // verify log contains config error
         let log_path = tmp.path().join(".chug").join("mcp-remote-srv.log");
         let content = fs::read_to_string(&log_path).unwrap_or_default();
@@ -1207,7 +1263,7 @@ for line in sys.stdin:
 
         let reg = McpRegistry::new(tmp.path(), false, None).unwrap();
         assert_eq!(reg.servers.len(), 1);
-        assert_eq!(reg.servers[0].name, "stdio-srv");
+        assert_eq!(reg.servers[0].name(), "stdio-srv");
         let log_path = tmp.path().join(".chug").join("mcp-remote-srv.log");
         let content = fs::read_to_string(&log_path).unwrap_or_default();
         assert!(content.contains("unsupported transport: ws"));
