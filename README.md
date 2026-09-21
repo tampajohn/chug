@@ -78,6 +78,38 @@ an error the model can see and route around; `allow destructive` in a steering
 note disables the gate for the run. Fail-open if the judge is down. Verdicts
 logged to `.chug/risk_verdicts.jsonl`.
 
+## MCP servers (`mcp.json`)
+
+chug consumes tools from MCP servers (stdio, tools capability). Claude
+Code-compatible config, first found wins: `--mcp-config <path>` →
+`./mcp.json` → `~/.config/chug/mcp.json` (`--mcp-off` disables).
+
+```json
+{"mcpServers": {"<name>": {"command": "...", "args": ["..."], "env": {"K": "V"}}}}
+```
+
+Server tools appear as `mcp__<name>__<tool>` alongside the builtins.
+Per-server fail-soft: a server that dies mid-run errors its calls without
+killing the run; servers spawn in their own process groups and are
+group-killed on every exit path. MCP tools bypass the laya risk gate (which
+judges bash only). No config anywhere = byte-identical behavior.
+
+## Langfuse observability (optional)
+
+Traces to a self-hosted Langfuse v3 when configured — off with zero cost
+otherwise. Config: `LANGFUSE_HOST` + `LANGFUSE_PUBLIC_KEY` +
+`LANGFUSE_SECRET_KEY` (env wins; falls back to `~/.langfuse-keys-chug`, then
+`~/.langfuse-keys`).
+
+- **Trace** per run / chat session, **generation** per LLM call (usage incl.
+  `cache_read_input_tokens` → the Langfuse model registry computes cost),
+  **span** per tool call
+- **Events**: goal accepted/rejected, aborts, risk-gate verdicts, steering
+- **Scores**: `outcome` (completed|aborted|budget|stuck) + `iterations`
+- **Fire-and-forget**: bounded queue + background flusher, exit-drain on all
+  paths; any delivery failure is counted and ignored — telemetry never
+  changes run behavior
+
 ## Self-hosting specs
 
 - `META-SPEC.md` — chug orchestrating child chug runs (git-worktree-per-round
@@ -94,4 +126,4 @@ cargo build && cargo clippy --all-targets -- -D warnings && cargo test
 ```
 
 All three must stay green. Layout: `src/{api,driver,events,tools,tui,chat,
-attach,complete,riskgate,auth,ledger,transcript}.rs` (+ `main.rs`).
+attach,complete,riskgate,mcp,observ,auth,ledger,transcript}.rs` (+ `main.rs`).
