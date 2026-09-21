@@ -224,6 +224,20 @@ impl McpRegistry {
                 eprintln!("chug: warning: invalid mcp server name {name}");
                 continue;
             }
+            let config_error = validate_config(&raw);
+            if let Some(msg) = config_error {
+                let log = cwd.join(".chug").join(format!("mcp-{name}.log"));
+                log_line(&log, &format!("chug: mcp server {name} config error: {msg}"));
+                eprintln!("chug: warning: mcp server {name} config error: {msg}");
+                continue;
+            }
+            // Remote HTTP transport is not wired in round 1
+            if raw.url.is_some() {
+                let log = cwd.join(".chug").join(format!("mcp-{name}.log"));
+                log_line(&log, &format!("chug: mcp server {name} is remote; remote http transport lands in round 2"));
+                eprintln!("chug: warning: mcp server {name} is remote; remote http transport lands in round 2");
+                continue;
+            }
             match McpServer::spawn(cwd, &name, raw).and_then(|mut s| {
                 s.initialize()?;
                 Ok(s)
@@ -299,6 +313,62 @@ fn is_valid_name(name: &str) -> bool {
     !name.is_empty() && name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
 }
 
+fn expand_env_vars(s: &str) -> Option<String> {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    let mut missing = false;
+    while let Some(c) = chars.next() {
+        if c == '$' && chars.peek() == Some(&'{') {
+            chars.next();
+            let mut var = String::new();
+            while let Some(&ch) = chars.peek() {
+                if ch == '}' {
+                    chars.next();
+                    break;
+                }
+                var.push(ch);
+                chars.next();
+            }
+            if let Ok(val) = std::env::var(&var) {
+                out.push_str(&val);
+            } else {
+                missing = true;
+                break;
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    if missing { None } else { Some(out) }
+}
+
+fn validate_config(raw: &McpServerConfigRaw) -> Option<String> {
+    let is_remote = raw.url.is_some();
+    let is_stdio = raw.command.is_some();
+    if is_remote && is_stdio {
+        return Some("server cannot be both remote and stdio".into());
+    }
+    if is_remote {
+        if let Some(t) = &raw.transport {
+            if t != "http" {
+                return Some(format!("unsupported transport: {t}"));
+            }
+        }
+        if let Some(headers) = &raw.headers {
+            for (k, v) in headers {
+                if expand_env_vars(v).is_none() {
+                    return Some(format!("missing env var in header {k}"));
+                }
+            }
+        }
+        return None;
+    }
+    if is_stdio {
+        return None;
+    }
+    Some("stdio server requires command".into())
+}
+
 #[derive(Debug, serde::Deserialize)]
 struct McpConfig {
     #[serde(rename = "mcpServers")]
@@ -307,9 +377,18 @@ struct McpConfig {
 
 #[derive(Debug, serde::Deserialize)]
 struct McpServerConfigRaw {
-    command: String,
+    #[serde(default)]
+    command: Option<String>,
+    #[serde(default)]
     args: Option<Vec<String>>,
+    #[serde(default)]
     env: Option<HashMap<String, String>>,
+    #[serde(default)]
+    url: Option<String>,
+    #[serde(default)]
+    transport: Option<String>,
+    #[serde(default)]
+    headers: Option<HashMap<String, String>>,
 }
 
 impl McpServer {
@@ -318,7 +397,8 @@ impl McpServer {
         if let Some(parent) = log_path.parent() {
             let _ = fs::create_dir_all(parent);
         }
-        let mut cmd = Command::new(&cfg_raw.command);
+        let command = cfg_raw.command.as_deref().context("command required for stdio server")?;
+        let mut cmd = Command::new(command);
         if let Some(args) = cfg_raw.args {
             cmd.args(args);
         }
@@ -565,9 +645,12 @@ for line in sys.stdin:
         let py = dir.join(format!("{name}_srv.py"));
         fs::write(&py, body).unwrap();
         McpServerConfigRaw {
-            command: "python3".into(),
+            command: Some("python3".to_string()),
             args: Some(vec![py.to_string_lossy().into_owned()]),
             env: None,
+            url: None,
+            transport: None,
+            headers: None,
         }
     }
 
@@ -583,15 +666,15 @@ for line in sys.stdin:
     fn write_mcp_json(dir: &Path, name: &str, body: &str) {
         let py = dir.join(format!("{name}_srv.py"));
         fs::write(&py, body).unwrap();
-        let cfg = json!({
+        let cfg_json = json!({
             "mcpServers": {
                 name: {
                     "command": "python3",
-                    "args": [py.to_string_lossy()],
+                    "args": [py.to_string_lossy()]
                 }
             }
         });
-        fs::write(dir.join("mcp.json"), cfg.to_string()).unwrap();
+        fs::write(dir.join("mcp.json"), serde_json::to_string(&cfg_json).unwrap()).unwrap();
     }
 
     // ---------- unit: naming / config discovery ----------
@@ -871,12 +954,15 @@ for line in sys.stdin:
         let py = tmp.path().join("fake_srv.py");
         fs::write(&py, echo_server_body()).unwrap();
         let cfg = McpServerConfigRaw {
-            command: "sh".into(),
+            command: Some("sh".to_string()),
             args: Some(vec![
-                "-c".into(),
+                "-c".to_string(),
                 format!("sleep 300 & exec python3 {}", py.to_string_lossy()),
             ]),
             env: None,
+            url: None,
+            transport: None,
+            headers: None,
         };
         let mut srv = McpServer::spawn(tmp.path(), "fake", cfg).unwrap();
         srv.initialize().unwrap();
@@ -977,5 +1063,80 @@ for line in sys.stdin:
         let res = McpServer::parse_call_response(resp);
         assert!(res.is_error);
         assert_eq!(res.content, "line one\nline two");
+    }
+
+    // ---------- spec-9 config extension ----------
+
+    #[test]
+    fn remote_entry_parses_and_validates_success() {
+        use std::collections::HashMap;
+        unsafe { std::env::set_var("REMOTE_TOKEN", "abc123"); }
+        let raw = McpServerConfigRaw {
+            command: None,
+            args: None,
+            env: None,
+            url: Some("https://example.com/mcp".to_string()),
+            transport: Some("http".to_string()),
+            headers: Some({
+                let mut m = HashMap::new();
+                m.insert("Authorization".to_string(), "Bearer ${REMOTE_TOKEN}".to_string());
+                m
+            }),
+        };
+        assert_eq!(validate_config(&raw), None);
+    }
+
+    #[test]
+    fn missing_env_var_skips_only_that_server() {
+        let tmp = TempDir::new().unwrap();
+        // Create a stdio server
+        let py = tmp.path().join("std_srv.py");
+        fs::write(&py, echo_server_body()).unwrap();
+        let cfg_json = json!({
+            "mcpServers": {
+                "stdio-srv": {"command": "python3", "args": [py.to_string_lossy()]},
+                "remote-srv": {
+                    "url": "https://example.com/mcp",
+                    "transport": "http",
+                    "headers": {"Authorization": "Bearer ${MISSING_VAR}"}
+                }
+            }
+        });
+        fs::write(tmp.path().join("mcp.json"), serde_json::to_string(&cfg_json).unwrap()).unwrap();
+
+        let reg = McpRegistry::new(tmp.path(), false, None).unwrap();
+        // remote skipped due to missing env var, stdio loaded
+        assert_eq!(reg.servers.len(), 1);
+        assert_eq!(reg.servers[0].name, "stdio-srv");
+    }
+
+    #[test]
+    fn bad_transport_skips_only_that_server() {
+        let tmp = TempDir::new().unwrap();
+        let py = tmp.path().join("std_srv.py");
+        fs::write(&py, echo_server_body()).unwrap();
+        let cfg_json = json!({
+            "mcpServers": {
+                "stdio-srv": {"command": "python3", "args": [py.to_string_lossy()]},
+                "remote-srv": {
+                    "url": "https://example.com/mcp",
+                    "transport": "ws",
+                    "headers": {}
+                }
+            }
+        });
+        fs::write(tmp.path().join("mcp.json"), serde_json::to_string(&cfg_json).unwrap()).unwrap();
+
+        let reg = McpRegistry::new(tmp.path(), false, None).unwrap();
+        assert_eq!(reg.servers.len(), 1);
+        assert_eq!(reg.servers[0].name, "stdio-srv");
+    }
+
+    #[test]
+    fn stdio_only_config_unchanged() {
+        let tmp = TempDir::new().unwrap();
+        write_mcp_json(tmp.path(), "fake", echo_server_body());
+        let reg = McpRegistry::new(tmp.path(), false, None).unwrap();
+        assert_eq!(reg.servers.len(), 1);
     }
 }

@@ -12,6 +12,7 @@ mod tools;
 mod transcript;
 mod tui;
 mod mcp;
+mod sse;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
