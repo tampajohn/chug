@@ -349,10 +349,10 @@ fn validate_config(raw: &McpServerConfigRaw) -> Option<String> {
         return Some("server cannot be both remote and stdio".into());
     }
     if is_remote {
-        if let Some(t) = &raw.transport {
-            if t != "http" {
-                return Some(format!("unsupported transport: {t}"));
-            }
+        if let Some(t) = &raw.transport
+            && t != "http"
+        {
+            return Some(format!("unsupported transport: {t}"));
         }
         if let Some(headers) = &raw.headers {
             for (k, v) in headers {

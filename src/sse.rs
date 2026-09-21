@@ -1,3 +1,8 @@
+//! SSE line parsing and reconnect/retry backoff schedules for the MCP
+//! streamable-HTTP transport (SPEC-9). Wired up in round 2 — until then the
+//! items here are exercised only by unit tests.
+#![allow(dead_code)]
+
 use std::time::Duration;
 
 /// SSE event emitted by the parser.
@@ -114,15 +119,17 @@ mod tests {
     #[test]
     fn parser_blank_line_dispatches() {
         let mut p = SseParser::new();
-        p.feed_line("data: a");
-        p.feed_line("");
-        p.feed_line("data: b");
-        p.feed_line("");
-        // first event
-        // note: we already consumed first blank, need recheck
-        // just test basic
-        let ev1 = SseParser::new();
-        // skip
+        assert!(p.feed_line("data: a").is_none());
+        let ev = p.feed_line("").expect("blank line must dispatch pending event");
+        assert_eq!(ev.data, "a");
+        assert_eq!(ev.event, None);
+        assert_eq!(ev.id, None);
+        // state resets after dispatch: second event parsed independently
+        assert!(p.feed_line("data: b").is_none());
+        let ev = p.feed_line("").expect("second blank line must dispatch");
+        assert_eq!(ev.data, "b");
+        // a blank line with nothing pending dispatches nothing
+        assert!(p.feed_line("").is_none());
     }
 }
 
