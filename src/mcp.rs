@@ -64,8 +64,9 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 }
 
 /// Append one line to the per-server mcp log. Best effort: logging must never
-/// break the protocol path.
-fn log_line(path: &Path, line: &str) {
+/// break the protocol path. Shared with the HTTP transport (remote servers
+/// log to the same .chug/mcp-<name>.log file).
+pub(crate) fn log_line(path: &Path, line: &str) {
     if let Some(parent) = path.parent() {
         let _ = fs::create_dir_all(parent);
     }
@@ -265,7 +266,7 @@ impl McpRegistry {
             // Remote entry: streamable-HTTP transport. Fail-soft like stdio:
             // any handshake error skips this server, the run continues.
             if raw.url.is_some() {
-                match spawn_remote(&name, &raw) {
+                match spawn_remote(cwd, &name, &raw) {
                     Ok(srv) => servers.push(Box::new(srv)),
                     Err(e) => {
                         let log = cwd.join(".chug").join(format!("mcp-{name}.log"));
@@ -336,7 +337,7 @@ impl McpRegistry {
 /// validated config: `url` is present, `transport` is "http", and every
 /// `${VAR}` in the headers expands (validate_config ran first). Fail-soft:
 /// any error here skips the server; the caller logs and continues the run.
-fn spawn_remote(name: &str, raw: &McpServerConfigRaw) -> anyhow::Result<crate::mcp_http::HttpMcpServer> {
+fn spawn_remote(cwd: &Path, name: &str, raw: &McpServerConfigRaw) -> anyhow::Result<crate::mcp_http::HttpMcpServer> {
     let url = raw.url.clone().context("remote server requires url")?;
     let mut headers = Vec::new();
     if let Some(hdrs) = &raw.headers {
@@ -348,6 +349,9 @@ fn spawn_remote(name: &str, raw: &McpServerConfigRaw) -> anyhow::Result<crate::m
     }
     let mut srv = crate::mcp_http::HttpMcpServer::new(name.to_string(), url, headers)
         .context("building http mcp client")?;
+    // Same per-server log file as stdio servers: listen-stream notes
+    // (dropped notifications, reconnects, 405) land there too.
+    srv.set_log_path(cwd.join(".chug").join(format!("mcp-{name}.log")));
     srv.initialize()?;
     Ok(srv)
 }
