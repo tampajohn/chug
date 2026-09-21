@@ -9,9 +9,10 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, bail};
 use serde_json::{Value, json};
 
-use crate::api::{Client, ContentBlock, KnownBlock, Llm, Message};
+use crate::api::{Client, ContentBlock, KnownBlock, Llm, Message, ObsCtx};
 use crate::events::{Event, EventSink, TurnEndReason};
 use crate::ledger;
+use crate::observ;
 use crate::riskgate::{GateDecision, LayaJudge, RiskGate};
 use crate::tools::{self, ToolCtx, ToolResult};
 use crate::transcript;
@@ -139,6 +140,11 @@ struct LoopCtx<'a> {
     controls: &'a Controls,
     updates: &'a Receiver<SlashUpdate>,
     bash_timeout: Duration,
+    /// Langfuse trace for the enclosing run / chat session (`None` when
+    /// observability is off): gates all per-event emission in the loop.
+    trace: Option<&'a str>,
+    /// The process observability sink (Noop when off → every call is a no-op).
+    obs: &'a observ::Sink,
 }
 
 enum VerifyOutcome {
@@ -154,7 +160,7 @@ pub fn run(cfg: RunConfig, sink: &mut dyn EventSink) -> anyhow::Result<i32> {
     } else {
         None
     };
-    run_loop(cfg, client, gate, sink)
+    run_loop(cfg, client, gate, sink, observ::global())
 }
 
 fn run_loop(
@@ -162,9 +168,21 @@ fn run_loop(
     client: Client,
     mut gate: Option<RiskGate>,
     sink: &mut dyn EventSink,
+    obs: &observ::Sink,
 ) -> anyhow::Result<i32> {
     let mut client = client;
     ledger::ensure_seeded(&cfg.cwd)?;
+
+    // SPEC-8: one trace per run, created up front; finished with the outcome
+    // + iterations scores at the end of the loop (or left open on a hard
+    // error — the process-exit drain still flushes what was emitted).
+    let trace = obs.trace_started(
+        &cfg.goal,
+        &cfg.model,
+        &cfg.cwd.display().to_string(),
+        "run",
+        Some(cfg.spec_path.to_string_lossy().as_ref()),
+    );
 
     let mut messages: Vec<Message> = if cfg.resume {
         resume_messages(&cfg.cwd)?
@@ -199,6 +217,8 @@ fn run_loop(
         controls: &cfg.controls,
         updates: &update_rx,
         bash_timeout: cfg.bash_timeout,
+        trace: trace.as_deref(),
+        obs,
     };
     match drive_loop(
         &ctx,
@@ -238,6 +258,8 @@ pub fn run_turn(
     updates: &Receiver<SlashUpdate>,
     knobs: &mut TurnKnobs,
     bash_timeout: Duration,
+    trace: Option<&str>,
+    obs: &observ::Sink,
     sink: &mut dyn EventSink,
 ) -> anyhow::Result<TurnEndReason> {
     let ctx = LoopCtx {
@@ -246,6 +268,8 @@ pub fn run_turn(
         controls,
         updates,
         bash_timeout,
+        trace,
+        obs,
     };
     match drive_loop(&ctx, knobs, client, gate, messages, None, sink)? {
         DriveOutcome::TurnEnded(reason) => Ok(reason),
@@ -288,6 +312,7 @@ fn drive_loop(
                 "iteration budget exceeded",
                 TurnEndReason::BudgetExceeded,
                 1,
+                iteration,
                 sink,
             );
         }
@@ -297,6 +322,7 @@ fn drive_loop(
                 "time budget exceeded",
                 TurnEndReason::BudgetExceeded,
                 1,
+                iteration,
                 sink,
             );
         }
@@ -305,7 +331,7 @@ fn drive_loop(
                 Mode::Autonomous => "operator abort",
                 Mode::Chat => "operator interrupt",
             };
-            return abort_exit(ctx, reason, TurnEndReason::Interrupted, 1, sink);
+            return abort_exit(ctx, reason, TurnEndReason::Interrupted, 1, iteration, sink);
         }
 
         // Steering notes queued by the operator are consumed here, at the
@@ -313,6 +339,11 @@ fn drive_loop(
         let notes = drain_steering(&ctx.controls.steering_rx);
         if !notes.is_empty() {
             append_steering_notes(ctx.cwd, messages, &notes, sink)?;
+            if let Some(trace) = ctx.trace {
+                for note in &notes {
+                    ctx.obs.event(trace, "steering", json!({ "note": note }));
+                }
+            }
             // Operator override: `allow destructive` disables the risk gate
             // for the remainder of the run.
             if notes.iter().any(|n| is_allow_destructive(n))
@@ -355,7 +386,14 @@ fn drive_loop(
             max: knobs.max_iters,
             messages: messages.len() as u32,
         });
-        let resp = client.complete(&system, messages, &tool_schemas)?;
+        // SPEC-8: the api layer emits one generation per response (model,
+        // usage incl. cache reads, latency, stop reason, iteration) when a
+        // trace exists for this loop.
+        let obs_ctx = ObsCtx {
+            trace_id: ctx.trace,
+            iteration,
+        };
+        let resp = client.complete(&system, messages, &tool_schemas, &obs_ctx)?;
 
         let usage = resp.body.get("usage").cloned().unwrap_or(Value::Null);
         usage_in += usage
@@ -388,26 +426,56 @@ fn drive_loop(
             sink.emit(Event::ToolStart {
                 name: name.to_string(),
             });
+            let tool_start = std::time::SystemTime::now();
             let result = if name == "bash" {
-                if let Some(gate) = gate.as_mut() {
-                    match input
-                        .get("command")
-                        .and_then(Value::as_str)
-                        .map(|command| gate.check(command, sink))
-                    {
-                        Some(GateDecision::Blocked(msg)) => ToolResult {
-                            content: msg,
-                            is_error: true,
-                        },
-                        // Allowed, no command field, or no gate: execute.
-                        _ => tools::dispatch(&tool_ctx, name, input),
+                if let Some(gate) = gate.as_mut()
+                    && let Some(command) = input.get("command").and_then(Value::as_str)
+                    && !gate.is_disabled()
+                {
+                    let command_preview: String = command.chars().take(200).collect();
+                    match gate.check(command, sink) {
+                        GateDecision::Blocked(msg) => {
+                            if let Some(trace) = ctx.trace {
+                                ctx.obs.event(
+                                    trace,
+                                    "risk_gate",
+                                    json!({ "verdict": "blocked", "command": command_preview }),
+                                );
+                            }
+                            ToolResult {
+                                content: msg,
+                                is_error: true,
+                            }
+                        }
+                        GateDecision::Allowed => {
+                            if let Some(trace) = ctx.trace {
+                                ctx.obs.event(
+                                    trace,
+                                    "risk_gate",
+                                    json!({ "verdict": "allowed", "command": command_preview }),
+                                );
+                            }
+                            tools::dispatch(&tool_ctx, name, input)
+                        }
                     }
                 } else {
+                    // Disabled gate, no command field, or no gate: execute.
                     tools::dispatch(&tool_ctx, name, input)
                 }
             } else {
                 tools::dispatch(&tool_ctx, name, input)
             };
+            // SPEC-8: one span per tool call with ok / is_error metadata.
+            if let Some(trace) = ctx.trace {
+                ctx.obs.span(
+                    trace,
+                    name,
+                    tool_start,
+                    std::time::SystemTime::now(),
+                    !result.is_error,
+                    result.is_error,
+                );
+            }
             sink.emit(Event::ToolResult {
                 name: name.to_string(),
                 ok: !result.is_error,
@@ -453,7 +521,10 @@ fn drive_loop(
                 VerifyOutcome::NoCheck | VerifyOutcome::Accepted => {
                     let user_msg = Message::user(user_blocks);
                     transcript::append(ctx.cwd, &user_msg)?;
-                    sink.emit(Event::GoalAccepted { summary });
+                    sink.emit(Event::GoalAccepted { summary: summary.clone() });
+                    if let Some(trace) = ctx.trace {
+                        ctx.obs.event(trace, "goal_accepted", json!({ "summary": summary }));
+                    }
                     if ctx.mode == Mode::Chat {
                         // Keep full history so the next turn continues the
                         // same conversation.
@@ -461,12 +532,28 @@ fn drive_loop(
                         messages.push(user_msg);
                         return Ok(DriveOutcome::TurnEnded(TurnEndReason::GoalAccepted));
                     }
+                    // SPEC-8: the run's outcome scores + trace finish.
+                    if let Some(trace) = ctx.trace {
+                        finish_run(
+                            ctx.obs,
+                            trace,
+                            observ::outcome::COMPLETED,
+                            u64::from(iteration) + 1,
+                        );
+                    }
                     return Ok(DriveOutcome::RunFinished(0));
                 }
                 VerifyOutcome::Failed(output) => {
                     sink.emit(Event::GoalRejected {
                         reason: "check command failed".to_string(),
                     });
+                    if let Some(trace) = ctx.trace {
+                        ctx.obs.event(
+                            trace,
+                            "goal_rejected",
+                            json!({ "reason": "check command failed" }),
+                        );
+                    }
                     user_blocks.push(ContentBlock::text_block(format!(
                         "goal_complete rejected: the spec check command failed. Output:\n\n{output}\n\nFix the failure and try again. Update the ledger to reflect the current state."
                     )));
@@ -480,7 +567,14 @@ fn drive_loop(
         messages.push(user_msg);
 
         if is_stuck(recent.make_contiguous()) {
-            return abort_exit(ctx, "stuck: repeated error", TurnEndReason::Interrupted, 2, sink);
+            return abort_exit(
+                ctx,
+                "stuck: repeated error",
+                TurnEndReason::Interrupted,
+                2,
+                iteration,
+                sink,
+            );
         }
 
         if transcript_trim(messages) {
@@ -646,14 +740,35 @@ pub fn build_chat_system_prompt(
     prompt
 }
 
+/// End-of-run observability tail: outcome + iterations scores, then the
+/// trace-finish upsert (Langfuse merges trace-create events by id).
+fn finish_run(obs: &observ::Sink, trace: &str, outcome: &str, iterations: u64) {
+    obs.score_outcome(trace, outcome);
+    obs.score_iterations(trace, iterations);
+    obs.trace_finished(trace, outcome, iterations);
+}
+
+/// Map an abort reason onto the categorical outcome score.
+fn abort_outcome(reason: &str) -> &'static str {
+    if reason.contains("budget") {
+        observ::outcome::BUDGET
+    } else if reason.contains("stuck") {
+        observ::outcome::STUCK
+    } else {
+        observ::outcome::ABORTED
+    }
+}
+
 /// Shared abort tail: push the freshest ledger, then the Aborted event, then
 /// map to the mode-appropriate outcome (exit code for `run`, turn-end for
-/// chat). `turn_reason` is only used in chat mode.
+/// chat). `turn_reason` is only used in chat mode. `iteration` feeds the
+/// `iterations` score on autonomous exits (the completed full iterations).
 fn abort_exit(
     ctx: &LoopCtx,
     reason: &str,
     turn_reason: TurnEndReason,
     code: i32,
+    iteration: u32,
     sink: &mut dyn EventSink,
 ) -> anyhow::Result<DriveOutcome> {
     // Push the freshest ledger before the abort event so the sink prints the
@@ -664,6 +779,14 @@ fn abort_exit(
     sink.emit(Event::Aborted {
         reason: reason.to_string(),
     });
+    if let Some(trace) = ctx.trace {
+        ctx.obs.event(trace, "abort", json!({ "reason": reason }));
+        if ctx.mode == Mode::Autonomous {
+            // SPEC-8: finish the run trace with the classified outcome. Chat
+            // turns keep the session trace open — the session continues.
+            finish_run(ctx.obs, trace, abort_outcome(reason), u64::from(iteration));
+        }
+    }
     Ok(match ctx.mode {
         Mode::Autonomous => DriveOutcome::RunFinished(code),
         Mode::Chat => DriveOutcome::TurnEnded(turn_reason),
@@ -673,6 +796,7 @@ fn abort_exit(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::api::ScriptedLlm;
     use serde_json::json;
 
     fn tool_result_msg(text: &str) -> Message {
@@ -946,7 +1070,8 @@ mod tests {
         };
         let client = Client::new_without_credentials("test-model").unwrap();
         let mut sink = RecordingSink::default();
-        let code = run_loop(cfg, client, None, &mut sink).unwrap();
+        // Noop sink: observability off → the run path must be untouched.
+        let code = run_loop(cfg, client, None, &mut sink, &observ::Sink::Noop).unwrap();
 
         assert_eq!(code, 1);
         assert!(matches!(
@@ -963,5 +1088,324 @@ mod tests {
         // aborted at the boundary before any LLM call
         assert!(!sink.0.iter().any(|e| matches!(e, Event::ModelText(_))));
         assert!(!sink.0.iter().any(|e| matches!(e, Event::Iteration { .. })));
+    }
+
+    // ---------- observability wiring (SPEC-8) ----------
+
+    /// A live observability sink wired to a counting transport: `sink.shutdown()`
+    /// flushes everything, then `transport.events()` returns what was emitted.
+    fn test_obs() -> (std::sync::Arc<observ::testing::CountingTransport>, observ::Sink) {
+        let transport = observ::testing::CountingTransport::new();
+        let sink = observ::testing::test_sink(transport.clone());
+        (transport, sink)
+    }
+
+    fn events_of_kind(
+        transport: &observ::testing::CountingTransport,
+        kind: &str,
+    ) -> Vec<Value> {
+        transport
+            .events()
+            .into_iter()
+            .filter(|e| e["type"] == kind)
+            .collect()
+    }
+
+    fn tool_use_response(name: &str, input: Value) -> Value {
+        json!({
+            "stop_reason": "tool_use",
+            "usage": {"input_tokens": 10, "output_tokens": 5},
+            "content": [{"type": "tool_use", "id": "tu_1", "name": name, "input": input}],
+        })
+    }
+
+    fn text_only_response(text: &str) -> Value {
+        json!({
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 10, "output_tokens": 5},
+            "content": [{"type": "text", "text": text}],
+        })
+    }
+
+    fn ctx_for<'a>(
+        tmp: &'a tempfile::TempDir,
+        mode: Mode,
+        controls: &'a Controls,
+        update_rx: &'a Receiver<SlashUpdate>,
+        trace: Option<&'a str>,
+        obs: &'a observ::Sink,
+    ) -> LoopCtx<'a> {
+        LoopCtx {
+            cwd: tmp.path(),
+            mode,
+            controls,
+            updates: update_rx,
+            bash_timeout: Duration::from_secs(1),
+            trace,
+            obs,
+        }
+    }
+
+    fn knobs_with(max_iters: u32) -> TurnKnobs {
+        TurnKnobs {
+            spec_path: None,
+            goal: None,
+            check_cmd: None,
+            max_iters,
+            max_minutes: 120,
+        }
+    }
+
+    #[test]
+    fn observability_run_emits_span_goal_event_and_completion_scores() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (transport, sink) = test_obs();
+        let (_utx, urx) = mpsc::channel::<SlashUpdate>();
+        let controls = Controls::detached();
+        let ctx = ctx_for(&tmp, Mode::Autonomous, &controls, &urx, Some("chug-test0001"), &sink);
+        let mut knobs = knobs_with(40);
+        let mut llm = ScriptedLlm::new(vec![
+            tool_use_response("read_file", json!({"path": "missing.txt"})),
+            tool_use_response("goal_complete", json!({"summary": "did it"})),
+        ]);
+        let mut gate = None;
+        let mut messages = Vec::new();
+        let outcome = drive_loop(
+            &ctx,
+            &mut knobs,
+            &mut llm,
+            &mut gate,
+            &mut messages,
+            Some("check: true".to_string()),
+            &mut RecordingSink::default(),
+        )
+        .unwrap();
+        assert!(matches!(outcome, DriveOutcome::RunFinished(0)));
+        sink.shutdown();
+
+        // One span per tool call — read_file (missing file → error result)
+        // and goal_complete (ok) — with ok / is_error metadata.
+        let spans = events_of_kind(&transport, "span-create");
+        assert_eq!(spans.len(), 2);
+        assert_eq!(spans[0]["body"]["name"], "read_file");
+        assert_eq!(spans[0]["body"]["metadata"]["ok"], false);
+        assert_eq!(spans[0]["body"]["metadata"]["is_error"], true);
+        assert_eq!(spans[1]["body"]["name"], "goal_complete");
+        assert_eq!(spans[1]["body"]["metadata"]["ok"], true);
+        assert_eq!(spans[1]["body"]["metadata"]["is_error"], false);
+
+        // Goal accepted event carrying the summary.
+        let accepted = events_of_kind(&transport, "event-create");
+        assert_eq!(accepted.len(), 1);
+        assert_eq!(accepted[0]["body"]["name"], "goal_accepted");
+        assert_eq!(accepted[0]["body"]["metadata"]["summary"], "did it");
+
+        // Outcome (completed) + iterations (2 LLM iterations) scores.
+        let scores = events_of_kind(&transport, "score-create");
+        assert_eq!(scores.len(), 2);
+        assert_eq!(scores[0]["body"]["name"], "outcome");
+        assert_eq!(scores[0]["body"]["stringValue"], "completed");
+        assert_eq!(scores[0]["body"]["dataType"], "CATEGORICAL");
+        assert_eq!(scores[1]["body"]["name"], "iterations");
+        assert_eq!(scores[1]["body"]["value"], 2);
+        assert_eq!(scores[1]["body"]["dataType"], "NUMERIC");
+
+        // The run trace is finished via the trace-create upsert.
+        let finishes = events_of_kind(&transport, "trace-create");
+        assert_eq!(finishes.len(), 1);
+        assert_eq!(finishes[0]["body"]["id"], "chug-test0001");
+        assert_eq!(finishes[0]["body"]["metadata"]["outcome"], "completed");
+        assert_eq!(finishes[0]["body"]["metadata"]["iterations"], 2);
+    }
+
+    #[test]
+    fn observability_budget_abort_scores_budget_outcome_and_finishes_trace() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (transport, sink) = test_obs();
+        let (_utx, urx) = mpsc::channel::<SlashUpdate>();
+        let controls = Controls::detached();
+        let ctx = ctx_for(&tmp, Mode::Autonomous, &controls, &urx, Some("chug-test0002"), &sink);
+        let mut knobs = knobs_with(0); // budget exhausted before iteration 1
+        let mut llm = ScriptedLlm::new(vec![]);
+        let mut gate = None;
+        let mut messages = Vec::new();
+        let outcome = drive_loop(
+            &ctx,
+            &mut knobs,
+            &mut llm,
+            &mut gate,
+            &mut messages,
+            None,
+            &mut RecordingSink::default(),
+        )
+        .unwrap();
+        assert!(matches!(outcome, DriveOutcome::RunFinished(1)));
+        sink.shutdown();
+
+        let aborts = events_of_kind(&transport, "event-create");
+        assert_eq!(aborts.len(), 1);
+        assert_eq!(aborts[0]["body"]["name"], "abort");
+        assert_eq!(
+            aborts[0]["body"]["metadata"]["reason"],
+            "iteration budget exceeded"
+        );
+        let scores = events_of_kind(&transport, "score-create");
+        assert_eq!(scores[0]["body"]["stringValue"], "budget");
+        assert_eq!(scores[1]["body"]["value"], 0);
+        let finishes = events_of_kind(&transport, "trace-create");
+        assert_eq!(finishes[0]["body"]["metadata"]["outcome"], "budget");
+    }
+
+    #[test]
+    fn observability_chat_turns_neither_score_nor_finish_the_session_trace() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (transport, sink) = test_obs();
+        let (_utx, urx) = mpsc::channel::<SlashUpdate>();
+        let controls = Controls::detached();
+        let ctx = ctx_for(&tmp, Mode::Chat, &controls, &urx, Some("chug-test0003"), &sink);
+        // Budget exhausted immediately: the turn aborts but the SESSION
+        // trace stays open (per-session lifecycle, not per-turn).
+        let mut knobs = knobs_with(0);
+        let mut llm = ScriptedLlm::new(vec![]);
+        let mut gate = None;
+        let mut messages = Vec::new();
+        let outcome = drive_loop(
+            &ctx,
+            &mut knobs,
+            &mut llm,
+            &mut gate,
+            &mut messages,
+            None,
+            &mut RecordingSink::default(),
+        )
+        .unwrap();
+        assert!(matches!(
+            outcome,
+            DriveOutcome::TurnEnded(TurnEndReason::BudgetExceeded)
+        ));
+        sink.shutdown();
+
+        // The abort event is emitted, but no scores and no trace finish —
+        // the session continues and finishing is the chat loop's job.
+        let aborts = events_of_kind(&transport, "event-create");
+        assert_eq!(aborts[0]["body"]["name"], "abort");
+        assert!(events_of_kind(&transport, "score-create").is_empty());
+        assert!(events_of_kind(&transport, "trace-create").is_empty());
+    }
+
+    #[test]
+    fn observability_risk_gate_verdicts_become_events() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (transport, sink) = test_obs();
+        let (_utx, urx) = mpsc::channel::<SlashUpdate>();
+        let controls = Controls::detached();
+
+        // Phase 1: judge blocks → verdict "blocked" event.
+        let ctx = ctx_for(&tmp, Mode::Chat, &controls, &urx, Some("chug-test0004"), &sink);
+        let mut knobs = knobs_with(40);
+        let mut gate = Some(RiskGate::new(
+            Box::new(CannedJudge("destructive", 0.9)),
+            tmp.path(),
+        ));
+        let mut llm = ScriptedLlm::new(vec![
+            tool_use_response("bash", json!({"command": "rm -rf site"})),
+            text_only_response("understood"),
+        ]);
+        let mut messages = Vec::new();
+        let outcome = drive_loop(
+            &ctx,
+            &mut knobs,
+            &mut llm,
+            &mut gate,
+            &mut messages,
+            None,
+            &mut RecordingSink::default(),
+        )
+        .unwrap();
+        assert!(matches!(outcome, DriveOutcome::TurnEnded(TurnEndReason::Completed)));
+
+        // Phase 2: judge allows → verdict "allowed" event (same trace).
+        let ctx = ctx_for(&tmp, Mode::Chat, &controls, &urx, Some("chug-test0004"), &sink);
+        let mut knobs = knobs_with(40);
+        let mut gate = Some(RiskGate::new(
+            Box::new(CannedJudge("safe", 0.1)),
+            tmp.path(),
+        ));
+        let mut llm = ScriptedLlm::new(vec![
+            tool_use_response("bash", json!({"command": "ls"})),
+            text_only_response("listed"),
+        ]);
+        let mut messages = Vec::new();
+        drive_loop(
+            &ctx,
+            &mut knobs,
+            &mut llm,
+            &mut gate,
+            &mut messages,
+            None,
+            &mut RecordingSink::default(),
+        )
+        .unwrap();
+        sink.shutdown();
+
+        let gate_events: Vec<Value> = transport
+            .events()
+            .into_iter()
+            .filter(|e| e["type"] == "event-create" && e["body"]["name"] == "risk_gate")
+            .collect();
+        assert_eq!(gate_events.len(), 2);
+        assert_eq!(gate_events[0]["body"]["metadata"]["verdict"], "blocked");
+        assert_eq!(gate_events[0]["body"]["metadata"]["command"], "rm -rf site");
+        assert_eq!(gate_events[1]["body"]["metadata"]["verdict"], "allowed");
+        assert_eq!(gate_events[1]["body"]["metadata"]["command"], "ls");
+    }
+
+    #[test]
+    fn observability_steering_notes_become_events() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (transport, sink) = test_obs();
+        let (_utx, urx) = mpsc::channel::<SlashUpdate>();
+        let (steer_tx, steer_rx) = mpsc::channel();
+        steer_tx.send("focus on tests".to_string()).unwrap();
+        let controls = Controls {
+            abort: Arc::new(AtomicBool::new(false)),
+            steering_rx: steer_rx,
+        };
+        let ctx = ctx_for(&tmp, Mode::Chat, &controls, &urx, Some("chug-test0005"), &sink);
+        let mut knobs = knobs_with(40);
+        let mut llm = ScriptedLlm::new(vec![text_only_response("ok")]);
+        let mut gate = None;
+        let mut messages = Vec::new();
+        drive_loop(
+            &ctx,
+            &mut knobs,
+            &mut llm,
+            &mut gate,
+            &mut messages,
+            None,
+            &mut RecordingSink::default(),
+        )
+        .unwrap();
+        sink.shutdown();
+
+        let steering: Vec<Value> = transport
+            .events()
+            .into_iter()
+            .filter(|e| e["type"] == "event-create" && e["body"]["name"] == "steering")
+            .collect();
+        assert_eq!(steering.len(), 1);
+        assert_eq!(steering[0]["body"]["metadata"]["note"], "focus on tests");
+    }
+
+    /// Minimal judge double: always returns the same canned verdict.
+    struct CannedJudge(&'static str, f64);
+
+    impl crate::riskgate::Judge for CannedJudge {
+        fn judge(&mut self, _command: &str) -> Result<crate::riskgate::Verdict, String> {
+            Ok(crate::riskgate::Verdict {
+                choice: self.0.to_string(),
+                p_destructive: self.1,
+            })
+        }
     }
 }

@@ -20,8 +20,9 @@
 //! counted and logged once per run; observability NEVER changes run
 //! behavior. Keys are never logged.
 
-// R1 lands this module without its driver/api call sites (R2 wires those);
-// until then most of the surface is reachable only from tests.
+// R2 wires the driver/api/chat call sites; what remains `dead` in non-test
+// builds are the test-only inspection accessors (dropped_count,
+// send_error_count, enabled, raw emit) used by the test seam below.
 #![allow(dead_code)]
 
 use std::path::{Path, PathBuf};
@@ -659,6 +660,25 @@ impl Sink {
         ));
     }
 
+    /// End-of-run upsert: Langfuse merges trace-create events by id, so a
+    /// second (partial) body attaches the outcome + iteration count to the
+    /// trace created at startup. One per finished run / chat session.
+    pub fn trace_finished(&self, trace_id: &str, outcome: &str, iterations: u64) {
+        let Sink::Live(live) = self else {
+            return;
+        };
+        live.emit(envelope(
+            &new_id(),
+            &now_rfc3339(),
+            "trace-create",
+            json!({
+                "id": trace_id,
+                "sessionId": trace_id,
+                "metadata": { "outcome": outcome, "iterations": iterations },
+            }),
+        ));
+    }
+
     /// Events dropped because the channel was full or the flusher is gone.
     pub fn dropped_count(&self) -> u64 {
         match self {
@@ -921,5 +941,378 @@ fn truncate_chars(s: &str, max: usize) -> String {
         s.to_string()
     } else {
         s.chars().take(max).collect()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Test seam: a counting transport + live-sink constructor so driver/chat/api
+// tests can observe exactly what would be POSTed, without any network.
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+pub(crate) mod testing {
+    use super::*;
+
+    /// Records every delivered batch in memory (no network, no I/O).
+    pub(crate) struct CountingTransport {
+        batches: Mutex<Vec<Vec<Value>>>,
+    }
+
+    impl CountingTransport {
+        pub(crate) fn new() -> Arc<Self> {
+            Arc::new(Self {
+                batches: Mutex::new(Vec::new()),
+            })
+        }
+
+        /// All events ever delivered, in order, batches flattened.
+        pub(crate) fn events(&self) -> Vec<Value> {
+            self.batches
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .iter()
+                .flatten()
+                .cloned()
+                .collect()
+        }
+
+        pub(crate) fn batch_count(&self) -> usize {
+            self.batches
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .len()
+        }
+    }
+
+    impl Transport for CountingTransport {
+        fn send_batch(&self, events: &[Value]) -> anyhow::Result<()> {
+            self.batches
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .push(events.to_vec());
+            Ok(())
+        }
+    }
+
+    /// A live sink wired to a counting transport that never flushes on its
+    /// own (huge batch size + interval): callers `shutdown()` to force the
+    /// drain, then read `transport.events()`.
+    pub(crate) fn test_sink(transport: Arc<CountingTransport>) -> Sink {
+        Sink::Live(LiveSink::with_transport(
+            transport,
+            1000,
+            FlushOpts {
+                batch_size: 10_000,
+                interval: Duration::from_secs(3600),
+                drain_cap: Duration::from_secs(5),
+            },
+        ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::observ::testing::{CountingTransport, test_sink};
+
+    fn env_with<'a>(pairs: &'a [(&'a str, &'a str)]) -> impl Fn(&str) -> Option<String> + 'a {
+        move |name: &str| {
+            pairs
+                .iter()
+                .find(|(k, _)| *k == name)
+                .map(|(_, v)| v.to_string())
+        }
+    }
+
+    // ---------- config resolution ----------
+
+    #[test]
+    fn resolve_env_only_config_is_on() {
+        let env = env_with(&[
+            (HOST_VAR, "https://lf.example.com"),
+            (PUBLIC_KEY_VAR, "pk-lf-a"),
+            (SECRET_KEY_VAR, "sk-lf-b"),
+        ]);
+        let resolution = resolve_with(&env, &None);
+        assert_eq!(
+            resolution,
+            Resolution::On(LangfuseConfig {
+                host: "https://lf.example.com".into(),
+                public_key: "pk-lf-a".into(),
+                secret_key: "sk-lf-b".into(),
+            })
+        );
+    }
+
+    #[test]
+    fn resolve_file_keys_fall_back_and_env_wins_per_key() {
+        let home = tempfile::tempdir().unwrap();
+        std::fs::write(
+            home.path().join(".langfuse-keys-chug"),
+            "LANGFUSE_HOST=https://file.example.com\npk-lf-file-pk\nsk-lf-file-sk\n",
+        )
+        .unwrap();
+        // Env supplies only the host; keys come from the file.
+        let env = env_with(&[(HOST_VAR, "https://env.example.com")]);
+        let resolution = resolve_with(&env, &Some(home.path().to_path_buf()));
+        match resolution {
+            Resolution::On(cfg) => {
+                assert_eq!(cfg.host, "https://env.example.com");
+                assert_eq!(cfg.public_key, "pk-lf-file-pk");
+                assert_eq!(cfg.secret_key, "sk-lf-file-sk");
+            }
+            other => panic!("expected On, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn resolve_prefers_chug_file_over_plain_keys_file() {
+        let home = tempfile::tempdir().unwrap();
+        std::fs::write(home.path().join(".langfuse-keys"), "pk-lf-plain\nsk-lf-plain\n").unwrap();
+        std::fs::write(
+            home.path().join(".langfuse-keys-chug"),
+            "LANGFUSE_HOST=https://chug.example.com\npk-lf-chug\nsk-lf-chug\n",
+        )
+        .unwrap();
+        let resolution = resolve_with(&env_with(&[]), &Some(home.path().to_path_buf()));
+        match resolution {
+            Resolution::On(cfg) => {
+                assert_eq!(cfg.public_key, "pk-lf-chug");
+                assert_eq!(cfg.host, "https://chug.example.com");
+            }
+            other => panic!("expected On, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn resolve_partial_config_is_off_with_note_naming_missing_vars() {
+        // Host + public key but no secret key.
+        let env = env_with(&[(HOST_VAR, "https://lf.example.com"), (PUBLIC_KEY_VAR, "pk-lf-a")]);
+        let resolution = resolve_with(&env, &None);
+        let Resolution::OffNoted(note) = resolution else {
+            panic!("expected OffNoted, got {resolution:?}");
+        };
+        assert!(note.contains(SECRET_KEY_VAR), "{note}");
+        assert!(!note.contains("pk-lf-a"), "keys must never appear: {note}");
+    }
+
+    #[test]
+    fn resolve_nothing_configured_is_silent_and_malformed_file_is_noted() {
+        assert_eq!(resolve_with(&env_with(&[]), &None), Resolution::OffSilent);
+
+        let home = tempfile::tempdir().unwrap();
+        std::fs::write(home.path().join(".langfuse-keys-chug"), "not a key file\n").unwrap();
+        let resolution = resolve_with(&env_with(&[]), &Some(home.path().to_path_buf()));
+        let Resolution::OffNoted(note) = resolution else {
+            panic!("expected OffNoted, got {resolution:?}");
+        };
+        assert!(note.contains("malformed"), "{note}");
+    }
+
+    // ---------- builders ----------
+
+    #[test]
+    fn trace_body_carries_metadata_tags_and_truncated_name() {
+        let long_goal: String = "g".repeat(200);
+        let body = trace_body(
+            "chug-abc12345",
+            &long_goal,
+            "claude-sonnet-4-6",
+            "/tmp/proj",
+            "run",
+            Some("/tmp/proj/SPEC.md"),
+        );
+        assert_eq!(body["id"], "chug-abc12345");
+        assert_eq!(body["name"].as_str().unwrap().chars().count(), TRACE_NAME_MAX_CHARS);
+        assert_eq!(body["metadata"]["model"], "claude-sonnet-4-6");
+        assert_eq!(body["metadata"]["cwd"], "/tmp/proj");
+        assert_eq!(body["metadata"]["mode"], "run");
+        assert_eq!(body["metadata"]["spec_file"], "/tmp/proj/SPEC.md");
+        assert_eq!(body["tags"][0], "chug");
+        assert_eq!(body["tags"][1], "claude-sonnet-4-6");
+        assert_eq!(body["sessionId"], "chug-abc12345");
+        // None spec_file stays null, not the string "None".
+        let body = trace_body("chug-x", "goal", "m", "/c", "chat", None);
+        assert!(body["metadata"]["spec_file"].is_null());
+    }
+
+    #[test]
+    fn generation_body_includes_cache_read_only_when_present() {
+        let usage = Usage {
+            input: 100,
+            output: 20,
+            total: 120,
+            cache_read_input_tokens: Some(64),
+        };
+        let body = generation_body(
+            "id1", "chug-t", "model-a", 8192, &usage, "s", "e", 3, Some("tool_use"),
+        );
+        assert_eq!(body["traceId"], "chug-t");
+        assert_eq!(body["model"], "model-a");
+        assert_eq!(body["modelParameters"]["maxTokens"], 8192);
+        assert_eq!(body["usage"]["input"], 100);
+        assert_eq!(body["usage"]["output"], 20);
+        assert_eq!(body["usage"]["total"], 120);
+        assert_eq!(body["usage"]["cache_read_input_tokens"], 64);
+        assert_eq!(body["metadata"]["iteration"], 3);
+        assert_eq!(body["metadata"]["stop_reason"], "tool_use");
+
+        let no_cache = Usage { input: 1, output: 2, total: 3, cache_read_input_tokens: None };
+        let body = generation_body("id2", "chug-t", "m", 100, &no_cache, "s", "e", 0, None);
+        assert!(body["usage"].get("cache_read_input_tokens").is_none());
+        assert!(body["metadata"]["stop_reason"].is_null());
+    }
+
+    #[test]
+    fn score_bodies_carry_data_type() {
+        let cat = categorical_score_body("id", "chug-t", SCORE_OUTCOME, outcome::BUDGET);
+        assert_eq!(cat["name"], "outcome");
+        assert_eq!(cat["stringValue"], "budget");
+        assert_eq!(cat["dataType"], "CATEGORICAL");
+        let num = numeric_score_body("id", "chug-t", SCORE_ITERATIONS, 7);
+        assert_eq!(num["name"], "iterations");
+        assert_eq!(num["value"], 7);
+        assert_eq!(num["dataType"], "NUMERIC");
+    }
+
+    // ---------- sink lifecycle ----------
+
+    #[test]
+    fn sink_lifecycle_spans_events_scores_and_trace_finish_upsert() {
+        let transport = CountingTransport::new();
+        let sink = test_sink(Arc::clone(&transport));
+        let trace = sink
+            .trace_started("fix the bug", "model-a", "/tmp/p", "run", Some("SPEC.md"))
+            .expect("live sink returns a trace id");
+        assert!(trace.starts_with("chug-"));
+        sink.span(&trace, "bash", SystemTime::UNIX_EPOCH, SystemTime::now(), false, true);
+        sink.event(&trace, "abort", json!({ "reason": "operator abort" }));
+        sink.score_outcome(&trace, outcome::ABORTED);
+        sink.score_iterations(&trace, 4);
+        sink.trace_finished(&trace, outcome::ABORTED, 4);
+        sink.shutdown();
+
+        let events = transport.events();
+        let kinds: Vec<&str> = events.iter().filter_map(|e| e["type"].as_str()).collect();
+        assert_eq!(
+            kinds,
+            vec![
+                "trace-create",
+                "span-create",
+                "event-create",
+                "score-create",
+                "score-create",
+                "trace-create",
+            ]
+        );
+        // Span metadata maps ok / is_error.
+        let span = &events[1]["body"];
+        assert_eq!(span["name"], "bash");
+        assert_eq!(span["metadata"]["ok"], false);
+        assert_eq!(span["metadata"]["is_error"], true);
+        // The finish upsert keeps the same trace id and adds outcome metadata.
+        assert_eq!(events[0]["body"]["id"], trace);
+        assert_eq!(events[5]["body"]["id"], trace);
+        assert_eq!(events[5]["body"]["metadata"]["outcome"], "aborted");
+        assert_eq!(events[5]["body"]["metadata"]["iterations"], 4);
+        // All events share one batch (single drain POST).
+        assert_eq!(transport.batch_count(), 1);
+    }
+
+    #[test]
+    fn noop_sink_never_emits() {
+        let sink = Sink::Noop;
+        assert!(!sink.enabled());
+        assert!(sink.trace_started("g", "m", "/c", "run", None).is_none());
+        sink.trace_finished("chug-x", outcome::COMPLETED, 1);
+        sink.generation(
+            "chug-x",
+            "m",
+            100,
+            &Usage { input: 1, output: 1, total: 2, cache_read_input_tokens: None },
+            SystemTime::UNIX_EPOCH,
+            SystemTime::UNIX_EPOCH,
+            0,
+            None,
+        );
+        assert_eq!(sink.dropped_count(), 0);
+    }
+
+    #[test]
+    fn batch_size_triggers_mid_stream_flush_and_full_channel_drops() {
+        // Gate the transport so the flusher is PROVABLY stuck inside its
+        // first send while the test overflows the channel — a plain counting
+        // transport races (the flusher may drain events as fast as they are
+        // emitted, so nothing ever drops).
+        struct GatedTransport {
+            gate: AtomicBool,
+            sends_started: AtomicU64,
+        }
+        impl Transport for GatedTransport {
+            fn send_batch(&self, _events: &[Value]) -> anyhow::Result<()> {
+                self.sends_started.fetch_add(1, Ordering::SeqCst);
+                while !self.gate.load(Ordering::SeqCst) {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                Ok(())
+            }
+        }
+        let transport = Arc::new(GatedTransport {
+            gate: AtomicBool::new(false),
+            sends_started: AtomicU64::new(0),
+        });
+        // Channel cap 4, batch size 3: the 3rd event triggers a send.
+        let sink = Sink::Live(LiveSink::with_transport(
+            transport.clone(),
+            4,
+            FlushOpts {
+                batch_size: 3,
+                interval: Duration::from_secs(3600),
+                drain_cap: Duration::from_secs(1),
+            },
+        ));
+        for _ in 0..3 {
+            sink.event("chug-x", "e", json!({}));
+        }
+        // Mid-stream flush happened (send began without any shutdown).
+        for _ in 0..100 {
+            if transport.sends_started.load(Ordering::SeqCst) == 1 {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(transport.sends_started.load(Ordering::SeqCst), 1);
+        // Flusher is blocked in the gated send, so the 4-slot channel cannot
+        // drain: 10 events → exactly the last 6 are dropped.
+        for _ in 0..10 {
+            sink.event("chug-x", "e", json!({}));
+        }
+        assert_eq!(sink.dropped_count(), 6);
+        // Release the gate: the buffered events still drain on shutdown.
+        transport.gate.store(true, Ordering::SeqCst);
+        sink.shutdown();
+        assert_eq!(sink.send_error_count(), 0);
+    }
+
+    #[test]
+    fn transport_errors_count_once_and_fail_open() {
+        struct FailingTransport;
+        impl Transport for FailingTransport {
+            fn send_batch(&self, _events: &[Value]) -> anyhow::Result<()> {
+                bail!("endpoint down")
+            }
+        }
+        let sink = Sink::Live(LiveSink::with_transport(
+            Arc::new(FailingTransport),
+            10,
+            FlushOpts {
+                batch_size: 10_000,
+                interval: Duration::from_secs(3600),
+                drain_cap: Duration::from_secs(1),
+            },
+        ));
+        sink.event("chug-x", "e", json!({}));
+        sink.shutdown();
+        assert_eq!(sink.send_error_count(), 1);
     }
 }
