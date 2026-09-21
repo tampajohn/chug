@@ -77,7 +77,7 @@ check: cd /Users/jadams/workspace/chug && cargo test
              mutations are vacuous (round 1 shipped dead code with 245/245
              green until mutations exposed it). End with a verdict line
              VERDICT: PASS or VERDICT: FAIL plus a numbered findings list." \
-     --model anthropic-system.ai.kimi-k3 --max-iters 25 --max-minutes 20
+     --model anthropic-system.ai.kimi-k3 --max-iters 40 --max-minutes 30
    ```
    Read the verdict. PASS → merge. FAIL → round N+1 with the findings pasted
    into the implementation goal as feedback. Do not merge on your own review
