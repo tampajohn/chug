@@ -71,8 +71,12 @@ check: cd /Users/jadams/workspace/chug && cargo test
      --goal "VALIDATION ONLY — do not implement. Review the uncommitted/committed
              diff in this worktree against the spec: correctness bugs, missing
              spec requirements, weak tests. Run cargo build + clippy + test
-             yourself. End with a verdict line VERDICT: PASS or VERDICT: FAIL
-             plus a numbered findings list." \
+             yourself. Where feasible, MUTATION-TEST: deliberately break the
+             new code (flip a condition, drop a check, corrupt a value) and
+             confirm the round's tests catch it — green tests that survive
+             mutations are vacuous (round 1 shipped dead code with 245/245
+             green until mutations exposed it). End with a verdict line
+             VERDICT: PASS or VERDICT: FAIL plus a numbered findings list." \
      --model anthropic-system.ai.kimi-k3 --max-iters 25 --max-minutes 20
    ```
    Read the verdict. PASS → merge. FAIL → round N+1 with the findings pasted
