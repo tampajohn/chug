@@ -248,6 +248,8 @@ fn cmd_run(
             controls: driver::Controls::detached(),
             risk_gate,
             bash_timeout,
+            mcp_config,
+            mcp_off,
         };
         let mut sink = events::ConsoleSink::new(cfg.cwd.clone());
         driver::run(cfg, &mut sink)
@@ -284,6 +286,8 @@ fn run_with_tui(
         resume,
         risk_gate,
         bash_timeout,
+        mcp_config,
+        mcp_off,
         controls: driver::Controls {
             abort: Arc::clone(&abort),
             steering_rx: steer_rx,
@@ -322,6 +326,7 @@ fn run_with_tui(
 
 /// `chat` mode: worker thread runs the chat session, main thread runs the UI.
 /// The TUI is the interface; there is no headless chat.
+#[allow(clippy::too_many_arguments)]
 fn cmd_chat(
     cwd: Option<PathBuf>,
     model: Option<String>,
@@ -355,6 +360,8 @@ fn cmd_chat(
         resume,
         risk_gate,
         bash_timeout,
+        mcp_config,
+        mcp_off,
         controls: driver::Controls {
             abort: Arc::clone(&abort),
             steering_rx: steer_rx,

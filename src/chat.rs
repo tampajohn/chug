@@ -13,6 +13,7 @@ use crate::api::{Client, ContentBlock, Llm, Message};
 use crate::driver::{self, Controls, SlashUpdate, TurnKnobs};
 use crate::events::{Event, EventSink};
 use crate::ledger;
+use crate::mcp::McpRegistry;
 use crate::riskgate::{LayaJudge, RiskGate};
 use crate::transcript;
 
@@ -123,6 +124,10 @@ pub struct ChatConfig {
     pub risk_gate: bool,
     /// Per-command wall-clock budget for the `bash` tool.
     pub bash_timeout: Duration,
+    /// Path to an MCP config JSON. Overrides discovery. None → discovery.
+    pub mcp_config: Option<PathBuf>,
+    /// Force MCP servers off even when a config exists.
+    pub mcp_off: bool,
     /// Abort flag + steering channel shared with the UI.
     pub controls: Controls,
     /// User objectives submitted while idle.
@@ -131,8 +136,10 @@ pub struct ChatConfig {
     pub update_rx: Receiver<SlashUpdate>,
 }
 
-/// Production entry point: build the API client + risk gate, then run the
-/// chat session. Returns the process exit code.
+/// Production entry point: build the API client + risk gate + MCP registry,
+/// then run the chat session. Returns the process exit code. The MCP registry
+/// lives for the whole session (spawned at start, killed when the session
+/// ends — including on error return).
 pub fn run_chat(cfg: ChatConfig, sink: &mut dyn EventSink) -> anyhow::Result<i32> {
     let mut client = Client::new(&cfg.model)?;
     let gate = if cfg.risk_gate {
@@ -140,17 +147,19 @@ pub fn run_chat(cfg: ChatConfig, sink: &mut dyn EventSink) -> anyhow::Result<i32
     } else {
         None
     };
-    run_chat_with(cfg, &mut client, gate, sink)
+    let mut mcp = McpRegistry::new(&cfg.cwd, cfg.mcp_off, cfg.mcp_config.clone())?;
+    run_chat_with(cfg, &mut client, gate, &mut mcp, sink)
 }
 
 /// The chat session loop. Idle: block for the next objective. Working: run
 /// one turn via the shared driver loop. The UI quitting (dropping its
 /// senders) ends the session gracefully. Split from [`run_chat`] so tests
-/// can inject a scripted LLM and no gate.
+/// can inject a scripted LLM, no gate, and an MCP registry.
 fn run_chat_with(
     cfg: ChatConfig,
     client: &mut dyn Llm,
     mut gate: Option<RiskGate>,
+    mcp: &mut McpRegistry,
     sink: &mut dyn EventSink,
 ) -> anyhow::Result<i32> {
     ledger::ensure_seeded(&cfg.cwd)?;
@@ -195,6 +204,7 @@ fn run_chat_with(
             &cfg.update_rx,
             &mut knobs,
             cfg.bash_timeout,
+            mcp,
             sink,
         )?;
         sink.emit(Event::TurnEnd { reason });
@@ -320,6 +330,10 @@ mod tests {
             resume: false,
             risk_gate: false,
             bash_timeout: Duration::from_secs(crate::tools::BASH_TIMEOUT_SECS),
+            // mcp_off: tests must never pick up the developer's
+            // ~/.config/chug/mcp.json.
+            mcp_config: None,
+            mcp_off: true,
             controls: Controls {
                 abort: Arc::clone(&abort),
                 steering_rx,
@@ -359,8 +373,12 @@ mod tests {
         script: impl FnOnce(&mpsc::Sender<String>, &mpsc::Sender<SlashUpdate>) + Send + 'static,
     ) -> (i32, Vec<Event>, ScriptedLlm, PathBuf) {
         let cwd = h.cfg.cwd.clone();
+        let cwd_for_worker = cwd.clone();
         let worker = std::thread::spawn(move || {
-            let code = run_chat_with(h.cfg, &mut h.llm, None, &mut h.sink)
+            // Forced-off registry: MCP is a strict no-op in these tests.
+            let mut mcp = crate::mcp::McpRegistry::new(&cwd_for_worker, true, None)
+                .expect("empty mcp registry");
+            let code = run_chat_with(h.cfg, &mut h.llm, None, &mut mcp, &mut h.sink)
                 .expect("chat session failed");
             (code, h.sink.0, h.llm)
         });

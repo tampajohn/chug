@@ -12,6 +12,7 @@ use serde_json::{Value, json};
 use crate::api::{Client, ContentBlock, KnownBlock, Llm, Message};
 use crate::events::{Event, EventSink, TurnEndReason};
 use crate::ledger;
+use crate::mcp::McpRegistry;
 use crate::riskgate::{GateDecision, LayaJudge, RiskGate};
 use crate::tools::{self, ToolCtx, ToolResult};
 use crate::transcript;
@@ -45,6 +46,10 @@ pub struct RunConfig {
     pub risk_gate: bool,
     /// Per-command wall-clock budget for the `bash` tool.
     pub bash_timeout: Duration,
+    /// Path to an MCP config JSON. Overrides discovery. None → discovery.
+    pub mcp_config: Option<PathBuf>,
+    /// Force MCP servers off even when a config exists.
+    pub mcp_off: bool,
 }
 
 /// Operator controls the driver honors at each iteration boundary:
@@ -165,6 +170,10 @@ fn run_loop(
 ) -> anyhow::Result<i32> {
     let mut client = client;
     ledger::ensure_seeded(&cfg.cwd)?;
+    // MCP servers spawn lazily here, at run start; an empty registry (no
+    // config anywhere, or --mcp-off) is a strict no-op. Dropped on every exit
+    // path — normal, budget/abort, or panic unwind — killing every server.
+    let mut mcp = McpRegistry::new(&cfg.cwd, cfg.mcp_off, cfg.mcp_config.clone())?;
 
     let mut messages: Vec<Message> = if cfg.resume {
         resume_messages(&cfg.cwd)?
@@ -208,6 +217,7 @@ fn run_loop(
         &mut messages,
         Some(initial_spec),
         sink,
+        &mut mcp,
     )? {
         DriveOutcome::RunFinished(code) => Ok(code),
         DriveOutcome::TurnEnded(_) => bail!("chat turn outcome in autonomous mode"),
@@ -238,6 +248,7 @@ pub fn run_turn(
     updates: &Receiver<SlashUpdate>,
     knobs: &mut TurnKnobs,
     bash_timeout: Duration,
+    mcp: &mut McpRegistry,
     sink: &mut dyn EventSink,
 ) -> anyhow::Result<TurnEndReason> {
     let ctx = LoopCtx {
@@ -247,7 +258,7 @@ pub fn run_turn(
         updates,
         bash_timeout,
     };
-    match drive_loop(&ctx, knobs, client, gate, messages, None, sink)? {
+    match drive_loop(&ctx, knobs, client, gate, messages, None, sink, mcp)? {
         DriveOutcome::TurnEnded(reason) => Ok(reason),
         DriveOutcome::RunFinished(_) => bail!("autonomous run outcome in chat mode"),
     }
@@ -268,8 +279,12 @@ fn drive_loop(
     messages: &mut Vec<Message>,
     initial_spec: Option<String>,
     sink: &mut dyn EventSink,
+    mcp: &mut McpRegistry,
 ) -> anyhow::Result<DriveOutcome> {
-    let tool_schemas = tools::tool_schemas();
+    // An empty registry (no MCP config) extends with nothing: byte-identical
+    // tools array to before.
+    let mut tool_schemas = tools::tool_schemas();
+    tool_schemas.extend(mcp.tool_schemas());
     let tool_ctx = ToolCtx {
         cwd: ctx.cwd.to_path_buf(),
         bash_timeout: ctx.bash_timeout,
@@ -388,7 +403,10 @@ fn drive_loop(
             sink.emit(Event::ToolStart {
                 name: name.to_string(),
             });
-            let result = if name == "bash" {
+            let result = if name.starts_with("mcp__") {
+                // MCP tools bypass the laya risk gate (it judges bash only).
+                mcp.dispatch(name, input.clone())
+            } else if name == "bash" {
                 if let Some(gate) = gate.as_mut() {
                     match input
                         .get("command")
@@ -943,6 +961,9 @@ mod tests {
             controls,
             risk_gate: false,
             bash_timeout: Duration::from_secs(tools::BASH_TIMEOUT_SECS),
+            mcp_config: None,
+            // Tests must never pick up the developer's ~/.config/chug/mcp.json.
+            mcp_off: true,
         };
         let client = Client::new_without_credentials("test-model").unwrap();
         let mut sink = RecordingSink::default();
@@ -963,5 +984,189 @@ mod tests {
         // aborted at the boundary before any LLM call
         assert!(!sink.0.iter().any(|e| matches!(e, Event::ModelText(_))));
         assert!(!sink.0.iter().any(|e| matches!(e, Event::Iteration { .. })));
+    }
+
+    // ---------- MCP integration (fake echo server, no network) ----------
+
+    /// LLM double that records the tools array it was offered, like
+    /// ScriptedLlm but for the tool schemas (which the driver composes).
+    struct ToolRecordingLlm {
+        responses: std::collections::VecDeque<Value>,
+        recorded_tools: Vec<Vec<Value>>,
+    }
+
+    impl ToolRecordingLlm {
+        fn new(responses: Vec<Value>) -> Self {
+            ToolRecordingLlm {
+                responses: responses.into(),
+                recorded_tools: Vec::new(),
+            }
+        }
+    }
+
+    impl Llm for ToolRecordingLlm {
+        fn complete(
+            &mut self,
+            _system: &str,
+            _messages: &[Message],
+            tools: &[Value],
+        ) -> anyhow::Result<crate::api::Response> {
+            self.recorded_tools.push(tools.to_vec());
+            self.responses
+                .pop_front()
+                .map(|body| crate::api::Response { body })
+                .ok_or_else(|| anyhow::anyhow!("no scripted response left"))
+        }
+
+        fn set_model(&mut self, _model: &str) {}
+    }
+
+    /// Fake MCP echo server (same script family as mcp.rs's tests) configured
+    /// via mcp.json in the cwd.
+    fn write_echo_server(dir: &Path) {
+        let py = dir.join("fake_srv.py");
+        std::fs::write(
+            &py,
+            r#"
+import sys, json
+def send(o):
+    sys.stdout.write(json.dumps(o) + "\n"); sys.stdout.flush()
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    req = json.loads(line)
+    if "method" not in req or "id" not in req:
+        continue
+    m, i = req["method"], req["id"]
+    if m == "initialize":
+        send({"jsonrpc": "2.0", "id": i, "result": {"protocolVersion": "2025-06-18", "capabilities": {"tools": {}}, "serverInfo": {"name": "fake", "version": "0"}}})
+    elif m == "tools/list":
+        send({"jsonrpc": "2.0", "id": i, "result": {"tools": [{"name": "echo", "description": "Echo the arguments back", "inputSchema": {"type": "object", "properties": {"text": {"type": "string"}}}}]}})
+    elif m == "tools/call":
+        send({"jsonrpc": "2.0", "id": i, "result": {"content": [{"type": "text", "text": "echo: " + json.dumps(req["params"]["arguments"])}], "isError": False}})
+"#,
+        )
+        .unwrap();
+        let cfg = json!({
+            "mcpServers": {
+                "fake": {"command": "python3", "args": [py.to_string_lossy()]}
+            }
+        });
+        std::fs::write(dir.join("mcp.json"), cfg.to_string()).unwrap();
+    }
+
+    fn chat_knobs() -> TurnKnobs {
+        TurnKnobs {
+            spec_path: None,
+            goal: None,
+            check_cmd: None,
+            max_iters: 5,
+            max_minutes: 10,
+        }
+    }
+
+    fn tool_result_text(messages: &[Message]) -> Option<(String, bool)> {
+        messages.iter().rev().find_map(|m| match &m.content[0] {
+            ContentBlock::Known(KnownBlock::ToolResult { content, is_error, .. }) => {
+                Some((content.as_str().unwrap_or_default().to_string(), *is_error))
+            }
+            _ => None,
+        })
+    }
+
+    #[test]
+    fn mcp_schemas_merged_and_mcp_tool_use_routed_to_registry() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_echo_server(tmp.path());
+        let mut mcp =
+            McpRegistry::new(tmp.path(), false, None).expect("registry with fake server");
+        assert!(!mcp.tool_schemas().is_empty(), "fake server must register tools");
+
+        let mut client = ToolRecordingLlm::new(vec![
+            json!({
+                "stop_reason": "tool_use",
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+                "content": [{"type": "tool_use", "id": "tu_1", "name": "mcp__fake__echo", "input": {"text": "hello mcp"}}]
+            }),
+            json!({
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+                "content": [{"type": "text", "text": "done"}]
+            }),
+        ]);
+        let mut messages = vec![Message::user(vec![ContentBlock::text_block(
+            "call the echo tool".to_string(),
+        )])];
+        let mut sink = RecordingSink::default();
+        let reason = run_turn(
+            tmp.path(),
+            &mut client,
+            &mut None,
+            &mut messages,
+            &Controls::detached(),
+            &mpsc::channel().1,
+            &mut chat_knobs(),
+            Duration::from_secs(tools::BASH_TIMEOUT_SECS),
+            &mut mcp,
+            &mut sink,
+        )
+        .unwrap();
+        assert_eq!(reason, TurnEndReason::Completed);
+
+        // The tools array the model saw merges MCP schemas with the built-ins.
+        let offered = &client.recorded_tools[0];
+        assert!(
+            offered.iter().any(|t| t["name"] == "mcp__fake__echo"),
+            "mcp schema missing: {offered:?}"
+        );
+        assert!(offered.iter().any(|t| t["name"] == "bash"));
+
+        // The mcp__-prefixed tool_use was routed to the registry and the
+        // model saw the echoed content.
+        let (content, is_error) = tool_result_text(&messages).expect("tool result in transcript");
+        assert!(!is_error, "{content}");
+        assert!(content.contains(r#""text": "hello mcp""#), "{content}");
+    }
+
+    #[test]
+    fn empty_registry_is_a_noop_on_the_tools_array() {
+        let tmp = tempfile::tempdir().unwrap();
+        // mcp_off: guaranteed-empty registry even if the developer's machine
+        // has ~/.config/chug/mcp.json.
+        let mut mcp = McpRegistry::new(tmp.path(), true, None).unwrap();
+        let mut client = ToolRecordingLlm::new(vec![json!({
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 1, "output_tokens": 1},
+            "content": [{"type": "text", "text": "done"}]
+        })]);
+        let mut messages = vec![Message::user(vec![ContentBlock::text_block("hi")])];
+        let mut sink = RecordingSink::default();
+        run_turn(
+            tmp.path(),
+            &mut client,
+            &mut None,
+            &mut messages,
+            &Controls::detached(),
+            &mpsc::channel().1,
+            &mut chat_knobs(),
+            Duration::from_secs(tools::BASH_TIMEOUT_SECS),
+            &mut mcp,
+            &mut sink,
+        )
+        .unwrap();
+
+        let offered = &client.recorded_tools[0];
+        let names: Vec<&str> = offered
+            .iter()
+            .filter_map(|t| t["name"].as_str())
+            .collect();
+        let baseline: Vec<String> = tools::tool_schemas()
+            .into_iter()
+            .filter_map(|t| t["name"].as_str().map(str::to_string))
+            .collect();
+        // Byte-identical tool list: nothing added, nothing removed.
+        assert_eq!(names, baseline);
+        assert!(names.iter().all(|n| !n.starts_with("mcp__")));
     }
 }
