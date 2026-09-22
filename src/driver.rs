@@ -193,6 +193,19 @@ fn run_loop(
             }
             archive::Outcome::Skipped => {}
         }
+        // T7: same treatment for the transcript, before the first append —
+        // a later --resume must never splice foreign sessions into context.
+        match transcript::rotate_fresh(&cfg.cwd) {
+            archive::Outcome::Archived(path) => {
+                eprintln!("chug: archived previous transcript to {}", path.display());
+            }
+            archive::Outcome::Failed(why) => {
+                eprintln!(
+                    "chug: warning: could not archive previous transcript ({why}); appending to it"
+                );
+            }
+            archive::Outcome::Skipped => {}
+        }
         ledger::ensure_seeded(&cfg.cwd)?;
     }
     // MCP servers spawn lazily here, at run start; an empty registry (no
@@ -1285,6 +1298,92 @@ mod tests {
 
         assert_eq!(result.unwrap(), 1, "run proceeds despite the failed archive");
         assert_eq!(ledger::read(tmp.path()).unwrap(), foreign, "ledger kept as-is");
+    }
+
+    // ---------- T7: fresh-run transcript rotation ----------
+
+    fn transcript_archives(tmp: &tempfile::TempDir) -> Vec<PathBuf> {
+        let dir = tmp.path().join(".chug");
+        if !dir.exists() {
+            return Vec::new();
+        }
+        let mut out: Vec<PathBuf> = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| {
+                let path = e.unwrap().path();
+                let name = path.file_name().unwrap().to_string_lossy().to_string();
+                (name.starts_with("transcript-") && name.ends_with(".jsonl")).then_some(path)
+            })
+            .collect();
+        out.sort();
+        out
+    }
+
+    #[test]
+    fn fresh_run_rotates_previous_transcript() {
+        let tmp = tempfile::tempdir().unwrap();
+        let spec = write_spec(&tmp);
+        let old = Message::user(vec![ContentBlock::text_block("Goal: OLD SESSION")]);
+        transcript::append(tmp.path(), &old).unwrap();
+
+        let client = Client::new_without_credentials("test-model").unwrap();
+        let mut sink = RecordingSink::default();
+        run_loop(
+            aborted_run_config(&tmp, &spec, false),
+            client,
+            None,
+            &mut sink,
+            &observ::Sink::Noop,
+        )
+        .unwrap();
+
+        // The old session was archived with its content intact.
+        let archives = transcript_archives(&tmp);
+        assert_eq!(archives.len(), 1, "exactly one transcript archive: {archives:?}");
+        assert!(
+            std::fs::read_to_string(&archives[0])
+                .unwrap()
+                .contains("Goal: OLD SESSION")
+        );
+        // The new transcript begins with this run's goal message and nothing
+        // else (the abort fires before any LLM call).
+        let messages = transcript::load(tmp.path()).unwrap();
+        assert_eq!(messages.len(), 1);
+        assert!(
+            messages[0].content[0]
+                .text()
+                .unwrap()
+                .starts_with("Goal: x\n"),
+            "{:?}",
+            messages[0].content[0].text()
+        );
+    }
+
+    #[test]
+    fn resume_run_loads_transcript_without_rotating() {
+        let tmp = tempfile::tempdir().unwrap();
+        let spec = write_spec(&tmp);
+        let old = Message::user(vec![ContentBlock::text_block("Goal: OLD SESSION")]);
+        transcript::append(tmp.path(), &old).unwrap();
+
+        let client = Client::new_without_credentials("test-model").unwrap();
+        let mut sink = RecordingSink::default();
+        run_loop(
+            aborted_run_config(&tmp, &spec, true),
+            client,
+            None,
+            &mut sink,
+            &observ::Sink::Noop,
+        )
+        .unwrap();
+
+        assert!(transcript_archives(&tmp).is_empty(), "--resume never archives");
+        let messages = transcript::load(tmp.path()).unwrap();
+        assert_eq!(
+            messages,
+            vec![old],
+            "transcript untouched: the old session loads as-is"
+        );
     }
 
     // ---------- MCP integration (fake echo server, no network) ----------

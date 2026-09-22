@@ -55,7 +55,10 @@ returns to idle, repeat. Natural stops end the turn; budgets are per turn.
 - **Stuck tripwire** — 3 identical consecutive tool errors → abort, ledger
   intact, resumable
 - **Transcript trimming** — old tool outputs collapse to `[trimmed]` past a
-  token estimate; the ledger carries durable state
+  token estimate; the ledger carries durable state. A fresh `chug run`
+  rotates a non-empty `.chug/transcript.jsonl` to
+  `.chug/transcript-<timestamp>.jsonl` before its first append, so
+  `--resume` never splices foreign sessions into context
 
 ## TUI (`--tui`)
 
