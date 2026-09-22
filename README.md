@@ -46,7 +46,10 @@ returns to idle, repeat. Natural stops end the turn; budgets are per turn.
 - **Anti-stall kick** — if the model stops without `goal_complete`, the driver
   injects "consult the ledger, continue" and keeps going
 - **LEDGER.md** — external memory the model updates each iteration; injected
-  into every turn, so transcript trimming never loses progress
+  into every turn, so transcript trimming never loses progress. A fresh
+  `chug run` never inherits a previous session's ledger: a non-seed
+  LEDGER.md is archived to `.chug/LEDGER-<timestamp>.md` and the run starts
+  from the seed (`--resume` keeps it, chat sessions share it)
 - **Verification** — `goal_complete` re-runs the spec's `check:` command;
   failure rejects the claim and the loop continues
 - **Stuck tripwire** — 3 identical consecutive tool errors → abort, ledger

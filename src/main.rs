@@ -1,4 +1,5 @@
 mod api;
+mod archive;
 mod attach;
 mod auth;
 mod chat;

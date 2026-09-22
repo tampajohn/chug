@@ -10,6 +10,7 @@ use anyhow::{Context, bail};
 use serde_json::{Value, json};
 
 use crate::api::{Client, ContentBlock, KnownBlock, Llm, Message, ObsCtx};
+use crate::archive;
 use crate::events::{Event, EventSink, TurnEndReason};
 use crate::ledger;
 use crate::mcp::McpRegistry;
@@ -176,7 +177,24 @@ fn run_loop(
     obs: &observ::Sink,
 ) -> anyhow::Result<i32> {
     let mut client = client;
-    ledger::ensure_seeded(&cfg.cwd)?;
+    if cfg.resume {
+        ledger::ensure_seeded(&cfg.cwd)?;
+    } else {
+        // T3: a fresh run never inherits a previous session's ledger — it is
+        // archived (never deleted) and the seed re-installed. Continuation
+        // across a crash is what --resume is for. Best-effort: housekeeping
+        // failures warn on stderr, never abort the run.
+        match ledger::archive_stale(&cfg.cwd) {
+            archive::Outcome::Archived(path) => {
+                eprintln!("chug: archived previous ledger to {}", path.display());
+            }
+            archive::Outcome::Failed(why) => {
+                eprintln!("chug: warning: could not archive previous ledger ({why}); keeping it");
+            }
+            archive::Outcome::Skipped => {}
+        }
+        ledger::ensure_seeded(&cfg.cwd)?;
+    }
     // MCP servers spawn lazily here, at run start; an empty registry (no
     // config anywhere, or --mcp-off) is a strict no-op. Dropped on every exit
     // path — normal, budget/abort, or panic unwind — killing every server.
@@ -1109,6 +1127,164 @@ mod tests {
         // aborted at the boundary before any LLM call
         assert!(!sink.0.iter().any(|e| matches!(e, Event::ModelText(_))));
         assert!(!sink.0.iter().any(|e| matches!(e, Event::Iteration { .. })));
+    }
+
+    // ---------- T3: fresh-run ledger archiving ----------
+
+    /// A RunConfig that aborts at the first iteration boundary: the whole
+    /// startup path (seeding, archiving, first-message append) runs, but no
+    /// LLM call is ever made.
+    fn aborted_run_config(tmp: &tempfile::TempDir, spec: &Path, resume: bool) -> RunConfig {
+        let (stx, srx) = mpsc::channel();
+        drop(stx);
+        RunConfig {
+            cwd: tmp.path().to_path_buf(),
+            spec_path: spec.to_path_buf(),
+            goal: "x".to_string(),
+            model: "test-model".to_string(),
+            max_iters: 5,
+            max_minutes: 10,
+            resume,
+            controls: Controls {
+                abort: Arc::new(AtomicBool::new(true)),
+                steering_rx: srx,
+            },
+            risk_gate: false,
+            bash_timeout: Duration::from_secs(tools::BASH_TIMEOUT_SECS),
+            mcp_config: None,
+            mcp_off: true,
+        }
+    }
+
+    fn write_spec(tmp: &tempfile::TempDir) -> PathBuf {
+        let spec = tmp.path().join("s.md");
+        std::fs::write(&spec, "spec text\ncheck: true\n").unwrap();
+        spec
+    }
+
+    fn ledger_archives(tmp: &tempfile::TempDir) -> Vec<PathBuf> {
+        let dir = tmp.path().join(".chug");
+        if !dir.exists() {
+            return Vec::new();
+        }
+        let mut out: Vec<PathBuf> = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| {
+                let path = e.unwrap().path();
+                let name = path.file_name().unwrap().to_string_lossy().to_string();
+                (name.starts_with("LEDGER-") && name.ends_with(".md")).then_some(path)
+            })
+            .collect();
+        out.sort();
+        out
+    }
+
+    #[test]
+    fn fresh_run_archives_foreign_ledger_and_reseeds() {
+        let tmp = tempfile::tempdir().unwrap();
+        let spec = write_spec(&tmp);
+        std::fs::write(
+            tmp.path().join("LEDGER.md"),
+            "# Ledger\n\n## Done\n- OLD PROJECT goal met\n",
+        )
+        .unwrap();
+
+        let client = Client::new_without_credentials("test-model").unwrap();
+        let mut sink = RecordingSink::default();
+        let code = run_loop(
+            aborted_run_config(&tmp, &spec, false),
+            client,
+            None,
+            &mut sink,
+            &observ::Sink::Noop,
+        )
+        .unwrap();
+        assert_eq!(code, 1, "aborted at the first boundary");
+
+        let archives = ledger_archives(&tmp);
+        assert_eq!(archives.len(), 1, "exactly one ledger archive: {archives:?}");
+        assert!(
+            std::fs::read_to_string(&archives[0])
+                .unwrap()
+                .contains("OLD PROJECT goal met")
+        );
+        assert_eq!(
+            ledger::read(tmp.path()).unwrap(),
+            ledger::SEED,
+            "fresh run starts on the pristine seed"
+        );
+    }
+
+    #[test]
+    fn fresh_run_leaves_pristine_seed_ledger_alone() {
+        let tmp = tempfile::tempdir().unwrap();
+        let spec = write_spec(&tmp);
+        std::fs::write(tmp.path().join("LEDGER.md"), ledger::SEED).unwrap();
+
+        let client = Client::new_without_credentials("test-model").unwrap();
+        let mut sink = RecordingSink::default();
+        run_loop(
+            aborted_run_config(&tmp, &spec, false),
+            client,
+            None,
+            &mut sink,
+            &observ::Sink::Noop,
+        )
+        .unwrap();
+
+        assert!(ledger_archives(&tmp).is_empty(), "no archive for the seed");
+        assert_eq!(ledger::read(tmp.path()).unwrap(), ledger::SEED);
+    }
+
+    #[test]
+    fn resume_run_never_archives_ledger() {
+        let tmp = tempfile::tempdir().unwrap();
+        let spec = write_spec(&tmp);
+        let foreign = "# Ledger\n\n## Done\n- previous run state\n";
+        std::fs::write(tmp.path().join("LEDGER.md"), foreign).unwrap();
+
+        let client = Client::new_without_credentials("test-model").unwrap();
+        let mut sink = RecordingSink::default();
+        run_loop(
+            aborted_run_config(&tmp, &spec, true),
+            client,
+            None,
+            &mut sink,
+            &observ::Sink::Noop,
+        )
+        .unwrap();
+
+        assert!(ledger_archives(&tmp).is_empty(), "--resume never archives");
+        assert_eq!(ledger::read(tmp.path()).unwrap(), foreign, "ledger kept");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn fresh_run_warns_and_proceeds_when_ledger_archive_fails() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let spec = write_spec(&tmp);
+        let foreign = "# Ledger\n\n## Done\n- stuck foreign ledger\n";
+        std::fs::write(tmp.path().join("LEDGER.md"), foreign).unwrap();
+        // The rename needs write permission on the source dir (cwd); with cwd
+        // read-only but .chug/ writable the archive fails while the run can
+        // still proceed and append its transcript.
+        std::fs::create_dir(tmp.path().join(".chug")).unwrap();
+        std::fs::set_permissions(tmp.path(), std::fs::Permissions::from_mode(0o555)).unwrap();
+
+        let client = Client::new_without_credentials("test-model").unwrap();
+        let mut sink = RecordingSink::default();
+        let result = run_loop(
+            aborted_run_config(&tmp, &spec, false),
+            client,
+            None,
+            &mut sink,
+            &observ::Sink::Noop,
+        );
+        std::fs::set_permissions(tmp.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        assert_eq!(result.unwrap(), 1, "run proceeds despite the failed archive");
+        assert_eq!(ledger::read(tmp.path()).unwrap(), foreign, "ledger kept as-is");
     }
 
     // ---------- MCP integration (fake echo server, no network) ----------
