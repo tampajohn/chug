@@ -347,6 +347,9 @@ pub trait Llm {
         obs: &ObsCtx<'_>,
     ) -> anyhow::Result<Response>;
     fn set_model(&mut self, model: &str);
+    /// The model id subsequent `complete` calls will use (T12: abort output
+    /// names it, so chat `/model` switches are reflected immediately).
+    fn model(&self) -> &str;
 }
 
 /// Observability context for one `complete` call, supplied by the driver.
@@ -385,6 +388,10 @@ impl Llm for Client {
 
     fn set_model(&mut self, model: &str) {
         Client::set_model(self, model);
+    }
+
+    fn model(&self) -> &str {
+        &self.model
     }
 }
 
@@ -518,11 +525,6 @@ impl Client {
     /// Swap the model id used by subsequent `complete` calls (chat `/model`).
     pub fn set_model(&mut self, model: &str) {
         self.model = model.to_string();
-    }
-
-    #[cfg(test)]
-    pub fn model(&self) -> &str {
-        &self.model
     }
 
     /// One non-streaming Messages API call with T1 retry semantics: connection
@@ -687,6 +689,10 @@ impl Llm for ScriptedLlm {
 
     fn set_model(&mut self, model: &str) {
         self.model = model.to_string();
+    }
+
+    fn model(&self) -> &str {
+        &self.model
     }
 }
 

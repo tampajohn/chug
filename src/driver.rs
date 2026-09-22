@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 use crate::api::{Client, ContentBlock, KnownBlock, Llm, Message, ObsCtx};
 use crate::archive;
 use crate::eventlog;
-use crate::events::{Event, EventSink, TurnEndReason};
+use crate::events::{BudgetExceeded, Event, EventSink, TurnEndReason};
 use crate::ledger;
 use crate::mcp::McpRegistry;
 use crate::observ;
@@ -376,6 +376,10 @@ fn drive_loop(
             return abort_exit(
                 ctx,
                 "iteration budget exceeded",
+                Some(BudgetExceeded::Iterations {
+                    max: knobs.max_iters,
+                }),
+                client.model(),
                 TurnEndReason::BudgetExceeded,
                 1,
                 iteration,
@@ -386,6 +390,10 @@ fn drive_loop(
             return abort_exit(
                 ctx,
                 "time budget exceeded",
+                Some(BudgetExceeded::Minutes {
+                    max: knobs.max_minutes,
+                }),
+                client.model(),
                 TurnEndReason::BudgetExceeded,
                 1,
                 iteration,
@@ -397,7 +405,16 @@ fn drive_loop(
                 Mode::Autonomous => "operator abort",
                 Mode::Chat => "operator interrupt",
             };
-            return abort_exit(ctx, reason, TurnEndReason::Interrupted, 1, iteration, sink);
+            return abort_exit(
+                ctx,
+                reason,
+                None,
+                client.model(),
+                TurnEndReason::Interrupted,
+                1,
+                iteration,
+                sink,
+            );
         }
 
         // Steering notes queued by the operator are consumed here, at the
@@ -639,6 +656,8 @@ fn drive_loop(
             return abort_exit(
                 ctx,
                 "stuck: repeated error",
+                None,
+                client.model(),
                 TurnEndReason::Interrupted,
                 2,
                 iteration,
@@ -854,9 +873,15 @@ fn abort_outcome(reason: &str) -> &'static str {
 /// map to the mode-appropriate outcome (exit code for `run`, turn-end for
 /// chat). `turn_reason` is only used in chat mode. `iteration` feeds the
 /// `iterations` score on autonomous exits (the completed full iterations).
+/// T12: `model` names the model that died (read from the client at the abort
+/// site, so chat `/model` switches are reflected); `budget` is `Some` only
+/// for budget deaths, driving the sink's fallback-resume hint.
+#[allow(clippy::too_many_arguments)]
 fn abort_exit(
     ctx: &LoopCtx,
     reason: &str,
+    budget: Option<BudgetExceeded>,
+    model: &str,
     turn_reason: TurnEndReason,
     code: i32,
     iteration: u32,
@@ -869,6 +894,8 @@ fn abort_exit(
     sink.emit(Event::LedgerChanged(ledger_text));
     sink.emit(Event::Aborted {
         reason: reason.to_string(),
+        model: model.to_string(),
+        budget,
     });
     if let Some(trace) = ctx.trace {
         ctx.obs.event(trace, "abort", json!({ "reason": reason }));
@@ -1170,7 +1197,7 @@ mod tests {
         assert_eq!(code, 1);
         assert!(matches!(
             sink.0.iter().find(|e| matches!(e, Event::Aborted { .. })),
-            Some(Event::Aborted { reason }) if reason == "operator abort"
+            Some(Event::Aborted { reason, .. }) if reason == "operator abort"
         ));
         // identical abort path to budgets: freshest ledger pushed, then abort
         let aborted_idx = sink
@@ -1621,6 +1648,96 @@ mod tests {
             lines.last().unwrap()["reason"],
             "iteration budget exceeded"
         );
+        // T12: the abort line names the model and the exhausted budget.
+        assert_eq!(lines.last().unwrap()["model"], "scripted-model");
+        assert_eq!(lines.last().unwrap()["budget_kind"], "iterations");
+        assert_eq!(lines.last().unwrap()["budget_max"], 1);
+    }
+
+    /// T12: the Aborted event itself carries the dying model + the exhausted
+    /// budget, so sinks can render the resume-with-fallback hint.
+    #[test]
+    fn budget_abort_event_names_model_and_exhausted_budget() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (_utx, urx) = mpsc::channel::<SlashUpdate>();
+        let controls = Controls::detached();
+        let ctx = ctx_for(&tmp, Mode::Autonomous, &controls, &urx, None, &observ::Sink::Noop);
+        let mut knobs = knobs_with(1); // die on the iteration budget after one pass
+        let mut llm = ScriptedLlm::new(vec![text_only_response("thinking")]);
+        let mut gate = None;
+        let mut messages = Vec::new();
+        let mut sink = RecordingSink::default();
+        let outcome = drive_loop(
+            &ctx,
+            &mut knobs,
+            &mut llm,
+            &mut gate,
+            &mut messages,
+            None,
+            &mut sink,
+            &mut McpRegistry::new(tmp.path(), true, None).unwrap(),
+        )
+        .unwrap();
+        assert!(matches!(outcome, DriveOutcome::RunFinished(1)));
+        let abort = sink
+            .0
+            .iter()
+            .find_map(|e| match e {
+                Event::Aborted {
+                    reason,
+                    model,
+                    budget,
+                } => Some((reason.clone(), model.clone(), *budget)),
+                _ => None,
+            })
+            .expect("abort event emitted");
+        assert_eq!(abort.0, "iteration budget exceeded");
+        assert_eq!(abort.1, "scripted-model", "the dying model is named");
+        assert_eq!(
+            abort.2,
+            Some(BudgetExceeded::Iterations { max: 1 }),
+            "the exhausted iteration budget is named"
+        );
+    }
+
+    /// T12: operator aborts share the model line but carry no budget (the
+    /// fallback hint is a budget-death feature).
+    #[test]
+    fn operator_abort_event_has_model_but_no_budget() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (_utx, urx) = mpsc::channel::<SlashUpdate>();
+        let controls = Controls {
+            abort: Arc::new(AtomicBool::new(true)),
+            steering_rx: mpsc::channel().1,
+        };
+        let ctx = ctx_for(&tmp, Mode::Autonomous, &controls, &urx, None, &observ::Sink::Noop);
+        let mut knobs = knobs_with(5);
+        let mut llm = ScriptedLlm::new(vec![]);
+        let mut gate = None;
+        let mut messages = Vec::new();
+        let mut sink = RecordingSink::default();
+        let outcome = drive_loop(
+            &ctx,
+            &mut knobs,
+            &mut llm,
+            &mut gate,
+            &mut messages,
+            None,
+            &mut sink,
+            &mut McpRegistry::new(tmp.path(), true, None).unwrap(),
+        )
+        .unwrap();
+        assert!(matches!(outcome, DriveOutcome::RunFinished(1)));
+        let abort = sink
+            .0
+            .iter()
+            .find_map(|e| match e {
+                Event::Aborted { model, budget, .. } => Some((model.clone(), *budget)),
+                _ => None,
+            })
+            .expect("abort event emitted");
+        assert_eq!(abort.0, "scripted-model");
+        assert_eq!(abort.1, None);
     }
 
     /// An unwritable events log never aborts the run: poison the path with
@@ -1693,6 +1810,10 @@ mod tests {
         }
 
         fn set_model(&mut self, _model: &str) {}
+
+        fn model(&self) -> &str {
+            "tool-recording-model"
+        }
     }
 
     /// Fake MCP echo server (same script family as mcp.rs's tests) configured

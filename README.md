@@ -58,6 +58,12 @@ returns to idle, repeat. Natural stops end the turn; budgets are per turn.
   failure rejects the claim and the loop continues
 - **Stuck tripwire** — 3 identical consecutive tool errors → abort, ledger
   intact, resumable
+- **Abort output** — every abort prints the freshest LEDGER.md and the model
+  in use, plus a resume line naming the current model:
+  `resume: chug run --spec <spec> --goal "<goal>" --cwd <cwd> --resume [--model <other>]  (current model: <model>)`.
+  Budget deaths (iterations or wall-clock) also name the exhausted budget
+  (`budget: 40 iterations`), so a model that keeps dying on budget can be
+  swapped manually: `chug run --resume --model <other>`
 - **Transcript trimming** — old tool outputs collapse to `[trimmed]` past a
   token estimate; the ledger carries durable state. A fresh `chug run`
   rotates a non-empty `.chug/transcript.jsonl` to
@@ -68,7 +74,8 @@ returns to idle, repeat. Natural stops end the turn; budgets are per turn.
   (the banner fields: version/commit/model/spec/cwd/mode, once per run or
   chat session), one line per iteration with cumulative tokens,
   tool results (ok/is_error/duration_ms, ≤200-char previews), verification
-  commands, goal verdicts, aborts. Best-effort telemetry: a write failure
+  commands, goal verdicts, aborts (with the dying model and, on budget
+  deaths, the exhausted budget). Best-effort telemetry: a write failure
   warns once on stderr and never affects the run. Fresh runs rotate a
   previous log to `.chug/events-<timestamp>.jsonl` alongside the transcript
 

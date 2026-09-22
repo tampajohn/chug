@@ -20,7 +20,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use serde_json::{Value, json};
 
 use crate::archive;
-use crate::events::{Event, EventSink};
+use crate::events::{BudgetExceeded, Event, EventSink};
 use crate::observ::now_rfc3339;
 
 pub fn events_path(cwd: &Path) -> PathBuf {
@@ -160,11 +160,29 @@ impl EventSink for EventLogSink<'_> {
                 "outcome": "rejected",
                 "reason": reason,
             })),
-            Event::Aborted { reason } => Some(json!({
-                "type": "abort",
-                "ts": now_rfc3339(),
-                "reason": reason,
-            })),
+            Event::Aborted {
+                reason,
+                model,
+                budget,
+            } => {
+                // T12: the abort line names the model that died, plus the
+                // exhausted budget on budget deaths.
+                let mut line = json!({
+                    "type": "abort",
+                    "ts": now_rfc3339(),
+                    "reason": reason,
+                    "model": model,
+                });
+                if let Some(budget) = budget {
+                    let (kind, max) = match budget {
+                        BudgetExceeded::Iterations { max } => ("iterations", u64::from(*max)),
+                        BudgetExceeded::Minutes { max } => ("minutes", *max),
+                    };
+                    line["budget_kind"] = json!(kind);
+                    line["budget_max"] = json!(max);
+                }
+                Some(line)
+            }
             // Everything else (model text, tool starts, ledger snapshots,
             // steering, risk verdicts, chat turn boundaries) stays out of
             // the log per the T10 spec.
@@ -301,6 +319,8 @@ mod tests {
         });
         sink.emit(Event::Aborted {
             reason: "iteration budget exceeded".into(),
+            model: "test-model".into(),
+            budget: Some(BudgetExceeded::Iterations { max: 40 }),
         });
         let lines = read_lines(tmp.path());
         let types: Vec<&str> = lines.iter().map(|l| l["type"].as_str().unwrap()).collect();
@@ -311,6 +331,10 @@ mod tests {
         assert_eq!(lines[2]["outcome"], "rejected");
         assert_eq!(lines[2]["reason"], "check command failed");
         assert_eq!(lines[3]["reason"], "iteration budget exceeded");
+        // T12: model + exhausted budget ride the abort line.
+        assert_eq!(lines[3]["model"], "test-model");
+        assert_eq!(lines[3]["budget_kind"], "iterations");
+        assert_eq!(lines[3]["budget_max"], 40);
     }
 
     #[test]
@@ -329,6 +353,8 @@ mod tests {
         sink.emit(Event::Usage { input: 1, output: 1 });
         sink.emit(Event::Aborted {
             reason: "operator abort".into(),
+            model: "m".into(),
+            budget: None,
         });
         run_start(tmp.path(), "run", None, "m");
     }

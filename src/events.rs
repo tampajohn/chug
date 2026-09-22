@@ -36,6 +36,12 @@ pub enum Event {
     },
     Aborted {
         reason: String,
+        /// Model in use when the loop died (T12: named so the operator can
+        /// resume with a different one).
+        model: String,
+        /// Which budget ran out — `Some` only on budget deaths (T12);
+        /// operator/stuck aborts carry `None`.
+        budget: Option<BudgetExceeded>,
     },
     Usage {
         input: u64,
@@ -59,6 +65,27 @@ pub enum Event {
     TurnEnd {
         reason: TurnEndReason,
     },
+}
+
+/// Which budget killed the loop (T12). `Some` on [`Event::Aborted`] only for
+/// budget deaths, so the abort output can name the exhausted budget next to
+/// the resume-with-different-model hint.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BudgetExceeded {
+    /// Iteration budget (`--max-iters`).
+    Iterations { max: u32 },
+    /// Wall-clock budget (`--max-minutes`).
+    Minutes { max: u64 },
+}
+
+impl BudgetExceeded {
+    /// Human label for the abort block: `40 iterations` / `120 minutes`.
+    pub fn label(self) -> String {
+        match self {
+            BudgetExceeded::Iterations { max } => format!("{max} iterations"),
+            BudgetExceeded::Minutes { max } => format!("{max} minutes"),
+        }
+    }
 }
 
 /// Why a chat-mode turn ended.
@@ -147,14 +174,24 @@ impl EventSink for ConsoleSink {
                 let _ = writeln!(self.out, "\n--- LEDGER.md ---");
                 let _ = writeln!(self.out, "{}", self.last_ledger);
             }
-            Event::Aborted { reason } => {
+            Event::Aborted {
+                reason,
+                model,
+                budget,
+            } => {
                 let _ = writeln!(self.err, "chug: abort: {reason}");
                 let _ = writeln!(self.out, "--- LEDGER.md ---");
                 let _ = writeln!(self.out, "{}", self.last_ledger);
                 let _ = writeln!(self.out, "---");
+                // T12: name the model that died (and the exhausted budget on
+                // budget deaths) so the operator can resume with a fallback.
+                let _ = writeln!(self.out, "model: {model}");
+                if let Some(budget) = budget {
+                    let _ = writeln!(self.out, "budget: {}", budget.label());
+                }
                 let _ = writeln!(
                     self.out,
-                    "resume with: chug run --spec <spec> --goal \"<goal>\" --cwd {} --resume",
+                    "resume: chug run --spec <spec> --goal \"<goal>\" --cwd {} --resume [--model <other>]  (current model: {model})",
                     self.cwd.display()
                 );
             }
@@ -277,12 +314,16 @@ mod tests {
         );
     }
 
+    /// T12: a budget death names the model, the exhausted budget, and the
+    /// resume-with-fallback hint (with the current model named).
     #[test]
-    fn console_sink_abort_block_matches_pre_tui_format() {
+    fn console_sink_budget_abort_names_model_budget_and_fallback_hint() {
         let (mut sink, out, err) = sink("/work/dir");
         sink.emit(Event::LedgerChanged("# Ledger\n\n## Next\n- x\n".into()));
         sink.emit(Event::Aborted {
             reason: "iteration budget exceeded".into(),
+            model: "muse-glimmer-30b".into(),
+            budget: Some(BudgetExceeded::Iterations { max: 40 }),
         });
 
         assert_eq!(out_bytes(&err), "chug: abort: iteration budget exceeded\n");
@@ -291,8 +332,43 @@ mod tests {
             "--- LEDGER.md ---\n\
              # Ledger\n\n## Next\n- x\n\n\
              ---\n\
-             resume with: chug run --spec <spec> --goal \"<goal>\" --cwd /work/dir --resume\n"
+             model: muse-glimmer-30b\n\
+             budget: 40 iterations\n\
+             resume: chug run --spec <spec> --goal \"<goal>\" --cwd /work/dir --resume [--model <other>]  (current model: muse-glimmer-30b)\n"
         );
+    }
+
+    /// T12: non-budget aborts print the ledger exactly as before, share the
+    /// model line, and skip only the budget line.
+    #[test]
+    fn console_sink_non_budget_abort_has_model_but_no_budget_line() {
+        let (mut sink, out, err) = sink("/work/dir");
+        sink.emit(Event::LedgerChanged("# Ledger\n\n## Next\n- x\n".into()));
+        sink.emit(Event::Aborted {
+            reason: "stuck: repeated error".into(),
+            model: "claude-sonnet-4-6".into(),
+            budget: None,
+        });
+
+        assert_eq!(out_bytes(&err), "chug: abort: stuck: repeated error\n");
+        assert_eq!(
+            out_bytes(&out),
+            "--- LEDGER.md ---\n\
+             # Ledger\n\n## Next\n- x\n\n\
+             ---\n\
+             model: claude-sonnet-4-6\n\
+             resume: chug run --spec <spec> --goal \"<goal>\" --cwd /work/dir --resume [--model <other>]  (current model: claude-sonnet-4-6)\n"
+        );
+        assert!(!out_bytes(&out).contains("budget:"));
+    }
+
+    #[test]
+    fn budget_exceeded_labels() {
+        assert_eq!(
+            BudgetExceeded::Iterations { max: 40 }.label(),
+            "40 iterations"
+        );
+        assert_eq!(BudgetExceeded::Minutes { max: 120 }.label(), "120 minutes");
     }
 
     #[test]

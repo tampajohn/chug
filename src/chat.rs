@@ -570,7 +570,7 @@ mod tests {
         assert_eq!(code, 0);
         assert!(events.iter().any(|e| matches!(
             e,
-            Event::Aborted { reason } if reason == "operator interrupt"
+            Event::Aborted { reason, .. } if reason == "operator interrupt"
         )));
         assert_eq!(turn_ends(&events), vec![TurnEndReason::Interrupted]);
         // The interrupt hit at the boundary after exactly one LLM call, and
@@ -592,7 +592,7 @@ mod tests {
         assert_eq!(code, 0);
         assert!(events.iter().any(|e| matches!(
             e,
-            Event::Aborted { reason } if reason == "iteration budget exceeded"
+            Event::Aborted { reason, .. } if reason == "iteration budget exceeded"
         )));
         assert_eq!(turn_ends(&events), vec![TurnEndReason::BudgetExceeded]);
     }

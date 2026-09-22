@@ -295,7 +295,7 @@ impl App {
                     color: Color::Green,
                 });
             }
-            Event::Aborted { reason } => {
+            Event::Aborted { reason, .. } => {
                 if let Some(chat) = &mut self.chat {
                     // Chat mode: the turn (not the app) is over; TurnEnd
                     // follows and drives the state machine back to Idle.
@@ -1212,6 +1212,8 @@ mod tests {
         let mut b = app();
         b.apply(Event::Aborted {
             reason: "operator abort".into(),
+            model: "test-model".into(),
+            budget: None,
         });
         assert_eq!(b.status, Status::Aborted);
     }
@@ -1453,6 +1455,8 @@ mod tests {
         });
         f.app.apply(Event::Aborted {
             reason: "operator interrupt".into(),
+            model: "test-model".into(),
+            budget: None,
         });
         f.app.apply(Event::TurnEnd {
             reason: TurnEndReason::Interrupted,
@@ -1475,6 +1479,8 @@ mod tests {
         });
         f.app.apply(Event::Aborted {
             reason: "iteration budget exceeded".into(),
+            model: "test-model".into(),
+            budget: Some(crate::events::BudgetExceeded::Iterations { max: 40 }),
         });
         f.app.apply(Event::TurnEnd {
             reason: TurnEndReason::BudgetExceeded,
@@ -1646,6 +1652,8 @@ mod tests {
         // Turn end returns to Idle.
         f.app.apply(Event::Aborted {
             reason: "operator interrupt".into(),
+            model: "test-model".into(),
+            budget: None,
         });
         f.app.apply(Event::TurnEnd {
             reason: TurnEndReason::Interrupted,
