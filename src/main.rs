@@ -57,6 +57,10 @@ enum CliCommand {
         /// Wall-clock budget in minutes.
         #[arg(long, default_value_t = 120)]
         max_minutes: u64,
+        /// Token budget: cumulative input+output tokens across the run.
+        /// 0 = unlimited.
+        #[arg(long, default_value_t = 0)]
+        max_tokens: u64,
         /// Resume from <cwd>/.chug/transcript.jsonl.
         #[arg(long)]
         resume: bool,
@@ -99,6 +103,9 @@ enum CliCommand {
         /// Per-turn wall-clock budget in minutes.
         #[arg(long, default_value_t = 120)]
         max_minutes: u64,
+        /// Per-turn token budget: cumulative input+output tokens. 0 = unlimited.
+        #[arg(long, default_value_t = 0)]
+        max_tokens: u64,
         /// Resume from <cwd>/.chug/transcript.jsonl.
         #[arg(long)]
         resume: bool,
@@ -131,6 +138,7 @@ fn main() -> ExitCode {
             model,
             max_iters,
             max_minutes,
+            max_tokens,
             resume,
             risk_gate,
             bash_timeout,
@@ -141,6 +149,7 @@ fn main() -> ExitCode {
             model,
             max_iters,
             max_minutes,
+            max_tokens,
             resume,
             risk_gate,
             bash_timeout,
@@ -154,6 +163,7 @@ fn main() -> ExitCode {
             model,
             max_iters,
             max_minutes,
+            max_tokens,
             resume,
             tui,
             risk_gate,
@@ -167,6 +177,7 @@ fn main() -> ExitCode {
             model,
             max_iters,
             max_minutes,
+            max_tokens,
             resume,
             tui,
             risk_gate,
@@ -228,6 +239,7 @@ fn cmd_run(
     model: Option<String>,
     max_iters: u32,
     max_minutes: u64,
+    max_tokens: u64,
     resume: bool,
     tui: bool,
     risk_gate: bool,
@@ -249,7 +261,7 @@ fn cmd_run(
 
     if tui {
         run_with_tui(
-            spec, goal, cwd, model, max_iters, max_minutes, resume, risk_gate,
+            spec, goal, cwd, model, max_iters, max_minutes, max_tokens, resume, risk_gate,
             bash_timeout, mcp_config, mcp_off,
         )
     } else {
@@ -260,6 +272,7 @@ fn cmd_run(
             model,
             max_iters,
             max_minutes,
+            max_tokens,
             resume,
             controls: driver::Controls::detached(),
             risk_gate,
@@ -281,6 +294,7 @@ fn run_with_tui(
     model: String,
     max_iters: u32,
     max_minutes: u64,
+    max_tokens: u64,
     resume: bool,
     risk_gate: bool,
     bash_timeout: std::time::Duration,
@@ -299,6 +313,7 @@ fn run_with_tui(
         model: model.clone(),
         max_iters,
         max_minutes,
+        max_tokens,
         resume,
         risk_gate,
         bash_timeout,
@@ -348,6 +363,7 @@ fn cmd_chat(
     model: Option<String>,
     max_iters: u32,
     max_minutes: u64,
+    max_tokens: u64,
     resume: bool,
     risk_gate: bool,
     bash_timeout: Option<u64>,
@@ -375,6 +391,7 @@ fn cmd_chat(
         model: model.clone(),
         max_iters,
         max_minutes,
+        max_tokens,
         resume,
         risk_gate,
         bash_timeout,
@@ -471,5 +488,45 @@ mod tests {
     #[test]
     fn resolve_bash_timeout_wraps_secs_in_duration() {
         assert_eq!(resolve_bash_timeout(Some(1)).unwrap(), Duration::from_secs(1));
+    }
+
+    /// T15: `--max-tokens` parses into the knob (u64) and defaults to 0
+    /// (unlimited) on both subcommands that carry budgets.
+    #[test]
+    fn cli_max_tokens_parses_and_defaults_to_unlimited() {
+        let cli = Cli::try_parse_from([
+            "chug",
+            "run",
+            "--spec",
+            "s.md",
+            "--goal",
+            "g",
+            "--max-tokens",
+            "250000",
+        ])
+        .expect("run parses");
+        let CliCommand::Run { max_tokens, .. } = cli.command else {
+            panic!("expected the run subcommand");
+        };
+        assert_eq!(max_tokens, 250_000);
+
+        let cli = Cli::try_parse_from(["chug", "run", "--spec", "s.md", "--goal", "g"])
+            .expect("run without the flag parses");
+        let CliCommand::Run { max_tokens, .. } = cli.command else {
+            panic!("expected the run subcommand");
+        };
+        assert_eq!(max_tokens, 0, "unset = unlimited");
+
+        let cli = Cli::try_parse_from([
+            "chug",
+            "chat",
+            "--max-tokens",
+            "1000",
+        ])
+        .expect("chat parses");
+        let CliCommand::Chat { max_tokens, .. } = cli.command else {
+            panic!("expected the chat subcommand");
+        };
+        assert_eq!(max_tokens, 1_000);
     }
 }

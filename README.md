@@ -58,15 +58,22 @@ returns to idle, repeat. Natural stops end the turn; budgets are per turn.
   failure rejects the claim and the loop continues
 - **Stuck tripwire** — 3 identical consecutive tool errors → abort, ledger
   intact, resumable
-- **Budget-low warning** — when ≤5 iterations or ≤5 minutes remain, the loop
-  injects a one-shot `chug: budget low — N iteration(s) and M minute(s)
-  remain` user message (per budget kind) so the model reprioritizes toward
-  committing, gates, and bookkeeping before the abort at the loop top
+- **Budget-low warning** — when ≤5 iterations, ≤5 minutes, or ≤50,000 tokens
+  remain, the loop injects a one-shot `chug: budget low — N iteration(s),
+  M minute(s), K token(s) remain` user message (one shot per budget kind) so
+  the model reprioritizes toward committing, gates, and bookkeeping before
+  the abort at the loop top. The token count appears only when a token
+  budget is set
+- **Token budget** — `--max-tokens N` (run and chat) caps the run's
+  cumulative input+output tokens — the axis iteration/wall-clock budgets can
+  miss (a cheap watch-and-wait loop burns neither while racking up tokens).
+  Crossing the ceiling aborts at the loop top naming the exhausted budget
+  (`budget: N tokens`)
 - **Abort output** — every abort prints the freshest LEDGER.md and the model
   in use, plus a resume line naming the current model:
   `resume: chug run --spec <spec> --goal "<goal>" --cwd <cwd> --resume [--model <other>]  (current model: <model>)`.
-  Budget deaths (iterations or wall-clock) also name the exhausted budget
-  (`budget: 40 iterations`), so a model that keeps dying on budget can be
+  Budget deaths (iterations, wall-clock, or tokens) also name the exhausted
+  budget (`budget: 40 iterations`), so a model that keeps dying on budget can be
   swapped manually: `chug run --resume --model <other>`. The run's cumulative
   token cost is printed too (`tokens: <input> in / <output> out (cumulative)`)
   — on goal-complete output as well, right after the summary line — so a

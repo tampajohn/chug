@@ -76,14 +76,18 @@ pub enum BudgetExceeded {
     Iterations { max: u32 },
     /// Wall-clock budget (`--max-minutes`).
     Minutes { max: u64 },
+    /// Token budget (`--max-tokens`): cumulative input+output tokens (T15).
+    Tokens { max: u64 },
 }
 
 impl BudgetExceeded {
-    /// Human label for the abort block: `40 iterations` / `120 minutes`.
+    /// Human label for the abort block: `40 iterations` / `120 minutes` /
+    /// `250000 tokens`.
     pub fn label(self) -> String {
         match self {
             BudgetExceeded::Iterations { max } => format!("{max} iterations"),
             BudgetExceeded::Minutes { max } => format!("{max} minutes"),
+            BudgetExceeded::Tokens { max } => format!("{max} tokens"),
         }
     }
 }
@@ -460,6 +464,8 @@ mod tests {
             "40 iterations"
         );
         assert_eq!(BudgetExceeded::Minutes { max: 120 }.label(), "120 minutes");
+        // T15: the token budget names its ceiling the same way.
+        assert_eq!(BudgetExceeded::Tokens { max: 50_000 }.label(), "50000 tokens");
     }
 
     #[test]
