@@ -62,7 +62,9 @@ For each `todo` row, ONE at a time, foreground:
    same commit** (or an immediately following `todo:` commit). Update
    README.md in the merge commit when the item is user-visible. This
    ordering is the fix for the T10/T12 failure mode: children die between
-   the code commit and the row flip, so children never own the row.
+   the code commit and the row flip, so children never own the row. **Push
+   after each item lands green** (`git push` once the todo: commit is in) —
+   the operator watches origin; don't hold a batch hostage to the wrap.
 6. **Budget check.** Fewer than 15 iterations left → stop dispatching, go to
    wrap. Unworked rows stay `todo` — that is a fine outcome.
 
@@ -71,8 +73,10 @@ For each `todo` row, ONE at a time, foreground:
 - TODO.md truthful (every `done` row has a commit ref).
 - EVALUATION.md gains an **Outcomes** section: what landed, what was
   skipped/deferred, what the validators caught.
-- Final gates green in main (build + clippy + test) → `goal_complete` with
-  the cycle summary. Do not push; the human pushes.
+- Final gates green in main (build + clippy + test) → push anything
+  remaining (eval commits, Outcomes) → `goal_complete` with the cycle
+  summary. Never force-push; a rejected push means the remote moved — stop
+  and note it, don't reconcile mid-cycle.
 
 ## Hard rules
 
