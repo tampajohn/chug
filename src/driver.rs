@@ -41,6 +41,9 @@ const WARN_REMAINING_ITERS: u32 = 5;
 /// T13: wall-clock seconds remaining that trigger the one-shot warning
 /// (5 minutes).
 const WARN_REMAINING_SECS: u64 = 300;
+/// T15: remaining token budget (cumulative input+output) that triggers the
+/// one-shot warning, same shape as the iteration/seconds legs.
+const WARN_REMAINING_TOKENS: u64 = 50_000;
 
 pub struct RunConfig {
     pub cwd: PathBuf,
@@ -49,6 +52,10 @@ pub struct RunConfig {
     pub model: String,
     pub max_iters: u32,
     pub max_minutes: u64,
+    /// Cumulative token budget across the run: input+output tokens summed
+    /// over every API response. `0` = unlimited (the default; no ceiling,
+    /// no warning leg — pre-T15 behavior exactly).
+    pub max_tokens: u64,
     pub resume: bool,
     /// Shared controls checked at every iteration boundary.
     pub controls: Controls,
@@ -112,6 +119,9 @@ pub struct TurnKnobs {
     pub max_iters: u32,
     /// Per-turn (or per-run) wall-clock budget in minutes.
     pub max_minutes: u64,
+    /// Per-turn (or per-run) cumulative token budget (input+output across
+    /// the invocation's API responses); `0` = unlimited.
+    pub max_tokens: u64,
 }
 
 /// Mid-turn session updates, parsed from slash commands UI-side and applied
@@ -271,6 +281,7 @@ fn run_loop(
         check_cmd: None, // autonomous mode parses the spec's `check:` line
         max_iters: cfg.max_iters,
         max_minutes: cfg.max_minutes,
+        max_tokens: cfg.max_tokens,
     };
     let (_update_tx, update_rx) = mpsc::channel::<SlashUpdate>();
     let ctx = LoopCtx {
@@ -380,7 +391,7 @@ fn drive_loop(
     let (mut usage_in, mut usage_out) = (0u64, 0u64);
     // T13: one-shot latches for the budget-low warning, one per budget kind.
     // Per invocation: a chat turn (or a --resume) gets fresh warnings.
-    let (mut warned_iter, mut warned_time) = (false, false);
+    let (mut warned_iter, mut warned_time, mut warned_tokens) = (false, false, false);
 
     loop {
         if iteration >= knobs.max_iters {
@@ -403,6 +414,23 @@ fn drive_loop(
                 "time budget exceeded",
                 Some(BudgetExceeded::Minutes {
                     max: knobs.max_minutes,
+                }),
+                client.model(),
+                TurnEndReason::BudgetExceeded,
+                1,
+                iteration,
+                sink,
+            );
+        }
+        // T15: token budget — cumulative input+output across every API
+        // response so far (0 before the first response), checked at the same
+        // top-of-iteration point as the other budgets. `0` = unlimited.
+        if knobs.max_tokens > 0 && usage_in.saturating_add(usage_out) >= knobs.max_tokens {
+            return abort_exit(
+                ctx,
+                "token budget exceeded",
+                Some(BudgetExceeded::Tokens {
+                    max: knobs.max_tokens,
                 }),
                 client.model(),
                 TurnEndReason::BudgetExceeded,
@@ -465,15 +493,26 @@ fn drive_loop(
         let remaining_secs = Duration::from_secs(knobs.max_minutes.saturating_mul(60))
             .saturating_sub(start.elapsed())
             .as_secs();
-        if let Some(notice) =
-            budget_low_notice(remaining_iters, remaining_secs, warned_iter, warned_time)
-        {
+        // T15: tokens left under the cumulative budget; `None` when no token
+        // budget is set (the notice then never mentions tokens). Cumulative
+        // usage only grows, so this only ever drops.
+        let remaining_tokens = (knobs.max_tokens > 0)
+            .then(|| knobs.max_tokens.saturating_sub(usage_in.saturating_add(usage_out)));
+        if let Some(notice) = budget_low_notice(
+            remaining_iters,
+            remaining_secs,
+            remaining_tokens,
+            warned_iter,
+            warned_time,
+            warned_tokens,
+        ) {
             let msg = Message::user(vec![ContentBlock::text_block(notice)]);
             transcript::append(ctx.cwd, &msg)?;
             messages.push(msg);
         }
         warned_iter |= remaining_iters <= WARN_REMAINING_ITERS;
         warned_time |= remaining_secs <= WARN_REMAINING_SECS;
+        warned_tokens |= remaining_tokens.is_some_and(|r| r <= WARN_REMAINING_TOKENS);
 
         // Re-read spec every iteration: the user may edit it mid-run. Keep the
         // last good copy if it becomes unreadable.
@@ -740,25 +779,45 @@ fn append_steering_notes(
 /// firing. Pure so the time half is unit-testable without sleeping.
 ///
 /// Fires when the remaining iteration budget first drops to
-/// `<= WARN_REMAINING_ITERS` or the remaining wall-clock budget first drops
-/// to `<= WARN_REMAINING_SECS`, one shot per budget kind: the caller passes
-/// the two latch flags and mirrors this function's threshold comparisons when
-/// latching them (both directions are pinned by unit + scripted-loop tests).
-/// The message always states the actual remaining counts at fire time.
+/// `<= WARN_REMAINING_ITERS`, the remaining wall-clock budget first drops
+/// to `<= WARN_REMAINING_SECS`, or — T15 — the remaining token budget first
+/// drops to `<= WARN_REMAINING_TOKENS` (`None` = no token budget: the leg
+/// never fires and the message never mentions tokens), one shot per budget
+/// kind: the caller passes the three latch flags and mirrors this function's
+/// threshold comparisons when latching them (all directions are pinned by
+/// unit + scripted-loop tests). The message always states the actual
+/// remaining counts at fire time.
 fn budget_low_notice(
     remaining_iters: u32,
     remaining_secs: u64,
+    remaining_tokens: Option<u64>,
     already_warned_iter: bool,
     already_warned_time: bool,
+    already_warned_tokens: bool,
 ) -> Option<String> {
     let iters_low = remaining_iters <= WARN_REMAINING_ITERS;
     let time_low = remaining_secs <= WARN_REMAINING_SECS;
-    if (iters_low && !already_warned_iter) || (time_low && !already_warned_time) {
+    let tokens_low = remaining_tokens.is_some_and(|r| r <= WARN_REMAINING_TOKENS);
+    if (iters_low && !already_warned_iter)
+        || (time_low && !already_warned_time)
+        || (tokens_low && !already_warned_tokens)
+    {
+        // Without a token budget this stays byte-identical to the pre-T15
+        // message; with one, the remaining tokens join the count.
+        let counts = match remaining_tokens {
+            None => format!(
+                "{remaining_iters} iteration(s) and {} minute(s)",
+                remaining_secs / 60
+            ),
+            Some(tokens) => format!(
+                "{remaining_iters} iteration(s), {} minute(s), and {tokens} token(s)",
+                remaining_secs / 60
+            ),
+        };
         Some(format!(
-            "chug: budget low — {remaining_iters} iteration(s) and {} minute(s) remain. \
+            "chug: budget low — {counts} remain. \
              Stop starting new work: commit what is done, run the gates, and finish \
-             bookkeeping now.",
-            remaining_secs / 60
+             bookkeeping now."
         ))
     } else {
         None
@@ -1243,6 +1302,7 @@ mod tests {
             model: "test-model".to_string(),
             max_iters: 5,
             max_minutes: 10,
+            max_tokens: 0, // no token budget: pre-T15 behavior
             resume: false,
             controls,
             risk_gate: false,
@@ -1303,6 +1363,7 @@ mod tests {
             model: "test-model".to_string(),
             max_iters: 5,
             max_minutes: 10,
+            max_tokens: 0, // no token budget: pre-T15 behavior
             resume,
             controls: Controls {
                 abort: Arc::new(AtomicBool::new(true)),
@@ -1807,8 +1868,8 @@ mod tests {
     #[test]
     fn budget_low_notice_iteration_boundary() {
         // 6 remaining is above the threshold; 5 fires.
-        assert_eq!(budget_low_notice(6, u64::MAX, false, false), None);
-        assert!(budget_low_notice(5, u64::MAX, false, false).is_some());
+        assert_eq!(budget_low_notice(6, u64::MAX, None, false, false, false), None);
+        assert!(budget_low_notice(5, u64::MAX, None, false, false, false).is_some());
     }
 
     #[test]
@@ -1816,31 +1877,32 @@ mod tests {
         // One second above the 5-minute threshold stays silent; at the
         // threshold the time half fires on its own (iters far from low).
         assert_eq!(
-            budget_low_notice(u32::MAX, WARN_REMAINING_SECS + 1, false, false),
+            budget_low_notice(u32::MAX, WARN_REMAINING_SECS + 1, None, false, false, false),
             None
         );
         assert!(
-            budget_low_notice(u32::MAX, WARN_REMAINING_SECS, false, false).is_some()
+            budget_low_notice(u32::MAX, WARN_REMAINING_SECS, None, false, false, false).is_some()
         );
     }
 
     #[test]
     fn budget_low_notice_one_shot_flags_suppress_repeats() {
         // Both kinds latched: silent forever after, even deep in the low zone.
-        assert_eq!(budget_low_notice(1, 30, true, true), None);
+        assert_eq!(budget_low_notice(1, 30, None, true, true, false), None);
         // A latched kind never re-fires; the other still gets its one shot.
-        assert!(budget_low_notice(1, 30, true, false).is_some());
-        assert!(budget_low_notice(1, 30, false, true).is_some());
+        assert!(budget_low_notice(1, 30, None, true, false, false).is_some());
+        assert!(budget_low_notice(1, 30, None, false, true, false).is_some());
     }
 
     #[test]
     fn budget_low_notice_interpolates_actual_counts() {
-        let msg = budget_low_notice(3, 150, false, false).expect("fires below both thresholds");
+        let msg = budget_low_notice(3, 150, None, false, false, false)
+            .expect("fires below both thresholds");
         assert!(msg.contains("3 iteration(s)"), "{msg}");
         assert!(msg.contains("2 minute(s)"), "{msg}");
         assert!(msg.contains("commit what is done"), "{msg}");
         // The counts are the ones at fire time, not the thresholds.
-        let msg = budget_low_notice(1, 60, false, true).expect("iter half still armed");
+        let msg = budget_low_notice(1, 60, None, false, true, false).expect("iter half still armed");
         assert!(msg.contains("1 iteration(s)"), "{msg}");
         assert!(msg.contains("1 minute(s)"), "{msg}");
     }
@@ -1895,6 +1957,229 @@ mod tests {
         // call ever sees more than that single message: later calls still
         // carry the one notice as conversation history, never a second.
         assert_eq!(llm.calls.len(), 8);
+        for (i, (_, seen)) in llm.calls.iter().enumerate() {
+            let count = seen.iter().filter(|m| is_notice(m)).count();
+            assert!(
+                count == usize::from(i >= 3),
+                "call {} (1-based) carries {count} notice(s)",
+                i + 1
+            );
+        }
+    }
+
+    // ---------- T15: token-denominated budget ----------
+
+    #[test]
+    fn budget_low_notice_tokens_boundary() {
+        // One token above the threshold stays silent; at the threshold the
+        // tokens leg fires on its own (iters/time far from low).
+        assert_eq!(
+            budget_low_notice(
+                u32::MAX,
+                u64::MAX,
+                Some(WARN_REMAINING_TOKENS + 1),
+                false,
+                false,
+                false
+            ),
+            None
+        );
+        assert!(
+            budget_low_notice(u32::MAX, u64::MAX, Some(WARN_REMAINING_TOKENS), false, false, false)
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn budget_low_notice_tokens_none_means_unlimited() {
+        // No token budget: the tokens leg never fires…
+        assert_eq!(budget_low_notice(u32::MAX, u64::MAX, None, false, false, false), None);
+        // …and the message never mentions tokens, even when another leg fires.
+        let msg = budget_low_notice(3, 150, None, false, false, false).unwrap();
+        assert!(!msg.contains("token"), "{msg}");
+    }
+
+    #[test]
+    fn budget_low_notice_tokens_one_shot_latch() {
+        // A latched tokens leg stays silent even deeper in the low zone…
+        assert_eq!(budget_low_notice(u32::MAX, u64::MAX, Some(1), false, false, true), None);
+        // …while the other legs still get their one shot (and vice versa).
+        assert!(
+            budget_low_notice(1, 30, Some(1), true, true, false).is_some(),
+            "iters/time legs armed"
+        );
+        assert!(
+            budget_low_notice(u32::MAX, u64::MAX, Some(1), false, false, false).is_some(),
+            "tokens leg armed"
+        );
+    }
+
+    #[test]
+    fn budget_low_notice_tokens_interpolates_remaining() {
+        let msg = budget_low_notice(u32::MAX, u64::MAX, Some(12_345), false, false, false)
+            .expect("tokens leg fires");
+        assert!(msg.contains("12345 token(s)"), "{msg}");
+        assert!(msg.contains("commit what is done"), "{msg}");
+        // The message names the remaining counts of every budget kind at
+        // fire time, not the thresholds.
+        let msg = budget_low_notice(2, 60, Some(100), false, false, false)
+            .expect("tokens leg fires with iters low too");
+        assert!(msg.contains("2 iteration(s)"), "{msg}");
+        assert!(msg.contains("1 minute(s)"), "{msg}");
+        assert!(msg.contains("100 token(s)"), "{msg}");
+    }
+
+    /// T15, scripted run: a tiny token budget aborts at the top of the
+    /// iteration where cumulative usage (input+output) crosses it, naming
+    /// the exhausted budget; the loop stops with script responses left.
+    #[test]
+    fn token_budget_aborts_when_cumulative_usage_crosses_max() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (_utx, urx) = mpsc::channel::<SlashUpdate>();
+        let controls = Controls::detached();
+        let ctx = ctx_for(&tmp, Mode::Autonomous, &controls, &urx, None, &observ::Sink::Noop);
+        // --max-tokens 25 against responses costing 10 in + 5 out = 15 each:
+        // after two responses the cumulative 30 has crossed 25.
+        let mut knobs = knobs_with_tokens(50, 25);
+        let mut llm = ScriptedLlm::new(vec![
+            text_only_response("working"),
+            text_only_response("working"),
+            text_only_response("never reached"),
+        ]);
+        let mut gate = None;
+        let mut messages = Vec::new();
+        let mut sink = RecordingSink::default();
+        let outcome = drive_loop(
+            &ctx,
+            &mut knobs,
+            &mut llm,
+            &mut gate,
+            &mut messages,
+            None,
+            &mut sink,
+            &mut McpRegistry::new(tmp.path(), true, None).unwrap(),
+        )
+        .unwrap();
+        assert!(matches!(outcome, DriveOutcome::RunFinished(1)));
+        // The loop stopped at the boundary with a scripted response unused.
+        assert_eq!(llm.calls.len(), 2);
+        let abort = sink
+            .0
+            .iter()
+            .find_map(|e| match e {
+                Event::Aborted { reason, budget, .. } => Some((reason.clone(), *budget)),
+                _ => None,
+            })
+            .expect("abort event emitted");
+        assert_eq!(abort.0, "token budget exceeded");
+        assert_eq!(
+            abort.1,
+            Some(BudgetExceeded::Tokens { max: 25 }),
+            "the exhausted token budget is named"
+        );
+        // The events log's abort line picks the new variant up unchanged.
+        let lines = events_jsonl(&tmp);
+        assert_eq!(lines.last().unwrap()["type"], "abort");
+        assert_eq!(lines.last().unwrap()["reason"], "token budget exceeded");
+        assert_eq!(lines.last().unwrap()["budget_kind"], "tokens");
+        assert_eq!(lines.last().unwrap()["budget_max"], 25);
+    }
+
+    /// T15 control: the same shape of run with the knob unset (`0` =
+    /// unlimited) completes naturally no matter how many tokens it burns —
+    /// pre-T15 behavior exactly (no abort, no token warning leg).
+    #[test]
+    fn no_token_budget_runs_to_natural_completion() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (_utx, urx) = mpsc::channel::<SlashUpdate>();
+        let controls = Controls::detached();
+        let ctx = ctx_for(&tmp, Mode::Autonomous, &controls, &urx, None, &observ::Sink::Noop);
+        let mut knobs = knobs_with_tokens(50, 0);
+        let mut llm = ScriptedLlm::new(vec![
+            big_usage_text_response("working", (20_000, 5_000)),
+            big_usage_text_response("working", (20_000, 5_000)),
+            big_usage_text_response("working", (20_000, 5_000)),
+            tool_use_response("goal_complete", json!({"summary": "wrapped up"})),
+        ]);
+        let mut gate = None;
+        let mut messages = Vec::new();
+        let mut sink = RecordingSink::default();
+        let outcome = drive_loop(
+            &ctx,
+            &mut knobs,
+            &mut llm,
+            &mut gate,
+            &mut messages,
+            Some("check: true".to_string()),
+            &mut sink,
+            &mut McpRegistry::new(tmp.path(), true, None).unwrap(),
+        )
+        .unwrap();
+        assert!(matches!(outcome, DriveOutcome::RunFinished(0)));
+        assert!(!sink.0.iter().any(|e| matches!(e, Event::Aborted { .. })));
+        // 60,010 cumulative input tokens burned with no ceiling, no warning leg.
+        assert!(sink.0.iter().any(|e| matches!(
+            e,
+            Event::Usage {
+                input: 60_010,
+                ..
+            }
+        )));
+        let on_disk = transcript::load(tmp.path()).unwrap();
+        assert!(!on_disk.iter().any(|m| m.content.iter().any(
+            |b| b.text().is_some_and(|t| t.starts_with("chug: budget low"))
+        )));
+    }
+
+    /// T15, scripted run with a 120k-token budget and 25k-token responses:
+    /// exactly one budget-low user message naming the remaining tokens, first
+    /// seen by the model on the call after remaining drops to 45k, never a
+    /// second one. The run itself ends exactly as before (accepted goal).
+    #[test]
+    fn token_budget_low_warning_fires_once_mid_run() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (_utx, urx) = mpsc::channel::<SlashUpdate>();
+        let controls = Controls::detached();
+        let ctx = ctx_for(&tmp, Mode::Autonomous, &controls, &urx, None, &observ::Sink::Noop);
+        let mut knobs = knobs_with_tokens(50, 120_000);
+        let mut llm = ScriptedLlm::new(vec![
+            big_usage_text_response("working", (20_000, 5_000)),
+            big_usage_text_response("working", (20_000, 5_000)),
+            big_usage_text_response("working", (20_000, 5_000)),
+            tool_use_response("goal_complete", json!({"summary": "wrapped up"})),
+        ]);
+        let mut gate = None;
+        let mut messages = Vec::new();
+        let outcome = drive_loop(
+            &ctx,
+            &mut knobs,
+            &mut llm,
+            &mut gate,
+            &mut messages,
+            Some("check: true".to_string()),
+            &mut RecordingSink::default(),
+            &mut McpRegistry::new(tmp.path(), true, None).unwrap(),
+        )
+        .unwrap();
+        assert!(matches!(outcome, DriveOutcome::RunFinished(0)));
+
+        let is_notice = |m: &Message| {
+            m.role == "user"
+                && m.content
+                    .iter()
+                    .any(|b| b.text().is_some_and(|t| t.starts_with("chug: budget low")))
+        };
+
+        // Exactly one notice, naming the 45k tokens remaining at fire time.
+        let notices: Vec<&Message> = messages.iter().filter(|m| is_notice(m)).collect();
+        assert_eq!(notices.len(), 1, "exactly one token budget-low warning");
+        let text = notices[0].content[0].text().expect("notice is text");
+        assert!(text.contains("45000 token(s)"), "{text}");
+        assert!(text.contains("commit what is done"), "{text}");
+        // The model first sees it on the 4th call (remaining crossed the 50k
+        // threshold after the third response) and no call ever sees more
+        // than that single message.
+        assert_eq!(llm.calls.len(), 4);
         for (i, (_, seen)) in llm.calls.iter().enumerate() {
             let count = seen.iter().filter(|m| is_notice(m)).count();
             assert!(
@@ -2053,6 +2338,16 @@ for line in sys.stdin:
         })
     }
 
+    /// T15: a text-only response with an explicit (input, output) usage, so
+    /// scripted runs can move the cumulative token counters in big steps.
+    fn big_usage_text_response(text: &str, usage: (u64, u64)) -> Value {
+        json!({
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": usage.0, "output_tokens": usage.1},
+            "content": [{"type": "text", "text": text}],
+        })
+    }
+
     fn ctx_for<'a>(
         tmp: &'a tempfile::TempDir,
         mode: Mode,
@@ -2079,6 +2374,15 @@ for line in sys.stdin:
             check_cmd: None,
             max_iters,
             max_minutes: 120,
+            max_tokens: 0,
+        }
+    }
+
+    /// T15: knobs with a token budget (`0` = unlimited, like [`knobs_with`]).
+    fn knobs_with_tokens(max_iters: u32, max_tokens: u64) -> TurnKnobs {
+        TurnKnobs {
+            max_tokens,
+            ..knobs_with(max_iters)
         }
     }
 

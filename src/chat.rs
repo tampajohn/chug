@@ -120,6 +120,8 @@ pub struct ChatConfig {
     pub model: String,
     pub max_iters: u32,
     pub max_minutes: u64,
+    /// Per-turn token budget: cumulative input+output tokens. `0` = unlimited.
+    pub max_tokens: u64,
     pub resume: bool,
     pub risk_gate: bool,
     /// Per-command wall-clock budget for the `bash` tool.
@@ -186,6 +188,7 @@ fn run_chat_with(
         check_cmd: None,
         max_iters: cfg.max_iters,
         max_minutes: cfg.max_minutes,
+        max_tokens: cfg.max_tokens,
     };
 
     loop {
@@ -353,6 +356,7 @@ mod tests {
             model: "scripted-model".into(),
             max_iters: 40,
             max_minutes: 120,
+            max_tokens: 0, // no token budget: pre-T15 behavior
             resume: false,
             risk_gate: false,
             bash_timeout: Duration::from_secs(crate::tools::BASH_TIMEOUT_SECS),
@@ -708,6 +712,7 @@ mod tests {
             model: "scripted-model".into(),
             max_iters: 40,
             max_minutes: 120,
+            max_tokens: 0, // no token budget: pre-T15 behavior
             resume: false,
             risk_gate: false,
             bash_timeout: Duration::from_secs(crate::tools::BASH_TIMEOUT_SECS),

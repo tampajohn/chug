@@ -177,6 +177,7 @@ impl EventSink for EventLogSink<'_> {
                     let (kind, max) = match budget {
                         BudgetExceeded::Iterations { max } => ("iterations", u64::from(*max)),
                         BudgetExceeded::Minutes { max } => ("minutes", *max),
+                        BudgetExceeded::Tokens { max } => ("tokens", *max),
                     };
                     line["budget_kind"] = json!(kind);
                     line["budget_max"] = json!(max);
