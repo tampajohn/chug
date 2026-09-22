@@ -2076,6 +2076,191 @@ mod tests {
         assert!(log.contains("capped at 200"), "log should note the cap: {log}");
     }
 
+    // ---------- T16: pins for the SPEC-9 R4 carried validator gaps ----------
+
+    /// PIN (T16 #1, Accept headers): the exact Accept header the client
+    /// sends — `application/json, text/event-stream` on every JSON-RPC POST
+    /// and `text/event-stream` ALONE on the GET listen stream. Asserted with
+    /// equality, not `contains`: servers key content negotiation off this
+    /// exact value, so a "harmless" rewording must fail here.
+    #[test]
+    fn accept_headers_pinned_exactly_on_posts_and_listen_get() {
+        let (listener, url) = bind_stub();
+        let stub = thread::spawn(move || {
+            let mut c1 = accept_conn(&listener);
+            // All handshake POSTs ride all_headers(); one representative POST
+            // would suffice per the spec, but all three take the same wire
+            // path — assert each so a partial regression can't hide.
+            let req = read_request(&mut c1);
+            assert_eq!(req.json()["method"], "initialize");
+            assert_eq!(
+                req.header("accept"),
+                Some("application/json, text/event-stream"),
+                "POST accept header must be exactly the streamable-HTTP pair"
+            );
+            assert_eq!(req.header("content-type"), Some("application/json"));
+            write_response(
+                &mut c1,
+                200,
+                &[("content-type", "application/json")],
+                br#"{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-06-18","capabilities":{},"serverInfo":{"name":"stub","version":"0.0.1"}}}"#,
+            );
+            let req = read_request(&mut c1);
+            assert_eq!(req.json()["method"], "notifications/initialized");
+            assert_eq!(
+                req.header("accept"),
+                Some("application/json, text/event-stream"),
+                "notification POST accept header"
+            );
+            write_response(&mut c1, 202, &[], b"");
+            let req = read_request(&mut c1);
+            assert_eq!(req.json()["method"], "tools/list");
+            assert_eq!(
+                req.header("accept"),
+                Some("application/json, text/event-stream"),
+                "tools/list POST accept header"
+            );
+            write_response(
+                &mut c1,
+                200,
+                &[("content-type", "application/json")],
+                br#"{"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"echo","description":"d","inputSchema":{"type":"object"}}]}}"#,
+            );
+            // GET listen stream (fresh connection from the dedicated listen
+            // client): SSE-only accept, pinned exactly.
+            let mut c2 = accept_conn(&listener);
+            let get = read_request(&mut c2);
+            assert!(get.is_get(), "expected listen GET, got {}", get.request_line);
+            assert_eq!(
+                get.header("accept"),
+                Some("text/event-stream"),
+                "GET listen stream must ask for SSE only"
+            );
+            write_response_close(&mut c2, 405, &[("content-type", "text/plain")], b"no listen stream");
+        });
+        let mut srv = new_server("remote", url);
+        srv.initialize().unwrap();
+        assert_eq!(srv.tools()[0].name, "echo");
+        stub.join().unwrap();
+        drop(srv);
+    }
+
+    /// PIN (T16 #2, SSE-framed tools/list): a tools/list reply delivered as
+    /// SSE (`Content-Type: text/event-stream`, `data: {...}` events) instead
+    /// of a plain JSON body must parse through the shared incremental SSE
+    /// response path and yield the payload's tool list. Limitation note:
+    /// there is no list-specific SSE branch — one framing path serves every
+    /// `send_request` — so this pins the narrowest *previously uncovered*
+    /// path, the tools/list leg (the tools/call leg is covered by
+    /// `sse_framed_call_response_multiline_data_stream_held_open`).
+    #[test]
+    fn tools_list_reply_framed_as_sse_parses_to_tool_list() {
+        let (listener, url) = bind_stub();
+        let stub = thread::spawn(move || {
+            let mut c1 = accept_conn(&listener);
+            let req = read_request(&mut c1);
+            assert_eq!(req.json()["method"], "initialize");
+            write_response(
+                &mut c1,
+                200,
+                &[("content-type", "application/json")],
+                br#"{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-06-18","capabilities":{},"serverInfo":{"name":"stub","version":"0.0.1"}}}"#,
+            );
+            let req = read_request(&mut c1);
+            assert_eq!(req.json()["method"], "notifications/initialized");
+            write_response(&mut c1, 202, &[], b"");
+            let req = read_request(&mut c1);
+            assert_eq!(req.json()["method"], "tools/list");
+            assert_eq!(req.json()["id"], 2);
+            // The whole reply arrives SSE-framed, not as a JSON body.
+            write_sse_head(&mut c1);
+            write_sse_event(
+                &mut c1,
+                r#"{"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"sse-echo","description":"echo over SSE","inputSchema":{"type":"object","properties":{"n":{"type":"number"}}}}]}}"#,
+            );
+            // initialize() returns the moment the matching-id event lands;
+            // the listen GET then arrives on a fresh connection — refuse it
+            // (405) so the manager exits and Drop stays trivial.
+            let mut c2 = accept_conn(&listener);
+            let get = read_request(&mut c2);
+            assert!(get.is_get(), "expected listen GET, got {}", get.request_line);
+            write_response_close(&mut c2, 405, &[("content-type", "text/plain")], b"no listen stream");
+        });
+        let mut srv = new_server("remote", url);
+        srv.initialize().unwrap();
+        let tools = srv.tools();
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0].name, "sse-echo");
+        assert_eq!(tools[0].description, "echo over SSE");
+        assert_eq!(
+            tools[0].input_schema,
+            json!({"type":"object","properties":{"n":{"type":"number"}}})
+        );
+        stub.join().unwrap();
+        drop(srv);
+    }
+
+    /// PIN (T16 #3, deadlines): the explicit caller-side deadline surface.
+    /// The R4 blocker was a reqwest-level body-read timeout killing silent
+    /// SSE streams; the fix is these explicit deadlines (connect 10s inside
+    /// first-byte 30s inside per-call total 60s, plus the reply/listen
+    /// bounds). A drive-by "bump the timeout" edit must fail this test —
+    /// and deleting a constant must fail to compile — so the change is
+    /// deliberate.
+    #[test]
+    fn deadline_constants_and_constructor_defaults_are_pinned() {
+        assert_eq!(INIT_TIMEOUT, Duration::from_secs(10));
+        assert_eq!(LIST_TIMEOUT, Duration::from_secs(10));
+        assert_eq!(CALL_TIMEOUT, Duration::from_secs(60));
+        assert_eq!(FIRST_BYTE_TIMEOUT, Duration::from_secs(30));
+        assert_eq!(CONNECT_TIMEOUT, Duration::from_secs(10));
+        assert_eq!(REPLY_TIMEOUT, Duration::from_secs(30));
+        assert_eq!(LISTEN_POLL, Duration::from_millis(100));
+        assert_eq!(LISTEN_JOIN_GRACE, Duration::from_secs(5));
+        // The wire is governed by the FIELDS, not the constants directly:
+        // pin the constructor defaults to literal seconds so a drive-by edit
+        // to either the constants or the initializer breaks here.
+        // (Construction performs no I/O — port 9 is never dialed.)
+        let srv = new_server("remote", "http://127.0.0.1:9".to_string());
+        assert_eq!(srv.first_byte_timeout, Duration::from_secs(30));
+        assert_eq!(srv.call_timeout, Duration::from_secs(60));
+    }
+
+    /// PIN (T16 #3, behavioral half): `first_byte_timeout` (default 30s,
+    /// shrunk here) really is the response-head deadline — a stub that
+    /// accepts and reads the request but never answers fails the call at
+    /// the shrunk deadline, not at some reqwest-level default. Bounded:
+    /// fails in well under a second.
+    #[test]
+    fn first_byte_timeout_governs_head_deadline() {
+        let (listener, url) = bind_stub();
+        let (release_tx, release_rx) = mpsc::channel::<()>();
+        let stub = thread::spawn(move || {
+            let mut stream = accept_conn(&listener);
+            // Read the request, then answer NOTHING until released.
+            let req = read_request(&mut stream);
+            assert_eq!(req.json()["method"], "initialize");
+            release_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+        });
+        let mut srv = new_server("remote", url);
+        srv.first_byte_timeout = Duration::from_millis(300);
+        let t0 = Instant::now();
+        let err = srv.initialize().unwrap_err();
+        let elapsed = t0.elapsed();
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("no response head within"),
+            "unexpected failure mode: {msg}"
+        );
+        assert!(
+            elapsed < Duration::from_secs(5),
+            "first-byte deadline must fire near 300ms, took {elapsed:?}"
+        );
+        drop(srv);
+        release_tx.send(()).unwrap();
+        stub.join().unwrap();
+    }
+
     // ---------- T6: stub-internal timeouts keep a broken stub from hanging ----------
 
     /// A stub whose client never connects must panic at the accept deadline
