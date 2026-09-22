@@ -34,6 +34,14 @@ const TRIM_TARGET_TOKENS: usize = 80_000;
 const KEEP_LAST_MESSAGES: usize = 20;
 const STUCK_WINDOW: usize = 3;
 
+/// T13: the one-shot budget-low warning fires when this many iterations (or
+/// this many wall-clock seconds — [`WARN_REMAINING_SECS`]) remain, giving the
+/// model a chance to commit and wrap up before the abort at the loop top.
+const WARN_REMAINING_ITERS: u32 = 5;
+/// T13: wall-clock seconds remaining that trigger the one-shot warning
+/// (5 minutes).
+const WARN_REMAINING_SECS: u64 = 300;
+
 pub struct RunConfig {
     pub cwd: PathBuf,
     pub spec_path: PathBuf,
@@ -370,6 +378,9 @@ fn drive_loop(
     let mut spec_text = initial_spec;
     let mut recent: VecDeque<ToolResult> = VecDeque::with_capacity(STUCK_WINDOW);
     let (mut usage_in, mut usage_out) = (0u64, 0u64);
+    // T13: one-shot latches for the budget-low warning, one per budget kind.
+    // Per invocation: a chat turn (or a --resume) gets fresh warnings.
+    let (mut warned_iter, mut warned_time) = (false, false);
 
     loop {
         if iteration >= knobs.max_iters {
@@ -441,6 +452,28 @@ fn drive_loop(
         while let Ok(update) = ctx.updates.try_recv() {
             apply_slash_update(knobs, client, update);
         }
+
+        // T13: one-shot budget-low warning, injected before the next LLM call
+        // so the model reprioritizes toward committing, gates, and
+        // bookkeeping while budget remains (EVALUATION.md J1: wrap-phase
+        // budget deaths). The message is a plain user message in the
+        // transcript, like steering notes — no event, no abort-behavior
+        // change. Flags latch the underlying conditions, so each kind fires
+        // at most once even when the message was suppressed by the other
+        // kind's latch.
+        let remaining_iters = knobs.max_iters.saturating_sub(iteration);
+        let remaining_secs = Duration::from_secs(knobs.max_minutes.saturating_mul(60))
+            .saturating_sub(start.elapsed())
+            .as_secs();
+        if let Some(notice) =
+            budget_low_notice(remaining_iters, remaining_secs, warned_iter, warned_time)
+        {
+            let msg = Message::user(vec![ContentBlock::text_block(notice)]);
+            transcript::append(ctx.cwd, &msg)?;
+            messages.push(msg);
+        }
+        warned_iter |= remaining_iters <= WARN_REMAINING_ITERS;
+        warned_time |= remaining_secs <= WARN_REMAINING_SECS;
 
         // Re-read spec every iteration: the user may edit it mid-run. Keep the
         // last good copy if it becomes unreadable.
@@ -701,6 +734,35 @@ fn append_steering_notes(
         sink.emit(Event::SteeringQueued(note.clone()));
     }
     Ok(())
+}
+
+/// T13: the one-shot budget-low warning text, or `None` when nothing needs
+/// firing. Pure so the time half is unit-testable without sleeping.
+///
+/// Fires when the remaining iteration budget first drops to
+/// `<= WARN_REMAINING_ITERS` or the remaining wall-clock budget first drops
+/// to `<= WARN_REMAINING_SECS`, one shot per budget kind: the caller passes
+/// the two latch flags and mirrors this function's threshold comparisons when
+/// latching them (both directions are pinned by unit + scripted-loop tests).
+/// The message always states the actual remaining counts at fire time.
+fn budget_low_notice(
+    remaining_iters: u32,
+    remaining_secs: u64,
+    already_warned_iter: bool,
+    already_warned_time: bool,
+) -> Option<String> {
+    let iters_low = remaining_iters <= WARN_REMAINING_ITERS;
+    let time_low = remaining_secs <= WARN_REMAINING_SECS;
+    if (iters_low && !already_warned_iter) || (time_low && !already_warned_time) {
+        Some(format!(
+            "chug: budget low — {remaining_iters} iteration(s) and {} minute(s) remain. \
+             Stop starting new work: commit what is done, run the gates, and finish \
+             bookkeeping now.",
+            remaining_secs / 60
+        ))
+    } else {
+        None
+    }
 }
 
 /// The rejection text for a failed goal check (T9). Beyond the failure
@@ -1738,6 +1800,109 @@ mod tests {
             .expect("abort event emitted");
         assert_eq!(abort.0, "scripted-model");
         assert_eq!(abort.1, None);
+    }
+
+    // ---------- T13: budget-low warning before abort ----------
+
+    #[test]
+    fn budget_low_notice_iteration_boundary() {
+        // 6 remaining is above the threshold; 5 fires.
+        assert_eq!(budget_low_notice(6, u64::MAX, false, false), None);
+        assert!(budget_low_notice(5, u64::MAX, false, false).is_some());
+    }
+
+    #[test]
+    fn budget_low_notice_time_boundary() {
+        // One second above the 5-minute threshold stays silent; at the
+        // threshold the time half fires on its own (iters far from low).
+        assert_eq!(
+            budget_low_notice(u32::MAX, WARN_REMAINING_SECS + 1, false, false),
+            None
+        );
+        assert!(
+            budget_low_notice(u32::MAX, WARN_REMAINING_SECS, false, false).is_some()
+        );
+    }
+
+    #[test]
+    fn budget_low_notice_one_shot_flags_suppress_repeats() {
+        // Both kinds latched: silent forever after, even deep in the low zone.
+        assert_eq!(budget_low_notice(1, 30, true, true), None);
+        // A latched kind never re-fires; the other still gets its one shot.
+        assert!(budget_low_notice(1, 30, true, false).is_some());
+        assert!(budget_low_notice(1, 30, false, true).is_some());
+    }
+
+    #[test]
+    fn budget_low_notice_interpolates_actual_counts() {
+        let msg = budget_low_notice(3, 150, false, false).expect("fires below both thresholds");
+        assert!(msg.contains("3 iteration(s)"), "{msg}");
+        assert!(msg.contains("2 minute(s)"), "{msg}");
+        assert!(msg.contains("commit what is done"), "{msg}");
+        // The counts are the ones at fire time, not the thresholds.
+        let msg = budget_low_notice(1, 60, false, true).expect("iter half still armed");
+        assert!(msg.contains("1 iteration(s)"), "{msg}");
+        assert!(msg.contains("1 minute(s)"), "{msg}");
+    }
+
+    /// T13, scripted run with an 8-iteration budget: exactly one budget-low
+    /// user message, first seen by the model on the call where 5 iterations
+    /// remain (the 4th), never before and never a second one. The run itself
+    /// ends exactly as before (accepted goal, exit 0).
+    #[test]
+    fn budget_low_warning_fires_once_at_threshold() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (_utx, urx) = mpsc::channel::<SlashUpdate>();
+        let controls = Controls::detached();
+        let ctx = ctx_for(&tmp, Mode::Autonomous, &controls, &urx, None, &observ::Sink::Noop);
+        let mut knobs = knobs_with(8);
+        let mut responses = vec![text_only_response("working"); 7];
+        responses.push(tool_use_response("goal_complete", json!({"summary": "wrapped up"})));
+        let mut llm = ScriptedLlm::new(responses);
+        let mut gate = None;
+        let mut messages = Vec::new();
+        let outcome = drive_loop(
+            &ctx,
+            &mut knobs,
+            &mut llm,
+            &mut gate,
+            &mut messages,
+            Some("check: true".to_string()),
+            &mut RecordingSink::default(),
+            &mut McpRegistry::new(tmp.path(), true, None).unwrap(),
+        )
+        .unwrap();
+        assert!(matches!(outcome, DriveOutcome::RunFinished(0)));
+
+        let is_notice = |m: &Message| {
+            m.role == "user"
+                && m.content
+                    .iter()
+                    .any(|b| b.text().is_some_and(|t| t.starts_with("chug: budget low")))
+        };
+
+        // Exactly one notice in the transcript the driver holds…
+        let notices: Vec<&Message> = messages.iter().filter(|m| is_notice(m)).collect();
+        assert_eq!(notices.len(), 1, "exactly one budget-low warning");
+        let text = notices[0].content[0].text().expect("notice is text");
+        assert!(text.contains("5 iteration(s)"), "{text}");
+        assert!(text.contains("commit what is done"), "{text}");
+        // …and exactly one on disk.
+        let on_disk = transcript::load(tmp.path()).unwrap();
+        assert_eq!(on_disk.iter().filter(|m| is_notice(m)).count(), 1);
+
+        // The model first sees it on the 4th call (remaining == 5) and no
+        // call ever sees more than that single message: later calls still
+        // carry the one notice as conversation history, never a second.
+        assert_eq!(llm.calls.len(), 8);
+        for (i, (_, seen)) in llm.calls.iter().enumerate() {
+            let count = seen.iter().filter(|m| is_notice(m)).count();
+            assert!(
+                count == usize::from(i >= 3),
+                "call {} (1-based) carries {count} notice(s)",
+                i + 1
+            );
+        }
     }
 
     /// An unwritable events log never aborts the run: poison the path with
