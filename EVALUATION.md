@@ -136,4 +136,38 @@ Both are single-child-round sized (narrow diffs, scripted-harness tests).
 
 ## Outcomes (filled at cycle wrap — LOOP-SPEC Phase 3)
 
-_Pending._
+Cycle 2 executed 2026-09-21 23:29–23:59 EDT, one `chug run --spec LOOP-SPEC.md`
+session (kimi-k3 orchestrator; glm-5-3-flash implementation children; kimi-k3
+validation children).
+
+**Landed (2/2 rows, both mutation-validated):**
+- **T13 — budget-low warning** (`96dbe99`, merge `3c1c5b8`, row flip `8a2a084`).
+  glm child in 28 iterations; kimi validation VERDICT: PASS with **9/9
+  mutations caught** (threshold flips, `||`→`&&`, dropped latches/push/append,
+  off-by-one, corrupted interpolation). J1's wrap-phase death mode now has an
+  in-harness mitigation: one-shot notice at ≤5 iterations / ≤5 minutes.
+- **T14 — cumulative tokens in console output** (`82a38d8`, merge `c46136a`,
+  row flip `d972aac`). glm child in 18 iterations; kimi validation VERDICT:
+  PASS with **10/10 mutations caught**. Self-verified in the wild like T11's
+  banner: the validator's own goal-complete output printed
+  `tokens: 80148 in / 8687 out (cumulative)`.
+
+**Skipped/deferred:** nothing — the queue was two rows and both landed with
+~30 orchestrator iterations to spare. J3/J4 were assessed in-eval (no rows);
+J5 (glm-5-3-flash context window vs the 120k-estimate trim) stays a watch
+item — both glm children ran clean (max context unseen but no API errors),
+so the concern is weaker than feared but still unquantified.
+
+**What the validators caught:** no defects — both rounds passed first time.
+The mutations (19 total) instead proved the new tests are non-vacuous, which
+is the point of the exercise (round-1's 245/245-over-dead-code lesson).
+
+**Cost note for the next evaluator:** this cycle's two glm implementation
+children were dramatically cheaper than the kimi-k3 self sessions in the
+corpus (28 + 18 iterations, ~6 min and ~2 min wall-clock) — early evidence
+the `3c795b3` routing decision was right.
+
+**Final state:** TODO.md T1–T14 all `done` with commit refs;
+`tests/todo_consistency.rs` green; main-tree gates 335+3 green, clippy clean;
+README documents both additions (T13 bullet, T14 abort-output update).
+Not pushed — the human pushes.
