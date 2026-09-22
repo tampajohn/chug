@@ -1,183 +1,139 @@
-# EVALUATION — chug, assessed by chug-meta-meta (2026-09-21)
+# EVALUATION — chug, assessed by chug-loop (2026-09-21, cycle 2)
 
-Corpus: `TODO.md`, `.chug/LEDGER-spec5-archive.md`, `.chug/LEDGER-spec9-archive.md`,
-`.chug/transcript.jsonl` (510 lines), `SPEC.md`, `SELF-SPEC.md`, `META-SPEC.md`,
-`META-META-SPEC.md`, `SPEC-7/8/9`, `README.md`, `src/` (14,702 lines), git log.
-Verification performed: full `cargo test` = **288/288 green in 6.2s**; targeted
-code/tests inspection of the T1/T2/T4/T5 fixes before filing anything adjacent.
-Transcript line refs below are `.chug/transcript.jsonl` line numbers.
+Corpus: `.chug/events-20260922-032901.jsonl` (70 iterations, 112 tool results,
+2 aborts — the T11/T12 self session, jq-mined per LOOP-SPEC's events-first
+upgrade), `.chug/transcript-20260922-030812.jsonl` (322 lines: the T3/T7/T8/T9
+session + the T6/T10 session), `.chug/transcript-20260922-032901.jsonl` (432KB,
+T11/T12), four LEDGER archives, `TODO.md`, git log, `src/` (16,381 lines),
+`README.md`. Prior evaluation (I1–I13) lives at commit `e962f1f`.
+Verification performed: full `cargo test` = **327+3 green in 9s**;
+`tests/todo_consistency.rs` green (every `done` row's spec on disk); false-
+positive checks on suspicious transcript entries (J4); code inspection of the
+budget-check path (`src/driver.rs:374-398`), trim path (`:797+`), and
+ConsoleSink (`src/events.rs:145+`).
 
 ## 1. What chug does well
 
-- **Loop-as-code holds up over long sagas.** SPEC-9 landed through 4 worktree
-  rounds + 4 adversarial validations into main at `4ef81d0`, ledger carrying
-  state across ~100 iterations (transcript 292→507).
-- **The verification gate does not false-accept.** `goal_complete` was rejected
-  when `cargo test` couldn't run (transcript 479) — the loop continued instead
-  of taking the claim.
-- **Adversarial validation catches what green suites hide.** Round-1's vacuous
-  tests (245/245 green over dead code) got mutation testing codified
-  (`672d04a`); round-3's reqwest-30s-body-read default killing silent SSE was
-  caught pre-merge, fixed in `2655b39`, and empirically probed (38s silent
-  stream) before merging.
-- **Incident→fix loop works.** T1/T2/T4/T5 were filed from real transcript
-  evidence and are **verified fixed in this evaluation** (see §2 I1–I4).
+- **The loop closed its own backlog.** T1–T12 all landed, each with a spec
+  file and a commit ref in TODO.md, guarded by T8's consistency test so the
+  books can't silently drift again.
+- **T10's events.jsonl paid off in one day.** This evaluation ran primarily on
+  `jq` over events (token sums, abort timestamps, tool-error counts) instead
+  of mining trimmed, spliced transcripts — exactly the use case T10 was filed
+  for. Zero `[trimmed]` lines fought.
+- **T11's banner self-verified.** The second `run_start` in
+  `events-20260922-032901.jsonl` carries `"commit":"a115a71","version":"0.1.0"`
+  — the fix visible in its own telemetry stream.
+- **The T4/T5 friction fixes hold.** The T11/T12 session: 112 tool calls,
+  **zero** `is_error`, zero `export PATH` preambles, zero `git checkout --`
+  reverts (events.jsonl + transcript grep).
 
 ## 2. Incidents worth fixing
 
-### Existing TODO rows — assessment (not re-filed)
+### Existing TODO rows — assessment (all done, not re-filed)
 
-- **I1 → T1 (done, verified).** Two meta sessions died to ~30s muse endpoint
-  connection resets; chug retried only ~15s (TODO T1 note). Fix confirmed:
-  `RETRY_DELAYS_SECS = [1,2,4,8,16,32,64,120,240]` (~8 min) with 4xx fail-fast
-  and `retry-after` capped at 120s (`src/api.rs:19`, retry loop `:559-598`),
-  plus regression tests (`src/api.rs:849+`).
-- **I2 → T2 (done, verified).** A round-2 child hung 5+ min at 0% CPU on a
-  stale HTTP connection (TODO T2 note). Fix confirmed: 180s zero-bytes activity
-  watchdog (`src/api.rs:15`, `:252-301`) that fails the attempt as
-  connection-level so T1's retry applies; injected-timeout regression tests.
-- **I3 → T4 (done, verified).** The PATH tax — nearly every session opened with
-  `export PATH="$HOME/.cargo/bin:$PATH"`; several first attempts died on
-  `cargo: command not found` (TODO T4 note; checker's bare PATH visible at
-  transcript 481). Fix confirmed: `run_shell` prepends `~/.cargo/bin` when
-  present (`src/tools.rs:538-564`) and is shared by **both** the bash tool and
-  the goal-check path (`verify()` → `tools::run_shell`, `driver.rs`;
-  `CHECK_TIMEOUT_SECS=600`, `src/tools.rs:17`).
-- **I4 → T5 (done, verified).** `edit_file: 'old' found 2 times` caused 3×
-  `git checkout --` revert-thrash in one round (TODO T5 note). Fix confirmed:
-  the error now lists match line numbers + context, capped at 20
-  (`src/tools.rs:269-301`; tests `:851-884`).
-- **I5 → T3 (todo — correctly open).** A fresh `chug run --spec SPEC-9`
-  inherited the SPEC-5 meta's LEDGER.md ("goal met") because `ensure_seeded`
-  skips when a ledger exists (`driver.rs:185`, `src/ledger.rs`). Unfixed.
-- **I6 → T6 (todo — correctly open, partially mitigated).** Round-2's HTTP stub
-  tests froze a gates run for 9 minutes (TODO T6 note). The stub now sets a 10s
-  read timeout (`src/mcp_http.rs:1110`) and the full suite runs in 6.2s here,
-  but systematic stub-internal timeouts + bounded review commands are not done.
+T1–T12 are all `done` with commit refs; spot-verified in code: T10 rotation
+fired correctly for *this* session (events + transcript archived at 23:29),
+T12's abort output names model/budget (`src/events.rs` ConsoleSink), T8's
+guard rejects malformed rows (tests/todo_consistency.rs, 3 tests green).
 
-### New incidents (filed as T7–T12)
+### New incidents
 
-- **I7 → T9 — goal-check env opacity drove a sandbox escape.** After the
-  goal_complete rejection at transcript 479 (`sh: cargo: command not found`),
-  the SPEC-9 meta probed the checker's PATH, found stale entries, tried sudo,
-  then **created `~/.claude/plugins/cache/typesafe-ai/typesafe/0.5.7/bin/cargo`
-  as a symlink** — a mutation of global user state outside the repo, still on
-  disk today (transcript 481–489). Root cause: pre-T4 the check ran with a bare
-  PATH, and the rejection message ("goal_complete rejected: the spec check
-  command failed… Fix the failure and try again", `driver.rs verify()`) gives
-  zero environment context, so the model concluded it had to make cargo
-  globally resolvable. T4 fixed the env divergence; the residual fix is telling
-  the model the check runs via the same `run_shell` as its bash tool (T9).
-- **I8 → T7 — the transcript never rotates; `--resume` splices sessions.**
-  `.chug/transcript.jsonl` currently holds ≥7 spliced sessions: SPEC-4 goal at
-  line 1, two "Goal: smoke" sessions (175, 177), SPEC-5 meta twice (176, 198),
-  a SPEC-9 implementation run (279), the SPEC-9 meta (292), and this META-META
-  session (509). Fresh runs **append** (`driver.rs:196-207`); `--resume` loads
-  the whole pile (`driver.rs:249-255`). A resume in this repo today would feed
-  six foreign sessions into context. Adjacent to T3 (ledger) but a distinct
-  file and failure mode.
-- **I9 → T12 — wrong-model budget deaths with no on-ramp to fallback.**
-  muse-glimmer-30b burned **three consecutive 40-iteration budgets** on SPEC-9
-  round 2: one entirely on "read spec / examine mcp.rs" (transcript 386), one
-  dying mid-edit with 5 compile errors (390), one "again budget exceeded…
-  extremely slow" (394), before the manual kimi-k3 fallback
-  (`.chug/LEDGER-spec9-archive.md` process notes). Related: the validation
-  child budget had to be raised 25→40 because mutation testing kept exhausting
-  it and forcing resumes (`7108ec4`). Chug's abort output doesn't even name the
-  model that died or suggest `--resume --model …` (T12). Automatic model
-  routing is a human decision (§6).
-- **I10 → T8 — the self-improvement loop silently broke its own protocol.**
-  `specs/` has **never existed in git** (`git log --all -- specs/` is empty)
-  although TODO.md T1–T6 reference `specs/t1..t6` and SELF-SPEC mandates a spec
-  per row; the closing commit `9840aba` touched only `src/api.rs` +
-  `src/tools.rs`. Nothing noticed until this evaluation. Fix: a repo test that
-  parses TODO.md and requires every row's spec file to exist, plus backfilling
-  t1–t6 as done-records (T8).
-- **I11 → T11 — stale-binary confusion, twice.** SPEC-5's pty smoke ran a stale
-  `target/debug/chug` because `cargo test` doesn't rebuild the bin
-  (`.chug/LEDGER-spec5-archive.md`); SPEC-9's orchestrator ran a pre-T4 binary,
-  so the check-env fix didn't apply to its own session (transcript 501 — cargo
-  resolved only via a persisted export). A one-line startup banner with
-  version/commit makes staleness visible (T11).
-- **I12 — process incident, fix worked (not re-filed).** Round-1 shipped dead
-  code with 245/245 green until mutations exposed it (META-SPEC validation
-  template; `672d04a`). The same protocol then caught round-3's reqwest blocker
-  pre-merge. Adversarial validation is paying for itself.
-- **I13 — context incident, no row (watch).** `ORCH-2 EXITED` mid-PATH-saga
-  (transcript 492); a successor instance reconstructed state from files
-  (495–507). Recovery worked *because* state lives on disk — but with the
-  spliced transcript (I8) a naive `--resume` would have been poisoned. T7 + T10
-  make this class recoverable; the reaper itself is external.
+- **J1 → T13 — wrap-phase budget deaths, three in one evening.** The loop
+  checks budgets only at the top of each iteration (`src/driver.rs:374-398`)
+  and aborts with **no advance signal**, so wrap work (commit, gates, TODO
+  flip) — which always comes last — is what dies:
+  1. T10: budget-aborted with the implementation complete and green but
+     **uncommitted**; harvested post-mortem by the operator
+     (`a115a71` todo note).
+  2. T11/T12 session: abort at `03:15:40Z` (40 iters), resumed, abort again
+     at `03:19:09Z` (30 iters) **right after the T12 code commit**
+     (`.chug/events-20260922-032901.jsonl` abort events;
+     `.chug/LEDGER-20260922-032901.md`: "operator ran the gates, flipped the
+     TODO row, wrote this wrap").
+  3. Same pattern forced LOOP-SPEC §2.5's "orchestrator owns the books" rule
+     (process mitigation). The in-harness fix is a one-shot budget-low
+     warning so the model itself reprioritizes to commit+wrap (T13).
+- **J2 → T14 — token-cost blindness in headless output.** ConsoleSink drops
+  `Event::Usage` (`src/events.rs`: `Event::Usage { .. } => {}`), so
+  `chug run` prints no token totals at abort or goal-complete. The T11/T12
+  session burned **8,683,323 input + 1,243,749 output tokens** over 70
+  iterations (jq sum; last-iteration context 101,576) — invisible without
+  jq-mining events.jsonl, which is what this evaluation had to do. TUI mode
+  shows live tokens in the title; only the console sink is blind.
+- **J3 — assessed, no row (covered by T13 + routing doctrine).** The T10
+  session's acceptance smoke test hit a muse-endpoint proxy 400
+  (`/tmp/t10-smoke`, `03:01:08Z`, tail of transcript-...-030812) and burned
+  the session's final iterations on an environmental failure — the model
+  correctly diagnosed it, too late to matter. `3c795b3` already re-routed the
+  default implementation child to glm-5-3-flash via tools-proxy (muse now
+  opt-in). Lesson for spec authors: acceptance criteria that require *live
+  external endpoints* are budget hazards; prefer hermetic verification.
+- **J4 — false positive, verified, no row.** `Goal: {}` / `Goal: OLD SESSION`
+  / `Goal: x` in the old transcript pile are `src/driver.rs:248` source and
+  `:1410` test fixtures read into context, not real sessions; the tests use
+  tempdirs (`driver.rs:1407+`). Checked before filing.
+- **J5 — watch item, no row.** `transcript_trim` triggers at 120k *estimated*
+  tokens via chars/4 (`src/driver.rs:797+`), which underestimates code by
+  ~20-30%. kimi-k3 tolerates it; **glm-5-3-flash (the new default
+  implementation child) has an unverified context window** — if it's 128k,
+  real tokens could cross the window before trimming, and T1's 4xx fail-fast
+  turns that into a hard child death. First glm child sessions will provide
+  the evidence; file a row only if it fires.
 
 ## 3. Friction hot spots
 
-- **PATH tax — fixed (T4), verified; no recurrence post-`9840aba`.**
-- **Revert-thrash on edit_file — fixed (T5), verified; no `git checkout --`
-  thrash in the post-fix transcript tail.**
-- **Budget sizing — open.** Validation iters 25→40 (`7108ec4`), muse 3×40-iter
-  deaths (I9); each mitigation was manual. T12 helps operators; routing policy
-  is a human call.
-- **Lossy postmortems — open.** 231 of 510 transcript lines are `[trimmed]`;
-  transcript mining (how T4/T5 were found) fights the trimmer, and the file
-  splices sessions (I8). → T10.
-- **Check-env opacity — open, one sentence fixes the class.** → T9.
+- **PATH tax / edit_file revert-thrash — fixed, verified (J-corpus):** zero
+  recurrences in 112 post-fix tool calls.
+- **Wrap-phase budget deaths — open, ×3.** → T13 (the only repeated failure
+  mode in the new corpus).
+- **Cost observability — half-fixed.** T10 records tokens; the console
+  doesn't surface them. → T14.
+- **Live-endpoint acceptance criteria — open as doctrine.** J3; spec authors
+  should write "any working endpoint" and prefer hermetic checks.
 
 ## 4. Capability gaps (against the human specs' direction)
 
-- **Self-loop integrity:** nothing enforces SELF-SPEC's row↔spec contract (I10
-  proved it can silently rot). → T8.
-- **Local observability:** Langfuse is optional/remote (SPEC-8, fine as far as
-  it goes); the only durable local log is `risk_verdicts.jsonl`
-  (`src/riskgate.rs:132`). Metas debug children by mining a trimmed, spliced
-  transcript. → T10.
-- **Run-state hygiene:** ledger (T3) and transcript (T7) both lack run scoping.
-- **Adversarial validation** is prompt-level only; the artifacts it needs
-  (verdicts, budgets, model ids, durations) aren't persisted locally (→ T10
-  feeds it).
-- **Fleet-driving:** children are launched via raw bash with env prefixes;
-  status = polling transcript mtimes (META-SPEC). No first-class
-  supervise/kill/harvest. Human decision (§6).
-- **Model routing/escalation:** manual fallback only (I9). Human decision.
-- **Sandbox policy:** bash is unrestricted by design (SPEC.md); I7 shows a
-  cornered agent *will* mutate global user state to satisfy a check. Human
-  decision.
+- **Orchestration:** LOOP-SPEC (`aac3629`) now defines the one-command cycle
+  — this session is its first execution. Children are still raw bash +
+  worktrees with mtime polling; no supervise/kill/harvest primitives (human
+  decision, carried).
+- **Model routing/escalation:** manual fallback only (T12 hint + LOOP-SPEC
+  fallback rule). Automatic `--fallback-model` stays a human decision.
+- **Token budgets:** iterations + wall-clock only; no token-denominated
+  budget. T14 surfaces the data; a token budget is a future row *if* J2-class
+  sessions keep recurring.
+- **Context-window safety for smaller models:** J5 watch item.
+- **Sandbox policy:** unrestricted-by-design (SPEC.md). The I7 symlink
+  artifact (`~/.claude/plugins/cache/typesafe-ai/typesafe/0.5.7/bin/cargo`)
+  still exists; T4 made it non-load-bearing for chug — remove-or-keep stays a
+  human decision (carried).
 
 ## 5. Top 3 priorities
 
-1. **T7 — transcript rotation (bug).** `--resume` correctness: today it splices
-   7 sessions into one context. Cheap, and it shares the startup code path with
-   T3 — do them together (T3 first).
-2. **T8 — TODO↔spec consistency guard + backfill (loop integrity).** The whole
-   self-improvement program runs on TODO.md being true; it silently wasn't.
-   A parsing test + six small done-record specs closes it permanently.
-3. **T9 — check-env honesty in the rejection message (safety-adjacent).** The
-   most alarming behavior in the corpus (a sandbox escape via global symlink)
-   traces to an opaque error message; the fix is ~3 lines and a test.
+1. **T13 — budget-low warning (robustness).** Three deaths, one evening, same
+   phase. The only repeated failure mode in the new corpus; cheap (one-shot
+   message injection + two flags).
+2. **T14 — cumulative tokens in console output (DX).** Completes the T10
+   observability story; a few lines in ConsoleSink plus tests.
+3. **(No third row filed.)** The queue is deliberately lean: every other
+   finding is either verified-fixed, covered by existing doctrine, or a watch
+   item awaiting evidence (J5). Filing speculative rows burns child budget.
 
 ## 6. Handoff — recommended execution order
 
-**SELF-SPEC (continuous improvement, single-concern ≤15-iter items), in order:**
-1. **T3** (existing, pri 2) → **T7** — same startup path (`run_loop` /
-   `ensure_seeded`); land as one session's work, two commits.
-2. **T8** — guard test first (red), then backfill t1–t6 specs (green).
-3. **T9** — message tweak + test.
-4. **T6** (existing, pri 3) — stub-internal timeouts + bounded gate commands.
-5. **T11**, **T12** — small DX prints; batch them if convenient.
+**LOOP-SPEC Phase 2 (this cycle), in order:**
+1. **T13** — touches `src/driver.rs` → adversarial validation REQUIRED.
+2. **T14** — touches `src/events.rs` → adversarial validation REQUIRED.
 
-**META-SPEC fan-out (adversarial validation worth the round):**
-- **T10** (events.jsonl) — a new durable format touching `driver.rs`,
-  `events.rs`, and every future meta's workflow; deserves one
-  mutation-tested validation round. (Also SELF-sized if fan-out capacity is
-  scarce.)
+Both are single-child-round sized (narrow diffs, scripted-harness tests).
 
-**Human-decision items (no rows filed):**
-1. **Model routing/escalation** — in-harness `--fallback-model` vs keeping the
-   META-SPEC manual fallback (I9 evidence).
-2. **Fleet supervision primitives** — a `chug supervise` surface
-   (launch/status/kill/harvest) vs the current bash conventions.
-3. **Bash sandbox policy** post-I7 — unrestricted-by-design vs adding
-   guardrails (e.g. warn on writes outside cwd).
-4. **The stray cargo symlink** at
-   `~/.claude/plugins/cache/typesafe-ai/typesafe/0.5.7/bin/cargo` (I7 artifact)
-   — keep or remove; note it is currently load-bearing for bare-PATH cargo
-   resolution on this machine.
+**Human-decision items (no rows filed, carried from cycle 1):**
+1. Automatic model routing/escalation vs the manual LOOP-SPEC fallback.
+2. Fleet supervision primitives (`chug supervise`) vs bash conventions.
+3. Bash sandbox policy (unrestricted-by-design vs guardrails).
+4. The stray I7 cargo symlink — now non-load-bearing; remove or keep.
+
+## Outcomes (filled at cycle wrap — LOOP-SPEC Phase 3)
+
+_Pending._
