@@ -161,4 +161,44 @@ run that could never produce anything. Three sub-findings:
 
 ## Outcomes (filled at cycle wrap — LOOP-SPEC Phase 3)
 
-_(pending)_
+Cycle 3 executed 2026-09-22 02:04–02:40 EDT, one `chug run --spec
+LOOP-SPEC.md` session (kimi-k3 orchestrator; glm-5-3-flash implementation
+children; kimi-k3 validation child). Interactive chat PID 40170 present
+throughout — noted, non-blocking per the amended invariant.
+
+**Landed (2/2 rows):**
+- **T15 — token-denominated budget** (impl `fe822d1`, merge `12a6d20`, row
+  flip `fbd5271`). glm child ran 40/40 iterations (246,614 in / 33,499 out)
+  and died at the iteration budget **before committing** — the J1 pattern,
+  mitigated by T13's warning arriving too late in its final turn. The
+  orchestrator harvested the complete on-spec diff, fixed one test-fixture
+  arithmetic slip (`75_000` → `60_010`), committed, and ran gates (343+3,
+  clippy). kimi adversarial validation **VERDICT: PASS**: 8 mutants, core
+  all died (dropping the `max_tokens > 0` guard alone → 25 test failures).
+- **T16 — mcp_http test pins** (impl `8ec604c`, merge `1ec69f4`, row flip
+  `4ddd703`). glm child in 32 iterations, committed itself this time,
+  self-mutation-checked (7/7 died). +185/-0 test-module only; suite
+  347+3 in ~9s. Tests-only item → validation optional per LOOP-SPEC §2.4;
+  orchestrator gates + non-vacuousness spot-check sufficed. The SPEC-9 R4
+  carried debt (2026-09-21) is finally closed.
+
+**What the validators caught:** no implementation defects in T15 (second
+clean validation round in a row for glm children). The validator's three
+**weak-test survivors** (non-blocking, unpinned corners): (1) `>=` vs `>`
+abort boundary (no exact cumulative==max test), (2) caller-side
+`warned_tokens` latch (no multi-iteration tail in the scripted warning
+test), (3) exact unlimited-mode message bytes (fragments asserted only).
+Candidates for a future hardening row if a third one accumulates.
+
+**Process notes:** the K2 convention was practiced — all three child
+`.chug/events.jsonl` streams harvested into the main `.chug/`
+(`events-t15-impl/validate`, `events-t16-impl`) before worktree removal,
+so their costs are no longer unknowable. J5 evidence: glm children ran
+246k and 132k cumulative input tokens with **zero API errors**; the
+context-window concern keeps weakening, still unquantified at the top
+end. Both glm children needed no kimi fallback.
+
+**Final state:** TODO.md T1–T16 all `done` with commit refs;
+`tests/todo_consistency.rs` green; main-tree gates 347+3 green in ~9s,
+clippy clean; README documents the token budget (rode the impl commit);
+eval + both merges + row flips pushed to origin.
