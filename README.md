@@ -43,6 +43,10 @@ returns to idle, repeat. Natural stops end the turn; budgets are per turn.
 
 ## Autonomous mode (`chug run`)
 
+- **Startup banner** — `chug run` / `chug chat` print one stderr line at
+  start: `chug <version> (<commit>) cwd=… spec=… model=…`, so a stale
+  binary is visible at a glance. The commit is baked in at build time by
+  `build.rs` (`unknown` outside a git checkout; `CHUG_GIT_HASH` overrides)
 - **Anti-stall kick** — if the model stops without `goal_complete`, the driver
   injects "consult the ledger, continue" and keeps going
 - **LEDGER.md** — external memory the model updates each iteration; injected
@@ -61,7 +65,8 @@ returns to idle, repeat. Natural stops end the turn; budgets are per turn.
   `--resume` never splices foreign sessions into context
 - **Events log** — the driver appends its structured event stream to
   `.chug/events.jsonl`, one JSON object per line (`jq`-mineable): run start
-  (model/spec/cwd/mode), one line per iteration with cumulative tokens,
+  (the banner fields: version/commit/model/spec/cwd/mode, once per run or
+  chat session), one line per iteration with cumulative tokens,
   tool results (ok/is_error/duration_ms, ≤200-char previews), verification
   commands, goal verdicts, aborts. Best-effort telemetry: a write failure
   warns once on stderr and never affects the run. Fresh runs rotate a
@@ -159,5 +164,5 @@ cargo build && cargo clippy --all-targets -- -D warnings && cargo test
 ```
 
 All three must stay green. Layout: `src/{api,driver,eventlog,events,tools,tui,chat,
-attach,complete,riskgate,mcp,mcp_http,sse,observ,auth,ledger,transcript}.rs`
-(+ `main.rs`).
+attach,complete,riskgate,mcp,mcp_http,sse,observ,auth,ledger,transcript,build_info}.rs`
+(+ `main.rs`; `build.rs` only bakes the git commit into the startup banner).

@@ -1182,6 +1182,21 @@ mod tests {
         // aborted at the boundary before any LLM call
         assert!(!sink.0.iter().any(|e| matches!(e, Event::ModelText(_))));
         assert!(!sink.0.iter().any(|e| matches!(e, Event::Iteration { .. })));
+
+        // T11: the run's events log opens with the startup banner fields.
+        let first: Value = serde_json::from_str(
+            std::fs::read_to_string(tmp.path().join(".chug/events.jsonl"))
+                .expect("events.jsonl written")
+                .lines()
+                .next()
+                .expect("run_start line"),
+        )
+        .expect("first line parses");
+        assert_eq!(first["type"], "run_start");
+        assert_eq!(first["mode"], "run");
+        assert_eq!(first["model"], "test-model");
+        assert_eq!(first["version"], crate::build_info::VERSION);
+        assert_eq!(first["commit"], crate::build_info::GIT_COMMIT);
     }
 
     // ---------- T3: fresh-run ledger archiving ----------

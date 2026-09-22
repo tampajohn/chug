@@ -2,6 +2,7 @@ mod api;
 mod archive;
 mod attach;
 mod auth;
+mod build_info;
 mod chat;
 mod complete;
 mod driver;
@@ -243,6 +244,8 @@ fn cmd_run(
         .filter(|m| !m.trim().is_empty())
         .or_else(|| std::env::var("CHUG_MODEL").ok().filter(|m| !m.trim().is_empty()))
         .unwrap_or_else(|| driver::DEFAULT_MODEL.to_string());
+    // T11: one stderr line naming the build so a stale binary is obvious.
+    build_info::print_startup_banner(&cwd, Some(&spec), &model);
 
     if tui {
         run_with_tui(
@@ -357,6 +360,8 @@ fn cmd_chat(
         .filter(|m| !m.trim().is_empty())
         .or_else(|| std::env::var("CHUG_MODEL").ok().filter(|m| !m.trim().is_empty()))
         .unwrap_or_else(|| driver::DEFAULT_MODEL.to_string());
+    // T11: same banner as `run` (chat has no spec yet — one may arrive via /spec).
+    build_info::print_startup_banner(&cwd, None, &model);
 
     let (event_tx, event_rx) = mpsc::channel::<events::Event>();
     let (steer_tx, steer_rx) = mpsc::channel::<String>();

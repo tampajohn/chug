@@ -12,6 +12,7 @@ use std::time::Duration;
 use crate::api::{Client, ContentBlock, Llm, Message};
 use crate::attach;
 use crate::driver::{self, Controls, SlashUpdate, TurnKnobs};
+use crate::eventlog;
 use crate::events::{Event, EventSink};
 use crate::ledger;
 use crate::mcp::McpRegistry;
@@ -167,6 +168,9 @@ fn run_chat_with(
     obs: &observ::Sink,
 ) -> anyhow::Result<i32> {
     ledger::ensure_seeded(&cfg.cwd)?;
+    // T11: the session's events log opens with the banner fields (mode
+    // "chat"; a spec, if any, arrives later via /spec).
+    eventlog::run_start(&cfg.cwd, "chat", None, &cfg.model);
     // No goal text at session start (objectives arrive turn by turn); the
     // trace is identified by its id, mode metadata, and tags.
     let trace = obs.trace_started("", &cfg.model, &cfg.cwd.display().to_string(), "chat", None);
@@ -522,6 +526,32 @@ mod tests {
             Event::GoalAccepted { summary } if summary == "verified"
         )));
         assert_eq!(turn_ends(&events), vec![TurnEndReason::GoalAccepted]);
+    }
+
+    /// T11: a chat session's events log opens with the banner fields, mode
+    /// "chat" (mirrors the run-mode run_start line).
+    #[test]
+    fn chat_session_opens_events_log_with_run_start() {
+        let tmp = tempfile::tempdir().unwrap();
+        let h = harness(&tmp, vec![text_response("hi")]);
+        let (code, _, _, cwd) = run_session(h, |objective_tx, _| {
+            objective_tx.send("hello".into()).unwrap();
+        });
+        assert_eq!(code, 0);
+        let first: serde_json::Value = serde_json::from_str(
+            std::fs::read_to_string(cwd.join(".chug/events.jsonl"))
+                .expect("events.jsonl written")
+                .lines()
+                .next()
+                .expect("run_start line"),
+        )
+        .expect("first line parses");
+        assert_eq!(first["type"], "run_start");
+        assert_eq!(first["mode"], "chat");
+        assert_eq!(first["model"], "scripted-model");
+        assert_eq!(first["version"], crate::build_info::VERSION);
+        assert_eq!(first["commit"], crate::build_info::GIT_COMMIT);
+        assert!(first["spec"].is_null(), "chat starts spec-less: {first}");
     }
 
     #[test]

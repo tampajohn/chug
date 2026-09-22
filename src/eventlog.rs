@@ -41,9 +41,9 @@ pub fn rotate_fresh(cwd: &Path) -> archive::Outcome {
     }
 }
 
-/// The run-start record: model, spec path, cwd, mode. Written once per
-/// autonomous run (T11 extends it with version/commit and reuses the same
-/// fields for the startup banner).
+/// The run-start record: version, commit, model, spec path, cwd, mode —
+/// the same fields as the T11 startup banner. Written once per autonomous
+/// run and once per chat session.
 pub fn run_start(cwd: &Path, mode: &str, spec: Option<&Path>, model: &str) {
     append_line(
         cwd,
@@ -54,6 +54,8 @@ pub fn run_start(cwd: &Path, mode: &str, spec: Option<&Path>, model: &str) {
             "model": model,
             "spec": spec.map(|p| p.display().to_string()),
             "cwd": cwd.display().to_string(),
+            "version": crate::build_info::VERSION,
+            "commit": crate::build_info::GIT_COMMIT,
         }),
     );
 }
@@ -209,6 +211,9 @@ mod tests {
         assert_eq!(lines[0]["model"], "test-model");
         assert_eq!(lines[0]["spec"], "/repo/SPEC.md");
         assert_eq!(lines[0]["cwd"], tmp.path().display().to_string());
+        // T11: the banner's build identification rides along.
+        assert_eq!(lines[0]["version"], crate::build_info::VERSION);
+        assert_eq!(lines[0]["commit"], crate::build_info::GIT_COMMIT);
         assert!(lines[0]["ts"].as_str().unwrap().ends_with('Z'));
     }
 
