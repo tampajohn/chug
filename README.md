@@ -58,6 +58,10 @@ returns to idle, repeat. Natural stops end the turn; budgets are per turn.
   failure rejects the claim and the loop continues
 - **Stuck tripwire** — 3 identical consecutive tool errors → abort, ledger
   intact, resumable
+- **Budget-low warning** — when ≤5 iterations or ≤5 minutes remain, the loop
+  injects a one-shot `chug: budget low — N iteration(s) and M minute(s)
+  remain` user message (per budget kind) so the model reprioritizes toward
+  committing, gates, and bookkeeping before the abort at the loop top
 - **Abort output** — every abort prints the freshest LEDGER.md and the model
   in use, plus a resume line naming the current model:
   `resume: chug run --spec <spec> --goal "<goal>" --cwd <cwd> --resume [--model <other>]  (current model: <model>)`.
