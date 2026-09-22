@@ -10,10 +10,13 @@ check: cd /Users/jadams/workspace/chug && cargo test
 
 ## Why the protocol exists (read, don't skip)
 
-- Child `chug run` sessions take 10–40 minutes. Your bash tool has a long
-  timeout for this session — launch children in the FOREGROUND and WAIT for
-  the exit code. Do not background-and-poll; foreground is simpler and your
-  timeout covers it.
+- Child `chug run` sessions take 10–40 minutes, but your bash tool has a
+  HARD 120s cap (default; `--bash-timeout`/`CHUG_BASH_TIMEOUT` overrides only
+  if the operator set them at YOUR launch). Launch children BACKGROUNDED
+  (`nohup ... > /tmp/chug-round-N.log 2>&1 & echo $!`) and poll every
+  ~60–110s (`ps -p <pid>`, log tail, worktree `.chug/events.jsonl` mtime) —
+  each poll is a short bash call under the cap. Never foreground-and-wait a
+  child unless you have verified your own bash timeout exceeds 40 min.
 - Children MUST NOT share your cwd: chug writes `.chug/transcript.jsonl` and
   `LEDGER.md` under cwd, and a child in your cwd would corrupt your own
   transcript. Therefore every child round runs in its own **git worktree**.
@@ -54,13 +57,15 @@ check: cd /Users/jadams/workspace/chug && cargo test
    third.
 3. **Worktree.** `git -C /Users/jadams/workspace/chug worktree add
    /tmp/chug-round-N -b round-N`
-4. **Launch child (foreground, one at a time):**
+4. **Launch child (backgrounded + polled, one at a time — see the 120s bash
+   cap note above):**
    ```
-   cd /tmp/chug-round-N && /Users/jadams/workspace/chug/target/debug/chug run \
+   cd /tmp/chug-round-N && nohup /Users/jadams/workspace/chug/target/debug/chug run \
      --spec <your feature spec file> \
      --goal "ROUND GOAL: <G>. Implement ONLY this slice. Keep cargo build and
              cargo test green. Do not touch unrelated files." \
-     --model anthropic-system.ai.glm-5-3-flash --max-iters 40 --max-minutes 35
+     --model anthropic-system.ai.glm-5-3-flash --max-iters 40 --max-minutes 35 \
+     > /tmp/chug-round-N.log 2>&1 & echo "child pid: $!"
    ```
 5. **Review.** `git -C /tmp/chug-round-N diff main...round-N --stat` (children
    may not commit — then inspect `git -C /tmp/chug-round-N status` + the
@@ -70,9 +75,10 @@ check: cd /Users/jadams/workspace/chug && cargo test
    (bounded — see the gates rule below) — never trust a claim of
    green without seeing it.
 6. **Validate (kimi-k3, REQUIRED).** Before merging any round, launch a
-   validation child on kimi-k3 (env-stripped, see Models):
+   validation child on kimi-k3 (no env prefix, backgrounded + polled like
+   the implementation child):
    ```
-   cd /tmp/chug-round-N && /Users/jadams/workspace/chug/target/debug/chug run \
+   cd /tmp/chug-round-N && nohup /Users/jadams/workspace/chug/target/debug/chug run \
      --spec <the round's feature spec, e.g. SPEC-N-*.md> \
      --goal "VALIDATION ONLY — do not implement. Review the uncommitted/committed
              diff in this worktree against the spec: correctness bugs, missing
@@ -83,7 +89,8 @@ check: cd /Users/jadams/workspace/chug && cargo test
              mutations are vacuous (round 1 shipped dead code with 245/245
              green until mutations exposed it). End with a verdict line
              VERDICT: PASS or VERDICT: FAIL plus a numbered findings list." \
-     --model anthropic-system.ai.kimi-k3 --max-iters 40 --max-minutes 30
+     --model anthropic-system.ai.kimi-k3 --max-iters 40 --max-minutes 30 \
+     > /tmp/chug-round-N-validate.log 2>&1 & echo "validator pid: $!"
    ```
    Read the verdict. PASS → merge. FAIL → round N+1 with the findings pasted
    into the implementation goal as feedback. Do not merge on your own review

@@ -33,21 +33,27 @@ budget. Commit the evaluation artifacts (`eval: ...`) before dispatching.
 
 Priority order: bugs > robustness > DX friction > performance > features.
 
-For each `todo` row, ONE at a time, foreground:
+For each `todo` row, ONE at a time (backgrounded child + polling, per step 2):
 
 1. **Worktree.** `git -C /Users/jadams/workspace/chug worktree add
    /tmp/chug-loop-t<N> -b loop-t<N>`; `cargo build` there.
 2. **Implementation child** (glm-5-3-flash, no env prefix; if it errors
    persistently — rate limit, repeated 5xx — rerun the child on
-   `anthropic-system.ai.kimi-k3` and note the fallback in your ledger):
+   `anthropic-system.ai.kimi-k3` and note the fallback in your ledger).
+   **Children take 10–40 min but your bash tool has a HARD 120s cap** —
+   launch backgrounded and poll, never foreground-and-wait:
    ```
-   cd /tmp/chug-loop-t<N> && /Users/jadams/workspace/chug/target/debug/chug run \
+   cd /tmp/chug-loop-t<N> && nohup /Users/jadams/workspace/chug/target/debug/chug run \
      --spec /Users/jadams/workspace/chug/specs/t<N>-<slug>.md \
      --goal "Implement TODO item t<N> ONLY. Keep cargo build + clippy + test
              green. Commit your work here. DO NOT touch TODO.md or LEDGER.md —
              bookkeeping is the orchestrator's." \
-     --model anthropic-system.ai.glm-5-3-flash --max-iters 40 --max-minutes 35
+     --model anthropic-system.ai.glm-5-3-flash --max-iters 40 --max-minutes 35 \
+     > /tmp/chug-loop-t<N>.log 2>&1 & echo "child pid: $!"
    ```
+   Poll every ~60–110s (`ps -p <pid>` + `tail` the log + watch the
+   worktree's `.chug/events.jsonl` mtime) — each poll is its own short bash
+   call, safely under the cap. Exit of the pid = child done; then review.
 3. **Review.** Diff the branch, read the child's ledger if ambiguous, and run
    bounded gates yourself (`perl -e 'alarm 600; exec @ARGV' cargo test --
    --test-threads=4`). Never trust a claim of green without seeing it.
@@ -83,9 +89,14 @@ For each `todo` row, ONE at a time, foreground:
 - ONE child at a time, foreground, bounded gates — all of META-SPEC's hard
   rules apply (never reset/remove worktrees with unmerged work, never
   force-push, wedge protocol).
-- If another chug process (besides you) has `/Users/jadams/workspace/chug`
-  as its cwd, `goal_complete` is FORBIDDEN — note it and stop. Single-driver
-  invariant.
+- Single-driver invariant: another **`chug run`** (autonomous driver) with
+  `/Users/jadams/workspace/chug` as its cwd blocks the cycle. When tripped:
+  do NO mutating work, verify the untouched tree's gates once, then
+  `goal_complete` immediately with a BLOCKED report — do not watch-and-wait
+  (a paced 2h watch burned 712k tokens in cycle 3; the fast exit is the
+  doctrine). An interactive **`chug chat`** does NOT block: note it and
+  proceed (shared `.chug/` appends interleave harmlessly; the operator is
+  trusted not to run chat turns in the repo mid-cycle).
 - Children never edit TODO.md or LEDGER.md in the main tree.
 - README gate before `goal_complete`: it must document everything the cycle
   landed.
