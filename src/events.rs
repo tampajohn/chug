@@ -18,6 +18,9 @@ pub enum Event {
     ToolResult {
         name: String,
         ok: bool,
+        /// Wall-clock time the tool call took (logged by the T10 events
+        /// log; the console/TUI sinks ignore it).
+        duration_ms: u64,
         /// First 500 chars of the tool result content.
         preview: String,
     },
@@ -241,6 +244,7 @@ mod tests {
         sink.emit(Event::ToolResult {
             name: "bash".into(),
             ok: false,
+            duration_ms: 3,
             preview: "boom".into(),
         });
         sink.emit(Event::ToolStart {
@@ -249,6 +253,7 @@ mod tests {
         sink.emit(Event::ToolResult {
             name: "write_file".into(),
             ok: true,
+            duration_ms: 1,
             preview: "wrote 5 bytes".into(),
         });
         sink.emit(Event::LedgerChanged("# Ledger\n".into()));

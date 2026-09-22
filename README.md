@@ -59,6 +59,13 @@ returns to idle, repeat. Natural stops end the turn; budgets are per turn.
   rotates a non-empty `.chug/transcript.jsonl` to
   `.chug/transcript-<timestamp>.jsonl` before its first append, so
   `--resume` never splices foreign sessions into context
+- **Events log** — the driver appends its structured event stream to
+  `.chug/events.jsonl`, one JSON object per line (`jq`-mineable): run start
+  (model/spec/cwd/mode), one line per iteration with cumulative tokens,
+  tool results (ok/is_error/duration_ms, ≤200-char previews), verification
+  commands, goal verdicts, aborts. Best-effort telemetry: a write failure
+  warns once on stderr and never affects the run. Fresh runs rotate a
+  previous log to `.chug/events-<timestamp>.jsonl` alongside the transcript
 
 ## TUI (`--tui`)
 
@@ -151,6 +158,6 @@ otherwise. Config: `LANGFUSE_HOST` + `LANGFUSE_PUBLIC_KEY` +
 cargo build && cargo clippy --all-targets -- -D warnings && cargo test
 ```
 
-All three must stay green. Layout: `src/{api,driver,events,tools,tui,chat,
+All three must stay green. Layout: `src/{api,driver,eventlog,events,tools,tui,chat,
 attach,complete,riskgate,mcp,mcp_http,sse,observ,auth,ledger,transcript}.rs`
 (+ `main.rs`).

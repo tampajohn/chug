@@ -239,7 +239,9 @@ impl App {
                     preview: String::new(),
                 });
             }
-            Event::ToolResult { name, ok, preview } => {
+            Event::ToolResult {
+                name, ok, preview, ..
+            } => {
                 // Complete the most recent pending entry with the same name;
                 // if none is pending, record the result directly.
                 let idx = self.activity.iter().rposition(|a| match a {
@@ -1167,6 +1169,7 @@ mod tests {
         a.apply(Event::ToolResult {
             name: "bash".into(),
             ok: false,
+            duration_ms: 2,
             preview: "boom".into(),
         });
         assert_eq!(a.activity.len(), 1);

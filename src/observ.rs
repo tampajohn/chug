@@ -905,7 +905,7 @@ fn splitmix64(x: &mut u64) -> u64 {
     z ^ (z >> 31)
 }
 
-fn now_rfc3339() -> String {
+pub(crate) fn now_rfc3339() -> String {
     rfc3339_millis(SystemTime::now())
 }
 

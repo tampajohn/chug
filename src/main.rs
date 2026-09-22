@@ -5,6 +5,7 @@ mod auth;
 mod chat;
 mod complete;
 mod driver;
+mod eventlog;
 mod events;
 mod riskgate;
 mod ledger;

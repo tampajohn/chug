@@ -11,6 +11,7 @@ use serde_json::{Value, json};
 
 use crate::api::{Client, ContentBlock, KnownBlock, Llm, Message, ObsCtx};
 use crate::archive;
+use crate::eventlog;
 use crate::events::{Event, EventSink, TurnEndReason};
 use crate::ledger;
 use crate::mcp::McpRegistry;
@@ -206,6 +207,19 @@ fn run_loop(
             }
             archive::Outcome::Skipped => {}
         }
+        // T10: the events log shares the transcript's lifecycle — fresh
+        // runs start a new file; --resume keeps appending.
+        match eventlog::rotate_fresh(&cfg.cwd) {
+            archive::Outcome::Archived(path) => {
+                eprintln!("chug: archived previous events log to {}", path.display());
+            }
+            archive::Outcome::Failed(why) => {
+                eprintln!(
+                    "chug: warning: could not archive previous events log ({why}); appending to it"
+                );
+            }
+            archive::Outcome::Skipped => {}
+        }
         ledger::ensure_seeded(&cfg.cwd)?;
     }
     // MCP servers spawn lazily here, at run start; an empty registry (no
@@ -260,6 +274,8 @@ fn run_loop(
         trace: trace.as_deref(),
         obs,
     };
+    // T10: first line of the run's events log (model/spec/cwd/mode).
+    eventlog::run_start(&cfg.cwd, "run", Some(&cfg.spec_path), &cfg.model);
     match drive_loop(
         &ctx,
         &mut knobs,
@@ -336,6 +352,10 @@ fn drive_loop(
     sink: &mut dyn EventSink,
     mcp: &mut McpRegistry,
 ) -> anyhow::Result<DriveOutcome> {
+    // T10: tee every event into `.chug/events.jsonl` (best-effort, never
+    // aborts) before it reaches the console/TUI sink.
+    let mut event_log = eventlog::EventLogSink::new(ctx.cwd, sink);
+    let sink = &mut event_log as &mut dyn EventSink;
     // An empty registry (no MCP config) extends with nothing: byte-identical
     // tools array to before.
     let mut tool_schemas = tools::tool_schemas();
@@ -473,6 +493,7 @@ fn drive_loop(
                 name: name.to_string(),
             });
             let tool_start = std::time::SystemTime::now();
+            let tool_t0 = Instant::now();
             let result = if name.starts_with("mcp__") {
                 // MCP tools bypass the laya risk gate (it judges bash only).
                 mcp.dispatch(name, input.clone())
@@ -528,6 +549,7 @@ fn drive_loop(
             sink.emit(Event::ToolResult {
                 name: name.to_string(),
                 ok: !result.is_error,
+                duration_ms: tool_t0.elapsed().as_millis() as u64,
                 preview: result.content.chars().take(500).collect(),
             });
             if name == "goal_complete" {
@@ -1473,6 +1495,152 @@ mod tests {
         assert!(
             rejection.contains("do NOT create or modify files outside the run cwd"),
             "{rejection}"
+        );
+    }
+
+    // ---------- T10: .chug/events.jsonl ----------
+
+    /// Read the events log of a run in `tmp`, asserting every line is JSON.
+    fn events_jsonl(tmp: &tempfile::TempDir) -> Vec<Value> {
+        let path = tmp.path().join(".chug").join("events.jsonl");
+        std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("events.jsonl readable: {e}"))
+            .lines()
+            .map(|l| serde_json::from_str(l).expect("every events.jsonl line parses as JSON"))
+            .collect()
+    }
+
+    /// A scripted autonomous run leaves a jq-mineable events log: iteration
+    /// lines carry cumulative tokens, tool results carry ok/is_error/
+    /// duration_ms and a ≤200-char preview, and the terminal goal event is
+    /// recorded. The tee is transparent to the real sink.
+    #[test]
+    fn drive_loop_writes_events_jsonl() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (_utx, urx) = mpsc::channel::<SlashUpdate>();
+        let controls = Controls::detached();
+        let ctx = ctx_for(&tmp, Mode::Autonomous, &controls, &urx, None, &observ::Sink::Noop);
+        let mut knobs = knobs_with(5);
+        let loud = format!("printf '{}'", "x".repeat(500));
+        let mut llm = ScriptedLlm::new(vec![
+            tool_use_response("bash", json!({"command": "false"})),
+            tool_use_response("bash", json!({"command": loud})),
+            tool_use_response("goal_complete", json!({"summary": "all done"})),
+        ]);
+        let mut gate = None;
+        let mut messages = Vec::new();
+        let mut sink = RecordingSink::default();
+        let outcome = drive_loop(
+            &ctx,
+            &mut knobs,
+            &mut llm,
+            &mut gate,
+            &mut messages,
+            Some("check: true".to_string()),
+            &mut sink,
+            &mut McpRegistry::new(tmp.path(), true, None).unwrap(),
+        )
+        .unwrap();
+        assert!(matches!(outcome, DriveOutcome::RunFinished(0)));
+        // Transparent tee: the real sink still saw the terminal event.
+        assert!(
+            sink.0.iter().any(|e| matches!(e, Event::GoalAccepted { .. })),
+            "inner sink receives events through the tee"
+        );
+
+        let lines = events_jsonl(&tmp);
+        // Iteration lines: n + cumulative tokens from the Usage merge.
+        let iters: Vec<&Value> = lines.iter().filter(|l| l["type"] == "iteration").collect();
+        assert_eq!(iters.len(), 3, "one per iteration: {lines:?}");
+        assert_eq!(iters[0]["n"], 1);
+        assert_eq!(iters[0]["input_tokens"], 10);
+        assert_eq!(iters[2]["input_tokens"], 30);
+        // Tool results: the failing bash is an error; previews cap at 200.
+        let tools: Vec<&Value> = lines.iter().filter(|l| l["type"] == "tool_result").collect();
+        assert_eq!(tools.len(), 3, "{lines:?}");
+        assert_eq!(tools[0]["name"], "bash");
+        assert_eq!(tools[0]["ok"], false);
+        assert_eq!(tools[0]["is_error"], true);
+        assert!(tools[0]["duration_ms"].is_u64(), "duration recorded");
+        assert_eq!(tools[1]["is_error"], false);
+        for t in &tools {
+            let p = t["preview"].as_str().unwrap();
+            assert!(p.chars().count() <= 200, "preview ≤200 chars, got {}", p.chars().count());
+        }
+        assert_eq!(tools[1]["preview"].as_str().unwrap().chars().count(), 200);
+        // The check ran and the terminal goal verdict is on record.
+        assert!(lines.iter().any(|l| l["type"] == "verifying"));
+        let goal = lines.iter().find(|l| l["type"] == "goal").expect("goal line");
+        assert_eq!(goal["outcome"], "accepted");
+        assert_eq!(goal["summary"], "all done");
+        // The goal line is the last event of the run.
+        assert_eq!(lines.last().unwrap()["type"], "goal");
+    }
+
+    /// The terminal abort event lands in the log too (budget death here).
+    #[test]
+    fn drive_loop_events_jsonl_records_abort() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (_utx, urx) = mpsc::channel::<SlashUpdate>();
+        let controls = Controls::detached();
+        let ctx = ctx_for(&tmp, Mode::Autonomous, &controls, &urx, None, &observ::Sink::Noop);
+        let mut knobs = knobs_with(1); // die on the iteration budget after one pass
+        let mut llm = ScriptedLlm::new(vec![text_only_response("thinking")]);
+        let mut gate = None;
+        let mut messages = Vec::new();
+        let outcome = drive_loop(
+            &ctx,
+            &mut knobs,
+            &mut llm,
+            &mut gate,
+            &mut messages,
+            None,
+            &mut RecordingSink::default(),
+            &mut McpRegistry::new(tmp.path(), true, None).unwrap(),
+        )
+        .unwrap();
+        assert!(matches!(outcome, DriveOutcome::RunFinished(1)));
+        let lines = events_jsonl(&tmp);
+        assert_eq!(lines.last().unwrap()["type"], "abort");
+        assert_eq!(
+            lines.last().unwrap()["reason"],
+            "iteration budget exceeded"
+        );
+    }
+
+    /// An unwritable events log never aborts the run: poison the path with
+    /// a directory so every append fails, and the scripted run still
+    /// completes through the real sink.
+    #[test]
+    fn drive_loop_survives_unwritable_events_log() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join(".chug").join("events.jsonl")).unwrap();
+        let (_utx, urx) = mpsc::channel::<SlashUpdate>();
+        let controls = Controls::detached();
+        let ctx = ctx_for(&tmp, Mode::Autonomous, &controls, &urx, None, &observ::Sink::Noop);
+        let mut knobs = knobs_with(5);
+        let mut llm = ScriptedLlm::new(vec![
+            tool_use_response("bash", json!({"command": "true"})),
+            tool_use_response("goal_complete", json!({"summary": "finished anyway"})),
+        ]);
+        let mut gate = None;
+        let mut messages = Vec::new();
+        let mut sink = RecordingSink::default();
+        let outcome = drive_loop(
+            &ctx,
+            &mut knobs,
+            &mut llm,
+            &mut gate,
+            &mut messages,
+            Some("check: true".to_string()),
+            &mut sink,
+            &mut McpRegistry::new(tmp.path(), true, None).unwrap(),
+        )
+        .unwrap();
+        assert!(matches!(outcome, DriveOutcome::RunFinished(0)));
+        assert!(
+            sink.0.iter().any(|e| matches!(e, Event::GoalAccepted { .. })),
+            "run completes with the events log failing underneath"
         );
     }
 
