@@ -124,6 +124,10 @@ pub struct ConsoleSink {
     err: Box<dyn Write>,
     cwd: PathBuf,
     last_ledger: String,
+    /// Latest cumulative token totals (T14): the driver emits `Usage` after
+    /// every response with run-to-date totals, so the last one wins. `None`
+    /// until the first response (an early abort then prints no tokens line).
+    last_usage: Option<(u64, u64)>,
 }
 
 impl ConsoleSink {
@@ -133,6 +137,7 @@ impl ConsoleSink {
             err: Box::new(std::io::stderr()),
             cwd,
             last_ledger: String::new(),
+            last_usage: None,
         }
     }
 
@@ -143,7 +148,15 @@ impl ConsoleSink {
             err,
             cwd,
             last_ledger: String::new(),
+            last_usage: None,
         }
+    }
+
+    /// `tokens: <input> in / <output> out (cumulative)` — omitted entirely
+    /// when the loop died before any API response.
+    fn tokens_line(&self) -> Option<String> {
+        self.last_usage
+            .map(|(input, output)| format!("tokens: {input} in / {output} out (cumulative)"))
     }
 }
 
@@ -171,6 +184,10 @@ impl EventSink for ConsoleSink {
             Event::GoalAccepted { summary } => {
                 let _ = writeln!(self.out, "chug: goal complete");
                 let _ = writeln!(self.out, "summary: {summary}");
+                // T14: what the run cost, right next to the summary.
+                if let Some(line) = self.tokens_line() {
+                    let _ = writeln!(self.out, "{line}");
+                }
                 let _ = writeln!(self.out, "\n--- LEDGER.md ---");
                 let _ = writeln!(self.out, "{}", self.last_ledger);
             }
@@ -189,13 +206,22 @@ impl EventSink for ConsoleSink {
                 if let Some(budget) = budget {
                     let _ = writeln!(self.out, "budget: {}", budget.label());
                 }
+                // T14: cumulative tokens for the run, so a wrapped run's cost
+                // is visible without mining `.chug/events.jsonl`.
+                if let Some(line) = self.tokens_line() {
+                    let _ = writeln!(self.out, "{line}");
+                }
                 let _ = writeln!(
                     self.out,
                     "resume: chug run --spec <spec> --goal \"<goal>\" --cwd {} --resume [--model <other>]  (current model: {model})",
                     self.cwd.display()
                 );
             }
-            Event::Usage { .. } => {}
+            Event::Usage { input, output } => {
+                // Cumulative run totals: latest wins. Printed at the
+                // goal-complete/abort boundaries, not per event.
+                self.last_usage = Some((input, output));
+            }
             Event::SteeringQueued(_) => {}
             Event::RiskVerdict {
                 blocked,
@@ -360,6 +386,71 @@ mod tests {
              resume: chug run --spec <spec> --goal \"<goal>\" --cwd /work/dir --resume [--model <other>]  (current model: claude-sonnet-4-6)\n"
         );
         assert!(!out_bytes(&out).contains("budget:"));
+    }
+
+    /// T14: goal-complete output names the cumulative token totals.
+    #[test]
+    fn console_sink_goal_accepted_prints_cumulative_tokens() {
+        let (mut sink, out, _err) = sink("/work/dir");
+        sink.emit(Event::Usage {
+            input: 8_683_323,
+            output: 1_243_749,
+        });
+        sink.emit(Event::GoalAccepted {
+            summary: "did it".into(),
+        });
+
+        let stdout = out_bytes(&out);
+        assert!(stdout.contains("tokens: 8683323 in / 1243749 out (cumulative)"));
+        // Spec: the tokens line goes after the summary line.
+        let summary = stdout.find("summary: did it").unwrap();
+        let tokens = stdout.find("tokens: 8683323").unwrap();
+        let ledger = stdout.find("--- LEDGER.md ---").unwrap();
+        assert!(summary < tokens && tokens < ledger);
+    }
+
+    /// T14: `Usage` values are cumulative, so the last one seen is what the
+    /// abort block prints.
+    #[test]
+    fn console_sink_abort_prints_latest_usage_totals() {
+        let (mut sink, out, _err) = sink("/work/dir");
+        sink.emit(Event::Usage {
+            input: 1_000,
+            output: 100,
+        });
+        sink.emit(Event::Usage {
+            input: 8_683_323,
+            output: 1_243_749,
+        });
+        sink.emit(Event::Aborted {
+            reason: "iteration budget exceeded".into(),
+            model: "muse-glimmer-30b".into(),
+            budget: Some(BudgetExceeded::Iterations { max: 40 }),
+        });
+
+        let stdout = out_bytes(&out);
+        assert!(stdout.contains("tokens: 8683323 in / 1243749 out (cumulative)"));
+        assert!(!stdout.contains("tokens: 1000"));
+        // Sits alongside the model/budget lines, before the resume hint.
+        let budget = stdout.find("budget: 40 iterations").unwrap();
+        let tokens = stdout.find("tokens: 8683323").unwrap();
+        let resume = stdout.find("resume:").unwrap();
+        assert!(budget < tokens && tokens < resume);
+    }
+
+    /// T14: an abort before the first API response prints no tokens line.
+    #[test]
+    fn console_sink_abort_without_usage_has_no_tokens_line() {
+        let (mut sink, out, _err) = sink("/work/dir");
+        sink.emit(Event::Aborted {
+            reason: "interrupted".into(),
+            model: "muse-glimmer-30b".into(),
+            budget: None,
+        });
+
+        let stdout = out_bytes(&out);
+        assert!(!stdout.contains("tokens:"));
+        assert!(stdout.contains("model: muse-glimmer-30b"));
     }
 
     #[test]

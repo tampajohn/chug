@@ -67,7 +67,10 @@ returns to idle, repeat. Natural stops end the turn; budgets are per turn.
   `resume: chug run --spec <spec> --goal "<goal>" --cwd <cwd> --resume [--model <other>]  (current model: <model>)`.
   Budget deaths (iterations or wall-clock) also name the exhausted budget
   (`budget: 40 iterations`), so a model that keeps dying on budget can be
-  swapped manually: `chug run --resume --model <other>`
+  swapped manually: `chug run --resume --model <other>`. The run's cumulative
+  token cost is printed too (`tokens: <input> in / <output> out (cumulative)`)
+  — on goal-complete output as well, right after the summary line — so a
+  wrapped run's spend is visible without mining `.chug/events.jsonl`
 - **Transcript trimming** — old tool outputs collapse to `[trimmed]` past a
   token estimate; the ledger carries durable state. A fresh `chug run`
   rotates a non-empty `.chug/transcript.jsonl` to
