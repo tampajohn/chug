@@ -157,8 +157,13 @@ otherwise. Config: `LANGFUSE_HOST` + `LANGFUSE_PUBLIC_KEY` +
 
 ## Self-hosting specs
 
+- `LOOP-SPEC.md` — **the one-command self-improvement loop**: evaluate
+  (meta-meta) → generate the TODO queue → work it with child runs →
+  adversarial validation → merge → wrap
 - `META-SPEC.md` — chug orchestrating child chug runs (git-worktree-per-round
   protocol; how SPEC-5 was implemented)
+- `META-META-SPEC.md` — the evaluator: reads the corpus (events.jsonl,
+  ledgers, specs, code), writes EVALUATION.md + the next TODO rows/specs
 - `SELF-SPEC.md` — continuous self-improvement: chug writes improvement specs,
   maintains a TODO ledger, works items within budget
 - `SPEC-*.md` — feature specs, each written for (and mostly implemented by)
