@@ -703,10 +703,22 @@ for line in sys.stdin:
 "#
     }
 
-    /// Write a python script and build a spawn config for it.
+    /// Script body = fail-fast alarm prelude + the fake's own body. The
+    /// alarm far outlives any test (each finishes in seconds and Drop kills
+    /// the child); it exists so a STUCK child can never hold a gate
+    /// hostage — at the alarm it dies, the client sees EOF, and the
+    /// affected test fails loudly instead of hanging.
+    fn fake_server_script(body: &str) -> String {
+        format!("import signal\nsignal.alarm(120)  # T6: a wedged fake must die, not hang the suite\n{body}")
+    }
+
+    /// Write a python script and build a spawn config for it. Every fake
+    /// gets an overall self-termination alarm (T6): a wedged child dies on
+    /// its own — the pipe EOF marks it down and the test fails fast —
+    /// instead of blocking the suite on a silent pipe forever.
     fn server_config(dir: &Path, name: &str, body: &str) -> McpServerConfigRaw {
         let py = dir.join(format!("{name}_srv.py"));
-        fs::write(&py, body).unwrap();
+        fs::write(&py, fake_server_script(body)).unwrap();
         McpServerConfigRaw {
             command: Some("python3".to_string()),
             args: Some(vec![py.to_string_lossy().into_owned()]),
@@ -728,7 +740,7 @@ for line in sys.stdin:
     /// Write an mcp.json into `dir` configuring one server.
     fn write_mcp_json(dir: &Path, name: &str, body: &str) {
         let py = dir.join(format!("{name}_srv.py"));
-        fs::write(&py, body).unwrap();
+        fs::write(&py, fake_server_script(body)).unwrap();
         let cfg_json = json!({
             "mcpServers": {
                 name: {
@@ -1017,7 +1029,7 @@ for line in sys.stdin:
     fn drop_kills_process_group_and_does_not_wedge() {
         let tmp = TempDir::new().unwrap();
         let py = tmp.path().join("fake_srv.py");
-        fs::write(&py, echo_server_body()).unwrap();
+        fs::write(&py, fake_server_script(echo_server_body())).unwrap();
         let cfg = McpServerConfigRaw {
             command: Some("sh".to_string()),
             args: Some(vec![

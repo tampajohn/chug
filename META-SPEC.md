@@ -61,7 +61,8 @@ check: cd /Users/jadams/workspace/chug && cargo test
    may not commit — then inspect `git -C /tmp/chug-round-N status` + the
    files directly). Read the child's `LEDGER.md` and the tail of its
    `.chug/transcript.jsonl` if the outcome is ambiguous. Run
-   `cd /tmp/chug-round-N && cargo test` yourself — never trust a claim of
+   `cd /tmp/chug-round-N && cargo test -- --test-threads=4` yourself
+   (bounded — see the gates rule below) — never trust a claim of
    green without seeing it.
 6. **Validate (kimi-k3, REQUIRED).** Before merging any round, launch a
    validation child on kimi-k3 (env-stripped, see Models):
@@ -86,9 +87,9 @@ check: cd /Users/jadams/workspace/chug && cargo test
    child committed: `git -C /Users/jadams/workspace/chug merge round-N`. If
    not: replicate the diff into the main tree (checkout the changed files:
    `git -C /Users/jadams/workspace/chug checkout round-N -- <files>` when the
-   child committed; otherwise copy the files) and `cargo test` in the main
-   tree before calling it landed. Red or off-spec → either fix trivially
-   yourself or run round N+1 with the failure as feedback in the goal.
+   child committed; otherwise copy the files) and `cargo test -- --test-threads=4`
+   in the main tree before calling it landed. Red or off-spec → either fix
+   trivially yourself or run round N+1 with the failure as feedback in the goal.
 8. **Ledger.** Record round outcome in YOUR LEDGER.md: scope, verdict, what
    remains.
 
@@ -106,6 +107,13 @@ Derive 2-4 narrow slices from YOUR feature spec — one concern per round, each 
 - If a child wedges (no transcript growth for >5 min): check its
   `.chug/transcript.jsonl` mtime and process; kill it, harvest what landed,
   count the round as feedback, move on.
+- **Gates are bounded (T6).** Any `cargo test` you run as a review or merge
+  gate must be wall-clock bounded so a hung suite degrades to a FAILURE,
+  never a freeze: use `cargo test -- --test-threads=4` under an explicit
+  cap (e.g. `perl -e 'alarm 600; exec @ARGV' cargo test -- --test-threads=4`
+  on macOS, `timeout 600 cargo test -- --test-threads=4` on Linux) or the
+  driver's own bash timeout. A gate that hits its cap is RED — kill it,
+  treat the round as failed, move on; never wait out a stub.
 - When every requirement of your feature spec is implemented in the main tree and
   `cargo build`, `cargo clippy --all-targets -- -D warnings`, and
   `cargo test` are all clean there → `goal_complete` with a summary of the

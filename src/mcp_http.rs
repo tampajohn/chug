@@ -1103,12 +1103,16 @@ mod tests {
 
     /// Read one request: head up to \r\n\r\n, then exactly Content-Length
     /// body bytes. Panics (loudly, failing the test via join) on any
-    /// protocol surprise; 10s read timeout keeps a broken client from
-    /// hanging the suite.
+    /// protocol surprise; STUB_IO_TIMEOUT read timeout keeps a broken
+    /// client from hanging the suite (T6).
     fn read_request(stream: &mut TcpStream) -> Observed {
-        stream
-            .set_read_timeout(Some(Duration::from_secs(10)))
-            .unwrap();
+        read_request_within(stream, STUB_IO_TIMEOUT)
+    }
+
+    /// `read_request` with an explicit read timeout — short-timeout variant
+    /// for tests that exercise the stub's own fail-fast behavior.
+    fn read_request_within(stream: &mut TcpStream, timeout: Duration) -> Observed {
+        stream.set_read_timeout(Some(timeout)).unwrap();
         let mut head = Vec::new();
         let mut byte = [0u8; 1];
         loop {
@@ -1209,6 +1213,47 @@ mod tests {
         (listener, url)
     }
 
+    /// Stub-side I/O ceiling (T6): every blocking operation a stub thread
+    /// performs is bounded so a broken client fails the test in seconds
+    /// instead of hanging the whole suite on `accept()`/`read()`/`write()`.
+    const STUB_IO_TIMEOUT: Duration = Duration::from_secs(10);
+    const STUB_ACCEPT_TIMEOUT: Duration = Duration::from_secs(10);
+
+    /// Accept one connection with a deadline (nonblocking poll): a client
+    /// that never connects panics the stub thread — failing the test via
+    /// `join` — instead of blocking it forever. Accepted streams carry
+    /// read+write timeouts so a wedged peer fails fast mid-exchange too.
+    fn accept_conn(listener: &TcpListener) -> TcpStream {
+        accept_conn_within(listener, STUB_ACCEPT_TIMEOUT)
+    }
+
+    fn accept_conn_within(listener: &TcpListener, deadline: Duration) -> TcpStream {
+        listener.set_nonblocking(true).unwrap();
+        let t0 = Instant::now();
+        loop {
+            match listener.accept() {
+                Ok((stream, _)) => {
+                    // macOS accepted sockets inherit the listener's
+                    // nonblocking flag — force blocking mode so all stub
+                    // I/O is governed by the explicit timeouts below
+                    // (SO_RCVTIMEO fires as WouldBlock/TimedOut).
+                    stream.set_nonblocking(false).unwrap();
+                    stream.set_read_timeout(Some(STUB_IO_TIMEOUT)).unwrap();
+                    stream.set_write_timeout(Some(STUB_IO_TIMEOUT)).unwrap();
+                    return stream;
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    assert!(
+                        t0.elapsed() < deadline,
+                        "stub accept timed out after {deadline:?}: client never connected"
+                    );
+                    thread::sleep(Duration::from_millis(5));
+                }
+                Err(e) => panic!("accept failed: {e}"),
+            }
+        }
+    }
+
     /// Serve the three handshake exchanges on an accepted connection:
     /// initialize (200 JSON, issuing `session`), notifications/initialized
     /// (202, no body), tools/list (200 JSON, one `echo` tool). Asserts the
@@ -1280,7 +1325,7 @@ mod tests {
     fn registry_handshake_session_replay_and_call() {
         let (listener, url) = bind_stub();
         let stub = thread::spawn(move || {
-            let (mut stream, _) = listener.accept().unwrap();
+            let mut stream = accept_conn(&listener);
             serve_handshake(&mut stream, Some("sess-abc"));
             let req = read_request(&mut stream);
             assert_eq!(req.json()["method"], "tools/call");
@@ -1316,7 +1361,7 @@ mod tests {
     fn configured_headers_sent_with_expanded_values() {
         let (listener, url) = bind_stub();
         let stub = thread::spawn(move || {
-            let (mut stream, _) = listener.accept().unwrap();
+            let mut stream = accept_conn(&listener);
             for _ in 0..3 {
                 let req = read_request(&mut stream);
                 assert_eq!(req.header("authorization"), Some("Bearer tok123"));
@@ -1358,7 +1403,7 @@ mod tests {
         let (listener, url) = bind_stub();
         let (release_tx, release_rx) = mpsc::channel::<()>();
         let stub = thread::spawn(move || {
-            let (mut stream, _) = listener.accept().unwrap();
+            let mut stream = accept_conn(&listener);
             serve_handshake(&mut stream, None);
             let req = read_request(&mut stream);
             assert_eq!(req.json()["method"], "tools/call");
@@ -1391,7 +1436,7 @@ mod tests {
     fn server_request_over_sse_gets_method_not_found_reply() {
         let (listener, url) = bind_stub();
         let stub = thread::spawn(move || {
-            let (mut c1, _) = listener.accept().unwrap();
+            let mut c1 = accept_conn(&listener);
             serve_handshake(&mut c1, Some("sess-9"));
             let req = read_request(&mut c1);
             assert_eq!(req.json()["method"], "tools/call");
@@ -1406,7 +1451,7 @@ mod tests {
             // the listen manager stops trying, and keep accepting until the
             // reply POST arrives.
             let (mut c2, reply) = loop {
-                let (mut s, _) = listener.accept().unwrap();
+                let mut s = accept_conn(&listener);
                 let req = read_request(&mut s);
                 if req.is_get() {
                     write_response(&mut s, 405, &[("content-type", "text/plain")], b"no listen stream");
@@ -1483,7 +1528,7 @@ mod tests {
     fn http_status_is_immediate_error_without_retry() {
         let (listener, url) = bind_stub();
         let stub = thread::spawn(move || {
-            let (mut stream, _) = listener.accept().unwrap();
+            let mut stream = accept_conn(&listener);
             let _req = read_request(&mut stream);
             write_response(&mut stream, 500, &[("content-type", "text/plain")], b"nope");
         });
@@ -1502,7 +1547,7 @@ mod tests {
     fn registry_skips_remote_on_handshake_failure() {
         let (listener, url) = bind_stub();
         let stub = thread::spawn(move || {
-            let (mut stream, _) = listener.accept().unwrap();
+            let mut stream = accept_conn(&listener);
             let _req = read_request(&mut stream);
             write_response(&mut stream, 500, &[("content-type", "text/plain")], b"nope");
         });
@@ -1553,11 +1598,11 @@ mod tests {
     fn listen_stream_request_gets_method_not_found_reply() {
         let (listener, url) = bind_stub();
         let stub = thread::spawn(move || {
-            let (mut c1, _) = listener.accept().unwrap();
+            let mut c1 = accept_conn(&listener);
             serve_handshake_close(&mut c1, Some("sess-L"));
             // The listen GET arrives next, carrying the SSE accept header
             // and the session id captured during the handshake.
-            let (mut c2, _) = listener.accept().unwrap();
+            let mut c2 = accept_conn(&listener);
             let get = read_request(&mut c2);
             assert!(get.is_get(), "expected listen GET, got {}", get.request_line);
             assert!(
@@ -1568,7 +1613,7 @@ mod tests {
             write_sse_head(&mut c2);
             write_sse_event(&mut c2, r#"{"jsonrpc":"2.0","id":77,"method":"sampling/createMessage","params":{}}"#);
             // The client answers with its own POST on a fresh connection.
-            let (mut c3, _) = listener.accept().unwrap();
+            let mut c3 = accept_conn(&listener);
             let reply = read_request(&mut c3);
             assert!(!reply.is_get());
             let j = reply.json();
@@ -1590,12 +1635,12 @@ mod tests {
     fn listen_stream_notification_is_dropped_without_reply() {
         let (listener, url) = bind_stub();
         let stub = thread::spawn(move || {
-            let (mut c1, _) = listener.accept().unwrap();
+            let mut c1 = accept_conn(&listener);
             // Keep-alive handshake: the later tools/call reuses c1 through
             // the connection pool, so the listen GET is the only NEW
             // connection after the handshake (no accept-order race).
             serve_handshake(&mut c1, None);
-            let (mut c2, _) = listener.accept().unwrap();
+            let mut c2 = accept_conn(&listener);
             let get = read_request(&mut c2);
             assert!(get.is_get(), "expected listen GET, got {}", get.request_line);
             write_sse_head(&mut c2);
@@ -1617,6 +1662,7 @@ mod tests {
             while t0.elapsed() < Duration::from_millis(400) {
                 match listener.accept() {
                     Ok((mut s, _)) => {
+                        s.set_nonblocking(false).unwrap();
                         let req = read_request(&mut s);
                         unexpected.push(req.request_line.clone());
                         write_response(&mut s, 202, &[], b"");
@@ -1651,11 +1697,11 @@ mod tests {
         let (ack_tx, ack_rx) = mpsc::channel::<()>();
         let (release_tx, release_rx) = mpsc::channel::<()>();
         let stub = thread::spawn(move || {
-            let (mut c1, _) = listener.accept().unwrap();
+            let mut c1 = accept_conn(&listener);
             serve_handshake_close(&mut c1, Some("sess-R"));
             // First listen stream: one id-bearing event, then the server
             // drops the connection.
-            let (mut c2, _) = listener.accept().unwrap();
+            let mut c2 = accept_conn(&listener);
             let get1 = read_request(&mut c2);
             assert!(get1.is_get());
             assert!(get1.header("last-event-id").is_none(), "no Last-Event-ID on first connect");
@@ -1664,7 +1710,7 @@ mod tests {
             c2.flush().unwrap();
             drop(c2);
             // Reconnect: Last-Event-ID + session ride the second GET.
-            let (mut c3, _) = listener.accept().unwrap();
+            let mut c3 = accept_conn(&listener);
             let get2 = read_request(&mut c3);
             assert!(get2.is_get());
             assert_eq!(get2.header("last-event-id"), Some("evt-42"));
@@ -1679,7 +1725,7 @@ mod tests {
             c3.flush().unwrap();
             drop(c3);
             // Third GET: Last-Event-ID advanced to the second stream's id.
-            let (mut c4, _) = listener.accept().unwrap();
+            let mut c4 = accept_conn(&listener);
             let get3 = read_request(&mut c4);
             assert!(get3.is_get());
             assert_eq!(get3.header("last-event-id"), Some("evt-43"));
@@ -1723,9 +1769,9 @@ mod tests {
     fn listen_get_405_disables_listen_stream_without_reconnect_storm() {
         let (listener, url) = bind_stub();
         let stub = thread::spawn(move || {
-            let (mut c1, _) = listener.accept().unwrap();
+            let mut c1 = accept_conn(&listener);
             serve_handshake_close(&mut c1, None);
-            let (mut c2, _) = listener.accept().unwrap();
+            let mut c2 = accept_conn(&listener);
             let get = read_request(&mut c2);
             assert!(get.is_get());
             write_response_close(&mut c2, 405, &[("content-type", "text/plain")], b"no listen stream");
@@ -1737,6 +1783,7 @@ mod tests {
                 match listener.accept() {
                     Ok((mut s, _)) => {
                         retries += 1;
+                        s.set_nonblocking(false).unwrap();
                         let _req = read_request(&mut s);
                         write_response_close(&mut s, 405, &[], b"");
                     }
@@ -1770,9 +1817,9 @@ mod tests {
         let (seen_tx, seen_rx) = mpsc::channel::<()>();
         let (release_tx, release_rx) = mpsc::channel::<()>();
         let stub = thread::spawn(move || {
-            let (mut c1, _) = listener.accept().unwrap();
+            let mut c1 = accept_conn(&listener);
             serve_handshake(&mut c1, None);
-            let (mut c2, _) = listener.accept().unwrap();
+            let mut c2 = accept_conn(&listener);
             let _get = read_request(&mut c2);
             write_sse_head(&mut c2);
             seen_tx.send(()).unwrap();
@@ -1805,9 +1852,9 @@ mod tests {
         let (watch_done_tx, watch_done_rx) = mpsc::channel::<()>();
         let (release_tx, release_rx) = mpsc::channel::<()>();
         let stub = thread::spawn(move || {
-            let (mut c1, _) = listener.accept().unwrap();
+            let mut c1 = accept_conn(&listener);
             serve_handshake_close(&mut c1, None);
-            let (mut c2, _) = listener.accept().unwrap();
+            let mut c2 = accept_conn(&listener);
             let get = read_request(&mut c2);
             assert!(get.is_get(), "expected listen GET, got {}", get.request_line);
             write_sse_head(&mut c2);
@@ -1821,6 +1868,7 @@ mod tests {
                 match listener.accept() {
                     Ok((mut s, _)) => {
                         extra += 1;
+                        s.set_nonblocking(false).unwrap();
                         let _ = read_request(&mut s);
                     }
                     Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
@@ -1854,7 +1902,7 @@ mod tests {
     fn sse_call_response_after_delayed_gap_succeeds() {
         let (listener, url) = bind_stub();
         let stub = thread::spawn(move || {
-            let (mut stream, _) = listener.accept().unwrap();
+            let mut stream = accept_conn(&listener);
             serve_handshake(&mut stream, None);
             let req = read_request(&mut stream);
             assert_eq!(req.json()["method"], "tools/call");
@@ -1882,7 +1930,7 @@ mod tests {
         let (listener, url) = bind_stub();
         let (release_tx, release_rx) = mpsc::channel::<()>();
         let stub = thread::spawn(move || {
-            let (mut stream, _) = listener.accept().unwrap();
+            let mut stream = accept_conn(&listener);
             serve_handshake(&mut stream, None);
             let req = read_request(&mut stream);
             assert_eq!(req.json()["method"], "tools/call");
@@ -1914,9 +1962,9 @@ mod tests {
     fn drop_during_listen_backoff_is_prompt() {
         let (listener, url) = bind_stub();
         let stub = thread::spawn(move || {
-            let (mut c1, _) = listener.accept().unwrap();
+            let mut c1 = accept_conn(&listener);
             serve_handshake_close(&mut c1, None);
-            let (mut c2, _) = listener.accept().unwrap();
+            let mut c2 = accept_conn(&listener);
             let get = read_request(&mut c2);
             assert!(get.is_get());
             // Refuse the listen stream: FailedToOpen → backoff sleep.
@@ -1964,7 +2012,7 @@ mod tests {
     fn sse_call_response_ignores_wrong_id_until_matching() {
         let (listener, url) = bind_stub();
         let stub = thread::spawn(move || {
-            let (mut stream, _) = listener.accept().unwrap();
+            let mut stream = accept_conn(&listener);
             serve_handshake(&mut stream, None);
             let req = read_request(&mut stream);
             assert_eq!(req.json()["method"], "tools/call");
@@ -1988,7 +2036,7 @@ mod tests {
     fn tools_list_capped_at_max_with_log_note() {
         let (listener, url) = bind_stub();
         let stub = thread::spawn(move || {
-            let (mut stream, _) = listener.accept().unwrap();
+            let mut stream = accept_conn(&listener);
             let req = read_request(&mut stream);
             assert_eq!(req.json()["method"], "initialize");
             write_response(
@@ -2026,5 +2074,85 @@ mod tests {
         drop(srv);
         let log = std::fs::read_to_string(&log_path).expect("cap note logged");
         assert!(log.contains("capped at 200"), "log should note the cap: {log}");
+    }
+
+    // ---------- T6: stub-internal timeouts keep a broken stub from hanging ----------
+
+    /// A stub whose client never connects must panic at the accept deadline
+    /// instead of blocking the suite forever on `accept()`.
+    #[test]
+    fn stub_accept_deadline_fails_fast_when_client_never_connects() {
+        let (listener, _url) = bind_stub();
+        let t0 = Instant::now();
+        let stub = thread::spawn(move || {
+            let _ = accept_conn_within(&listener, Duration::from_millis(300));
+        });
+        stub.join().expect_err("accept must fail at the deadline");
+        assert!(
+            t0.elapsed() < Duration::from_secs(5),
+            "accept outlived its deadline"
+        );
+    }
+
+    /// A stub reading from a silent client must panic at its read timeout
+    /// instead of hanging the suite on `read()`.
+    #[test]
+    fn stub_read_timeout_fails_fast_on_silent_client() {
+        let (listener, url) = bind_stub();
+        let stub = thread::spawn(move || {
+            let mut stream = accept_conn(&listener);
+            let _ = read_request_within(&mut stream, Duration::from_millis(300));
+        });
+        // Connect and say nothing.
+        let addr = url.strip_prefix("http://").unwrap();
+        let _client = TcpStream::connect(addr).unwrap();
+        let t0 = Instant::now();
+        stub.join().expect_err("stub must fail on a silent client");
+        assert!(
+            t0.elapsed() < Duration::from_secs(5),
+            "stub read outlived its timeout"
+        );
+    }
+
+    /// A deliberately unresponsive stub (accepts, never replies) makes the
+    /// affected call FAIL within a small bounded time — the suite degrades
+    /// to a failure, never a freeze.
+    #[test]
+    fn unresponsive_stub_fails_call_bounded() {
+        let (listener, url) = bind_stub();
+        let (release_tx, release_rx) = mpsc::channel::<()>();
+        let stub = thread::spawn(move || {
+            let mut stream = accept_conn(&listener);
+            serve_handshake(&mut stream, None);
+            let req = read_request(&mut stream);
+            assert_eq!(req.json()["method"], "tools/call");
+            // Unresponsive: the answer never comes.
+            release_rx.recv_timeout(Duration::from_secs(30)).unwrap();
+        });
+        let mut srv = new_server("remote", url);
+        srv.initialize().unwrap();
+        srv.call_timeout = Duration::from_millis(600);
+        let t0 = Instant::now();
+        let res = srv.call("echo", json!({}));
+        let elapsed = t0.elapsed();
+        // The failure surfaces as an Err (no response head ever arrived) or
+        // an error ToolResult — either way it must be an error, bounded.
+        match res {
+            Ok(r) => assert!(r.is_error, "unresponsive stub must fail the call: {}", r.content),
+            Err(e) => {
+                let msg = format!("{e:#}");
+                assert!(
+                    msg.contains("no response head") || msg.contains("timed out"),
+                    "unexpected failure mode: {msg}"
+                );
+            }
+        }
+        assert!(
+            elapsed < Duration::from_secs(5),
+            "call must fail near the overridden 600ms deadline, took {elapsed:?}"
+        );
+        release_tx.send(()).unwrap();
+        stub.join().unwrap();
+        drop(srv);
     }
 }
