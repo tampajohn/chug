@@ -1,173 +1,164 @@
-# EVALUATION — chug, assessed by chug-loop (2026-09-21, cycle 2)
+# EVALUATION — chug, assessed by chug-loop (2026-09-22, cycle 3)
 
-Corpus: `.chug/events-20260922-032901.jsonl` (70 iterations, 112 tool results,
-2 aborts — the T11/T12 self session, jq-mined per LOOP-SPEC's events-first
-upgrade), `.chug/transcript-20260922-030812.jsonl` (322 lines: the T3/T7/T8/T9
-session + the T6/T10 session), `.chug/transcript-20260922-032901.jsonl` (432KB,
-T11/T12), four LEDGER archives, `TODO.md`, git log, `src/` (16,381 lines),
-`README.md`. Prior evaluation (I1–I13) lives at commit `e962f1f`.
-Verification performed: full `cargo test` = **327+3 green in 9s**;
-`tests/todo_consistency.rs` green (every `done` row's spec on disk); false-
-positive checks on suspicious transcript entries (J4); code inspection of the
-budget-check path (`src/driver.rs:374-398`), trim path (`:797+`), and
-ConsoleSink (`src/events.rs:145+`).
+Corpus: `.chug/events-20260922-060458.jsonl` (cycle-3 halted run: 80/80
+iterations, 93 tool results, 1 abort, jq-mined per the events-first
+upgrade), `.chug/events-20260922-035728.jsonl` (cycle-2 orchestrator: 75
+iters, 97 tool results, 0 errors, goal accepted — the healthy reference
+run), `.chug/transcript-20260922-060458.jsonl` (cycle-3, incl. the T13
+budget-low warning in the wild), `LEDGER-20260922-060458.md` (cycle-3's
+no-op halt ledger — the doctrine payload), `TODO.md` (T1–T14 done), git
+log through `988741d`, `src/` (16,637 lines), `README.md`. Prior
+evaluations: cycle 2 at `0d71d00`, cycle 1 at `e962f1f`.
+Verification performed: full `cargo test` = **335+3 green in 9.05s**;
+`cargo clippy --all-targets -- -D warnings` clean; code inspection of the
+budget path (`src/driver.rs:380-408`, `:464-476`, `:748+`), usage
+accumulation (`:515-525`), `BudgetExceeded` (`src/events.rs:70-101`), and
+the mcp_http constants/headers (`src/mcp_http.rs:31-52`, `:572`, `:797`).
 
 ## 1. What chug does well
 
-- **The loop closed its own backlog.** T1–T12 all landed, each with a spec
-  file and a commit ref in TODO.md, guarded by T8's consistency test so the
-  books can't silently drift again.
-- **T10's events.jsonl paid off in one day.** This evaluation ran primarily on
-  `jq` over events (token sums, abort timestamps, tool-error counts) instead
-  of mining trimmed, spliced transcripts — exactly the use case T10 was filed
-  for. Zero `[trimmed]` lines fought.
-- **T11's banner self-verified.** The second `run_start` in
-  `events-20260922-032901.jsonl` carries `"commit":"a115a71","version":"0.1.0"`
-  — the fix visible in its own telemetry stream.
-- **The T4/T5 friction fixes hold.** The T11/T12 session: 112 tool calls,
-  **zero** `is_error`, zero `export PATH` preambles, zero `git checkout --`
-  reverts (events.jsonl + transcript grep).
+- **The doctrine loop works end-to-end.** Cycle 3 produced zero code and
+  still paid: its halt ledger identified the 120s bash cap and the
+  watch-and-wait burn, and the operator codified both into LOOP-SPEC the
+  same night (`988741d` — invariant trips on `chug run` only, fast BLOCKED
+  exit, backgrounded+polled children; `f554871` — auto-push). Failure →
+  ledger → spec amendment in one turn.
+- **T13's budget-low warning fired correctly in the wild on its first
+  trial.** Cycle-3's transcript carries `chug: budget low — 5 iteration(s)
+  and 115 minute(s) remain. Stop starting new work…` at iteration 75
+  (transcript-20260922-060458.jsonl:152); the session then wrapped
+  cleanly (gates + ledger) instead of dying mid-bookkeeping — the exact
+  J1 death mode it was built for.
+- **Cycle 2 is the healthy-run reference:** 97 tool calls, **zero**
+  `is_error`, zero PATH preambles, zero revert-thrash — the T4/T5 fixes
+  continue to hold across model families (glm children, kimi orchestrator).
+- **Events-first evaluation keeps paying.** Cycle 3's failure shape (63
+  identical `CONFLICT: PID 40170` polls, one 120s process-group kill, one
+  `sh` process-substitution syntax error) is fully reconstructible from
+  `jq` alone; no transcript archaeology required.
 
 ## 2. Incidents worth fixing
 
-### Existing TODO rows — assessment (all done, not re-filed)
+### Cycle 3, dissected (the no-op halt)
 
-T1–T12 are all `done` with commit refs; spot-verified in code: T10 rotation
-fired correctly for *this* session (events + transcript archived at 23:29),
-T12's abort output names model/budget (`src/events.rs` ConsoleSink), T8's
-guard rejects malformed rows (tests/todo_consistency.rs, 3 tests green).
+Cycle 3 tripped the single-driver invariant on an interactive `chug chat`
+(PID 40170), correctly refused to work — then held a **paced watch for
+~2h**: 63+ near-identical bash polls, burning **80/80 iterations and
+712,215 input + 64,091 output tokens** (events-20260922-060458.jsonl,
+last iteration 06:03:34Z; abort: `budget_kind: iterations, max: 80`) on a
+run that could never produce anything. Three sub-findings:
 
-### New incidents
+- **K1 → T15 — there is no token-denominated budget.** Iterations and
+  wall-clock are the only ceilings (`src/driver.rs:386-408`); cycle 3 maxed
+  its iteration budget while using **29 of 240 wall-clock minutes** — the
+  two existing budgets were both the wrong shape for a cheap-poll watch,
+  and only iterations (barely) caught it. The cycle-2 eval (§4) deferred a
+  token budget "if J2-class sessions keep recurring" — they recurred within
+  a day (712k tokens on a *no-op*; the T11/T12 session's 8.68M input tokens
+  was the prior exhibit). All plumbing exists to make this cheap:
+  `BudgetExceeded` enum + T12 abort output + T13 warning legs.
+- **K2 — child telemetry dies with the worktree (doctrine, no code row).**
+  Cycle 2's glm children ran clean, but their `.chug/events.jsonl` was
+  destroyed with `/tmp/chug-loop-t13/t14`, so their token costs and peak
+  contexts are unknowable (cycle-2 Outcomes: "max context unseen") — which
+  is exactly why J5 (below) stays unquantified. Fix is a convention, not
+  code: harvest `/tmp/chug-loop-t<N>/.chug/events*.jsonl` into the main
+  repo's (gitignored) `.chug/` before `git worktree remove`. Practiced
+  this cycle; amending LOOP-SPEC §2.5 to require it is the human's call
+  (LOOP-SPEC is a human spec — META-META hard rule).
+- **K3 — assessed, no row: two minor bash-tool bumps.** One `sh: -c:
+  syntax error near unexpected token '<'` (process substitution — the
+  bash tool is `sh -c`, and chug's own tool docs say so; the model adapted
+  immediately) and one `timed out after 120s (process group killed)` —
+  which *was* the valuable empirical discovery of the hard bash cap, now
+  codified (`988741d`). Neither warrants a code row.
 
-- **J1 → T13 — wrap-phase budget deaths, three in one evening.** The loop
-  checks budgets only at the top of each iteration (`src/driver.rs:374-398`)
-  and aborts with **no advance signal**, so wrap work (commit, gates, TODO
-  flip) — which always comes last — is what dies:
-  1. T10: budget-aborted with the implementation complete and green but
-     **uncommitted**; harvested post-mortem by the operator
-     (`a115a71` todo note).
-  2. T11/T12 session: abort at `03:15:40Z` (40 iters), resumed, abort again
-     at `03:19:09Z` (30 iters) **right after the T12 code commit**
-     (`.chug/events-20260922-032901.jsonl` abort events;
-     `.chug/LEDGER-20260922-032901.md`: "operator ran the gates, flipped the
-     TODO row, wrote this wrap").
-  3. Same pattern forced LOOP-SPEC §2.5's "orchestrator owns the books" rule
-     (process mitigation). The in-harness fix is a one-shot budget-low
-     warning so the model itself reprioritizes to commit+wrap (T13).
-- **J2 → T14 — token-cost blindness in headless output.** ConsoleSink drops
-  `Event::Usage` (`src/events.rs`: `Event::Usage { .. } => {}`), so
-  `chug run` prints no token totals at abort or goal-complete. The T11/T12
-  session burned **8,683,323 input + 1,243,749 output tokens** over 70
-  iterations (jq sum; last-iteration context 101,576) — invisible without
-  jq-mining events.jsonl, which is what this evaluation had to do. TUI mode
-  shows live tokens in the title; only the console sink is blind.
-- **J3 — assessed, no row (covered by T13 + routing doctrine).** The T10
-  session's acceptance smoke test hit a muse-endpoint proxy 400
-  (`/tmp/t10-smoke`, `03:01:08Z`, tail of transcript-...-030812) and burned
-  the session's final iterations on an environmental failure — the model
-  correctly diagnosed it, too late to matter. `3c795b3` already re-routed the
-  default implementation child to glm-5-3-flash via tools-proxy (muse now
-  opt-in). Lesson for spec authors: acceptance criteria that require *live
-  external endpoints* are budget hazards; prefer hermetic verification.
-- **J4 — false positive, verified, no row.** `Goal: {}` / `Goal: OLD SESSION`
-  / `Goal: x` in the old transcript pile are `src/driver.rs:248` source and
-  `:1410` test fixtures read into context, not real sessions; the tests use
-  tempdirs (`driver.rs:1407+`). Checked before filing.
-- **J5 — watch item, no row.** `transcript_trim` triggers at 120k *estimated*
-  tokens via chars/4 (`src/driver.rs:797+`), which underestimates code by
-  ~20-30%. kimi-k3 tolerates it; **glm-5-3-flash (the new default
-  implementation child) has an unverified context window** — if it's 128k,
-  real tokens could cross the window before trimming, and T1's 4xx fail-fast
-  turns that into a hard child death. First glm child sessions will provide
-  the evidence; file a row only if it fires.
+### The T13 warning's one cosmetic wrinkle
+
+- **K4 — assessed, no row.** The budget-low message names *both* kinds
+  ("5 iteration(s) **and 115 minute(s)** remain") even when only one is
+  binding — in a watch-mode burn the minutes figure is noise. Cosmetic;
+  the warning did its job (clean wrap), and cycle-3's model confusion
+  about remaining iterations was self-inflicted reasoning, not a harness
+  defect. Not worth a row.
+
+### Carried debt finally filed
+
+- **K5 → T16 — SPEC-9's R4 validator gaps were carried, never filed.**
+  `LEDGER-spec9-archive.md` (2026-09-21): "Carried, low-severity test-only
+  gaps from R4 validator, could seed TODO: Accept-header pin test,
+  tools/list-over-SSE framing test, timeout-constant pins." Five cycles of
+  ledgers later they exist nowhere in TODO.md — carried-debt items only
+  survive if the evaluator re-files them. All three are cheap stub-test
+  pins in `src/mcp_http.rs` (Accept headers at `:572`/`:797`; constants at
+  `:31-52`).
+
+### Watch items
+
+- **J5 (continues, no row).** glm-5-3-flash's context window vs the 120k
+  *estimated* trim (chars/4, `src/driver.rs:797+`). Cycle-2's glm children
+  (28 + 18 iters) ran clean, but K2 destroyed the evidence. With the K2
+  harvest convention this cycle, the next evaluation gets real numbers.
+- **Single-driver detection as a feature.** Three cycles now have each
+  hand-rolled `lsof`/`pgrep` invariant checks (cycle 3 ran 63 of them). A
+  `chug doctor` subcommand could own this — human-decision item, listed in
+  §4, not filed.
 
 ## 3. Friction hot spots
 
-- **PATH tax / edit_file revert-thrash — fixed, verified (J-corpus):** zero
-  recurrences in 112 post-fix tool calls.
-- **Wrap-phase budget deaths — open, ×3.** → T13 (the only repeated failure
-  mode in the new corpus).
-- **Cost observability — half-fixed.** T10 records tokens; the console
-  doesn't surface them. → T14.
-- **Live-endpoint acceptance criteria — open as doctrine.** J3; spec authors
-  should write "any working endpoint" and prefer hermetic checks.
+- **PATH tax / revert-thrash — fixed, holding (3rd eval running):** zero
+  recurrences across cycle-2's 97 and cycle-3's 93 tool calls.
+- **Watch-and-wait token burn — process-fixed, harness hole open:** the
+  fast-BLOCKED-exit doctrine (`988741d`) removes the *reason* to watch;
+  T15 closes the *ability* to burn unbounded tokens in any run shape.
+- **Wrap-phase budget deaths — fixed, verified in the wild (K-corpus):**
+  T13 fired on first trial; cycle 3 wrapped with books complete.
+- **Cost observability — console fixed, ceiling missing:** T14 surfaces
+  spend at abort/goal; T15 is the natural completion (the *limit* leg).
 
 ## 4. Capability gaps (against the human specs' direction)
 
-- **Orchestration:** LOOP-SPEC (`aac3629`) now defines the one-command cycle
-  — this session is its first execution. Children are still raw bash +
-  worktrees with mtime polling; no supervise/kill/harvest primitives (human
-  decision, carried).
-- **Model routing/escalation:** manual fallback only (T12 hint + LOOP-SPEC
-  fallback rule). Automatic `--fallback-model` stays a human decision.
-- **Token budgets:** iterations + wall-clock only; no token-denominated
-  budget. T14 surfaces the data; a token budget is a future row *if* J2-class
-  sessions keep recurring.
-- **Context-window safety for smaller models:** J5 watch item.
-- **Sandbox policy:** unrestricted-by-design (SPEC.md). The I7 symlink
-  artifact (`~/.claude/plugins/cache/typesafe-ai/typesafe/0.5.7/bin/cargo`)
-  still exists; T4 made it non-load-bearing for chug — remove-or-keep stays a
-  human decision (carried).
+- **Token budgets — open, filed (T15).** The third budget leg.
+- **Orchestration:** LOOP-SPEC now runs the full cycle with
+  backgrounded+polled children; supervision/kill/harvest primitives stay a
+  human decision (carried). K2's events-harvest convention recommended for
+  LOOP-SPEC §2.5.
+- **Model routing/escalation:** manual fallback only (unchanged, human
+  decision, carried). Cycle 2's glm children needed no fallback.
+- **Single-driver tooling:** `chug doctor`-style invariant/process
+  inspection — human decision (new this cycle).
+- **Sandbox policy:** unrestricted-by-design (carried); the stray I7
+  cargo symlink remains a remove-or-keep human decision (carried).
 
 ## 5. Top 3 priorities
 
-1. **T13 — budget-low warning (robustness).** Three deaths, one evening, same
-   phase. The only repeated failure mode in the new corpus; cheap (one-shot
-   message injection + two flags).
-2. **T14 — cumulative tokens in console output (DX).** Completes the T10
-   observability story; a few lines in ConsoleSink plus tests.
-3. **(No third row filed.)** The queue is deliberately lean: every other
-   finding is either verified-fixed, covered by existing doctrine, or a watch
-   item awaiting evidence (J5). Filing speculative rows burns child budget.
+1. **T15 — token-denominated budget (robustness, pri 2).** The only new
+   failure mode in the cycle-3 corpus with no mitigation: 712k tokens on a
+   no-op, caught only by the iteration ceiling. Reuses T12/T13 plumbing;
+   single-child sized.
+2. **T16 — SPEC-9 R4 test pins (robustness/tests, pri 3).** Clears the
+   oldest carried debt; three small stub-test pins in mcp_http.rs.
+3. **(No third row filed.)** Queue stays lean: everything else is
+   verified-fixed, doctrine for the human, or a watch item awaiting K2
+   data.
 
 ## 6. Handoff — recommended execution order
 
 **LOOP-SPEC Phase 2 (this cycle), in order:**
-1. **T13** — touches `src/driver.rs` → adversarial validation REQUIRED.
-2. **T14** — touches `src/events.rs` → adversarial validation REQUIRED.
+1. **T15** — touches `src/driver.rs` + `src/events.rs` → adversarial
+   validation REQUIRED.
+2. **T16** — tests-only (`src/mcp_http.rs` test module) → validation
+   optional per LOOP-SPEC §2.4; orchestrator gates suffice.
 
-Both are single-child-round sized (narrow diffs, scripted-harness tests).
-
-**Human-decision items (no rows filed, carried from cycle 1):**
-1. Automatic model routing/escalation vs the manual LOOP-SPEC fallback.
-2. Fleet supervision primitives (`chug supervise`) vs bash conventions.
-3. Bash sandbox policy (unrestricted-by-design vs guardrails).
-4. The stray I7 cargo symlink — now non-load-bearing; remove or keep.
+**Human-decision items (no rows filed, carried unless noted):**
+1. LOOP-SPEC §2.5 amendment: require harvesting child
+   `.chug/events*.jsonl` into the main tree before worktree removal (K2,
+   new this cycle — recommended).
+2. `chug doctor` subcommand for single-driver/process inspection (new).
+3. Automatic model routing/escalation vs the manual fallback (carried).
+4. Fleet supervision primitives vs bash conventions (carried).
+5. Bash sandbox policy (carried); stray I7 cargo symlink (carried).
 
 ## Outcomes (filled at cycle wrap — LOOP-SPEC Phase 3)
 
-Cycle 2 executed 2026-09-21 23:29–23:59 EDT, one `chug run --spec LOOP-SPEC.md`
-session (kimi-k3 orchestrator; glm-5-3-flash implementation children; kimi-k3
-validation children).
-
-**Landed (2/2 rows, both mutation-validated):**
-- **T13 — budget-low warning** (`96dbe99`, merge `3c1c5b8`, row flip `8a2a084`).
-  glm child in 28 iterations; kimi validation VERDICT: PASS with **9/9
-  mutations caught** (threshold flips, `||`→`&&`, dropped latches/push/append,
-  off-by-one, corrupted interpolation). J1's wrap-phase death mode now has an
-  in-harness mitigation: one-shot notice at ≤5 iterations / ≤5 minutes.
-- **T14 — cumulative tokens in console output** (`82a38d8`, merge `c46136a`,
-  row flip `d972aac`). glm child in 18 iterations; kimi validation VERDICT:
-  PASS with **10/10 mutations caught**. Self-verified in the wild like T11's
-  banner: the validator's own goal-complete output printed
-  `tokens: 80148 in / 8687 out (cumulative)`.
-
-**Skipped/deferred:** nothing — the queue was two rows and both landed with
-~30 orchestrator iterations to spare. J3/J4 were assessed in-eval (no rows);
-J5 (glm-5-3-flash context window vs the 120k-estimate trim) stays a watch
-item — both glm children ran clean (max context unseen but no API errors),
-so the concern is weaker than feared but still unquantified.
-
-**What the validators caught:** no defects — both rounds passed first time.
-The mutations (19 total) instead proved the new tests are non-vacuous, which
-is the point of the exercise (round-1's 245/245-over-dead-code lesson).
-
-**Cost note for the next evaluator:** this cycle's two glm implementation
-children were dramatically cheaper than the kimi-k3 self sessions in the
-corpus (28 + 18 iterations, ~6 min and ~2 min wall-clock) — early evidence
-the `3c795b3` routing decision was right.
-
-**Final state:** TODO.md T1–T14 all `done` with commit refs;
-`tests/todo_consistency.rs` green; main-tree gates 335+3 green, clippy clean;
-README documents both additions (T13 bullet, T14 abort-output update).
-Not pushed — the human pushes.
+_(pending)_
