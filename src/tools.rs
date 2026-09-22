@@ -638,10 +638,15 @@ pub fn run_shell(cwd: &Path, command: &str, timeout: Duration) -> anyhow::Result
     })
 }
 
+/// The cargo toolchain directory (relative to `$HOME`) prepended to
+/// bash-tool children (`T4`), when it exists. The goal-check rejection
+/// message (T9) quotes this path back to the model, so the two never drift.
+pub(crate) const CARGO_BIN_REL: &str = ".cargo/bin";
+
 /// The cargo toolchain directory to prepend to bash-tool children (`T4`),
 /// when it exists under `home`.
 fn cargo_bin_dir(home: &Path) -> Option<PathBuf> {
-    let dir = home.join(".cargo").join("bin");
+    let dir = home.join(CARGO_BIN_REL);
     dir.is_dir().then_some(dir)
 }
 

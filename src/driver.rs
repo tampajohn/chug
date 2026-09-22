@@ -603,9 +603,7 @@ fn drive_loop(
                             json!({ "reason": "check command failed" }),
                         );
                     }
-                    user_blocks.push(ContentBlock::text_block(format!(
-                        "goal_complete rejected: the spec check command failed. Output:\n\n{output}\n\nFix the failure and try again. Update the ledger to reflect the current state."
-                    )));
+                    user_blocks.push(ContentBlock::text_block(goal_rejected_message(&output)));
                 }
             }
         }
@@ -662,6 +660,28 @@ fn append_steering_notes(
         sink.emit(Event::SteeringQueued(note.clone()));
     }
     Ok(())
+}
+
+/// The rejection text for a failed goal check (T9). Beyond the failure
+/// output, the model is told the check shares the bash tool's environment —
+/// the same `sh -c` wrapper in the run cwd with the same PATH prepend — and
+/// is explicitly warned against "fixing" the check by mutating state outside
+/// the run cwd (EVALUATION.md I7: an agent once created a global cargo
+/// symlink to make cargo resolvable). Environment literals are derived from
+/// the same constants the shell wrapper uses, so the note cannot drift from
+/// reality: [`tools::CARGO_BIN_REL`] and [`tools::CHECK_TIMEOUT_SECS`].
+fn goal_rejected_message(output: &str) -> String {
+    format!(
+        "goal_complete rejected: the spec check command failed. Output:\n\n{output}\n\n\
+         Fix the failure and try again. Update the ledger to reflect the current state.\n\n\
+         Environment note: the check ran via the same shell wrapper as your bash tool \
+         (`sh -c` in the run cwd, `~/{CARGO_BIN_REL}` prepended to PATH when that \
+         directory exists, {CHECK_TIMEOUT_SECS}s timeout). If the check fails on a \
+         missing tool that works in your bash tool, suspect the check command itself — \
+         do NOT create or modify files outside the run cwd to make the check pass.",
+        CARGO_BIN_REL = tools::CARGO_BIN_REL,
+        CHECK_TIMEOUT_SECS = tools::CHECK_TIMEOUT_SECS,
+    )
 }
 
 /// Verification on `goal_complete`: run the configured check command, if any.
@@ -1383,6 +1403,76 @@ mod tests {
             messages,
             vec![old],
             "transcript untouched: the old session loads as-is"
+        );
+    }
+
+    // ---------- T9: goal-rejection environment honesty ----------
+
+    #[test]
+    fn goal_rejected_message_states_check_environment() {
+        let msg = goal_rejected_message("$ cargo test\nexit code: 127\nsh: cargo: command not found");
+        // The three key facts (T9): the check shares the bash tool's
+        // run_shell wrapper, the cargo PATH prepend, and the out-of-cwd
+        // prohibition. The literals are derived from the shell wrapper's own
+        // constants, so drift between the message and reality breaks here.
+        assert!(msg.contains("same shell wrapper as your bash tool"), "{msg}");
+        assert!(msg.contains(&format!("~/{}", tools::CARGO_BIN_REL)), "{msg}");
+        assert!(
+            msg.contains(&format!("{}s timeout", tools::CHECK_TIMEOUT_SECS)),
+            "{msg}"
+        );
+        assert!(
+            msg.contains("do NOT create or modify files outside the run cwd"),
+            "{msg}"
+        );
+        // The original guidance and the failing output are preserved.
+        assert!(msg.contains("Fix the failure and try again"), "{msg}");
+        assert!(msg.contains("sh: cargo: command not found"), "{msg}");
+    }
+
+    #[test]
+    fn goal_rejection_includes_environment_note_in_tool_result() {
+        // End to end through drive_loop: a goal_complete with a failing
+        // check puts the T9 environment note in the user message the model
+        // sees next iteration.
+        let tmp = tempfile::tempdir().unwrap();
+        let (_utx, urx) = mpsc::channel::<SlashUpdate>();
+        let controls = Controls::detached();
+        let ctx = ctx_for(&tmp, Mode::Autonomous, &controls, &urx, None, &observ::Sink::Noop);
+        let mut knobs = knobs_with(1); // abort right after the first iteration
+        let mut llm = ScriptedLlm::new(vec![tool_use_response(
+            "goal_complete",
+            json!({"summary": "claim done"}),
+        )]);
+        let mut gate = None;
+        let mut messages = Vec::new();
+        let outcome = drive_loop(
+            &ctx,
+            &mut knobs,
+            &mut llm,
+            &mut gate,
+            &mut messages,
+            Some("check: false".to_string()),
+            &mut RecordingSink::default(),
+            &mut McpRegistry::new(tmp.path(), true, None).unwrap(),
+        )
+        .unwrap();
+        assert!(matches!(outcome, DriveOutcome::RunFinished(1)));
+        let rejection: String = messages
+            .last()
+            .expect("rejection user message")
+            .content
+            .iter()
+            .filter_map(|b| b.text())
+            .collect();
+        assert!(rejection.contains("goal_complete rejected"), "{rejection}");
+        assert!(
+            rejection.contains("same shell wrapper as your bash tool"),
+            "{rejection}"
+        );
+        assert!(
+            rejection.contains("do NOT create or modify files outside the run cwd"),
+            "{rejection}"
         );
     }
 
