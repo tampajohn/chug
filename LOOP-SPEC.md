@@ -10,8 +10,11 @@ check: cd /Users/jadams/workspace/chug && cargo test
 
 Read first: `META-META-SPEC.md` (evaluation doctrine), `META-SPEC.md`
 (child-launch and validation doctrine). They apply in full except where this
-spec overrides. Model routing is META-SPEC's: muse implements (spark env
-prefix), kimi validates (no prefix) — you yourself are kimi.
+spec overrides. Model routing: **`anthropic-system.ai.glm-5-3-flash`
+implements, `anthropic-system.ai.kimi-k3` validates** — both via tools-proxy,
+no env prefix (children read ~/.claude/settings.json per the SPEC-6 auth
+chain). You yourself are kimi. GLM and kimi are different model families, so
+the validation verdict is still an independent second opinion.
 
 ## Phase 1 — Evaluate (you, directly, no children)
 
@@ -34,15 +37,16 @@ For each `todo` row, ONE at a time, foreground:
 
 1. **Worktree.** `git -C /Users/jadams/workspace/chug worktree add
    /tmp/chug-loop-t<N> -b loop-t<N>`; `cargo build` there.
-2. **Implementation child** (muse env prefix per META-SPEC; kimi fallback if
-   the endpoint refuses connections):
+2. **Implementation child** (glm-5-3-flash, no env prefix; if it errors
+   persistently — rate limit, repeated 5xx — rerun the child on
+   `anthropic-system.ai.kimi-k3` and note the fallback in your ledger):
    ```
    cd /tmp/chug-loop-t<N> && /Users/jadams/workspace/chug/target/debug/chug run \
      --spec /Users/jadams/workspace/chug/specs/t<N>-<slug>.md \
      --goal "Implement TODO item t<N> ONLY. Keep cargo build + clippy + test
              green. Commit your work here. DO NOT touch TODO.md or LEDGER.md —
              bookkeeping is the orchestrator's." \
-     --model muse-glimmer-30b --max-iters 40 --max-minutes 35
+     --model anthropic-system.ai.glm-5-3-flash --max-iters 40 --max-minutes 35
    ```
 3. **Review.** Diff the branch, read the child's ledger if ambiguous, and run
    bounded gates yourself (`perl -e 'alarm 600; exec @ARGV' cargo test --

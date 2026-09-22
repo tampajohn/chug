@@ -19,20 +19,27 @@ check: cd /Users/jadams/workspace/chug && cargo test
   transcript. Therefore every child round runs in its own **git worktree**.
 - The child binary: `target/debug/chug` inside each round worktree (build it
   there first: `cargo build` in the worktree).
-- Orchestrator (you): kimi-k3. Implementation children: `muse-glimmer-30b`.
-  Validation children: `anthropic-system.ai.kimi-k3` (see Models below).
+- Orchestrator (you): kimi-k3. Implementation children:
+  `anthropic-system.ai.glm-5-3-flash`. Validation children:
+  `anthropic-system.ai.kimi-k3` (see Models below).
 
-## Models (default: muse implements, kimi validates)
+## Models (default: glm implements, kimi validates)
 
-- **Implementation children**: `muse-glimmer-30b` on the spark SGLang
-  endpoint — prefix their command with
-  `ANTHROPIC_BASE_URL=http://spark-2e89.tail6a8e24.ts.net:8080 ANTHROPIC_AUTH_TOKEN=$(cat ~/.muse-glimmer-key)`.
+- **Implementation children**: `anthropic-system.ai.glm-5-3-flash` with NO
+  env prefix — they read ~/.claude/settings.json for tools-proxy
+  automatically (SPEC-6 auth chain).
 - **Validation children (ADVERSARIAL APPROVAL — REQUIRED before every merge)**:
-  `anthropic-system.ai.kimi-k3` with NO env prefix — they read
-  ~/.claude/settings.json for tools-proxy automatically.
-- **Fallback**: if the muse endpoint is unreachable (connection refused on
-  the child's first iteration), rerun that round's implementation child on
-  kimi-k3 (no env prefix) and note the fallback in your ledger.
+  `anthropic-system.ai.kimi-k3`, also no env prefix. GLM (Zhipu) and kimi
+  (Moonshot) are different model families, so the verdict stays an
+  independent second opinion even though both ride tools-proxy.
+- **Fallback**: if glm-5-3-flash errors persistently (rate limit, repeated
+  5xx), rerun that round's implementation child on kimi-k3 and note the
+  fallback in your ledger.
+- **Alternative endpoint**: `muse-glimmer-30b` on the spark SGLang endpoint
+  (`ANTHROPIC_BASE_URL=http://spark-2e89.tail6a8e24.ts.net:8080
+  ANTHROPIC_AUTH_TOKEN=$(cat ~/.muse-glimmer-key)`) remains available for
+  fully-local/free implementation runs when the spark cluster is healthy —
+  swap it in deliberately, not by default.
 
 ## Round protocol (round N, scoped sub-goal G)
 
@@ -49,13 +56,11 @@ check: cd /Users/jadams/workspace/chug && cargo test
    /tmp/chug-round-N -b round-N`
 4. **Launch child (foreground, one at a time):**
    ```
-   cd /tmp/chug-round-N && ANTHROPIC_BASE_URL=http://spark-2e89.tail6a8e24.ts.net:8080 \
-     ANTHROPIC_AUTH_TOKEN=$(cat ~/.muse-glimmer-key) \
-     /Users/jadams/workspace/chug/target/debug/chug run \
+   cd /tmp/chug-round-N && /Users/jadams/workspace/chug/target/debug/chug run \
      --spec <your feature spec file> \
      --goal "ROUND GOAL: <G>. Implement ONLY this slice. Keep cargo build and
              cargo test green. Do not touch unrelated files." \
-     --model muse-glimmer-30b --max-iters 40 --max-minutes 35
+     --model anthropic-system.ai.glm-5-3-flash --max-iters 40 --max-minutes 35
    ```
 5. **Review.** `git -C /tmp/chug-round-N diff main...round-N --stat` (children
    may not commit — then inspect `git -C /tmp/chug-round-N status` + the
