@@ -13,8 +13,9 @@ check: test -f EVALUATION.md && grep -q "specs/t" TODO.md
 2. `LEDGER.md` + `.chug/transcript.jsonl` (tail only) — the SPEC-9 saga and
    any other recent sessions: what actually went wrong, what was slow, what
    the validators caught.
-3. The specs: `SPEC.md`, `META-SPEC.md`, `SELF-SPEC.md`, `SPEC-7/8/9` — the
-   current doctrine; find its gaps, don't duplicate it.
+3. The specs: `SPEC.md`, `META-SPEC.md`, `SELF-SPEC.md` (root doctrine) and
+   `specs/spec-7/8/9-*.md` (era-1 features) — the current doctrine; find its
+   gaps, don't duplicate it.
 4. The code: `src/` layout + `wc -l` per file; skim `api.rs`, `driver.rs`,
    `tools.rs`, `chat.rs` for structural smells (don't deep-read everything —
    this is an evaluation, not an implementation).

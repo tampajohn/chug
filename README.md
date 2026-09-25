@@ -183,8 +183,13 @@ otherwise. Config: `LANGFUSE_HOST` + `LANGFUSE_PUBLIC_KEY` +
   ledgers, specs, code), writes EVALUATION.md + the next TODO rows/specs
 - `SELF-SPEC.md` — continuous self-improvement: chug writes improvement specs,
   maintains a TODO ledger, works items within budget
-- `SPEC-*.md` — feature specs, each written for (and mostly implemented by)
-  chug itself
+- `specs/` — work-item specs: `t<N>-*.md` (the machine queue, one per TODO
+  row, guard-enforced) and `spec-*.md` (era-1 features: TUI, tools/risk-gate,
+  interactive, auth, MCP, Langfuse — each written for, and mostly implemented
+  by, chug itself). `specs/archive/` holds superseded one-offs
+- Layout rule: **root is doctrine** (the files above — protocols you launch
+  with), **`specs/` is work** (anything a TODO row or feature round points
+  at)
 
 ## Development
 

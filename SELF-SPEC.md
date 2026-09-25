@@ -71,6 +71,7 @@ summary: items done, specs written, what's next.
 - One item at a time. No parallel worktrees in self mode.
 - Never modify a deployed/public behavior without a spec row for it first.
 - Never commit red. Never delete or rewrite someone else's SPEC-*.md.
-- Human specs (SPEC.md, SPEC-TUI.md, SPEC-3..6, META-SPEC.md) outrank your
+- Human specs (SPEC.md, specs/spec-tui.md, specs/spec-3..6-*.md,
+  META-SPEC.md) outrank your
   judgment — if a human spec contradicts your TODO item, the item is wrong;
   mark it blocked with the conflict.
