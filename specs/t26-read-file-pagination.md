@@ -1,6 +1,6 @@
 # T26 — `read_file` gains `offset`/`limit` pagination
 
-check: cd /Users/jadams/workspace/chug && cargo test
+check: cargo test
 
 ## Why (evidence)
 
