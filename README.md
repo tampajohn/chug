@@ -113,8 +113,9 @@ panic-safe terminal restore.
 ## Tools
 
 `read_file`, `write_file`, `edit_file` (+`replace_all`), `bash`, `grep`,
-`glob`, `list_dir`, `update_ledger`, `goal_complete`.
-All paths sandboxed to `--cwd`. `bash` runs in its own process group —
+`glob`, `list_dir`, `update_ledger`, `goal_complete`, `delegate`.
+All paths sandboxed to `--cwd` (`delegate` is the one documented exception —
+its absolute `cwd`/`spec` target child worktrees by design). `bash` runs in its own process group —
 timeouts SIGKILL the whole group, so orphaned grandchildren can't wedge the
 driver (120s default; `--bash-timeout` / `CHUG_BASH_TIMEOUT` overrides).
 
