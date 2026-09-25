@@ -96,7 +96,9 @@ returns to idle, repeat. Natural stops end the turn; budgets are per turn.
   runtime, `null` when it doesn't — and the configured budget ceilings —
   `max_iters`, `max_minutes`, `max_tokens` as `null` when unset), one line
   per iteration with cumulative tokens, tool results (ok/is_error/duration_ms, ≤200-char
-  previews), verification commands, goal verdicts, budget-low warning
+  previews — error results keep a tail-anchored ≤2000-char window, so the
+  failing test's name or error block at the end of the output is on record),
+  verification commands, goal verdicts, budget-low warning
   injections (with the remaining counts at fire time), and aborts (with the
   dying model and, on budget deaths, the exhausted budget). Best-effort
   telemetry: a write failure warns once on stderr and never affects the run.

@@ -119,6 +119,13 @@ pub struct EventLogSink<'a> {
     pending_iter: Option<u32>,
 }
 
+/// T25: the JSONL sink's error-leg preview window. The driver already
+/// tail-selects error previews (see `driver::ERROR_PREVIEW_TAIL_CHARS`), so
+/// the sink just passes up to this many chars through — a longer driver
+/// window can never blow up the line. Ok results keep the T10-era 200-char
+/// head, byte-identical to pre-T25.
+const ERROR_PREVIEW_MAX_CHARS: usize = 2000;
+
 impl<'a> EventLogSink<'a> {
     pub fn new(cwd: &Path, inner: &'a mut dyn EventSink) -> Self {
         EventLogSink {
@@ -169,15 +176,28 @@ impl EventSink for EventLogSink<'_> {
                 ok,
                 duration_ms,
                 preview,
-            } => Some(json!({
-                "type": "tool_result",
-                "ts": now_rfc3339(),
-                "name": name,
-                "ok": ok,
-                "is_error": !ok,
-                "duration_ms": duration_ms,
-                "preview": preview.chars().take(200).collect::<String>(),
-            })),
+            } => {
+                // T25: failure-aware preview window. Ok results keep the
+                // T10-era 200-char head of the driver's (500-char head)
+                // preview, byte-identical to pre-T25. Error results pass up
+                // to [`ERROR_PREVIEW_MAX_CHARS`] of the driver's
+                // already-tail-selected preview through, so the failing
+                // test's name at the end of the output survives the sink.
+                let preview: String = if *ok {
+                    preview.chars().take(200).collect()
+                } else {
+                    preview.chars().take(ERROR_PREVIEW_MAX_CHARS).collect()
+                };
+                Some(json!({
+                    "type": "tool_result",
+                    "ts": now_rfc3339(),
+                    "name": name,
+                    "ok": ok,
+                    "is_error": !ok,
+                    "duration_ms": duration_ms,
+                    "preview": preview,
+                }))
+            }
             Event::Verifying { cmd } => Some(json!({
                 "type": "verifying",
                 "ts": now_rfc3339(),
@@ -414,6 +434,10 @@ mod tests {
         assert_eq!(lines[0]["output_tokens"], 56);
     }
 
+    /// The pre-T25 200-char pin, re-anchored by T25 to the **ok leg**: the
+    /// fixture was `ok: false` before T25, but a 500-char error preview now
+    /// passes through whole (≤2000), so the 200-char head-truncation pins
+    /// ok results — exactly today's behavior, unchanged.
     #[test]
     fn sink_truncates_tool_preview_at_200_chars() {
         let tmp = tempfile::tempdir().unwrap();
@@ -421,18 +445,135 @@ mod tests {
         let mut sink = EventLogSink::new(tmp.path(), &mut inner);
         sink.emit(Event::ToolResult {
             name: "bash".into(),
-            ok: false,
+            ok: true,
             duration_ms: 7,
             preview: "x".repeat(500),
         });
         let lines = read_lines(tmp.path());
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0]["type"], "tool_result");
-        assert_eq!(lines[0]["ok"], false);
-        assert_eq!(lines[0]["is_error"], true);
+        assert_eq!(lines[0]["ok"], true);
+        assert_eq!(lines[0]["is_error"], false);
         assert_eq!(lines[0]["duration_ms"], 7);
         let preview = lines[0]["preview"].as_str().unwrap();
         assert_eq!(preview.chars().count(), 200);
+    }
+
+    /// T25: the ok leg is head-anchored, not just capped — the FIRST 200
+    /// chars of a long ok preview survive, never the tail.
+    #[test]
+    fn sink_ok_preview_keeps_head_not_tail() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut inner = NullSink;
+        let mut sink = EventLogSink::new(tmp.path(), &mut inner);
+        sink.emit(Event::ToolResult {
+            name: "bash".into(),
+            ok: true,
+            duration_ms: 1,
+            preview: format!("{}{}", "a".repeat(250), "z".repeat(250)),
+        });
+        let lines = read_lines(tmp.path());
+        let preview = lines[0]["preview"].as_str().unwrap();
+        assert_eq!(preview.chars().count(), 200);
+        assert!(preview.starts_with(&"a".repeat(200)), "head kept: {preview}");
+        assert!(!preview.contains('z'), "tail dropped: {preview}");
+    }
+
+    /// T25: the error leg's window at the sink is 2000 chars, not the
+    /// T10-era 200 — a long error preview is capped at exactly 2000 chars.
+    #[test]
+    fn sink_error_preview_capped_at_2000_chars() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut inner = NullSink;
+        let mut sink = EventLogSink::new(tmp.path(), &mut inner);
+        sink.emit(Event::ToolResult {
+            name: "bash".into(),
+            ok: false,
+            duration_ms: 7,
+            preview: "x".repeat(2500),
+        });
+        let lines = read_lines(tmp.path());
+        assert_eq!(lines[0]["ok"], false);
+        assert_eq!(lines[0]["is_error"], true);
+        let preview = lines[0]["preview"].as_str().unwrap();
+        assert_eq!(preview.chars().count(), 2000);
+    }
+
+    /// T25, the non-vacuous heart: a SHORT error preview is kept whole.
+    /// Pre-T25 the flat 200-char head-take truncated these 300 chars to 200,
+    /// losing the `FAILED <test name>` tail.
+    #[test]
+    fn sink_keeps_short_error_preview_whole() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut inner = NullSink;
+        let mut sink = EventLogSink::new(tmp.path(), &mut inner);
+        let mut preview = "x".repeat(277);
+        preview.push_str("FAILED tests::t25_flake"); // 23 chars → 300 total
+        assert_eq!(preview.chars().count(), 300);
+        sink.emit(Event::ToolResult {
+            name: "bash".into(),
+            ok: false,
+            duration_ms: 7,
+            preview,
+        });
+        let lines = read_lines(tmp.path());
+        let out = lines[0]["preview"].as_str().unwrap();
+        assert_eq!(out.chars().count(), 300, "all 300 chars kept: {out}");
+        assert!(out.ends_with("FAILED tests::t25_flake"), "tail kept: {out}");
+    }
+
+    /// T25, production shape: the driver already tail-selected ≤2000 chars,
+    /// so the sink must pass the whole error preview through — the
+    /// `failures:` block at the END survives (pre-T25 it was cut to the
+    /// first 200 chars).
+    #[test]
+    fn sink_passes_tail_selected_error_preview_through_whole() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut inner = NullSink;
+        let mut sink = EventLogSink::new(tmp.path(), &mut inner);
+        let mut preview = "x".repeat(1900);
+        preview.push_str("failures:\n    tests::the_flaky_one"); // 34 chars → 1934
+        sink.emit(Event::ToolResult {
+            name: "bash".into(),
+            ok: false,
+            duration_ms: 7,
+            preview,
+        });
+        let lines = read_lines(tmp.path());
+        let out = lines[0]["preview"].as_str().unwrap();
+        assert_eq!(out.chars().count(), 1934);
+        assert!(
+            out.ends_with("failures:\n    tests::the_flaky_one"),
+            "tail-selected preview passes through whole: {out}"
+        );
+    }
+
+    /// T25: a >2000-char error preview full of multibyte chars serializes
+    /// without panic, stays within the char budget, and is cut on char
+    /// boundaries (chars(), never byte slicing).
+    #[test]
+    fn sink_error_preview_multibyte_stays_in_char_budget() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut inner = NullSink;
+        let mut sink = EventLogSink::new(tmp.path(), &mut inner);
+        // "é中🦀" = 3 chars / 9 bytes; 800 repeats = 2400 chars, 7200 bytes.
+        let unit = "é中🦀";
+        let preview = unit.repeat(800);
+        assert_eq!(preview.chars().count(), 2400);
+        // The expected serialization: the first 2000 CHARS of the preview
+        // (666 units + "é中") — never a mid-character byte cut.
+        let expected: String = preview.chars().take(ERROR_PREVIEW_MAX_CHARS).collect();
+        sink.emit(Event::ToolResult {
+            name: "bash".into(),
+            ok: false,
+            duration_ms: 7,
+            preview,
+        });
+        // read_lines parses every line as JSON: no panic, valid encoding.
+        let lines = read_lines(tmp.path());
+        let out = lines[0]["preview"].as_str().unwrap();
+        assert_eq!(out, expected, "cut on char boundaries, within the budget");
+        assert_eq!(out.chars().count(), 2000);
     }
 
     #[test]

@@ -34,6 +34,15 @@ const TRIM_TARGET_TOKENS: usize = 80_000;
 const KEEP_LAST_MESSAGES: usize = 20;
 const STUCK_WINDOW: usize = 3;
 
+/// T25: the error-leg preview window. Failure bytes cluster at the END of
+/// command output (cargo's `failures:` list, rustc's `error[Exxxx]` blocks),
+/// and the pre-T25 flat 500-char head window lost the failing test's name
+/// (cycle-9 eval N1), so error tool results keep the LAST
+/// [`ERROR_PREVIEW_TAIL_CHARS`] chars of their content in the emitted
+/// `Event::ToolResult` preview. Ok results keep the T10-era 500-char head,
+/// byte-identical.
+const ERROR_PREVIEW_TAIL_CHARS: usize = 2000;
+
 /// T13: the one-shot budget-low warning fires when this many iterations (or
 /// this many wall-clock seconds — [`WARN_REMAINING_SECS`]) remain, giving the
 /// model a chance to commit and wrap up before the abort at the loop top.
@@ -664,7 +673,7 @@ fn drive_loop(
                 name: name.to_string(),
                 ok: !result.is_error,
                 duration_ms: tool_t0.elapsed().as_millis() as u64,
-                preview: result.content.chars().take(500).collect(),
+                preview: tool_result_preview(&result.content, result.is_error),
             });
             if name == "goal_complete" {
                 goal_summary = Some(
@@ -768,6 +777,22 @@ fn drive_loop(
 
         iteration += 1;
     }
+}
+
+/// T25: the preview string a tool result contributes to [`Event::ToolResult`].
+/// Ok results keep the T10-era 500-char head of the content — byte-identical
+/// to pre-T25. Error results get a tail-anchored window, the LAST
+/// [`ERROR_PREVIEW_TAIL_CHARS`] chars, because failure bytes cluster at the
+/// end of command output (cargo's `failures:` list, rustc's `error[Exxxx]`
+/// blocks) and a flat head window drops the failing test's name (cycle-9
+/// eval N1). Char-boundary safe: always `chars()`, never byte slicing.
+fn tool_result_preview(content: &str, is_error: bool) -> String {
+    if !is_error {
+        return content.chars().take(500).collect();
+    }
+    let total = content.chars().count();
+    let skip = total.saturating_sub(ERROR_PREVIEW_TAIL_CHARS);
+    content.chars().skip(skip).collect()
 }
 
 /// Drain ALL pending steering notes, FIFO.
@@ -2355,6 +2380,143 @@ mod tests {
             sink.0.iter().any(|e| matches!(e, Event::GoalAccepted { .. })),
             "run completes with the events log failing underneath"
         );
+    }
+
+    // ---------- T25: failure-aware event previews ----------
+
+    #[test]
+    fn error_preview_is_tail_anchored_long_content() {
+        let marker = "failures:\n    tests::the_flaky_one";
+        let content = format!("{}{marker}", "x".repeat(3000));
+        let preview = tool_result_preview(&content, true);
+        assert_eq!(preview.chars().count(), ERROR_PREVIEW_TAIL_CHARS);
+        assert!(
+            preview.ends_with(marker),
+            "the failing test's name at the end survives: ...{}",
+            preview.chars().skip(ERROR_PREVIEW_TAIL_CHARS - 40).collect::<String>()
+        );
+        // Exactly the last 2000 chars of the content, nothing else.
+        let expected: String = content
+            .chars()
+            .skip(content.chars().count() - ERROR_PREVIEW_TAIL_CHARS)
+            .collect();
+        assert_eq!(preview, expected);
+    }
+
+    #[test]
+    fn error_preview_short_content_kept_whole() {
+        let content = "FAILED tests::small_failure".to_string();
+        assert_eq!(tool_result_preview(&content, true), content);
+    }
+
+    #[test]
+    fn ok_preview_keeps_500_char_head_byte_identical() {
+        // Head/tail distinguishable: a head-take(500) is all 'a', a tail
+        // window would end in 'b'.
+        let content = format!("{}{}", "a".repeat(800), "b".repeat(200));
+        let preview = tool_result_preview(&content, false);
+        assert_eq!(preview, "a".repeat(500));
+    }
+
+    #[test]
+    fn ok_preview_short_content_kept_whole() {
+        let content = "wrote 5 bytes".to_string();
+        assert_eq!(tool_result_preview(&content, false), content);
+    }
+
+    /// T25, end to end through drive_loop: a failing bash command whose
+    /// output exceeds the window carries its unique end-of-output marker
+    /// into the emitted `Event::ToolResult` preview (pre-T25 the flat
+    /// 500-char head dropped it, which is what hid the flaky test's name).
+    #[test]
+    fn error_tool_result_preview_ends_with_output_tail() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (_utx, urx) = mpsc::channel::<SlashUpdate>();
+        let controls = Controls::detached();
+        let ctx = ctx_for(&tmp, Mode::Autonomous, &controls, &urx, None, &observ::Sink::Noop);
+        let mut knobs = knobs_with(5);
+        let marker = "T25-TAIL-MARKER-the-flaky-test";
+        let cmd = format!("printf '%s' '{}{marker}'; exit 7", "x".repeat(2200));
+        let mut llm = ScriptedLlm::new(vec![
+            tool_use_response("bash", json!({"command": cmd})),
+            tool_use_response("goal_complete", json!({"summary": "done"})),
+        ]);
+        let mut gate = None;
+        let mut messages = Vec::new();
+        let mut sink = RecordingSink::default();
+        let outcome = drive_loop(
+            &ctx,
+            &mut knobs,
+            &mut llm,
+            &mut gate,
+            &mut messages,
+            Some("check: true".to_string()),
+            &mut sink,
+            &mut McpRegistry::new(tmp.path(), true, None).unwrap(),
+        )
+        .unwrap();
+        assert!(matches!(outcome, DriveOutcome::RunFinished(0)));
+
+        let (ok, preview) = sink
+            .0
+            .iter()
+            .find_map(|e| match e {
+                Event::ToolResult { name, ok, preview, .. } if name == "bash" => {
+                    Some((*ok, preview.clone()))
+                }
+                _ => None,
+            })
+            .expect("bash tool_result event");
+        assert!(!ok, "the failing command is an error result");
+        assert_eq!(preview.chars().count(), ERROR_PREVIEW_TAIL_CHARS);
+        assert!(
+            preview.ends_with(&format!("{marker}\n[exit code: 7]")),
+            "the emitted preview ends with the output tail"
+        );
+    }
+
+    /// T25 control: a successful tool result keeps the pre-T25 500-char
+    /// head preview, byte-identical.
+    #[test]
+    fn ok_tool_result_preview_keeps_500_char_head() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (_utx, urx) = mpsc::channel::<SlashUpdate>();
+        let controls = Controls::detached();
+        let ctx = ctx_for(&tmp, Mode::Autonomous, &controls, &urx, None, &observ::Sink::Noop);
+        let mut knobs = knobs_with(5);
+        let cmd = format!("printf '%s' '{}'", "y".repeat(800));
+        let mut llm = ScriptedLlm::new(vec![
+            tool_use_response("bash", json!({"command": cmd})),
+            tool_use_response("goal_complete", json!({"summary": "done"})),
+        ]);
+        let mut gate = None;
+        let mut messages = Vec::new();
+        let mut sink = RecordingSink::default();
+        let outcome = drive_loop(
+            &ctx,
+            &mut knobs,
+            &mut llm,
+            &mut gate,
+            &mut messages,
+            Some("check: true".to_string()),
+            &mut sink,
+            &mut McpRegistry::new(tmp.path(), true, None).unwrap(),
+        )
+        .unwrap();
+        assert!(matches!(outcome, DriveOutcome::RunFinished(0)));
+
+        let (ok, preview) = sink
+            .0
+            .iter()
+            .find_map(|e| match e {
+                Event::ToolResult { name, ok, preview, .. } if name == "bash" => {
+                    Some((*ok, preview.clone()))
+                }
+                _ => None,
+            })
+            .expect("bash tool_result event");
+        assert!(ok, "the succeeding command is not an error result");
+        assert_eq!(preview, "y".repeat(500), "ok preview is the 500-char head");
     }
 
     // ---------- MCP integration (fake echo server, no network) ----------
