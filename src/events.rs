@@ -47,6 +47,17 @@ pub enum Event {
         input: u64,
         output: u64,
     },
+    /// T17 telemetry: the one-shot budget-low warning was injected into the
+    /// transcript. The notice itself already reached the user as a message;
+    /// this event exists only so `.chug/events.jsonl` records that it fired,
+    /// with the remaining counts at fire time (a session whose transcript
+    /// didn't survive still shows whether — and how close to the ceiling —
+    /// the warning fired).
+    BudgetLow {
+        remaining_iters: u32,
+        remaining_secs: u64,
+        remaining_tokens: Option<u64>,
+    },
     SteeringQueued(String),
     /// One risk-gate judgment on a bash command (only when --risk-gate is on).
     RiskVerdict {
@@ -226,6 +237,9 @@ impl EventSink for ConsoleSink {
                 // goal-complete/abort boundaries, not per event.
                 self.last_usage = Some((input, output));
             }
+            // T17: telemetry only — the notice already reached the user as a
+            // transcript message; no console output.
+            Event::BudgetLow { .. } => {}
             Event::SteeringQueued(_) => {}
             Event::RiskVerdict {
                 blocked,

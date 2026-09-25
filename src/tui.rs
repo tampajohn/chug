@@ -313,6 +313,9 @@ impl App {
                 self.input_tokens = input;
                 self.output_tokens = output;
             }
+            // T17: telemetry only — the notice already reached the user as a
+            // transcript message; the activity stream stays as-is.
+            Event::BudgetLow { .. } => {}
             Event::SteeringQueued(note) => {
                 // Chat mode: the UI sent the expanded `llm_message`; the
                 // echo shows the typed text only, plus a dim `attached:`
