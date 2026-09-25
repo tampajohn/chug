@@ -200,6 +200,68 @@ per §2.6).
 
 ## Outcomes (filled at cycle wrap — LOOP-SPEC Phase 3)
 
+### Cycle 8 (2026-09-25, ~16:29–16:47 EDT) — freshness-skip + drained 1/1
+
+One `chug run --spec LOOP-SPEC.md` session (kimi-k3 orchestrator;
+glm-5-3-flash impl child; kimi-k3 validator), launched by loopd.
+**Freshness rule fired as designed:** EVALUATION.md was same-day (the
+cycle-7 eval below) and T22 sat `todo` with a ready spec → Phase 1
+skipped, zero re-eval burn, straight to the queue.
+
+**Landed (1/1 queued rows):**
+- **T22 — bash tool description: macOS `timeout` mirage note** (impl
+  `6068654`, row flip `d7147cf`, pushed `f0b4e1e..d7147cf`). glm impl
+  green first try, **goal accepted at 23/50 iters** — comfortable
+  headroom, and notable symmetry: the mirage this sentence warns
+  against killed the T20 child at 40/40 two cycles ago; the fix for
+  that class now lands at barely half the ceiling. One appended
+  sentence, both load-bearing tokens verbatim (`no \`timeout\`
+  command`, `perl -e 'alarm N; exec @ARGV'`), 120s driver-cap wording
+  intact, zero behavioral surface. Pin asserts the LIVE
+  `tool_schemas()` output (warning-in-context, idiom, 3→4 sentence
+  count, final-position, cap-preservation) — not a copied literal. kimi
+  validator **VERDICT: PASS** — **6/6 mutants died**: revert-to-pre-T22,
+  idiom corruption, negated-warning (proves the context assert is
+  non-vacuous — the token `timeout` alone satisfies nothing), extra
+  sentence, cap-wording change, note reordering; worktree restored
+  clean and full suite re-run green post-mutations. No README change
+  per the spec's §3 (model-facing surface; the bounded-gates idiom
+  lives in META-SPEC).
+
+**Skipped/deferred:** nothing — the queue is **drained** (T22 was the
+last `todo` row). TODO.md holds zero open rows for the first time since
+the loop began. A cold next cycle therefore cannot freshness-skip (the
+rule requires `todo` rows) and will run Phase 1 fresh — the designed
+flow, not a gap.
+
+**What the validators caught:** no implementation defects — **eighth
+consecutive clean glm round**. One mutation-harness craft note (not a
+defect): the validator's first all-occurrence cap-wording replace also
+hit the pin's own literal and survived; it recognized the artifact and
+re-tested the description-only mutant correctly. Worth remembering when
+auditing future mutation logs: mutants that edit test and code together
+can false-survive.
+
+**K2/T19 practiced:** 3 child artifacts harvested pre-removal (impl
+events 50 lines, validate events 46, validate LEDGER with the full
+mutation log; impl LEDGER was seed-trivial → skipped per doctrine).
+Worktree removed only after harvest + ff merge.
+
+**Spec-authoring follow-through:** T22's check line kept the t23
+convention (`cd /Users/jadams/workspace/chug && cargo test`) —
+behavior-checks-against-main are vacuous-but-harmless pre-merge
+(cycle-7 lesson), and the impl child goal-accepted from the worktree
+without incident, unlike T21's self-merge anomaly. No new lesson; the
+recorded one held.
+
+**Final state:** main `d7147cf`; gates 381+3 green, clippy `-D
+warnings` clean; everything pushed. Human-decision carries unchanged:
+child `--max-tokens` (J7), `chug doctor`, model routing/escalation,
+sandbox policy, loopd double-start race (M4, still unexercised).
+Next-cycle Phase 1 corpus pointers: this run's own `.chug/events.jsonl`
+plus `events-t22-{impl,validate}-20260925-164120.jsonl` and
+`LEDGER-t22-validate-20260925-164120.md`.
+
 ### Cycle 7 (2026-09-25, ~14:39–16:35 EDT) — evaluated fresh + worked 2/3 rows
 
 One `chug run --spec LOOP-SPEC.md` session (kimi-k3 orchestrator;
