@@ -45,21 +45,36 @@ For each `todo` row, ONE at a time (backgrounded child + polling, per step 2):
    persistently — rate limit, repeated 5xx — rerun the child on
    `anthropic-system.ai.kimi-k3` and note the fallback in your ledger).
    **Children take 10–40 min but your bash tool has a HARD 120s cap** —
-   launch backgrounded and poll, never foreground-and-wait:
+   that cap is why `delegate`, not bash, is the launch mechanism: it
+   spawns the child detached and returns at spawn (never
+   foreground-and-wait, now by construction), and its `status` action
+   replaces the old ps+tail+jq poll. Launch:
    ```
-   cd /tmp/chug-loop-t<N> && nohup /Users/jadams/workspace/chug/target/debug/chug run \
-     --spec /Users/jadams/workspace/chug/specs/t<N>-<slug>.md \
-     --goal "Implement TODO item t<N> ONLY. Keep cargo build + clippy + test
+   delegate  action: "launch"
+     cwd:         "/tmp/chug-loop-t<N>"        (absolute — the one cwd NOT confined to yours)
+     spec:        "/Users/jadams/workspace/chug/specs/t<N>-<slug>.md"  (absolute)
+     goal:        "Implement TODO item t<N> ONLY. Keep cargo build + clippy + test
              green. Commit your work here. DO NOT touch TODO.md or LEDGER.md —
-             bookkeeping is the orchestrator's." \
-     --model anthropic-system.ai.glm-5-3-flash --max-iters 50 --max-minutes 35 \
-     > /tmp/chug-loop-t<N>.log 2>&1 & echo "child pid: $!"
+             bookkeeping is the orchestrator's."
+     model:       "anthropic-system.ai.glm-5-3-flash"
+     max_iters:   50
+     max_minutes: 35
    ```
+   `max_iters: 50` and `max_minutes: 35` are explicit — delegate's
+   defaults are 40/35, and T21's headroom must survive the migration.
    (50, not 40: 3 of the last 5 glm impl children died at 40/40 with the work
    done — T15/T17/T20; minutes were never binding, T20 used 6 of 35.)
-   Poll every ~60–110s (`ps -p <pid>` + `tail` the log + watch the
-   worktree's `.chug/events.jsonl` mtime) — each poll is its own short bash
-   call, safely under the cap. Exit of the pid = child done; then review.
+   Poll every ~60–110s with `delegate{action: "status", cwd:
+   "/tmp/chug-loop-t<N>", pid: <pid launch returned>}` — each poll is a
+   single non-blocking tool call reporting liveness, a summary of the
+   child's `.chug/events.jsonl` (state, last_iteration,
+   budget-low/goal/abort flags) and the console-log tail; it replaces the
+   old `ps -p <pid>` + `tail` + events-mtime bash triple. If status
+   reports liveness unknown (pid omitted or lost), fall back to
+   `ps -p <pid>`. Exit of the pid = child done; then review. If
+   `delegate` itself errors persistently (the tool, not the child),
+   META-SPEC §4's hand-rolled nohup launch template remains the fallback
+   launch path — note the fallback in your ledger.
 3. **Review.** Diff the branch, read the child's ledger if ambiguous, and run
    bounded gates yourself (`perl -e 'alarm 600; exec @ARGV' cargo test --
    --test-threads=4`). Never trust a claim of green without seeing it.
@@ -67,8 +82,13 @@ For each `todo` row, ONE at a time (backgrounded child + polling, per step 2):
    src/driver.rs, src/api.rs, src/tools.rs, src/events.rs, or the loop/spec
    doctrine itself; optional for docs/tests-only items): META-SPEC §6
    verbatim — VERDICT: PASS/FAIL + numbered findings, mutation-testing where
-   feasible. FAIL → fix-up child with the findings pasted into its goal,
-   then re-validate.
+   feasible. The validation child launches exactly like step 2 — a
+   `delegate` launch with model `anthropic-system.ai.kimi-k3`,
+   `max_iters: 40`, `max_minutes: 30` (§6's budgets, passed explicitly —
+   minutes is 30, not delegate's 35 default), and §6's goal text
+   verbatim; this paragraph is a LOOP-SPEC override of §6's launch
+   mechanics only, and META-SPEC.md is not edited. FAIL → fix-up child
+   with the findings pasted into its goal, then re-validate.
 5. **Harvest, then merge + close — you own the books.** Before any
    `git worktree remove` (which deletes the worktree's untracked `.chug/`
    silently — the cycle-5 T18 loss), harvest every child run's
@@ -111,7 +131,8 @@ For each `todo` row, ONE at a time (backgrounded child + polling, per step 2):
 
 - ONE child at a time, foreground, bounded gates — all of META-SPEC's hard
   rules apply (never reset/remove worktrees with unmerged work, never
-  force-push, wedge protocol).
+  force-push, wedge protocol); `delegate` (launch + status) is that one
+  child's launch/observation surface (step 2).
 - Single-driver invariant: another **`chug run`** (autonomous driver) with
   `/Users/jadams/workspace/chug` as its cwd blocks the cycle. When tripped:
   do NO mutating work, verify the untouched tree's gates once, then
