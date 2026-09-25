@@ -483,3 +483,21 @@ One `chug run --spec LOOP-SPEC.md` session (kimi-k3 orchestrator), launched by l
 **K2/T19 practiced:** 7 child artifacts harvested pre-removal across the two items (T24: 2 impl cycle-9 + events/LEDGER validate; T26: events impl + events/LEDGER validate; T26 impl LEDGER was a seed — skipped per doctrine).
 
 **Final state:** main = `4b77d6b`; gates 403+3 green, clippy `-D warnings` clean; README truthful (T26 Tools one-liner rode the impl commit; T24 internal, no README change); todo_consistency guard green; everything pushed. **Queue EMPTY → the next cycle CANNOT skip Phase 1 (freshness rule requires todo rows) — it must evaluate fresh; this section plus the harvested t24/t26 streams are its corpus.** Watch items carried: unidentified T23 flaky test (T25's tail-window now self-names it), GNU/BSD sed (1 occurrence), J7 telemetry, delegate zombie-liveness nuance (new). Human-decision carries unchanged (child `--max-tokens`/J7, `chug doctor`, model routing, sandbox policy, loopd pidfile race).
+
+### Cycle 11 (2026-09-25, ~17:41–18:55 EDT) — fresh eval + T27 landed; T28 impl in flight at budget-low wrap
+
+One `chug run --spec LOOP-SPEC.md` session (kimi-k3 orchestrator; glm-5-3-flash impl children; kimi-k3 validator), launched by loopd. Queue drained at start → Phase 1 evaluated fresh (corpus: cycle-9/10 loop streams + six t24–t26 child streams + loopd logs), filed T27–T30 with specs, committed `bd3d719`, pushed, then worked the queue in doctrine order.
+
+**Landed (1/4 queued rows):**
+- **T27 — loopd cycle budget --max-iters 80→120** (impl `a436baf`, merge `759c45e`, row flip `414acf3`, pushed). glm impl goal accepted 12/50; diff exactly per spec (+2/−1, loopd.sh only; comment records the arithmetic; commit message records the no-signal-running-supervisor rationale + bounded bash incremental-read hazard; activation = operator's next loopd restart — NEW human-decision carry §6.8). kimi VERDICT: PASS 16/40 — gates re-run 403+3, goal text + file mode cmp-verified, 6 mutants: 5 caught (revert-80/dup-line/121/drop-minutes/wrong-model); M2 same-line-dup escapes `grep -c` but clap rejects duplicate args at runtime (informational); M6 comment-removal in-spec-scope (covered by review). 3 artifacts harvested pre-removal.
+- **NEW INCIDENT CLASS, survived by design: system hibernation mid-child.** The machine entered Low Power Sleep at 21:50:05Z (1% battery) and hibernated until 22:40:12Z — 50 min inside the T27 impl child's iteration-2 API call. macOS `Instant` excludes sleep → the child's awake-time budgets correctly did not fire; the frozen socket resumed post-wake and the child wrapped at 12/50. Budgets are awake-time-denominated; a stalled-across-sleep proxy call survives. Recorded for the corpus.
+
+**In flight at wrap (budget-low directive at 8 iterations left):**
+- **T28 — delegate zombie reap**: glm impl child pid 44199 at 28/50 with `src/tools.rs` modified but UNCOMMITTED; validation (REQUIRED, tools.rs) + merge cannot fit the remaining budget. Worktree `/tmp/chug-loop-t28` PRESERVED with the child left running (bounded 50/35 awake-time); partial events + LEDGER harvested to `.chug/events-t28-impl-partial-*.jsonl` / `LEDGER-t28-impl-partial-*.md`; row carries full recovery instructions (T24-cycle-9 pattern). **Next cycle: let the child finish → harvest full stream → review → kimi-validate → merge → flip → push. Do not launch a second impl into the same worktree.**
+- **T29 (feature, wait_secs), T30 (doctrine)**: untouched, specs ready.
+
+**What the validators caught:** no implementation defects — **twelfth consecutive clean glm round** (T27). Two informational mutation-harness notes (M2/M6 above).
+
+**Freshness rule for the next cycle:** LEGAL TO SKIP — T28/T29/T30 remain `todo` with ready specs and EVALUATION.md is same-day; recommended (T28 recovery first, then T29 feature before T30 friction per doctrine).
+
+**Final state:** main `414acf3`-plus-bookkeeping; gates 403+3 green, clippy clean; README gate satisfied (T27 internal loop tooling, no user-visible surface); everything pushed. Human-decision carries: loopd restart to activate 120 (NEW), child `--max-tokens`/J7, `chug doctor`, model routing, sandbox policy, loopd pidfile race, sed note. Watch: validator burn (38/40 trend), giant-row edit misses, T23 flake (zero recurrence), hibernate class (recorded).
