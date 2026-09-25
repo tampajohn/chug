@@ -1,200 +1,218 @@
-# EVALUATION — chug, assessed by chug-loop (2026-09-25, cycle 9)
+# EVALUATION — chug, assessed by chug-loop (2026-09-25, cycle 11)
 
-Corpus: `.chug/events-20260925-204432.jsonl` (**cycle-8's full LOOP-SPEC
-run**: 41 iterations, 47 tool results, goal accepted, freshness-skip →
-queue drained 1/1), `.chug/events-20260925-202932.jsonl` (**cycle-7's full
-run**: 76 iterations, 97 tool results, evaluated fresh + worked 2/3 rows),
-`.chug/events-t21-{impl,validate}-*.jsonl`,
-`.chug/events-t22-{impl,validate}-*.jsonl`,
-`.chug/events-t23-{impl,validate}-*.jsonl` (all K2-harvested),
-`.chug/loopd/` (supervisor logs — cycles 6→9 all unattended),
-`LEDGER-t2{1,2,3}-*.md`, `TODO.md` (T1–T23 done with refs), git log
-through `79b4c19`; `src/` (18,611 lines, +908 since cycle 7 — T23's
-delegate; driver.rs 2,894 unchanged); `README.md`.
-Prior evaluations: cycle 7 (with cycle-5/6/7/8 Outcomes) below at
-§Outcomes; cycle 5 at same section; cycle 4 at `c8222cd`; cycle 3 at
+Corpus: `.chug/events-20260925-211633.jsonl` (**cycle-9's full LOOP-SPEC
+run**: 79/80 iterations, 91 tool results, budget_low@8 at 21:14:00,
+goal accepted 21:15:31 — fresh eval + T25 landed, T24 validation
+deferred), `.chug/events-20260925-214135.jsonl` (**cycle-10's full
+run**: 68/80 iterations, 76 tool results, 12 delegate calls, goal
+accepted 21:40:33 — freshness-skip + drained 2/2),
+`.chug/events-t2{4,5,6}-{impl,validate}-*.jsonl` (six harvested child
+streams), `.chug/LEDGER-t2{4,5,6}-*.md`, `.chug/loopd/` (cycles 6→10
+all OK unattended; launchd job `com.tampajohn.chug-loopd` pid 77453),
+`TODO.md` (T1–T26 done with refs — **queue EMPTY at cycle start**),
+git log through `c912df3`; `src/` (19,198 lines, +587 since cycle 9 —
+T25+T26; driver.rs 3,056; tools.rs 2,332; mcp_http.rs 2,343; tui.rs
+2,163 — all four pageable post-T26); `README.md` (249 lines).
+Prior evaluations: cycle 9 (with cycle-5/6/7/8/9/10 Outcomes) below at
+§Outcomes; cycle 7 same section; cycle 4 at `c8222cd`; cycle 3 at
 `df4039a`; cycle 2 at `0d71d00`.
-Verification performed this eval: full `cargo test` ×5 consecutive =
-**381+3 green every run** (flaky-test repro hunt, ~60s wall);
-`cargo clippy` clean at cycle-8 wrap (`d7147cf` notes); delegate tool
-schema read live from `src/tools.rs:146`; eventlog preview seam read at
-`src/eventlog.rs:179`; read_file cap read at `src/tools.rs:18,223`;
-zero-delegate-call claim jq-verified against both cycle streams;
-web-fetch evidence grep (docs.rs/stackoverflow/google/fetch) across both
-cycle streams = 0 hits; driver spec-delivery read at
-`src/driver.rs:279,545` + `src/main.rs:42`.
+Verification performed this eval: full `cargo test -- --test-threads=4`
+= **403+3 green in 10.4s**; `cargo clippy --all-targets -- -D warnings`
+clean; flake grep (`FAILED`) across all six t2x child streams + both
+cycle streams — every hit explained (red-phase/mutant/quote, each now
+NAMED post-T25); `sed` GNU/BSD + `timeout` mirage greps = 0 new
+occurrences; delegate zombie-liveness verified field-by-field against
+cycle-10's nine status payloads; Phase-1 cost measured by tool-index
+(eval commit `b7f321f` = tool idx 47/91 at 20:50:59; first Phase-2
+call = idx 51 at 20:52:15); loopd.sh:71 confirmed the only
+`--max-iters 80` site (no test pins it); `libc::kill(pid,0)` liveness
+read at `src/tools.rs:836-846`, `delegate_status` at 729-756; web-fetch
+evidence grep (docs.rs/stackoverflow/google/fetch) across both cycle
+streams = 0 hits (4th consecutive eval).
 
 ## 1. What chug does well
 
-- **Eight consecutive clean glm implementation rounds.** Cycle 8's T22
-  impl: green first try, goal accepted at 23/50 — comfortable headroom
-  under T21's widened ceiling, on the item whose very sentence warns
-  against the mirage that killed T20 at 40/40 two cycles earlier.
-  Validators keep finding zero implementation defects (T22: 6/6 mutants
-  died; T23: 2/2 died; T21: 4/4 legs).
-- **The freshness rule fired as designed** (cycle 8): same-day eval +
-  queued row → Phase 1 skipped, straight to work, 41 iterations total —
-  the cheapest full cycle yet. And its complement fires now: queue
-  drained → this cycle re-evaluated fresh. Both directions of the
-  designed flow have been observed.
-- **loopd is now boring** (the compliment): cycles 6→9 supervised
-  end-to-end, 60s relaunch cadence, single-driver guard holding, no HALT
-  ever needed. `loopd.log` reads like a cron that happens to run a
-  self-improving agent.
-- **T13/T17/T18's budget telemetry chain paid for itself again**: the
-  T23 impl child's `budget_low` event (remaining 8, 20:17:49) preceded
-  the first-ever complete wrap in the ceiling zone (goal accepted 50/50)
-  — the J6 arc from pre-commit death → commit-no-wrap → full wrap is
-  closed and documented in cycle-7 Outcomes.
+- **The delegate dogfood is complete and measured.** Cycle 10 ran all
+  child plumbing through the tool: 12 delegate calls (3 launches + 9
+  status polls), every one 0–4 ms, **zero** hand-rolled
+  nohup/ps/tail/jq bash calls — against cycle 8's 37/47 bash-plumbing
+  profile. The T23 (ship) → T24 (adopt) arc closed in two cycles and
+  the delta is in the streams, not the narrative.
+- **Eleven consecutive clean glm implementation rounds.** Cycles 9–10
+  added three (T24 doctrine, T25 code, T26 code); validators PASS ×3
+  (T25: 7/8 mutants died, all spec-required; T26: 8/8; T24: goal text
+  cmp-verified + 2 mutants caught). No glm→kimi fallback has ever been
+  needed.
+- **T25's tail-window proved itself in the wild within one cycle.**
+  The t26-impl stream's red-phase previews NAME the failing tests
+  (`read_file_offset_at_last_line_shows_it … FAILED` at 21:29:30) —
+  exactly the bytes N1 lost pre-T25. The next unidentified flake will
+  arrive with its name attached.
+- **loopd remains boring**: cycles 6→10 supervised end-to-end, five
+  consecutive `cycle OK`, launchd-managed (`com.tampajohn.chug-loopd`),
+  HALT never fired, single-driver guard held every cycle.
+- **Freshness rule: both directions now boringly legal.** Skip fired in
+  cycles 8/10 (same-day eval + todo rows); fresh ran in 9/11 (empty
+  queue). Zero ambiguity in any cycle log about which leg applied.
 
 ## 2. Incidents worth fixing
 
-- **N1 → T25 — a flaky test fired once and its identity was destroyed
-  by the event stream's own preview cap.** The T23 impl child's suite
-  run at `2026-09-25T20:17:49` (`events-t23-impl-20260925-202220.jsonl`)
-  reports `FAILED. 379 passed; 1 failed` — but the recorded preview is
-  the flat 200-char head (`src/eventlog.rs:179`,
-  `preview.chars().take(200)`), which captured `Finished … test result:
-  FAILED` noise and **not the failing test's name** (cargo prints the
-  `failures:` list at the *end* of output, just past the window). The
-  child burned iterations 43–47 re-running the suite 3× (all green) to
-  rule out its own diff, then wrapped; the worktree transcript — the
-  only other place the name existed — was not harvested (operator's
-  choice per K2) and is gone. This eval re-ran the full suite 5×
-  consecutively in main: 381+3 green every time, no repro. Root cause
-  is not the flake (unidentifiable now) but the observability hole:
-  **error previews get the same 200c budget as success previews, even
-  though failure bytes cluster at the tail.** Fix filed: **T25**
-  (`specs/t25-failure-aware-previews.md`) — ok-leg stays a byte-identical
-  200c head; error-leg gains a tail-anchored window (≤2000c). The next
-  flake will name itself in the events stream alone.
-- **N2 — assessed, watch item: the flaky test itself.** One occurrence,
-  no identity, no repro in 5 tries. No row is fileable without a name —
-  which is precisely T25's point. If it recurs post-T25, the events
-  stream will carry the name and a bug row (pri 1) follows.
-- **N3 — assessed, watch item: GNU-vs-BSD userland, second species.**
-  The cycle-8 orchestrator hit `sed: 1: ",+60p\n": invalid command code
-  ,` (GNU sed range syntax on BSD sed;
-  `events-20260925-204432.jsonl`). Same class as T22's `timeout` mirage,
-  different species, ONE occurrence (T22 was filed on two). Below the
-  filing bar T22 set; if it recurs, the fix generalizes the bash
-  description's platform note to name BSD-userland flag drift. Carried.
-- **N4 — assessed, no row: validator `read_file` on the spec path
-  escapes the worktree.** The T23 validator tried `read_file
-  /Users/jadams/workspace/chug/specs/t23-delegate-tool.md` from its
-  worktree → `path escapes cwd`, recovered immediately. The driver
-  delivers the spec directly (`src/driver.rs:279`, re-read every
-  iteration, `src/main.rs:42`), so this is cosmetic; same carried class
-  as the edit_file confinement note from cycle 7.
+- **O1 → T27 — the ORCHESTRATOR's own iteration ceiling is now the
+  binding budget.** Cycle 9 ended at **79/80 iterations**: T13's
+  budget_low fired at remaining 8 (21:14:00) and forced a directive
+  wrap with T24's impl committed (`3334743`) but **validation deferred
+  to a second cycle** — a full extra loop of latency on a merge-ready
+  branch. Cycle 7 (the other fresh-eval cycle this era): **76/80**.
+  Freshness-skip cycles: 41, 68. Measured Phase-1 cost in cycle 9:
+  **~45 iterations** (eval commit at tool idx 47/91; Phase 2 began idx
+  51). One queue item end-to-end (worktree → build → child → review →
+  validate → merge → harvest → row-flip → push): ~30–35 iterations.
+  Arithmetic: 80 − 45 ≈ 1 item, wrap at the ceiling. Minutes were never
+  binding (cycles run 24–35 min of 240). This is T21's failure class
+  one level up — children got 40→50 after three 40/40 deaths; the
+  orchestrator's 80 has now produced two within-4-of-the-ceiling cycles
+  out of two measured fresh-eval cycles. Fix filed: **T27**
+  (`specs/t27-loopd-iteration-budget.md`) — `loopd.sh:71`
+  `--max-iters 80`→`120`, pri 2. (Activation: next supervisor start —
+  the spec records the running-script-edit hazard and its bounded
+  blast radius; no child touches the live loopd.)
+- **O2 → T28 — delegate `status` liveness lies exactly when it
+  matters.** All three cycle-10 children polled `alive: true` AFTER
+  their streams recorded `state: done, goal_seen: true` (21:22:47 pid
+  18744; 21:31:59 pid 23703; 21:37:39 pid 27993). Cause is structural:
+  liveness is `kill(pid, 0)` (`src/tools.rs:836-846`), which succeeds
+  on an exited-but-unreaped zombie, and the orchestrating chug — the
+  children's parent — never reaps. Harmless this cycle (doctrine
+  already reads `state`/`goal_seen` for truth, and exit-of-pid was
+  never the done signal post-T24) but the field is now permanently
+  untrustworthy in its only interesting case, and every future
+  consumer of `alive` inherits the trap. Fix filed: **T28**
+  (`specs/t28-delegate-zombie-reap.md`) — `delegate_status` attempts
+  `waitpid(pid, WNOHANG)` first (reaps own exited children → truthful
+  `alive: false`), falls back to `kill(pid, 0)` for foreign pids
+  (ECHILD), pri 3. tools.rs → validation REQUIRED per §2.4.
+- **O3 — assessed, watch: validator burn scales with the suite.** The
+  T26 validator used **38/40 iterations** (budget_low leg observed via
+  delegate status at 21:36) running 8 mutants against a 403+3 suite.
+  It wrapped inside budget — T18's widened margin doing its job — but
+  the trend only goes one way. No row; the T21-style fix (validator
+  template 40→50) is one died-at-ceiling incident away, and LOOP-SPEC
+  §2 step 4's budgets are the edit site.
+- **O4 — assessed, watch: TODO.md giant-row edit misses.** One
+  `edit_file: 'old' not found` per cycle (cycle 9: the t25 spec; cycle
+  10: the TODO row flip) — done-rows are now multi-KB single lines and
+  exact-match reconstruction from memory fails ~once per cycle, one
+  recovery iteration each. T26's pagination makes the fresh-read
+  mitigation free. Below the filing bar; carried.
+- **O5 — assessed, closing: the unidentified T23 flaky test.** Zero
+  recurrences across cycles 9–10 (grep `FAILED` over all six t2x child
+  streams + both cycle streams: every hit is a red-phase, a mutant, or
+  the eval quoting the original — each NAMED, per T25). Kept on watch
+  one more eval; then the class is T25's to catch.
+- **O6 — assessed, carried: `.chug` git-add fumble.** Cycle 9 tried
+  `git add .chug/…` for harvested artifacts (21:06:15) → gitignore
+  hint → immediate recovery, one iteration. The harvest is
+  local-corpus-only by design (gitignored, never pushed); LOOP-SPEC
+  already says "landed", not "committed". One occurrence; below the
+  bar. Second occurrence → one clarifying clause in §2 step 5.
 
 ## 3. Friction hot spots
 
-- **PATH tax / revert-thrash / edit-thrash / stub hangs / stale-ledger
-  / watch-and-wait / `timeout` mirage — fixed, holding (7th eval
-  running).** Zero recurrences; the T22-note corpus itself stayed clean
-  (no model reached for `timeout` in any post-T22 stream).
-- **Orchestration plumbing is STILL the orchestrator's dominant cost —
-  and the fix now exists but is unused.** Cycle 8: 37 of 47 tool calls
-  were bash, the plurality child plumbing by hand (`git worktree add`,
-  the 6-line nohup incantation, `ps -p` polls, log tails, jq on the
-  child's events.jsonl). The `delegate` tool (T23, landed `1012dca`)
-  internalizes exactly launch+status — and recorded **zero calls** in
-  the cycle-7 and cycle-8 loop streams (jq-verified): LOOP-SPEC §2
-  still teaches the hand-rolled template, so the loop's newest
-  capability is invisible to its own core mechanic. This is the
-  evidence behind T24 (§4).
-- **2000-line read cap: now four files over it.** tools.rs crossed the
-  cap this cycle (2,048, +879 from T23) joining driver.rs (2,894),
-  mcp_http.rs (2,343), tui.rs (2,163). The cap note names the window
-  but offers no paging primitive, so children fall back to `sed -n
-  X,Yp` chunking (T20 impl burned iterations 1–5 on this, cycle-7 eval).
-  Fix filed: **T26** (`specs/t26-read-file-pagination.md`), pri 3.
-- **Spec-authoring lessons (cycle-5 L4, cycle-7 T21-anomaly): holding.**
-  No derivation slips in cycle-8's spec; the T22 check line kept the
-  vacuous-but-harmless behavior-check convention and the impl child
-  goal-accepted without incident. T24's spec (this eval) applies the
-  content-check lesson: its `check:` greps the *worktree-relative*
-  LOOP-SPEC.md, never `cd`s to main.
+- **Fixed classes holding (8th eval running):** PATH tax,
+  revert-thrash, edit-thrash, stub hangs, stale-ledger, watch-and-wait,
+  `timeout` mirage (zero post-T22; no model has reached for `timeout`
+  in any post-T22 stream), GNU/BSD `sed` (still exactly 1 occurrence —
+  carried), 2000-line read cap (T26 landed; the t26-impl stream shows
+  zero sed-chunking).
+- **Child plumbing — FIXED, measured.** See §1: 12 delegate calls
+  replaced the entire nohup/ps/tail/jq surface in cycle 10. The loop's
+  largest mechanical sink is now the poll cadence itself → §4 T29.
+- **Status polls are the new dominant mechanical cost.** Cycle 10: 9
+  polls of 68 iterations (~13%), each a full-context LLM round trip —
+  late-cycle input is ~325k tokens (iteration 68: 325,546 in), so idle
+  waiting is the most expensive thing the loop does per child. This is
+  the evidence behind T29 (§4), not a bug.
 
 ## 4. Capability gaps — FEATURE SCAN (required)
 
 Judged against the human specs' direction (meta loops, adversarial
 validation, observability, fleet-driving) and harness-class norms:
 
-- **N5 → T24 — the loop's orchestration doctrine has not adopted the
-  loop's orchestration tool.** `delegate` exists in every session's
-  schema since `1012dca`; LOOP-SPEC §2's launch template is still the
-  6-line nohup incantation and its polling guidance is still
-  `ps`+`tail`+jq by hand (§3's 37/47 evidence). A doctrine edit —
-  impl-child launch via `delegate{action:launch}` with explicit
-  `--max-iters 50` (delegate defaults are 40/35, T21 needs 50), polling
-  via `delegate{action:status}`, validator launch likewise as a
-  LOOP-SPEC override of META-SPEC §6's mechanics (META-SPEC.md itself
-  untouched — human-owned doctrine) — converts T23 from shipped code
-  into practiced capability and deletes the orchestrator's largest
-  remaining token sink. Filed: **T24**
-  (`specs/t24-loop-adopts-delegate.md`), pri 2 per the features-first
-  doctrine. Validation REQUIRED (loop doctrine, §2.4).
-- **web_fetch — assessed, not filed (3rd consecutive eval).** Zero
-  external-info signals in the cycle-7/8 streams (grep:
-  docs.rs/stackoverflow/google/fetch = 0 hits); every cycle was fully
-  served by the local repo + harvested streams. The filing bar remains
-  "a cycle stalls on external information"; it has not happened.
-- **Parallel tool calls — assessed, not filed (carried).** Cycle 8 ran
-  47 tool results over 41 iterations (≈1.15/call) — no batching
-  pressure; shell `&&` covers what exists. Thin evidence, real
-  complexity. Noted.
-- **MCP consumption depth — no gap observed (carried).** spec-7/9
-  capability remains ahead of its use case; nothing in eight cycles
-  needed it.
-- **Session/handoff UX — working, no gap.** This cycle is again the
-  proof: cold start from cycle-8's wrap, zero human words, every fact
-  on disk.
-- **Carried human-decision items (unchanged):** child-launch
-  `--max-tokens` (J7 — data less anomalous this cycle: glm 116k/50 and
-  31k/23, kimi 112k/25 and 30k/21, but trust not established), `chug
-  doctor`, model routing/escalation (zero glm fallbacks through 8 clean
-  rounds), bash sandbox policy + stray I7 cargo symlink, loopd pidfile
-  race (M4, unexercised), GNU/BSD sed note (N3, one occurrence).
+- **O7 → T29 — delegate waits are polling-shaped; the tool should
+  long-poll.** `status` returns instantly (by T23 design); the
+  orchestrator then burns one full-context iteration per ~60–110 s of
+  child life purely to ask "done yet?" — 9 iterations per 2-item cycle
+  (§3). The missing capability is a bounded wait: `status` gains
+  optional `wait_secs` (default 0 = current instant behavior,
+  byte-identical output; >0 = block server-side until the child's
+  events-state changes OR the child exits OR the deadline, cap 600 s,
+  then return the same summary). One mechanical poll per wait-window
+  collapses to one tool call per state change. LOOP-SPEC §2's polling
+  line gains the wait option in the same item (the T23→T24 ship+adopt
+  pattern in one commit). Filed: **T29**
+  (`specs/t29-delegate-wait-secs.md`), pri 3, feature — worked ahead of
+  same-pri friction per the amended doctrine. Validation REQUIRED
+  (tools.rs + loop doctrine, both §2.4-named).
+- **web_fetch — NOT filed (4th consecutive eval).** Zero
+  external-info signals in the cycle-9/10 streams (grep:
+  docs.rs/stackoverflow/google/fetch = 0 hits, re-run this eval). Ten
+  cycles fully served by the local repo + harvested streams. The filing
+  bar stands: a cycle stalls on external information.
+- **Parallel tool calls — closed as a gap class.** The driver executes
+  multiple tool calls per turn (cycle 9: 91 results / 79 iterations ≈
+  1.15; this eval session itself batches reads). No row was ever
+  needed; the class is retired from the scan.
+- **`delegate` stop/kill action — assessed, not filed.** The wedge
+  protocol (kill a child with no transcript growth >5 min) has not
+  fired in ten cycles — no child has wedged since T2's activity
+  timeout. `kill <pid>` via bash is one call when it does. Filing bar:
+  the first post-T2 wedge.
+- **MCP consumption depth — no gap observed (carried, 8th eval).**
+- **Plan-then-execute / steering depth / session UX — no gap.** The
+  loop is the proof, eleventh consecutive cold start with zero human
+  words.
+- **Carried human-decision items (unchanged unless noted):**
+  child-launch `--max-tokens` (J7 — telemetry now looks sane in both
+  directions: glm 92k/25, 74k/34, 33k/27; kimi 47k/13, 71k/29, 80k/38
+  — the anomaly has normalized, but trust-in-proxy-accounting stays a
+  human call), `chug doctor`, model routing/escalation (11 clean glm
+  rounds, zero fallbacks), bash sandbox policy + stray I7 cargo
+  symlink, loopd pidfile race (M4, unexercised), GNU/BSD sed note (N3,
+  1 occurrence).
 
 ## 5. Top 3 priorities
 
-1. **T25 — failure-aware event previews (robustness, pri 2).** The
-   loop's postmortem surface provably lost a flaky test's identity this
-   cycle; the fix is one seam (`src/eventlog.rs:179`) with the ok-leg
-   byte-identical. Every future failure — flaky test, child compile
-   error, validator mutation — names itself. Worked first per doctrine
-   order (robustness > features).
-2. **T24 — LOOP-SPEC adopts `delegate` (feature, pri 2).** The largest
-   live capability gap is adoption-shaped: the tool exists, is tested,
-   is documented — and the doctrine that should use it predates it.
-   Converts the orchestrator's dominant token sink (hand-rolled
-   plumbing) into the tested primitive T23 built.
-3. **T26 — read_file offset/limit pagination (DX friction, pri 3).**
-   Four files now exceed the read cap; every child that must read them
-   re-derives sed paging. One schema addition, default path
-   byte-identical.
+1. **T27 — loopd cycle budget 80→120 (robustness, pri 2).** Two of two
+   measured fresh-eval cycles ended within 4 iterations of the ceiling;
+   one of them deferred a merge-ready validation to a whole extra
+   cycle. One number at `loopd.sh:71`, T21-precedent, bounded risk.
+2. **T28 — delegate status reaps zombies (robustness, pri 3).** The
+   loop's child-observation surface currently lies in its only
+   interesting case; `waitpid(WNOHANG)` + ECHILD fallback makes
+   `alive` truthful. tools.rs → kimi validation required.
+3. **T29 — delegate status `wait_secs` (feature, pri 3).** The largest
+   remaining mechanical token sink (§3); features-first over T30 at
+   equal pri per the amended doctrine.
 
 ## 6. Handoff — recommended execution order
 
-**LOOP-SPEC Phase 2 (this cycle):** T25 → T24 → T26, one at a time, each
-with kimi adversarial validation (T25 touches `src/eventlog.rs` —
-explicitly named in §2.4; T24 is loop doctrine; T26 touches
-`src/tools.rs`). Budget realism: cycle 7 worked 2 rows in ~2h/76 iters;
-this cycle's Phase 1 cost ~16 iterations, so T26 is the drop candidate
-per §2.6 (its spec is ready; a cold next cycle picks it up with zero
-human words). If T24 lands, dispatch later children **via the new
-delegate-based template** — an in-cycle dogfood to cite in the wrap.
-If any child dies mid-work: harvest, validate what landed, merge only
-if green+complete, else leave the row `todo` with findings.
+**LOOP-SPEC Phase 2 (this cycle):** T27 → T28 → T29 → T30, one at a
+time. Validation per §2.4: T27 (loop tooling/doctrine), T28
+(src/tools.rs), T29 (src/tools.rs + LOOP-SPEC), T30 (loop/spec
+doctrine) — all four get a kimi adversarial pass; T30 is the budget
+drop candidate (spec ready, a cold next cycle picks it up with zero
+human words). T27 dispatch note: the impl child edits `loopd.sh` in
+git ONLY — never signals the running supervisor (launchd job
+`com.tampajohn.chug-loopd`); activation is the operator's next
+restart, and the spec records why that's safe.
 
-**Human-decision items (no rows filed):** 1. Child-launch `--max-tokens`
-(carried; J7). 2. `chug doctor` (carried). 3. Model routing/escalation
-(carried). 4. Bash sandbox policy; stray I7 cargo symlink (carried).
-5. loopd pidfile write/check race (M4, unexercised). 6. GNU/BSD `sed`
-flag drift (N3 — one occurrence; second occurrence generalizes the bash
-description's platform note). 7. J7: proxy-side usage accounting per
-model family.
+**Human-decision items (no rows filed):** 1. Child-launch
+`--max-tokens` (J7 — telemetry normalized; still human). 2. `chug
+doctor`. 3. Model routing/escalation. 4. Bash sandbox policy; stray I7
+cargo symlink. 5. loopd pidfile write/check race (M4, unexercised).
+6. GNU/BSD `sed` flag drift (N3 — 1 occurrence). 7. Proxy-side usage
+accounting per model family (J7). 8. loopd activation of T27 (restart
+timing) — the only NEW carry this eval.
 
 ## Outcomes (filled at cycle wrap — LOOP-SPEC Phase 3)
 
