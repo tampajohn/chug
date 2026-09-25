@@ -51,11 +51,13 @@ pub fn tool_schemas() -> Vec<Value> {
     vec![
         json!({
             "name": "read_file",
-            "description": "Read a text file. Paths are relative to the working directory. Output is capped at 2000 lines and truncation is noted.",
+            "description": "Read a text file. Paths are relative to the working directory. Output is capped at 2000 lines and truncation is noted. Use `offset`/`limit` to page beyond the cap.",
             "input_schema": {
                 "type": "object",
                 "properties": {
-                    "path": {"type": "string", "description": "File path relative to cwd (must stay inside cwd)"}
+                    "path": {"type": "string", "description": "File path relative to cwd (must stay inside cwd)"},
+                    "offset": {"type": "integer", "description": "1-based first line to show (default 1)"},
+                    "limit": {"type": "integer", "description": "Max lines to show (default 2000; may exceed the cap)"}
                 },
                 "required": ["path"]
             }
@@ -220,20 +222,89 @@ fn get_path(ctx: &ToolCtx, input: &Value) -> anyhow::Result<PathBuf> {
     resolve_safe(&ctx.cwd, raw).map_err(|e| anyhow!("{e}"))
 }
 
+/// T26: `read_file` — optional `offset`/`limit` pagination.
+///
+/// With neither param the behavior is pre-T26 byte-for-byte: the whole file
+/// when it fits under [`READ_MAX_LINES`], else head-2000 plus the legacy
+/// truncation note. With either param, window semantics apply: show lines
+/// `offset ..= min(offset + limit - 1, line_count)` (`limit` may exceed the
+/// cap; `offset` is 1-based and an `offset < 1` is a tool error). A window
+/// that is not the whole file gets a note naming the actual window; an
+/// `offset` past EOF is not an error — a short note naming the file length is
+/// returned so paging loops can stop cleanly.
 fn read_file(ctx: &ToolCtx, input: &Value) -> anyhow::Result<ToolResult> {
     let path = get_path(ctx, input)?;
     let data =
         fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
     let line_count = data.lines().count();
-    let content = if line_count > READ_MAX_LINES {
-        let head: Vec<&str> = data.lines().take(READ_MAX_LINES).collect();
-        format!(
-            "{}\n\n[truncated: showing lines 1-{READ_MAX_LINES} of {line_count}]",
-            head.join("\n")
-        )
-    } else {
-        data
+
+    // Default path (neither param): exactly today's output, including the
+    // legacy note wording — pinned byte-identical by test.
+    if input.get("offset").is_none() && input.get("limit").is_none() {
+        let content = if line_count > READ_MAX_LINES {
+            let head: Vec<&str> = data.lines().take(READ_MAX_LINES).collect();
+            format!(
+                "{}\n\n[truncated: showing lines 1-{READ_MAX_LINES} of {line_count}]",
+                head.join("\n")
+            )
+        } else {
+            data
+        };
+        return Ok(ToolResult {
+            content,
+            is_error: false,
+        });
+    }
+
+    // Window path (either param present). `offset` is 1-based.
+    let offset = match input.get("offset") {
+        Some(v) => {
+            let n = v.as_u64().ok_or_else(|| {
+                anyhow!("read_file: `offset` must be an integer (1-based first line to show)")
+            })?;
+            if n < 1 {
+                bail!("read_file: `offset` is 1-based — the first line is 1, got {n}");
+            }
+            usize::try_from(n).unwrap_or(usize::MAX)
+        }
+        None => 1,
     };
+    let limit = match input.get("limit") {
+        Some(v) => {
+            let n = v.as_u64().ok_or_else(|| {
+                anyhow!("read_file: `limit` must be an integer (max lines to show)")
+            })?;
+            if n < 1 {
+                bail!("read_file: `limit` must be at least 1, got {n}");
+            }
+            usize::try_from(n).unwrap_or(usize::MAX)
+        }
+        // Default `limit` stays the cap; explicit paging may exceed it.
+        None => READ_MAX_LINES,
+    };
+
+    // Past-EOF offset: not an error — name the file length so a paging loop
+    // can stop.
+    if offset > line_count {
+        return Ok(ToolResult {
+            content: format!(
+                "[offset {offset} is past the end of this file: it has {line_count} lines]"
+            ),
+            is_error: false,
+        });
+    }
+    let end = offset.saturating_add(limit - 1).min(line_count);
+    let shown: Vec<&str> = data
+        .lines()
+        .skip(offset - 1)
+        .take(end - offset + 1)
+        .collect();
+    let mut content = shown.join("\n");
+    if offset != 1 || end != line_count {
+        content.push_str(&format!(
+            "\n\n[showing lines {offset}-{end} of {line_count}]"
+        ));
+    }
     Ok(ToolResult {
         content,
         is_error: false,
@@ -2043,6 +2114,219 @@ mod tests {
             result.content.contains("/nonexistent/chug"),
             "error must name the binary path: {}",
             result.content
+        );
+    }
+
+    // ---- T26: read_file `offset`/`limit` pagination ----
+
+    /// An `n`-line fixture (line i is `L{i}`, trailing newline) at `dir/big.txt`,
+    /// mirroring the >2000-line source files that motivated T26.
+    fn write_big_fixture(dir: &Path, n: usize) {
+        let body: String = (1..=n).map(|i| format!("L{i}\n")).collect();
+        fs::write(dir.join("big.txt"), body).unwrap();
+    }
+
+    fn read_dispatch(cwd: &Path, input: Value) -> ToolResult {
+        let ctx = ToolCtx {
+            cwd: cwd.to_path_buf(),
+            bash_timeout: Duration::from_secs(BASH_TIMEOUT_SECS),
+        };
+        dispatch(&ctx, "read_file", &input)
+    }
+
+    /// Lines `a..=b` of the `L{i}` fixture, joined with newlines.
+    fn fixture_lines(a: usize, b: usize) -> String {
+        (a..=b)
+            .map(|i| format!("L{i}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// T26 default leg (over the cap): with neither param the output must be
+    /// byte-identical to pre-T26 — head 2000 lines plus the LEGACY truncation
+    /// note. Pinned as one exact string so any note wording drift fails here.
+    #[test]
+    fn read_file_default_over_cap_is_byte_identical_head_and_legacy_note() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_big_fixture(tmp.path(), 2894);
+        let result = read_dispatch(tmp.path(), json!({"path": "big.txt"}));
+        assert!(!result.is_error, "{}", result.content);
+        let expected = format!(
+            "{}\n\n[truncated: showing lines 1-2000 of 2894]",
+            fixture_lines(1, 2000)
+        );
+        assert_eq!(result.content, expected);
+    }
+
+    /// T26 default leg (under the cap): the whole file verbatim, no note.
+    #[test]
+    fn read_file_default_under_cap_returns_file_verbatim() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_big_fixture(tmp.path(), 3);
+        let result = read_dispatch(tmp.path(), json!({"path": "big.txt"}));
+        assert!(!result.is_error, "{}", result.content);
+        assert_eq!(result.content, "L1\nL2\nL3\n");
+    }
+
+    /// T26 window leg: `offset: 2001` (no `limit`) starts at the file's true
+    /// line 2001 and runs to EOF, with a note naming the real window.
+    #[test]
+    fn read_file_offset_pages_to_true_window_through_eof() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_big_fixture(tmp.path(), 2894);
+        let result = read_dispatch(tmp.path(), json!({"path": "big.txt", "offset": 2001}));
+        assert!(!result.is_error, "{}", result.content);
+        assert!(
+            result.content.starts_with("L2001\n"),
+            "window must start at the file's line 2001: {}",
+            result.content.lines().next().unwrap_or_default()
+        );
+        let expected = format!(
+            "{}\n\n[showing lines 2001-2894 of 2894]",
+            fixture_lines(2001, 2894)
+        );
+        assert_eq!(result.content, expected);
+    }
+
+    /// T26 window leg: `offset`+`limit` shows exactly that slice, note names it.
+    #[test]
+    fn read_file_offset_limit_shows_exact_window() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_big_fixture(tmp.path(), 2894);
+        let result = read_dispatch(
+            tmp.path(),
+            json!({"path": "big.txt", "offset": 2001, "limit": 50}),
+        );
+        assert!(!result.is_error, "{}", result.content);
+        let expected = format!(
+            "{}\n\n[showing lines 2001-2050 of 2894]",
+            fixture_lines(2001, 2050)
+        );
+        assert_eq!(result.content, expected);
+    }
+
+    /// T26: `limit` may exceed the 2000-line cap (explicit paging is the
+    /// point), and a window covering the whole file gets NO note.
+    #[test]
+    fn read_file_limit_may_exceed_cap_whole_file_window_has_no_note() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_big_fixture(tmp.path(), 2894);
+        let result = read_dispatch(
+            tmp.path(),
+            json!({"path": "big.txt", "offset": 1, "limit": 5000}),
+        );
+        assert!(!result.is_error, "{}", result.content);
+        assert_eq!(result.content, fixture_lines(1, 2894));
+        assert!(!result.content.contains("[showing lines"));
+        assert!(!result.content.contains("[truncated:"));
+    }
+
+    /// T26: `limit` alone pages from the top (offset defaults to 1).
+    #[test]
+    fn read_file_limit_alone_pages_from_the_top() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_big_fixture(tmp.path(), 10);
+        let result = read_dispatch(tmp.path(), json!({"path": "big.txt", "limit": 3}));
+        assert!(!result.is_error, "{}", result.content);
+        assert_eq!(result.content, "L1\nL2\nL3\n\n[showing lines 1-3 of 10]");
+    }
+
+    /// T26 edge: `offset: 0` is a tool error naming the 1-based convention.
+    #[test]
+    fn read_file_offset_zero_is_tool_error_naming_one_based_convention() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_big_fixture(tmp.path(), 10);
+        let result = read_dispatch(tmp.path(), json!({"path": "big.txt", "offset": 0}));
+        assert!(result.is_error);
+        assert!(
+            result.content.contains("1-based"),
+            "error must name the 1-based convention: {}",
+            result.content
+        );
+    }
+
+    /// T26 edge: `offset` past EOF is NOT an error — short content naming the
+    /// file length, so paging loops stop cleanly instead of crashing.
+    #[test]
+    fn read_file_offset_past_eof_names_length_without_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_big_fixture(tmp.path(), 2894);
+        let result = read_dispatch(tmp.path(), json!({"path": "big.txt", "offset": 3000}));
+        assert!(!result.is_error, "{}", result.content);
+        assert!(result.content.contains("2894"), "{}", result.content);
+    }
+
+    /// T26 edge (EOF boundary): `offset` == line_count shows the LAST line —
+    /// the EOF test is strictly greater-than, not `>=`.
+    #[test]
+    fn read_file_offset_at_last_line_shows_it() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_big_fixture(tmp.path(), 2894);
+        let result = read_dispatch(tmp.path(), json!({"path": "big.txt", "offset": 2894}));
+        assert!(!result.is_error, "{}", result.content);
+        assert_eq!(
+            result.content,
+            "L2894\n\n[showing lines 2894-2894 of 2894]"
+        );
+    }
+
+    /// T26 edge: `limit: 1` shows exactly one line.
+    #[test]
+    fn read_file_limit_one_shows_exactly_one_line() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_big_fixture(tmp.path(), 2894);
+        let result = read_dispatch(
+            tmp.path(),
+            json!({"path": "big.txt", "offset": 7, "limit": 1}),
+        );
+        assert!(!result.is_error, "{}", result.content);
+        assert_eq!(result.content, "L7\n\n[showing lines 7-7 of 2894]");
+    }
+
+    /// T26 schema pin (T22 convention): the LIVE `tool_schemas()` read_file
+    /// entry carries integer `offset`/`limit` properties, documented, and
+    /// `required` stays exactly `["path"]` — the params are optional.
+    #[test]
+    fn read_file_schema_pins_optional_offset_and_limit() {
+        let schemas = tool_schemas();
+        let entries: Vec<&Value> = schemas
+            .iter()
+            .filter(|s| s.get("name").and_then(Value::as_str) == Some("read_file"))
+            .collect();
+        assert_eq!(entries.len(), 1, "exactly one read_file schema");
+        let schema = &entries[0];
+        let props = schema
+            .get("input_schema")
+            .and_then(|s| s.get("properties"))
+            .expect("input_schema.properties");
+        for key in ["offset", "limit"] {
+            let prop = props
+                .get(key)
+                .unwrap_or_else(|| panic!("{key} property missing from read_file schema"));
+            assert_eq!(
+                prop.get("type").and_then(Value::as_str),
+                Some("integer"),
+                "{key} must be typed integer"
+            );
+        }
+        let required: Vec<&str> = schema["input_schema"]["required"]
+            .as_array()
+            .expect("required list")
+            .iter()
+            .filter_map(Value::as_str)
+            .collect();
+        assert_eq!(
+            required,
+            vec!["path"],
+            "required must stay exactly [path] (offset/limit optional)"
+        );
+        let desc = schema
+            .get("description")
+            .and_then(Value::as_str)
+            .expect("description");
+        assert!(
+            desc.contains("Use `offset`/`limit` to page beyond the cap."),
+            "description lost the paging clause: {desc}"
         );
     }
 }
