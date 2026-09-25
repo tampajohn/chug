@@ -31,7 +31,11 @@ budget. Commit the evaluation artifacts (`eval: ...`) before dispatching.
 
 ## Phase 2 — Work the queue
 
-Priority order: bugs > robustness > DX friction > performance > features.
+Priority order: bugs > robustness > **features** > DX friction > performance.
+Features are first-class: the mandate is closing capability gaps (a missing
+`delegate`/`web_fetch` tool, a missing mode), not only hardening what exists.
+When the queue holds both a credible feature row and a DX-friction row of
+the same pri, work the feature first.
 
 For each `todo` row, ONE at a time (backgrounded child + polling, per step 2):
 
@@ -83,6 +87,11 @@ For each `todo` row, ONE at a time (backgrounded child + polling, per step 2):
   remaining (eval commits, Outcomes) → `goal_complete` with the cycle
   summary. Never force-push; a rejected push means the remote moved — stop
   and note it, don't reconcile mid-cycle.
+- **Your wrap is the next cycle's input.** `loopd.sh` relaunches this spec
+  back-to-back with no human in the loop — TODO.md, EVALUATION.md and
+  specs/ are the handoff. Leave them such that a cold next cycle needs zero
+  human words: every `todo` row has a ready spec, every deferred item says
+  why, every open question is written down.
 
 ## Hard rules
 

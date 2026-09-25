@@ -191,6 +191,26 @@ otherwise. Config: `LANGFUSE_HOST` + `LANGFUSE_PUBLIC_KEY` +
   with), **`specs/` is work** (anything a TODO row or feature round points
   at)
 
+## Continuous mode (`loopd.sh`)
+
+The self-improvement loop runs *continuously* — cycles back-to-back, no
+human per-phase prompting. Each cycle's wrap (TODO.md, EVALUATION.md,
+specs/) is the next cycle's input; phases chain through files.
+
+```bash
+nohup ./loopd.sh > /dev/null 2>&1 &   # start (detached)
+./loopd.sh status                     # liveness + recent cycle activity
+./loopd.sh stop                       # exits after the current cycle
+```
+
+Per cycle: kimi-k3 orchestrates LOOP-SPEC (evaluate or skip per freshness,
+work the queue — bugs > robustness > **features** > DX > perf — glm-5-3-flash
+children implement, kimi validates adversarially, auto-push per item).
+State in `.chug/loopd/` (cycle logs, pidfile). Three consecutive cycles
+without `goal_complete` → HALTED marker + exit. A second supervisor refuses
+to start (pidfile); a manual `LOOP-SPEC` run makes it skip a cycle rather
+than collide.
+
 ## Development
 
 ```bash

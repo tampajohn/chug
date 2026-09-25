@@ -33,8 +33,16 @@ you can). Sections:
 3. **Friction hot spots** — repeated patterns that burn tokens/turns
    (like the PATH tax, revert-thrash classes already in TODO — assess
    whether the fixes worked; don't re-file them).
-4. **Capability gaps** — judged against the direction in the human specs
-   (meta loops, adversarial validation, observability, fleet-driving).
+4. **Capability gaps — FEATURE SCAN (required)** — judged against the
+   direction in the human specs (meta loops, adversarial validation,
+   observability, fleet-driving) AND against what a coding harness of this
+   class should do. Name concrete MISSING capabilities, not just friction:
+   candidate classes to interrogate each cycle — delegation (a `delegate`
+   tool spawning a bounded child chug), web access, parallel tool calls,
+   richer MCP consumption, plan-then-execute modes, session/handoff UX,
+   steering depth. File at least one feature row per evaluation when a
+   credible gap exists; features are no longer the bottom of the priority
+   stack (LOOP-SPEC §2).
 5. **Top 3 priorities** — what you'd fix FIRST and why.
 
 ## Extend `TODO.md`
