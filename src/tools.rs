@@ -1,6 +1,6 @@
 use std::ffi::{OsStr, OsString};
 use std::fs;
-use std::io::Read;
+use std::io::{Read, Seek};
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
 use std::path::{Component, Path, PathBuf};
@@ -20,6 +20,18 @@ const OUTPUT_KEEP_HEAD: usize = 20_000;
 const OUTPUT_KEEP_TAIL: usize = 10_000;
 const GLOB_MAX: usize = 200;
 const LIST_DIR_MAX: usize = 500;
+
+/// T23 (`delegate`): child budget defaults, matching the LOOP-SPEC
+/// impl-child template of the loop that motivated the tool.
+pub(crate) const DELEGATE_DEFAULT_MAX_ITERS: u64 = 40;
+pub(crate) const DELEGATE_DEFAULT_MAX_MINUTES: u64 = 35;
+/// `status` reads only the last ≤64 KiB of a child's events log: the file
+/// grows unboundedly over a run and every poll must stay bounded.
+const DELEGATE_EVENTS_TAIL_BYTES: u64 = 64 * 1024;
+/// Same idea for the child's console log before its tail lines are taken.
+const DELEGATE_LOG_TAIL_BYTES: u64 = 8 * 1024;
+const DELEGATE_LOG_TAIL_LINES: usize = 3;
+const DELEGATE_LOG_LINE_MAX: usize = 200;
 
 #[derive(Debug, Clone)]
 pub struct ToolCtx {
@@ -131,6 +143,24 @@ pub fn tool_schemas() -> Vec<Value> {
             }
         }),
         json!({
+            "name": "delegate",
+            "description": "Launch or observe a bounded child `chug run` (e.g. in a worktree you created). action=launch: spawns a detached child with its working directory at `cwd` (absolute), spec/goal/model required, max_iters/max_minutes optional (defaults 40/35); returns immediately with the child pid and the log/events paths — it never waits on the child. action=status: reports the child's liveness (when you pass the `pid` from launch), a summary of its .chug/events.jsonl (state, last_iteration, budget-low/goal/abort flags), and the tail of its console log. Never blocks: launch returns at spawn, status reads tails only.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "enum": ["launch", "status"], "description": "launch spawns a detached child chug run; status observes a previously launched one"},
+                    "cwd": {"type": "string", "description": "Absolute directory the child runs in (launch and status; the worktree you created — NOT confined to your cwd)"},
+                    "spec": {"type": "string", "description": "Absolute path to the spec file (launch only, required)"},
+                    "goal": {"type": "string", "description": "Goal text for the child (launch only, required)"},
+                    "model": {"type": "string", "description": "Model id the child runs with (launch only, required — routing stays your explicit choice)"},
+                    "max_iters": {"type": "integer", "description": "Child iteration budget (launch only; default 40)"},
+                    "max_minutes": {"type": "integer", "description": "Child wall-clock budget in minutes (launch only; default 35)"},
+                    "pid": {"type": "integer", "description": "The pid launch returned (status only, optional; omit → liveness is reported unknown)"}
+                },
+                "required": ["action", "cwd"]
+            }
+        }),
+        json!({
             "name": "goal_complete",
             "description": "Assert that the goal is fully met and verified. Verification runs the spec's `check:` command if present; a failing check rejects the claim and the loop continues.",
             "input_schema": {
@@ -165,6 +195,7 @@ fn inner(ctx: &ToolCtx, name: &str, input: &Value) -> anyhow::Result<ToolResult>
         "grep" => grep(ctx, input),
         "glob" => glob_tool(ctx, input),
         "list_dir" => list_dir(ctx, input),
+        "delegate" => delegate(ctx, input),
         "update_ledger" => update_ledger(ctx, input),
         "goal_complete" => Ok(ToolResult {
             content: "goal_complete acknowledged. Verification will run; do not assume acceptance until the loop confirms it.".to_string(),
@@ -486,6 +517,369 @@ fn update_ledger(ctx: &ToolCtx, input: &Value) -> anyhow::Result<ToolResult> {
     })
 }
 
+/// T23: `delegate` — launch and observe a bounded child `chug run`.
+///
+/// Two actions. `launch` spawns a detached child
+/// (`<binary> run --spec … --goal … --model … --max-iters … --max-minutes …`,
+/// child cwd = the caller's `cwd`) and returns as soon as `spawn()` succeeds.
+/// The caller supplied the worktree, so worktree creation, building,
+/// harvest/merge, and killing the child stay with the caller's bash — this
+/// tool only replaces the `nohup … &` line and the ps/tail/jq polling.
+/// `status` reports the child's liveness plus a summary of its
+/// `.chug/events.jsonl` and the tail of its console log.
+///
+/// Deliberately repo-agnostic — chug is not married to any one loop, so
+/// there is no risk-gate integration here (the laya gate judges `bash`
+/// commands only and is default-off) and no opinion about what the child is
+/// for.
+///
+/// Path policy — deliberate exception, the ONLY tool exempt from
+/// [`resolve_safe`]: `cwd` and `spec` must be absolute and are NOT confined
+/// to the orchestrator's cwd, because children live in `/tmp` worktrees by
+/// design; the confinement every other tool enforces would make this tool
+/// useless for its one job.
+fn delegate(_ctx: &ToolCtx, input: &Value) -> anyhow::Result<ToolResult> {
+    // `_ctx` is deliberately unused: delegate is the one tool whose paths are
+    // not confined to ctx.cwd (see the path-policy note above).
+    match get_str(input, "action")? {
+        "launch" => delegate_launch(input),
+        "status" => delegate_status(input),
+        other => bail!("delegate: unknown action {other:?} (expected \"launch\" or \"status\")"),
+    }
+}
+
+/// The child's working directory. Absolute, and deliberately not confined to
+/// the orchestrator's cwd — the one [`resolve_safe`] exemption (see
+/// [`delegate`]).
+fn delegate_cwd(input: &Value) -> anyhow::Result<PathBuf> {
+    let raw = get_str(input, "cwd")?;
+    let cwd = PathBuf::from(raw);
+    if !cwd.is_absolute() {
+        bail!("delegate: cwd must be an absolute directory, got {raw:?}");
+    }
+    if !cwd.is_dir() {
+        bail!("delegate: cwd is not a directory: {}", cwd.display());
+    }
+    Ok(cwd)
+}
+
+/// The child's spec path: absolute (it is read by the child, whose cwd is the
+/// worktree, not by us — a relative path would mean something else there).
+fn delegate_spec(input: &Value) -> anyhow::Result<PathBuf> {
+    let raw = get_str(input, "spec")?;
+    let spec = PathBuf::from(raw);
+    if !spec.is_absolute() {
+        bail!("delegate: spec must be an absolute path, got {raw:?}");
+    }
+    Ok(spec)
+}
+
+/// Spawn a detached `chug run` child and return immediately. Never waits on
+/// the child — no sleeps, no retries, no waiting anywhere in this function.
+fn delegate_launch(input: &Value) -> anyhow::Result<ToolResult> {
+    let cwd = delegate_cwd(input)?;
+    let spec = delegate_spec(input)?;
+    let goal = get_str(input, "goal")?;
+    let model = get_str(input, "model")?;
+    let max_iters = input
+        .get("max_iters")
+        .and_then(Value::as_u64)
+        .unwrap_or(DELEGATE_DEFAULT_MAX_ITERS);
+    let max_minutes = input
+        .get("max_minutes")
+        .and_then(Value::as_u64)
+        .unwrap_or(DELEGATE_DEFAULT_MAX_MINUTES);
+
+    // Binary resolution: the test seam wins, else the running chug itself —
+    // children run the same binary, exactly like today's template line does.
+    let binary = match std::env::var_os("CHUG_DELEGATE_BIN") {
+        Some(override_bin) => PathBuf::from(override_bin),
+        None => std::env::current_exe().context("resolving the chug binary (current_exe)")?,
+    };
+
+    // One fixed log location: `status` and the harvest step find it without a knob.
+    let chug_dir = cwd.join(".chug");
+    fs::create_dir_all(&chug_dir).with_context(|| format!("creating {}", chug_dir.display()))?;
+    let log_path = chug_dir.join("delegate.log");
+
+    let mut cmd = Command::new(&binary);
+    cmd.arg("run")
+        .arg("--spec")
+        .arg(&spec)
+        .arg("--goal")
+        .arg(goal)
+        .arg("--model")
+        .arg(model)
+        .arg("--max-iters")
+        .arg(max_iters.to_string())
+        .arg("--max-minutes")
+        .arg(max_minutes.to_string())
+        .current_dir(&cwd)
+        .stdin(Stdio::null())
+        // stdout AND stderr append to one log file.
+        .stdout(Stdio::from(open_append(&log_path)?))
+        .stderr(Stdio::from(open_append(&log_path)?));
+    // Detached, `nohup … &` parity: the child gets its own process group and
+    // ignores SIGHUP, so it survives both the orchestrator exiting and a
+    // terminal hangup. Both are unix-only; non-unix falls back to a plain
+    // detached spawn (the parent never waits on it either way).
+    #[cfg(unix)]
+    {
+        cmd.process_group(0);
+        // Ignored dispositions survive exec, handled ones do not — so the
+        // child ends up SIG_IGN-ing SIGHUP without this process changing its
+        // own disposition.
+        unsafe {
+            cmd.pre_exec(|| {
+                libc::signal(libc::SIGHUP, libc::SIG_IGN);
+                Ok(())
+            });
+        }
+    }
+    let child = cmd
+        .spawn()
+        .with_context(|| format!("spawning chug child: {}", binary.display()))?;
+    let pid = child.id();
+    // Detached by contract: the handle is dropped immediately, the child is
+    // never waited on or reaped here.
+    drop(child);
+
+    Ok(ToolResult {
+        content: format!(
+            "launched: pid {pid}\nlog: {}\nevents: {}\nmodel: {model} max_iters: {max_iters} max_minutes: {max_minutes}",
+            log_path.display(),
+            chug_dir.join("events.jsonl").display(),
+        ),
+        is_error: false,
+    })
+}
+
+/// Observe a previously launched child: bounded tail reads only, no waiting.
+fn delegate_status(input: &Value) -> anyhow::Result<ToolResult> {
+    let cwd = delegate_cwd(input)?;
+    let pid = input.get("pid").and_then(Value::as_u64);
+    let alive = pid.and_then(process_alive);
+
+    let events_path = cwd.join(".chug").join("events.jsonl");
+    let (summary, events_note) = match read_tail_lines(&events_path, DELEGATE_EVENTS_TAIL_BYTES) {
+        Ok(lines) => {
+            let refs: Vec<&str> = lines.iter().map(String::as_str).collect();
+            (summarize_events(&refs), None)
+        }
+        // Missing (or unreadable) events log is the normal state before a
+        // child's first write — reported as `state: starting`, never an error.
+        Err(e) => (
+            DelegateSummary::default(),
+            Some(format!("events: nothing read ({e:#})")),
+        ),
+    };
+    let log_tail = read_log_tail(&cwd.join(".chug").join("delegate.log"));
+
+    Ok(ToolResult {
+        content: render_status(&summary, alive, &log_tail, events_note.as_deref()),
+        is_error: false,
+    })
+}
+
+/// The parsing/flag logic of `status`, with no I/O: every edge case (empty
+/// stream, torn last line, missing fields) is unit-tested through here.
+/// Malformed lines are skipped, never fatal — a torn final write must not
+/// blind the poll.
+fn summarize_events(lines: &[&str]) -> DelegateSummary {
+    let mut s = DelegateSummary::default();
+    for line in lines {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let Ok(value) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        let Some(obj) = value.as_object() else {
+            continue;
+        };
+        let Some(ev_type) = obj.get("type").and_then(Value::as_str) else {
+            continue;
+        };
+        // `last_event` is the last complete, parsable line — whatever it is.
+        s.last_event_type = Some(ev_type.to_string());
+        s.last_event_ts = obj.get("ts").and_then(Value::as_str).map(str::to_string);
+        match ev_type {
+            "run_start" => {
+                if let Some(max) = obj.get("max_iters").and_then(Value::as_u64) {
+                    s.max_iters = Some(max);
+                }
+            }
+            "iteration" => {
+                if let Some(n) = obj.get("n").and_then(Value::as_u64) {
+                    s.last_iteration = Some(n);
+                }
+            }
+            "budget_low" => s.budget_low_seen = true,
+            "goal" => s.goal_seen = true,
+            "abort" => {
+                s.abort_seen = true;
+                if let Some(reason) = obj.get("reason").and_then(Value::as_str) {
+                    s.abort_reason = Some(reason.to_string());
+                }
+            }
+            _ => {}
+        }
+    }
+    s
+}
+
+/// What `status` can say about a child's event stream.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct DelegateSummary {
+    /// `max_iters` from `run_start`, when that line was seen.
+    max_iters: Option<u64>,
+    /// `n` of the last `iteration` line.
+    last_iteration: Option<u64>,
+    last_event_type: Option<String>,
+    last_event_ts: Option<String>,
+    budget_low_seen: bool,
+    goal_seen: bool,
+    abort_seen: bool,
+    /// `reason` of the abort line, when present.
+    abort_reason: Option<String>,
+}
+
+impl DelegateSummary {
+    /// `starting` = nothing read yet (child may not have written anything);
+    /// `running` = events seen, no verdict; `done`/`aborted` = the stream
+    /// ended in a goal or an abort.
+    fn state(&self) -> &'static str {
+        if self.abort_seen {
+            "aborted"
+        } else if self.goal_seen {
+            "done"
+        } else if self.last_event_type.is_some() {
+            "running"
+        } else {
+            "starting"
+        }
+    }
+}
+
+/// Liveness probe for a child pid: `kill(pid, 0)` delivers no signal but
+/// reports existence (`EPERM` = exists, owned by someone else). No such probe
+/// on non-unix → liveness reports unknown there.
+fn process_alive(pid: u64) -> Option<bool> {
+    #[cfg(unix)]
+    {
+        let rc = unsafe { libc::kill(pid as i32, 0) };
+        Some(if rc == 0 {
+            true
+        } else {
+            std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+        })
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = pid;
+        None
+    }
+}
+
+/// The last `bound` bytes of `path`, as the complete lines inside that
+/// window. Both files a child writes grow unboundedly, so `status` reads
+/// tails only; a window that starts mid-line drops its first fragment, which
+/// is not a complete line.
+fn read_tail_lines(path: &Path, bound: u64) -> anyhow::Result<Vec<String>> {
+    let mut file = fs::File::open(path).with_context(|| format!("reading {}", path.display()))?;
+    let len = file.metadata()?.len();
+    let start = len.saturating_sub(bound);
+    let mut bytes = Vec::new();
+    if start > 0 {
+        file.seek(std::io::SeekFrom::Start(start))?;
+    }
+    file.read_to_end(&mut bytes)?;
+    let text = String::from_utf8_lossy(&bytes);
+    let mut lines: Vec<&str> = text.lines().collect();
+    if start > 0 && !lines.is_empty() {
+        lines.remove(0);
+    }
+    Ok(lines.into_iter().map(str::to_string).collect())
+}
+
+/// The child console log's tail: the last ≤3 non-empty lines, each clipped to
+/// 200 chars, so a poll sees a crash line without reading the whole log.
+/// Unreadable log → empty tail, never an error (the events summary is the
+/// primary signal).
+fn read_log_tail(path: &Path) -> Vec<String> {
+    match read_tail_lines(path, DELEGATE_LOG_TAIL_BYTES) {
+        Ok(lines) => lines
+            .into_iter()
+            .filter(|l| !l.trim().is_empty())
+            .rev()
+            .take(DELEGATE_LOG_TAIL_LINES)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .map(|l| l.chars().take(DELEGATE_LOG_LINE_MAX).collect())
+            .collect(),
+        Err(_) => Vec::new(),
+    }
+}
+
+/// The `status` text body: one `key: value` per line so a poll (model or
+/// test) can grep it.
+fn render_status(
+    summary: &DelegateSummary,
+    alive: Option<bool>,
+    log_tail: &[String],
+    events_note: Option<&str>,
+) -> String {
+    let mut out = format!("state: {}", summary.state());
+    match alive {
+        Some(true) => out.push_str("\nalive: true"),
+        Some(false) => out.push_str("\nalive: false"),
+        None => out.push_str("\nalive: unknown (no pid given)"),
+    }
+    if let Some(max) = summary.max_iters {
+        out.push_str(&format!("\nmax_iters: {max}"));
+    }
+    match summary.last_iteration {
+        Some(n) => out.push_str(&format!("\nlast_iteration: {n}")),
+        None => out.push_str("\nlast_iteration: none"),
+    }
+    match (&summary.last_event_type, &summary.last_event_ts) {
+        (Some(t), Some(ts)) => out.push_str(&format!("\nlast_event: {t} {ts}")),
+        (Some(t), None) => out.push_str(&format!("\nlast_event: {t}")),
+        (None, _) => out.push_str("\nlast_event: none"),
+    }
+    out.push_str(&format!(
+        "\nbudget_low_seen: {}\ngoal_seen: {}\nabort_seen: {}",
+        summary.budget_low_seen, summary.goal_seen, summary.abort_seen
+    ));
+    if let Some(reason) = &summary.abort_reason {
+        out.push_str(&format!("\nabort_reason: {reason}"));
+    }
+    if let Some(note) = events_note {
+        out.push_str(&format!("\n{note}"));
+    }
+    if log_tail.is_empty() {
+        out.push_str("\nlog_tail: (none)");
+    } else {
+        out.push_str("\nlog_tail:");
+        for line in log_tail {
+            out.push_str(&format!("\n  {line}"));
+        }
+    }
+    out
+}
+
+/// Open (creating) `path` for appending — the delegate log is opened twice so
+/// stdout and stderr share one file.
+fn open_append(path: &Path) -> anyhow::Result<fs::File> {
+    fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .with_context(|| format!("opening {}", path.display()))
+}
+
 /// Resolve `path` lexically against `cwd`, rejecting anything that escapes it
 /// (`..` traversal, absolute paths outside cwd). No filesystem access, no
 /// symlink resolution: purely lexical, per spec.
@@ -666,19 +1060,25 @@ fn child_path(inherited: &OsStr, cargo_bin: &Path) -> OsString {
     path
 }
 
+/// Kill the process group led by `pid` (the child is the group leader via
+/// `process_group(0)`). Shared with `mcp.rs` through [`kill_process_group`]
+/// and with the `delegate` end-to-end test, which only has the pid — the
+/// tool detaches and drops the handle on purpose.
+#[cfg(unix)]
+pub(crate) fn kill_pid_group(pid: u32) {
+    // Negative pid targets the entire process group.
+    unsafe {
+        libc::kill(-(pid as i32), libc::SIGKILL);
+    }
+}
+
 /// Kill the child's whole process group (the child is the group leader via
 /// `process_group(0)`), falling back to killing just the direct child on
 /// platforms without process groups. Shared with `mcp.rs`, which must honor
 /// the same no-orphan discipline.
 pub(crate) fn kill_process_group(child: &mut std::process::Child) {
     #[cfg(unix)]
-    {
-        let pgid = child.id() as i32;
-        // Negative pid targets the entire process group.
-        unsafe {
-            libc::kill(-pgid, libc::SIGKILL);
-        }
-    }
+    kill_pid_group(child.id());
     // Belt and braces: also kill the direct child (no-op if the group kill got it).
     let _ = child.kill();
 }
@@ -730,6 +1130,7 @@ pub fn truncate_middle(s: &str, head: usize, tail: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
 
     #[test]
     fn path_safety_rejects_parent_traversal() {
@@ -1136,5 +1537,467 @@ mod tests {
         // run_shell returns the raw combined output (the bash tool wrapper
         // appends the exit-code line); stdout keeps its trailing newline.
         assert_eq!(outcome.output, "hi\n");
+    }
+
+    // ---- T23: delegate ----
+
+    fn delegate_ctx(cwd: &Path) -> ToolCtx {
+        ToolCtx {
+            cwd: cwd.to_path_buf(),
+            bash_timeout: Duration::from_secs(BASH_TIMEOUT_SECS),
+        }
+    }
+
+    /// The tests that mutate `CHUG_DELEGATE_BIN` take this: the env is
+    /// process-global and cargo runs test threads in parallel.
+    static DELEGATE_ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn delegate_summary_empty_is_starting() {
+        let s = summarize_events(&[]);
+        assert_eq!(s.state(), "starting");
+        assert_eq!(s.max_iters, None);
+        assert_eq!(s.last_iteration, None);
+        assert_eq!(s.last_event_type, None);
+        assert!(!s.budget_low_seen && !s.goal_seen && !s.abort_seen);
+    }
+
+    #[test]
+    fn delegate_summary_run_start_only_is_running_with_budget() {
+        let lines = ["{\"type\":\"run_start\",\"ts\":\"2026-09-25T18:09:35.505Z\",\"mode\":\"run\",\"model\":\"kimi\",\"max_iters\":50,\"max_minutes\":35,\"max_tokens\":null}"];
+        let s = summarize_events(&lines);
+        assert_eq!(s.state(), "running");
+        assert_eq!(s.max_iters, Some(50));
+        assert_eq!(s.last_iteration, None);
+        assert_eq!(s.last_event_type.as_deref(), Some("run_start"));
+        assert_eq!(s.last_event_ts.as_deref(), Some("2026-09-25T18:09:35.505Z"));
+        assert!(!s.budget_low_seen && !s.goal_seen && !s.abort_seen);
+    }
+
+    #[test]
+    fn delegate_summary_mid_run_reports_iteration_and_last_event() {
+        let lines = [
+            "{\"type\":\"run_start\",\"ts\":\"t0\",\"max_iters\":40}",
+            "{\"type\":\"iteration\",\"ts\":\"t1\",\"n\":3,\"input_tokens\":10,\"output_tokens\":5}",
+            "{\"type\":\"tool_result\",\"ts\":\"t2\",\"name\":\"bash\",\"ok\":true,\"is_error\":false,\"duration_ms\":12,\"preview\":\"hi\"}",
+        ];
+        let s = summarize_events(&lines);
+        assert_eq!(s.state(), "running");
+        assert_eq!(s.max_iters, Some(40));
+        assert_eq!(s.last_iteration, Some(3));
+        assert_eq!(s.last_event_type.as_deref(), Some("tool_result"));
+        assert_eq!(s.last_event_ts.as_deref(), Some("t2"));
+        assert!(!s.budget_low_seen && !s.goal_seen && !s.abort_seen);
+    }
+
+    #[test]
+    fn delegate_summary_budget_low_sets_flag() {
+        let lines = [
+            "{\"type\":\"run_start\",\"ts\":\"t0\",\"max_iters\":40}",
+            "{\"type\":\"iteration\",\"ts\":\"t1\",\"n\":33}",
+            "{\"type\":\"budget_low\",\"ts\":\"t2\",\"remaining_iters\":8,\"remaining_secs\":1785,\"remaining_tokens\":null}",
+            "{\"type\":\"iteration\",\"ts\":\"t3\",\"n\":34}",
+        ];
+        let s = summarize_events(&lines);
+        assert!(s.budget_low_seen);
+        assert_eq!(s.state(), "running");
+        assert_eq!(s.last_iteration, Some(34));
+        assert!(!s.goal_seen && !s.abort_seen);
+    }
+
+    #[test]
+    fn delegate_summary_goal_sets_flag_and_done_state() {
+        let lines = [
+            "{\"type\":\"run_start\",\"ts\":\"t0\",\"max_iters\":40}",
+            "{\"type\":\"iteration\",\"ts\":\"t1\",\"n\":4}",
+            "{\"type\":\"goal\",\"ts\":\"t2\",\"outcome\":\"accepted\",\"summary\":\"VERDICT PASS\"}",
+        ];
+        let s = summarize_events(&lines);
+        assert!(s.goal_seen);
+        assert!(!s.abort_seen && !s.budget_low_seen);
+        assert_eq!(s.state(), "done");
+        assert_eq!(s.last_event_type.as_deref(), Some("goal"));
+    }
+
+    #[test]
+    fn delegate_summary_abort_sets_flag_reason_and_state() {
+        let lines = [
+            "{\"type\":\"run_start\",\"ts\":\"t0\",\"max_iters\":40}",
+            "{\"type\":\"iteration\",\"ts\":\"t1\",\"n\":40}",
+            "{\"type\":\"abort\",\"ts\":\"t2\",\"reason\":\"iteration budget exceeded\",\"model\":\"glm\",\"budget_kind\":\"iterations\",\"budget_max\":40}",
+        ];
+        let s = summarize_events(&lines);
+        assert!(s.abort_seen);
+        assert_eq!(s.abort_reason.as_deref(), Some("iteration budget exceeded"));
+        assert_eq!(s.state(), "aborted");
+        assert!(!s.goal_seen);
+    }
+
+    #[test]
+    fn delegate_summary_malformed_lines_skipped_not_fatal() {
+        let lines = [
+            "{\"type\":\"iteration\",\"ts\":\"t1\",\"n\":7}",
+            // A torn final write (partial JSON) and a non-JSON line must be
+            // skipped; the summary keeps standing on the complete lines.
+            "{\"type\":\"iteration\",\"ts\":\"t2\",\"n\":8,\"trunc",
+            "not json at all",
+            "",
+        ];
+        let s = summarize_events(&lines);
+        assert_eq!(s.state(), "running");
+        assert_eq!(s.last_iteration, Some(7));
+        assert_eq!(s.last_event_type.as_deref(), Some("iteration"));
+        assert_eq!(s.last_event_ts.as_deref(), Some("t1"));
+    }
+
+    #[test]
+    fn delegate_status_without_chug_dir_is_starting_not_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        let result = dispatch(
+            &delegate_ctx(tmp.path()),
+            "delegate",
+            &json!({"action": "status", "cwd": tmp.path()}),
+        );
+        assert!(!result.is_error, "{}", result.content);
+        assert!(result.content.contains("state: starting"), "{}", result.content);
+        assert!(result.content.contains("alive: unknown"), "{}", result.content);
+        assert!(result.content.contains("last_iteration: none"), "{}", result.content);
+        assert!(result.content.contains("goal_seen: false"), "{}", result.content);
+        assert!(result.content.contains("log_tail: (none)"), "{}", result.content);
+    }
+
+    #[test]
+    fn delegate_status_summarizes_synthetic_events_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::create_dir_all(tmp.path().join(".chug")).unwrap();
+        fs::write(
+            tmp.path().join(".chug/events.jsonl"),
+            concat!(
+                "{\"type\":\"run_start\",\"ts\":\"t0\",\"mode\":\"run\",\"model\":\"m\",\"max_iters\":50,\"max_minutes\":35,\"max_tokens\":null}\n",
+                "{\"type\":\"iteration\",\"ts\":\"t1\",\"n\":7,\"input_tokens\":1,\"output_tokens\":1}\n",
+                "{\"type\":\"budget_low\",\"ts\":\"t2\",\"remaining_iters\":8,\"remaining_secs\":100,\"remaining_tokens\":null}\n",
+                "{\"type\":\"abort\",\"ts\":\"t3\",\"reason\":\"iteration budget exceeded\",\"model\":\"m\",\"budget_kind\":\"iterations\",\"budget_max\":50}\n",
+            ),
+        )
+        .unwrap();
+        // The test process itself is a live pid for the kill(pid, 0) probe.
+        let result = dispatch(
+            &delegate_ctx(tmp.path()),
+            "delegate",
+            &json!({"action": "status", "cwd": tmp.path(), "pid": std::process::id()}),
+        );
+        assert!(!result.is_error, "{}", result.content);
+        assert!(result.content.contains("state: aborted"), "{}", result.content);
+        assert!(result.content.contains("alive: true"), "{}", result.content);
+        assert!(result.content.contains("max_iters: 50"), "{}", result.content);
+        assert!(result.content.contains("last_iteration: 7"), "{}", result.content);
+        assert!(result.content.contains("last_event: abort"), "{}", result.content);
+        assert!(result.content.contains("budget_low_seen: true"), "{}", result.content);
+        assert!(result.content.contains("abort_seen: true"), "{}", result.content);
+        assert!(
+            result.content.contains("abort_reason: iteration budget exceeded"),
+            "{}",
+            result.content
+        );
+        assert!(result.content.contains("goal_seen: false"), "{}", result.content);
+    }
+
+    /// The deliberate `resolve_safe` exemption: the child worktree lives
+    /// outside this process's sandbox (in /tmp by design) and `status` must
+    /// work on it anyway.
+    #[test]
+    fn delegate_paths_may_lie_outside_the_orchestrator_cwd() {
+        let ctx_cwd = tempfile::tempdir().unwrap();
+        let child_dir = tempfile::tempdir().unwrap();
+        let result = dispatch(
+            &delegate_ctx(ctx_cwd.path()),
+            "delegate",
+            &json!({"action": "status", "cwd": child_dir.path()}),
+        );
+        assert!(!result.is_error, "{}", result.content);
+        assert!(result.content.contains("state: starting"), "{}", result.content);
+    }
+
+    #[test]
+    fn delegate_rejects_relative_cwd_and_nonexistent_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ctx = delegate_ctx(tmp.path());
+        let result = dispatch(&ctx, "delegate", &json!({"action": "status", "cwd": "relative/child"}));
+        assert!(result.is_error);
+        assert!(result.content.contains("absolute directory"), "{}", result.content);
+        let result = dispatch(
+            &ctx,
+            "delegate",
+            &json!({"action": "status", "cwd": tmp.path().join("nope")}),
+        );
+        assert!(result.is_error);
+        assert!(result.content.contains("not a directory"), "{}", result.content);
+    }
+
+    #[test]
+    fn delegate_unknown_action_errors() {
+        let tmp = tempfile::tempdir().unwrap();
+        let result = dispatch(
+            &delegate_ctx(tmp.path()),
+            "delegate",
+            &json!({"action": "harvest", "cwd": tmp.path()}),
+        );
+        assert!(result.is_error);
+        assert!(result.content.contains("unknown action"), "{}", result.content);
+    }
+
+    #[test]
+    fn delegate_alive_probe_true_for_own_pid_false_for_reaped_exit() {
+        assert_eq!(process_alive(u64::from(std::process::id())), Some(true));
+        let mut child = Command::new("true").spawn().unwrap();
+        let pid = child.id();
+        assert!(child.wait().unwrap().success());
+        assert_eq!(process_alive(u64::from(pid)), Some(false));
+    }
+
+    #[test]
+    fn delegate_log_tail_last_three_nonempty_clipped() {
+        let tmp = tempfile::tempdir().unwrap();
+        let log = tmp.path().join("delegate.log");
+        fs::write(&log, "one\n\n".repeat(500) + "line-4\nline-5\nline-6\nline-7\n").unwrap();
+        assert_eq!(read_log_tail(&log), vec!["line-5", "line-6", "line-7"]);
+        let long = "y".repeat(500);
+        fs::write(&log, format!("{long}\nlast\n")).unwrap();
+        assert_eq!(read_log_tail(&log), vec!["y".repeat(200), "last".to_string()]);
+        // Unreadable log → empty tail, never an error.
+        assert!(read_log_tail(&tmp.path().join("missing.log")).is_empty());
+    }
+
+    /// Bound pin: the events log grows unboundedly, so `status` must read only
+    /// the last [`DELEGATE_EVENTS_TAIL_BYTES`]. A goal line older than that
+    /// window must not be reported — reading the whole file (bound removed)
+    /// would see it and fail this test.
+    #[test]
+    fn delegate_status_reads_only_the_tail_window() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::create_dir_all(tmp.path().join(".chug")).unwrap();
+        let mut body = String::from(
+            "{\"type\":\"goal\",\"ts\":\"ancient\",\"outcome\":\"accepted\",\"summary\":\"old run\"}\n",
+        );
+        let filler = format!(
+            "{{\"type\":\"iteration\",\"ts\":\"filler\",\"n\":1,\"pad\":\"{}\"}}\n",
+            "x".repeat(80)
+        );
+        while body.len() < DELEGATE_EVENTS_TAIL_BYTES as usize + 4096 {
+            body.push_str(&filler);
+        }
+        body.push_str("{\"type\":\"iteration\",\"ts\":\"recent\",\"n\":9}\n");
+        fs::write(tmp.path().join(".chug/events.jsonl"), body).unwrap();
+
+        let result = dispatch(
+            &delegate_ctx(tmp.path()),
+            "delegate",
+            &json!({"action": "status", "cwd": tmp.path()}),
+        );
+        assert!(!result.is_error, "{}", result.content);
+        assert!(
+            !result.content.contains("goal_seen: true"),
+            "pre-bound goal leaked into the tail window: {}",
+            result.content
+        );
+        assert!(result.content.contains("last_iteration: 9"), "{}", result.content);
+        assert!(result.content.contains("state: running"), "{}", result.content);
+    }
+
+    #[test]
+    fn delegate_schema_registers_exactly_one_entry_with_both_actions() {
+        let schemas = tool_schemas();
+        let entries: Vec<&Value> = schemas
+            .iter()
+            .filter(|s| s.get("name").and_then(Value::as_str) == Some("delegate"))
+            .collect();
+        assert_eq!(entries.len(), 1, "exactly one delegate schema");
+        let schema = &entries[0];
+        let action = schema
+            .get("input_schema")
+            .and_then(|s| s.get("properties"))
+            .and_then(|p| p.get("action"))
+            .expect("action property");
+        let actions: Vec<&str> = action
+            .get("enum")
+            .and_then(Value::as_array)
+            .expect("action enum")
+            .iter()
+            .filter_map(Value::as_str)
+            .collect();
+        assert_eq!(actions, vec!["launch", "status"]);
+        let required: Vec<&str> = schema["input_schema"]["required"]
+            .as_array()
+            .expect("required list")
+            .iter()
+            .filter_map(Value::as_str)
+            .collect();
+        assert!(required.contains(&"action"), "action must be required");
+        assert!(required.contains(&"cwd"), "cwd must be required");
+        // No other schema may shadow or duplicate the name.
+        assert!(schemas.iter().any(|s| s.get("name").and_then(Value::as_str) == Some("goal_complete")));
+    }
+
+    /// End-to-end with a stub binary: `CHUG_DELEGATE_BIN` points at a script
+    /// that writes a synthetic `run_start`+`iteration` into `$PWD/.chug/` then
+    /// sleeps. Launch returns a pid immediately; bounded polling (≤5s) then
+    /// sees the summary with `alive: true`.
+    #[cfg(unix)]
+    #[test]
+    fn delegate_launch_stub_then_status_reports_summary_and_liveness() {
+        use std::os::unix::fs::PermissionsExt;
+        let _guard = DELEGATE_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let child_dir = tempfile::tempdir().unwrap();
+        let ctx_cwd = tempfile::tempdir().unwrap();
+
+        let stub = ctx_cwd.path().join("chug-stub.sh");
+        fs::write(
+            &stub,
+            concat!(
+                "#!/bin/sh\n",
+                "mkdir -p .chug\n",
+                "printf '%s\\n' '{\"type\":\"run_start\",\"ts\":\"stub-t0\",\"mode\":\"run\",\"model\":\"stub\",\"max_iters\":40,\"max_minutes\":35,\"max_tokens\":null}' >> .chug/events.jsonl\n",
+                "printf '%s\\n' '{\"type\":\"iteration\",\"ts\":\"stub-t1\",\"n\":1,\"input_tokens\":7,\"output_tokens\":3}' >> .chug/events.jsonl\n",
+                "echo stub child up\n",
+                "sleep 60\n",
+            ),
+        )
+        .unwrap();
+        fs::set_permissions(&stub, fs::Permissions::from_mode(0o755)).unwrap();
+        // SAFETY: serialized by DELEGATE_ENV_LOCK; no other test reads this var.
+        unsafe { std::env::set_var("CHUG_DELEGATE_BIN", &stub) };
+
+        let launch = dispatch(
+            &delegate_ctx(ctx_cwd.path()),
+            "delegate",
+            &json!({
+                "action": "launch",
+                "cwd": child_dir.path(),
+                "spec": "/tmp/chug-stub-spec.md",
+                "goal": "stub goal",
+                "model": "stub-model",
+            }),
+        );
+        assert!(!launch.is_error, "{}", launch.content);
+        assert!(
+            launch.content.contains("max_iters: 40 max_minutes: 35"),
+            "defaults not applied: {}",
+            launch.content
+        );
+        assert!(
+            launch
+                .content
+                .contains(&format!("log: {}", child_dir.path().join(".chug/delegate.log").display())),
+            "{}",
+            launch.content
+        );
+        assert!(
+            launch
+                .content
+                .contains(&format!("events: {}", child_dir.path().join(".chug/events.jsonl").display())),
+            "{}",
+            launch.content
+        );
+        let pid: u32 = launch
+            .content
+            .lines()
+            .find_map(|l| l.strip_prefix("launched: pid "))
+            .expect("pid in launch output")
+            .trim()
+            .parse()
+            .expect("pid parses");
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut seen = None;
+        while Instant::now() < deadline {
+            let s = dispatch(
+                &delegate_ctx(ctx_cwd.path()),
+                "delegate",
+                &json!({"action": "status", "cwd": child_dir.path(), "pid": pid}),
+            );
+            assert!(!s.is_error, "{}", s.content);
+            if s.content.contains("last_iteration: 1") && s.content.contains("alive: true") {
+                seen = Some(s);
+                break;
+            }
+            thread::sleep(Duration::from_millis(100));
+        }
+        let status = seen.expect("stub summary + liveness within 5s");
+        assert!(status.content.contains("state: running"), "{}", status.content);
+        assert!(status.content.contains("max_iters: 40"), "{}", status.content);
+        assert!(
+            status.content.contains("last_event: iteration"),
+            "{}",
+            status.content
+        );
+        assert!(
+            status.content.contains("stub child up"),
+            "console log tail missing: {}",
+            status.content
+        );
+
+        // The tool detached and dropped the handle, so cleanup only has the pid.
+        kill_pid_group(pid);
+
+        // Explicit budgets pass through to the child untouched (the launch
+        // line echoes them back; the stub would receive them as argv).
+        let launch2 = dispatch(
+            &delegate_ctx(ctx_cwd.path()),
+            "delegate",
+            &json!({
+                "action": "launch",
+                "cwd": child_dir.path(),
+                "spec": "/tmp/chug-stub-spec.md",
+                "goal": "stub goal 2",
+                "model": "stub-model",
+                "max_iters": 7,
+                "max_minutes": 9,
+            }),
+        );
+        assert!(!launch2.is_error, "{}", launch2.content);
+        assert!(
+            launch2.content.contains("max_iters: 7 max_minutes: 9"),
+            "{}",
+            launch2.content
+        );
+        let pid2: u32 = launch2
+            .content
+            .lines()
+            .find_map(|l| l.strip_prefix("launched: pid "))
+            .expect("pid in launch output")
+            .trim()
+            .parse()
+            .expect("pid parses");
+        kill_pid_group(pid2);
+        // SAFETY: serialized by DELEGATE_ENV_LOCK; no other test reads this var.
+        unsafe { std::env::remove_var("CHUG_DELEGATE_BIN") };
+    }
+
+    /// Launch failure leg: a binary that does not exist must produce a tool
+    /// error naming the path — never a panic, never a driver abort.
+    #[test]
+    fn delegate_launch_missing_binary_is_tool_error() {
+        let _guard = DELEGATE_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let tmp = tempfile::tempdir().unwrap();
+        // SAFETY: serialized by DELEGATE_ENV_LOCK; no other test reads this var.
+        unsafe { std::env::set_var("CHUG_DELEGATE_BIN", "/nonexistent/chug") };
+        let result = dispatch(
+            &delegate_ctx(tmp.path()),
+            "delegate",
+            &json!({
+                "action": "launch",
+                "cwd": tmp.path(),
+                "spec": "/tmp/chug-spec.md",
+                "goal": "g",
+                "model": "m",
+            }),
+        );
+        unsafe { std::env::remove_var("CHUG_DELEGATE_BIN") };
+        assert!(result.is_error, "{}", result.content);
+        assert!(
+            result.content.contains("/nonexistent/chug"),
+            "error must name the binary path: {}",
+            result.content
+        );
     }
 }

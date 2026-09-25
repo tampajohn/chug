@@ -118,6 +118,22 @@ All paths sandboxed to `--cwd`. `bash` runs in its own process group —
 timeouts SIGKILL the whole group, so orphaned grandchildren can't wedge the
 driver (120s default; `--bash-timeout` / `CHUG_BASH_TIMEOUT` overrides).
 
+`delegate` — launch or observe a bounded child `chug run` (e.g. in a git
+worktree). Two actions: **`launch`** spawns a detached child (`--spec`,
+`--goal`, `--model` required; `--max-iters`/`--max-minutes` optional,
+defaults 40/35) against an absolute `cwd` you prepared, appends its
+stdout+stderr to `<cwd>/.chug/delegate.log`, and returns immediately with
+the child `pid` and the log/events paths — it never waits on the child
+(own process group, SIGHUP ignored, `nohup … &` parity). **`status`**
+reports the child's liveness (when you pass the `pid`), a summary of its
+`.chug/events.jsonl` (state, `last_iteration` + `max_iters`, budget-low /
+goal / abort flags with the abort reason) and the tail of its console log —
+bounded tail reads only, so polling never blocks. Delegate paths are the
+one exception to cwd sandboxing: `cwd` and `spec` must be absolute and may
+lie outside your `--cwd`, because children live in scratch worktrees by
+design. Worktree creation, building, harvest/merge, and killing the child
+stay with your `bash`.
+
 ## Risk gate (`--risk-gate`)
 
 Every `bash` command is classified by a [Laya](https://github.com/convaiinnovations/laya)
