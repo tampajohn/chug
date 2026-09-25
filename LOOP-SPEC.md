@@ -67,20 +67,31 @@ For each `todo` row, ONE at a time (backgrounded child + polling, per step 2):
    verbatim — VERDICT: PASS/FAIL + numbered findings, mutation-testing where
    feasible. FAIL → fix-up child with the findings pasted into its goal,
    then re-validate.
-5. **Merge + close — you own the books.** Merge to main, re-run gates in
-   main, then flip the TODO row to `done` **with the merge commit ref in the
-   same commit** (or an immediately following `todo:` commit). Update
-   README.md in the merge commit when the item is user-visible. This
-   ordering is the fix for the T10/T12 failure mode: children die between
-   the code commit and the row flip, so children never own the row. **Push
-   after each item lands green** (`git push` once the todo: commit is in) —
-   the operator watches origin; don't hold a batch hostage to the wrap.
+5. **Harvest, then merge + close — you own the books.** Before any
+   `git worktree remove` (which deletes the worktree's untracked `.chug/`
+   silently — the cycle-5 T18 loss), harvest every child run's
+   `.chug/events.jsonl` from the worktree into the main repo's `.chug/` as
+   `events-t<N>-<role>-<yyyymmdd>-<hhmmss>.jsonl` (impl and validator
+   alike; precedent `events-t17-impl-20260925-170831.jsonl`), plus the
+   child's `LEDGER.md` as `LEDGER-t<N>-<role>-<ts>.md` when it carried a
+   verdict or non-trivial findings; transcript harvest is the operator's
+   choice (size). Only then merge to main, re-run gates in main, then flip
+   the TODO row to `done` **with the merge commit ref in the same commit**
+   (or an immediately following `todo:` commit). Update README.md in the
+   merge commit when the item is user-visible. This ordering is the fix
+   for the T10/T12 failure mode: children die between the code commit and
+   the row flip, so children never own the row. **Push after each item
+   lands green** (`git push` once the todo: commit is in) — the operator
+   watches origin; don't hold a batch hostage to the wrap.
 6. **Budget check.** Fewer than 15 iterations left → stop dispatching, go to
    wrap. Unworked rows stay `todo` — that is a fine outcome.
 
 ## Phase 3 — Wrap
 
 - TODO.md truthful (every `done` row has a commit ref).
+- Child harvests landed in the main repo's `.chug/`: each worked item's
+  `events-t<N>-<role>-*.jsonl` (plus `LEDGER-t<N>-<role>-*.md` where
+  non-trivial) — nothing died with a removed worktree.
 - EVALUATION.md gains an **Outcomes** section: what landed, what was
   skipped/deferred, what the validators caught.
 - Final gates green in main (build + clippy + test) → push anything
