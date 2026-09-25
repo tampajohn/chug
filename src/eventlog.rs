@@ -47,6 +47,13 @@ pub fn rotate_fresh(cwd: &Path) -> archive::Outcome {
 /// did this run sail" even for runs that never aborted. `max_tokens` is
 /// `null` when unset (0), never a phantom number. Written once per
 /// autonomous run and once per chat session.
+///
+/// T20: `head_branch`/`head_commit` carry the **cwd's** checkout identity
+/// (see [`crate::build_info::resolve_head`]) so a harvested child stream
+/// names the worktree it ran in, not just the binary's build commit. Both
+/// are `null` when the identity couldn't be resolved (not a repo, git
+/// missing) — null means unresolved, never a phantom string.
+#[allow(clippy::too_many_arguments)] // one line per field, same shape as the banner
 pub fn run_start(
     cwd: &Path,
     mode: &str,
@@ -55,6 +62,7 @@ pub fn run_start(
     max_iters: u32,
     max_minutes: u64,
     max_tokens: u64,
+    head: Option<(&str, &str)>,
 ) {
     append_line(
         cwd,
@@ -67,6 +75,8 @@ pub fn run_start(
             "cwd": cwd.display().to_string(),
             "version": crate::build_info::VERSION,
             "commit": crate::build_info::GIT_COMMIT,
+            "head_branch": head.map(|(b, _)| b),
+            "head_commit": head.map(|(_, c)| c),
             "max_iters": max_iters,
             "max_minutes": max_minutes,
             "max_tokens": (max_tokens > 0).then_some(max_tokens),
@@ -250,6 +260,7 @@ mod tests {
             40,
             120,
             0,
+            None,
         );
         let lines = read_lines(tmp.path());
         assert_eq!(lines.len(), 1);
@@ -261,6 +272,16 @@ mod tests {
         // T11: the banner's build identification rides along.
         assert_eq!(lines[0]["version"], crate::build_info::VERSION);
         assert_eq!(lines[0]["commit"], crate::build_info::GIT_COMMIT);
+        // T20, pinned representation: unresolved checkout → null, never a
+        // phantom string (a tempdir is not a repo).
+        assert!(
+            lines[0]["head_branch"].is_null(),
+            "unresolved head_branch stays null: {lines:?}"
+        );
+        assert!(
+            lines[0]["head_commit"].is_null(),
+            "unresolved head_commit stays null: {lines:?}"
+        );
         // T17: the configured ceilings are on the record.
         assert_eq!(lines[0]["max_iters"], 40);
         assert_eq!(lines[0]["max_minutes"], 120);
@@ -276,11 +297,34 @@ mod tests {
     #[test]
     fn run_start_records_token_budget_when_set() {
         let tmp = tempfile::tempdir().unwrap();
-        run_start(tmp.path(), "run", None, "m", 8, 35, 250_000);
+        run_start(tmp.path(), "run", None, "m", 8, 35, 250_000, None);
         let lines = read_lines(tmp.path());
         assert_eq!(lines[0]["max_iters"], 8);
         assert_eq!(lines[0]["max_minutes"], 35);
         assert_eq!(lines[0]["max_tokens"], 250_000);
+    }
+
+    /// T20: when the caller resolved the cwd's checkout HEAD, the two
+    /// strings ride the run_start line — the orientation a harvested child
+    /// stream needs (branch@commit of the worktree it ran in).
+    #[test]
+    fn run_start_records_resolved_head_branch_and_commit() {
+        let tmp = tempfile::tempdir().unwrap();
+        run_start(
+            tmp.path(),
+            "run",
+            None,
+            "m",
+            5,
+            120,
+            0,
+            Some(("loop-t20", "9056c78")),
+        );
+        let lines = read_lines(tmp.path());
+        assert_eq!(lines[0]["head_branch"], "loop-t20");
+        assert_eq!(lines[0]["head_commit"], "9056c78");
+        // The baked build commit stays untouched alongside the checkout's.
+        assert_eq!(lines[0]["commit"], crate::build_info::GIT_COMMIT);
     }
 
     /// T17: a BudgetLow event serializes as one jq-mineable line, with
@@ -330,7 +374,7 @@ mod tests {
     #[test]
     fn rotate_fresh_archives_non_empty_events_log() {
         let tmp = tempfile::tempdir().unwrap();
-        run_start(tmp.path(), "run", None, "m", 5, 120, 0);
+        run_start(tmp.path(), "run", None, "m", 5, 120, 0, None);
 
         let out = rotate_fresh(tmp.path());
         let Outcome::Archived(dst) = out else {
@@ -448,6 +492,6 @@ mod tests {
             model: "m".into(),
             budget: None,
         });
-        run_start(tmp.path(), "run", None, "m", 5, 120, 0);
+        run_start(tmp.path(), "run", None, "m", 5, 120, 0, None);
     }
 }

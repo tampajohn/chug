@@ -257,7 +257,12 @@ fn cmd_run(
         .or_else(|| std::env::var("CHUG_MODEL").ok().filter(|m| !m.trim().is_empty()))
         .unwrap_or_else(|| driver::DEFAULT_MODEL.to_string());
     // T11: one stderr line naming the build so a stale binary is obvious.
-    build_info::print_startup_banner(&cwd, Some(&spec), &model);
+    // T20: resolve the cwd's checkout identity at runtime so the same line
+    // also names the branch@commit this process actually runs in — children
+    // run the main-tree binary inside a worktree, so `head=` and the baked
+    // commit legitimately differ. Unresolvable → no field, never a failure.
+    let head = build_info::resolve_head(&cwd);
+    build_info::print_startup_banner(&cwd, Some(&spec), &model, build_info::as_pair(&head));
 
     if tui {
         run_with_tui(
@@ -377,7 +382,9 @@ fn cmd_chat(
         .or_else(|| std::env::var("CHUG_MODEL").ok().filter(|m| !m.trim().is_empty()))
         .unwrap_or_else(|| driver::DEFAULT_MODEL.to_string());
     // T11: same banner as `run` (chat has no spec yet — one may arrive via /spec).
-    build_info::print_startup_banner(&cwd, None, &model);
+    // T20: the cwd's checkout identity rides it, same as run mode.
+    let head = build_info::resolve_head(&cwd);
+    build_info::print_startup_banner(&cwd, None, &model, build_info::as_pair(&head));
 
     let (event_tx, event_rx) = mpsc::channel::<events::Event>();
     let (steer_tx, steer_rx) = mpsc::channel::<String>();

@@ -298,7 +298,9 @@ fn run_loop(
         obs,
     };
     // T10: first line of the run's events log (model/spec/cwd/mode), plus
-    // the configured budget ceilings (T17).
+    // the configured budget ceilings (T17) and the cwd's checkout HEAD
+    // (T20, best-effort: a non-repo cwd just leaves both fields null).
+    let head = crate::build_info::resolve_head(&cfg.cwd);
     eventlog::run_start(
         &cfg.cwd,
         "run",
@@ -307,6 +309,7 @@ fn run_loop(
         cfg.max_iters,
         cfg.max_minutes,
         cfg.max_tokens,
+        crate::build_info::as_pair(&head),
     );
     match drive_loop(
         &ctx,
@@ -1372,6 +1375,11 @@ mod tests {
         assert_eq!(first["max_iters"], 5);
         assert_eq!(first["max_minutes"], 10);
         assert!(first["max_tokens"].is_null(), "no token budget → null");
+        // T20: the cwd's checkout HEAD rides along; this tempdir is not a
+        // repo, so both stay null (and the run itself was never touched by
+        // the failed resolution).
+        assert!(first["head_branch"].is_null(), "{first}");
+        assert!(first["head_commit"].is_null(), "{first}");
     }
 
     // ---------- T3: fresh-run ledger archiving ----------

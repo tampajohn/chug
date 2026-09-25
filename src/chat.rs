@@ -172,7 +172,9 @@ fn run_chat_with(
     ledger::ensure_seeded(&cfg.cwd)?;
     // T11: the session's events log opens with the banner fields (mode
     // "chat"; a spec, if any, arrives later via /spec) plus the configured
-    // per-turn budget ceilings (T17).
+    // per-turn budget ceilings (T17) and the cwd's checkout HEAD (T20,
+    // best-effort: unresolvable → null fields).
+    let head = crate::build_info::resolve_head(&cfg.cwd);
     eventlog::run_start(
         &cfg.cwd,
         "chat",
@@ -181,6 +183,7 @@ fn run_chat_with(
         cfg.max_iters,
         cfg.max_minutes,
         cfg.max_tokens,
+        crate::build_info::as_pair(&head),
     );
     // No goal text at session start (objectives arrive turn by turn); the
     // trace is identified by its id, mode metadata, and tags.
@@ -569,6 +572,10 @@ mod tests {
         assert_eq!(first["max_iters"], 40);
         assert_eq!(first["max_minutes"], 120);
         assert!(first["max_tokens"].is_null(), "no token budget → null");
+        // T20: the cwd's checkout HEAD rides the chat session's opening line
+        // too; a tempdir cwd is not a repo, so both stay null.
+        assert!(first["head_branch"].is_null(), "{first}");
+        assert!(first["head_commit"].is_null(), "{first}");
     }
 
     /// T17: a chat session with configured budgets (token budget set) opens

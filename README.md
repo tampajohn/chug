@@ -46,7 +46,13 @@ returns to idle, repeat. Natural stops end the turn; budgets are per turn.
 - **Startup banner** — `chug run` / `chug chat` print one stderr line at
   start: `chug <version> (<commit>) cwd=… spec=… model=…`, so a stale
   binary is visible at a glance. The commit is baked in at build time by
-  `build.rs` (`unknown` outside a git checkout; `CHUG_GIT_HASH` overrides)
+  `build.rs` (`unknown` outside a git checkout; `CHUG_GIT_HASH` overrides).
+  When the cwd's own worktree HEAD resolves at runtime, the line also names
+  the checkout: `… head=<branch>@<short>` — worktree children run the
+  main-tree binary, so `head=` (the cwd checkout) and the baked commit (the
+  binary) can legitimately differ, and that difference is the signal. Not a
+  repo, or git missing: the `head=` field is omitted and the line is
+  unchanged (the banner never fails the run)
 - **Anti-stall kick** — if the model stops without `goal_complete`, the driver
   injects "consult the ledger, continue" and keeps going
 - **LEDGER.md** — external memory the model updates each iteration; injected
@@ -85,10 +91,11 @@ returns to idle, repeat. Natural stops end the turn; budgets are per turn.
   `--resume` never splices foreign sessions into context
 - **Events log** — the driver appends its structured event stream to
   `.chug/events.jsonl`, one JSON object per line (`jq`-mineable): run start
-  (the banner fields: version/commit/model/spec/cwd/mode, once per run or
-  chat session, plus the configured budget ceilings — `max_iters`,
-  `max_minutes`, `max_tokens` as `null` when unset), one line per iteration
-  with cumulative tokens, tool results (ok/is_error/duration_ms, ≤200-char
+  (the banner fields: version/commit/model/spec/cwd/mode — plus the
+  checkout's `head_branch`/`head_commit` when the cwd's HEAD resolves at
+  runtime, `null` when it doesn't — and the configured budget ceilings —
+  `max_iters`, `max_minutes`, `max_tokens` as `null` when unset), one line
+  per iteration with cumulative tokens, tool results (ok/is_error/duration_ms, ≤200-char
   previews), verification commands, goal verdicts, budget-low warning
   injections (with the remaining counts at fire time), and aborts (with the
   dying model and, on budget deaths, the exhausted budget). Best-effort
