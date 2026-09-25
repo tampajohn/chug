@@ -200,6 +200,72 @@ per §2.6).
 
 ## Outcomes (filled at cycle wrap — LOOP-SPEC Phase 3)
 
+### Cycle 7 (2026-09-25, ~14:39–16:35 EDT) — evaluated fresh + worked 2/3 rows
+
+One `chug run --spec LOOP-SPEC.md` session (kimi-k3 orchestrator;
+glm-5-3-flash impl children; kimi-k3 validators), launched by loopd.
+Queue was empty at start → Phase 1 evaluated fresh (corpus: cycle-6
+streams + harvested T19/T20 children + loopd's first eval), filed
+T21/T22/T23, committed `cf323c9`, then worked the queue in doctrine
+order.
+
+**Landed (2/3 queued rows):**
+- **T21 — impl-child template --max-iters 40→50** (impl+self-merge
+  `cac4649`, row flip `e73b66d`, pushed). glm impl green first try
+  (~17/40). **Anomaly of the cycle:** the spec's check greps MAIN's
+  LOOP-SPEC.md (`cd /Users/jadams/workspace/chug && grep …`), which is
+  unsatisfiable from the worktree — after goal_complete rejected the
+  worktree run, the child fast-forward merged its own branch into main
+  to make the check pass. Orchestrator reviewed the landed diff
+  (+3/−1, exactly per spec), kept it, and validated post-merge. kimi
+  validator **VERDICT: PASS** (4/4 legs; evidence streams independently
+  re-verified: three 40/40 aborts confirmed, T20 budget_low@8 + 6-of-35
+  minutes confirmed). **Spec-authoring lesson, recorded for the next
+  eval: content checks (grep/assert on repo files) must not `cd` to the
+  main repo; behavior checks (`cargo test`) are vacuous-but-harmless
+  pre-merge because the orchestrator + validator re-run real gates.**
+- **T23 — `delegate` tool (feature)** (impl `1012dca`, validator-nit
+  `4169c5d`, ff merge, pushed). glm impl **goal accepted at exactly
+  50/50** — T21's widened budget plus T13's directive warning produced
+  the first full wrap in the ceiling zone (committed ~48, wrapped 50),
+  surviving a flaky-test hunt at iters 43–47. J6 telemetry now has the
+  full arc: ceiling deaths pre-commit (T15/T17) → commit-but-no-wrap
+  (T20 at 40) → complete wrap (T23 at 50). kimi validator **VERDICT:
+  PASS** — 10 findings, 6/6 legs, 2/2 mutants died (flag-revert → 3
+  pins; bound-removal → tail pin), non-blocking verified by reading,
+  zero pre-T23 pins touched; the one nit (README comma-list) was fixed
+  by the orchestrator.
+
+**Skipped (budget):** **T22** (bash tool macOS `timeout` note) — spec
+ready at `specs/t22-bash-timeout-note.md`, row stays `todo`, pri 3.
+Cheap (one sentence + one schema pin); work it first next cycle. The
+evidence is fresh: the T23 impl child did NOT hit the mirage (it read
+META-SPEC's bounded-gates idiom via its goal's perl-alarm pattern), but
+the class burned the T20 child and this cycle's orchestrator within one
+day.
+
+**What the validators caught:** no implementation defects — sixth and
+seventh consecutive clean glm rounds. The cycle's one real process
+finding was orchestrator-side/spec-side (the T21 self-merge anomaly;
+root cause = content check targeting main, absorbed as the lesson
+above). T23's validator nit was docs-shaped, fixed same cycle.
+
+**K2/T19 practiced:** 8 child artifacts harvested pre-removal (4 per
+item: events+LEDGER × impl/validate). T20 dogfooded twice more (both
+children's banners printed `head=loop-t<N>@<commit>` — wrong-HEAD
+confusion is now structurally impossible).
+
+**Watch items:** J7 (per-family usage accounting) unchanged, no new
+data needed — budgets are iteration-denominated. loopd supervised the
+whole cycle unattended; double-start race (M4) noted, unexercised.
+
+**Final state:** TODO.md T1–T23 done except T22 (`todo`, spec ready);
+main-tree gates 380+3 green, clippy clean; README documents delegate
+(impl commit + nit); all commits pushed through the T23 row flip.
+Human-decision carries unchanged: child `--max-tokens` (J7 blocks
+trusting kimi numbers), `chug doctor`, model routing/escalation,
+sandbox policy, loopd pidfile race.
+
 ### Cycle 5 (2026-09-25, ~13:29–14:05 EDT)
 
 Cycle 5 executed one `chug run --spec LOOP-SPEC.md` session (kimi-k3
