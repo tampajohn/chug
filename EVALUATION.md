@@ -166,4 +166,51 @@ all `EventSink` impls (`src/events.rs`, `src/eventlog.rs`, `src/tui.rs`).
 
 ## Outcomes (filled at cycle wrap — LOOP-SPEC Phase 3)
 
-_(pending — cycle 4 in progress)_
+Cycle 4 executed 2026-09-25 ~13:00–13:40 EDT, one `chug run --spec
+LOOP-SPEC.md` session (kimi-k3 orchestrator; glm-5-3-flash implementation
+children; kimi-k3 validators), wrapped on the T13 warning with 5
+iterations to spare — the warning working as designed on the orchestrator
+itself.
+
+**Landed (1/1 queued rows):**
+- **T17 — budget telemetry in events.jsonl** (impl `0abc5de`, merge
+  `96cc8ef`, row flip `a74e979`). The glm child ran 40/40 iterations and
+  died pre-commit (J1, 2nd post-T13); the orchestrator harvested the
+  complete on-spec diff (6 files, +283/−15, gates 353+3 + clippy green).
+  Validation took three children: validator 1 (kimi) died 40/40 with the
+  review done and mutants 1/2/4 killed but the verdict unwritten (J1,
+  3rd post-T13); validator 2 was killed early after forming a wrong-HEAD
+  belief; the orchestrator ran the remaining 3 mutants itself (all died,
+  including the T15 adjacency smoke — the `max_tokens>0` guard and the
+  iteration-abort boundary); validator 3 signed off **VERDICT: PASS**
+  (re-killed 2/2 samples, full correctness pass against spec reqs 1–5,
+  bounded gate 353+3, goal accepted at 35.5k/11k tokens).
+
+**Filed but unworked (budget, per Phase-2 budget check):**
+- **T18 — WARN_REMAINING_ITERS 5→8** (row + spec `edd636b`, pushed). J6
+  fired mid-cycle: 3 of the last 4 children died at the iteration ceiling
+  with work complete but wrap unfinished (T15 impl, T17 impl, T17
+  validator 1 — which acknowledged the warning at 36 and still fell ~3
+  turns short). Next cycle's first row; spec names every pin to flip.
+
+**What the validators caught:** no implementation defects — third
+consecutive clean glm implementation round. The catch this cycle was
+process-shaped: validator 1's death proved J6 better than any transcript
+archaeology could, and validator 2's confusion showed that "confirm vs
+commit <sha>" instructions invite git-probe misreads (validator 3's goal
+used `git diff main` ground truth instead — worked first try).
+
+**Process notes:** glm-5-3-flash ran ~3s/iteration — child economics are
+now iteration-bound, not wall-clock-bound (a 40-iteration child finished
+in ~4 min). K2 harvest practiced: all four T17 child event streams are in
+the main `.chug/` (`events-t17-impl/validate/validate2/validate3-*`).
+The orchestrator garbled two launch commands (shell-quoting); both were
+caught by polling within minutes, one cost validator 2's early kill.
+T17's own feature shipped mid-cycle too late to help this cycle's
+diagnosis — next cycle's children will have their warning injections on
+the jq record.
+
+**Final state:** TODO.md T1–T17 `done` with commit refs, T18 `todo`;
+`tests/todo_consistency.rs` green; main-tree gates 353+3 green, clippy
+clean; README documents T17 (rode the impl commit `0abc5de`); eval +
+merge + row flips + T18 filing all pushed to origin.
