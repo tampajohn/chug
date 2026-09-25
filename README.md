@@ -58,7 +58,7 @@ returns to idle, repeat. Natural stops end the turn; budgets are per turn.
   failure rejects the claim and the loop continues
 - **Stuck tripwire** — 3 identical consecutive tool errors → abort, ledger
   intact, resumable
-- **Budget-low warning** — when ≤5 iterations, ≤5 minutes, or ≤50,000 tokens
+- **Budget-low warning** — when ≤8 iterations, ≤5 minutes, or ≤50,000 tokens
   remain, the loop injects a one-shot `chug: budget low — N iteration(s),
   M minute(s), K token(s) remain` user message (one shot per budget kind) so
   the model reprioritizes toward committing, gates, and bookkeeping before

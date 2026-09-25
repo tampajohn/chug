@@ -37,7 +37,11 @@ const STUCK_WINDOW: usize = 3;
 /// T13: the one-shot budget-low warning fires when this many iterations (or
 /// this many wall-clock seconds — [`WARN_REMAINING_SECS`]) remain, giving the
 /// model a chance to commit and wrap up before the abort at the loop top.
-const WARN_REMAINING_ITERS: u32 = 5;
+/// T18: 5→8 on cycle-4 J6 evidence — 3 of the last 4 child runs died at the
+/// iteration ceiling with the wrap unfinished (final gates + commit + verdict
+/// need 4–6 iterations of runway; a 5-iteration warning left none for a slow
+/// gate run or a self-inflicted rework loop).
+const WARN_REMAINING_ITERS: u32 = 8;
 /// T13: wall-clock seconds remaining that trigger the one-shot warning
 /// (5 minutes).
 const WARN_REMAINING_SECS: u64 = 300;
@@ -1889,9 +1893,9 @@ mod tests {
 
     #[test]
     fn budget_low_notice_iteration_boundary() {
-        // 6 remaining is above the threshold; 5 fires.
-        assert_eq!(budget_low_notice(6, u64::MAX, None, false, false, false), None);
-        assert!(budget_low_notice(5, u64::MAX, None, false, false, false).is_some());
+        // 9 remaining is above the threshold; 8 fires (T18: WARN_REMAINING_ITERS = 8).
+        assert_eq!(budget_low_notice(9, u64::MAX, None, false, false, false), None);
+        assert!(budget_low_notice(8, u64::MAX, None, false, false, false).is_some());
     }
 
     #[test]
@@ -1929,9 +1933,10 @@ mod tests {
         assert!(msg.contains("1 minute(s)"), "{msg}");
     }
 
-    /// T13, scripted run with an 8-iteration budget: exactly one budget-low
-    /// user message, first seen by the model on the call where 5 iterations
-    /// remain (the 4th), never before and never a second one. The run itself
+    /// T13, scripted run with an 8-iteration budget and WARN=8 (T18): the
+    /// whole budget is warn-zone from the very first boundary, so exactly one
+    /// budget-low user message — naming the 8 iterations that remain — goes
+    /// out before the first call, and never a second one. The run itself
     /// ends exactly as before (accepted goal, exit 0).
     #[test]
     fn budget_low_warning_fires_once_at_threshold() {
@@ -1969,29 +1974,31 @@ mod tests {
         let notices: Vec<&Message> = messages.iter().filter(|m| is_notice(m)).collect();
         assert_eq!(notices.len(), 1, "exactly one budget-low warning");
         let text = notices[0].content[0].text().expect("notice is text");
-        assert!(text.contains("5 iteration(s)"), "{text}");
+        assert!(text.contains("8 iteration(s)"), "{text}");
         assert!(text.contains("commit what is done"), "{text}");
         // …and exactly one on disk.
         let on_disk = transcript::load(tmp.path()).unwrap();
         assert_eq!(on_disk.iter().filter(|m| is_notice(m)).count(), 1);
 
-        // The model first sees it on the 4th call (remaining == 5) and no
-        // call ever sees more than that single message: later calls still
-        // carry the one notice as conversation history, never a second.
+        // The model sees the single notice from the 1st call on (remaining
+        // == 8: with max_iters == WARN the whole budget is warn-zone at the
+        // first boundary) and no call ever sees more than that one message:
+        // later calls still carry it as conversation history, never a second.
         assert_eq!(llm.calls.len(), 8);
         for (i, (_, seen)) in llm.calls.iter().enumerate() {
             let count = seen.iter().filter(|m| is_notice(m)).count();
-            assert!(
-                count == usize::from(i >= 3),
-                "call {} (1-based) carries {count} notice(s)",
+            assert_eq!(
+                count, 1,
+                "call {} (1-based) carries {count} notice(s), expected the one",
                 i + 1
             );
         }
     }
 
     /// T17: the injection lands in `.chug/events.jsonl` as exactly one
-    /// `budget_low` line — the remaining counts at fire time (the iteration
-    /// leg fires with 5 remaining) and `remaining_tokens` null when no token
+    /// `budget_low` line — the remaining counts at fire time (T18: with an
+    /// 8-iteration budget and WARN=8 the iteration leg fires on the first
+    /// boundary, with 8 remaining) and `remaining_tokens` null when no token
     /// budget is configured — recorded before the run ends.
     #[test]
     fn budget_low_injection_lands_in_events_jsonl() {
@@ -2029,7 +2036,7 @@ mod tests {
             remaining <= u64::from(WARN_REMAINING_ITERS),
             "remaining at fire time is in the warn zone, got {remaining}"
         );
-        assert_eq!(remaining, 5, "the fire-time count, not the threshold");
+        assert_eq!(remaining, 8, "the fire-time count, not the threshold");
         assert!(
             lows[0]["remaining_tokens"].is_null(),
             "no token budget → null, never a phantom number"
