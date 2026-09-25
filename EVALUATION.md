@@ -1,216 +1,203 @@
-# EVALUATION — chug, assessed by chug-loop (2026-09-25, cycle 4)
+# EVALUATION — chug, assessed by chug-loop (2026-09-25, cycle 5)
 
-Corpus: `.chug/events-20260925-165721.jsonl` (**cycle-3's full LOOP-SPEC
-run**: 69 iterations, 90 tool results, 1 goal accepted, 328,009 in /
-39,348 out tokens, 06:04:58→06:40:04Z — the first cycle to work a queue
-end-to-end with backgrounded+polled children),
-`.chug/events-t15-impl-20260922-061957.jsonl` (T15 glm child: 40/40
-iterations, abort, 246,614 cumulative in),
-`.chug/events-t15-validate-20260922-063206.jsonl` (T15 kimi validator: 38
-iters, VERDICT PASS),
-`.chug/events-t16-impl-20260922-063855.jsonl` (T16 glm child: 32 iters,
-goal accepted, 132,128 cumulative in) — the three K2-harvested child
-streams, mined with jq per the events-first upgrade;
-`.chug/transcript-20260925-165721.jsonl` + `.chug/LEDGER-20260925-165721.md`
-(cycle-3 orchestrator); `TODO.md` (T1–T16 all done with refs); git log
-through `74aa7bc`; `src/` (17,195 lines; driver.rs 2,763); `README.md`.
-Prior evaluations: cycle 3 at `df4039a` (Outcomes at `74aa7bc`), cycle 2
-at `0d71d00`, cycle 1 at `e962f1f`.
-Verification performed: full `cargo test` = **350 green (347+3)**; `cargo
-clippy --all-targets -- -D warnings` clean; code inspection of the
-budget-low injection site (`src/driver.rs:495-516`), `budget_low_notice`
-(`:790-827`), the whole of `src/eventlog.rs` (362 lines), both `run_start`
-call sites (`src/driver.rs:297`, `src/chat.rs:175`), the `Event` enum and
-all `EventSink` impls (`src/events.rs`, `src/eventlog.rs`, `src/tui.rs`).
+Corpus: `.chug/events.jsonl` (**this cycle-5 LOOP-SPEC run, live** —
+~86k in / 27k out cumulative at mining time; an interactive `chug chat`
+(sonnet, operator) opened at 17:44Z and interleaves into the same
+stream — noted per the hard rules, non-blocking),
+`.chug/events-20260925-172902.jsonl` (**cycle-4's full LOOP-SPEC run**:
+80 iterations, 95 tool results, goal accepted, 260,967 in / 56,479 out,
+16:57→17:25Z — the cycle that landed T17 and filed T18),
+`.chug/events-t17-{impl,validate,validate2,validate3}-*.jsonl` (cycle-4's
+K2-harvested child streams, mined by the cycle-4 eval),
+`/tmp/chug-loop-t18.log` + `/tmp/chug-loop-t18-validate.log` (**cycle-5's
+two child console logs** — the only surviving record: both children's
+`.chug/` streams were lost at worktree removal, see L1),
+`TODO.md` (T1–T18 done with refs, T19–T20 filed this eval); git log
+through `019cfa8`; `src/` (17,467 lines; driver.rs 2,886, +123 since
+cycle 4); `README.md`.
+Prior evaluations: cycle 4 at `c8222cd` (Outcomes at `31ae7f1`), cycle 3
+at `df4039a`, cycle 2 at `0d71d00`, cycle 1 at `e962f1f`.
+Verification performed: full `cargo test` = **356 green (353+3)**; `cargo
+clippy --all-targets -- -D warnings` clean; line-by-line review of the
+T18 diff; independent re-derivation of its fire-time arithmetic against
+`src/driver.rs` (`iteration` init `:401`, ceiling abort `:410`,
+`remaining = max_iters − iteration` at `:505` **before** the increment at
+`:766`, latch mirror `:535`); `budget_low_notice` (`:800+`) and the
+untouched interpolation pins (`:1923`/:1928/:2143`) re-read; the
+validator's two mutation kills re-checked against the test names.
 
 ## 1. What chug does well
 
-- **The full LOOP-SPEC cycle works, end to end, in one command.** Cycle
-  3's resumed run evaluated, filed T15+T16, worked both with
-  backgrounded+polled glm children, adversarially validated T15 (kimi,
-  PASS, core mutants died), merged, flipped rows with refs, pushed after
-  each item, and wrapped with Outcomes — 35 wall minutes, 69/80
-  iterations, one `goal` verdict. Against the references: cycle 2 (healthy
-  fan-out) took 75 iterations; the cycle-3 halt burned 712k tokens on a
-  no-op. The amended doctrine (`988741d` fast-exit, polled children,
-  auto-push) did exactly what it was written to do.
-- **The backgrounded+polled child pattern is now measured, not just
-  asserted.** Of the orchestrator's 74 bash calls, ~30 were sleep-paced
-  polls at 105–110s each — all safely under the hard 120s cap, each ~2–3k
-  input tokens, zero CONFLICT trips, zero process-group kills.
-- **The K2 harvest convention paid off immediately.** All three child
-  event streams survived worktree removal, so child costs are knowable
-  for the first time (T15 246k / T16 132k / validator 56k cumulative
-  input) — and J5 is settled with them (below).
-- **Every shipped fix keeps holding.** Across 4 sessions and 270 tool
-  calls this corpus: zero PATH preambles (T4), zero non-unique-edit
-  thrash (T5), zero stub-test hangs (T6), zero stale-ledger inherits
-  (T3/T7), and the T12/T13/T14/T15 budget surface all fired or stayed
-  correctly silent. The 4 tool errors observed are one-turn,
-  self-corrected, and each of a different non-recurring class (§2 L3).
-- **J5 — RESOLVED with data.** Per-call context (delta of cumulative
-  `input_tokens`, jq-computable since T10): T15 glm child peak **93,568**
-  real tokens, T16 70,199, validator 22,287, orchestrator 76,901, cycle-2
-  orchestrator 76,532. Five glm child sessions across cycles 2–3, peak
-  93.5k, **zero API errors** against the 120k-estimate trim
-  (`src/driver.rs:32-33`). The concern is dead unless evidence revives it.
+- **The loop is now cheap.** Cycle 5 worked T18 end-to-end in ~25 wall
+  minutes with two children that both finished **first try**: glm impl
+  26/40 iters, goal accepted, self-committed (`9056c78`), non-vacuousness
+  self-demonstrated; kimi validator 22/40 iters, VERDICT PASS with 2/2
+  mutants killed. Contrast cycle 4: 3 of 4 children died at the ceiling,
+  validation took three children. The deltas were (a) the spec named
+  every pin to flip, (b) the validation goal carried ground-truth
+  pointers (`git diff main...loop-t18`, the merge sha) plus a hard
+  schedule — the exact lessons cycle 4's Outcomes wrote down. Doctrine
+  learned from failure and the failure stopped.
+- **The adversarial net caught a spec bug, not just code bugs.** T18's
+  spec asserted fire-time "remaining == 7 / 7 iteration(s)"; the true
+  value is 8 (0-based `iteration`, check pre-increment). Three
+  independent readings — implementer, validator, orchestrator — derived
+  the same correction, and the OLD pin ("4th call, 5 remaining" under
+  WARN=5) is consistent only with that model. The loop's quality bar now
+  extends to the specs themselves.
+- **Every shipped fix keeps holding (5th eval running).** Zero PATH
+  preambles, zero edit-thrash, zero stub hangs, zero stale-ledger
+  inherits across the corpus; T18's own pins prove WARN=8 is live; T17's
+  `run_start` ceilings are on disk in this run's stream (verified by
+  jq — no `budget_low` event yet: the orchestrator never neared its
+  ceiling this cycle, correctly silent).
+- **Events-first mining is the default operating mode.** Both cycle
+  streams were characterized with jq in seconds (type histograms,
+  cumulative tokens, goal/abort presence); nothing required transcript
+  archaeology this cycle.
 
 ## 2. Incidents worth fixing
 
-- **L1 → T17 — budget-low warning injections are invisible in
-  events.jsonl (the only new row this cycle).** The T15 glm child aborted
-  at 40/40 iterations with the implementation complete but **uncommitted**
-  (abort event 2026-09-22T06:17:07Z, `budget_kind: iterations`); the
-  orchestrator harvested the diff and committed it. Whether the child's
-  T13 warning ever fired — and at what remaining counts — is unknowable:
-  the K2 harvest preserves events, not transcripts, and the injection
-  site (`src/driver.rs:501-516`) emits no event. Consequence: T13's
-  one-shot latches and T15's token leg cannot be verified per-session for
-  exactly the sessions (children) whose transcripts don't survive, and J6
-  (below) can't be decided with data. Adjacent hole in the same theme:
-  `run_start` (`src/eventlog.rs:47-66`) records no budgets, so for
-  *successful* runs (no abort event to carry `budget_max`) even the
-  configured ceilings are absent from the jq record. Root cause: T10's
-  event set predates T13/T15; telemetry wasn't extended when the budget
-  legs landed. Fix filed: **T17** (`specs/t17-budget-events.md`).
-- **L2 — assessed, watch item J6 (child wrap margin), no row yet.** The
-  T15 child is the second J1 (code complete, died pre-commit) but the
-  first *post-T13*: the warning text already says "commit what is done,
-  run the gates, and finish bookkeeping now" (`src/driver.rs:818-822`),
-  so wording isn't the gap — margin is. A 40-iteration child doing
-  implement+test+commit gets ≤5 iterations of wrap runway, and glm's
-  edit-heavy style (35 `edit_file` calls in 40 iterations) burns deep.
-  The harvest protocol lost nothing (one test-fixture slip, fixed by the
-  orchestrator). One post-T13 occurrence → no harness change; if a second
-  occurs, candidates are WARN_REMAINING_ITERS 5→8 or a stronger ≤2-
-  remaining second-stage notice. T17's telemetry makes this decidable
-  (warned-at vs abort iteration per child).
-- **L3 — assessed, no row: three one-turn bumps, each self-corrected.**
-  (a) Orchestrator `edit_file` on `/tmp/chug-loop-t15/src/driver.rs`
-  rejected (path escapes cwd — by design; bash is the documented escape
-  hatch, used immediately). (b) The kimi validator tried `git worktree
-  add -b loop-t15` from inside that very worktree (branch in use; adapted)
-  — the durable fix is validation-goal template wording in META-SPEC §6,
-  a human spec. (c) The T15 glm child emitted one malformed
-  `edit_file` call (`missing or non-string field: old`; adapted). No
-  class repeats; each cost one turn.
+- **L1 → T19 — K2 harvest skipped at cleanup; both T18 child streams
+  lost (the only process failure this cycle).** After merging T18 the
+  orchestrator ran `git worktree remove /tmp/chug-loop-t18` **without**
+  first copying the children's `.chug/events.jsonl` (+ transcripts, +
+  impl LEDGER.md) into the main repo — one cycle after cycle 4 harvested
+  4/4 correctly by hand. `git worktree remove` deletes untracked files
+  silently, and `.chug/` is untracked in the worktree. Evidence: this
+  eval's corpus names console logs where cycle 4 named event streams.
+  Root cause: the convention lives in ledgers and memory, not in
+  LOOP-SPEC. Fix filed: **T19** (`specs/t19-events-harvest-step.md`) —
+  codify harvest-before-removal in LOOP-SPEC §2 step 5, which cycle 4
+  had already flagged as a human-decision item; it now has a failure
+  case attached.
+- **L2 → T20 — wrong-HEAD confusion, second occurrence of the class.**
+  Cycle 4: T17's kimi validator 2 was killed early on a wrong-HEAD
+  belief (cycle-4 Outcomes). Cycle 5: the T18 validator opened with "I'm
+  on `main` but the commit exists" (`/tmp/chug-loop-t18-validate.log`,
+  iteration 3) and self-corrected only because the goal spelled out the
+  diff ground truth. Root cause: the T11 banner prints the **binary's
+  build-time** commit, but children run the main-tree binary with a
+  worktree cwd — the one identity line a child sees names a commit that
+  is not its checkout's HEAD and no branch. Fix filed: **T20**
+  (`specs/t20-banner-worktree-head.md`) — runtime, best-effort
+  `head=<branch>@<short>` in the banner + `head_branch`/`head_commit` in
+  `run_start`; never fails the run, git-less fallback bytes unchanged.
+- **L3 — assessed, watch item J7 (usage-telemetry trust per model
+  family), no row.** The T18 kimi validator's console printed **17,384
+  cumulative input tokens for 22 iterations** (spec + diff + two cargo
+  gates + two mutation runs — each API call alone re-sends the growing
+  conversation); cycle 4's kimi validator 3 printed 35.5k for a full
+  review while glm children print 132–246k for comparable work. Either
+  the proxy under-reports kimi usage or kimi's per-call accounting
+  differs. Two sessions, same direction → watch item; no row because no
+  decision is blocked (child budgets are iteration/minute-denominated;
+  `--max-tokens` users should know the number may undercount on kimi).
+- **L4 — assessed, no row: the T18 spec's off-by-one (see §1).** A
+  spec-authoring lesson, absorbed: computed expectations must carry
+  their derivation (`remaining = max_iters − iteration`, 0-based,
+  pre-increment), not just the number. No harness change; the
+  three-reader catch worked.
 
 ## 3. Friction hot spots
 
 - **PATH tax / revert-thrash / edit-thrash / stub hangs — fixed, holding
-  (4th eval running):** zero recurrences in 270 tool calls across four
-  sessions and two model families.
-- **Watch-and-wait burn — closed twice over:** the fast-BLOCKED doctrine
-  removes the reason (`988741d`), T15's `--max-tokens` removes the
-  ability; neither was needed this cycle (no invariant trip, no runaway).
-- **Wrap-phase deaths — orchestrator leg verified, child leg = J6:** the
-  orchestrator wrapped with books complete; the child case is the watch
-  item above.
-- **Poll cadence vs the 120s cap:** 105–110s sleep-paced polls are the
-  doctrine working as designed, not friction; token cost ~2–3k per poll
-  is the price of the cap and it's fine.
-- **driver.rs 2,763 lines (+558 total src since cycle 3):** cohesive
-  (loop/budget/trim/notices + in-module tests); no incident traces to
-  file size. No row.
+  (5th eval):** zero recurrences in this corpus.
+- **Watch-and-wait burn — stayed closed:** no invariant trip, no
+  runaway; single-driver check was two `ps` greps again.
+- **Child wrap deaths (J6) — the fix shipped this cycle, effect
+  unmeasured:** T18 landed WARN=8, but neither cycle-5 child came near
+  the ceiling (26/40, 22/40), so the widened margin's value is
+  unverified in anger. Next multi-child cycle is the test; T17's
+  telemetry now records warned-at counts per child.
+- **2000-line read cap vs growing driver.rs (2,886 lines):** the impl
+  child spent iterations 1–5 chunking driver.rs via sed — no failure,
+  ~3 turns of tax. Not filing: the cap's paging behavior worked as
+  designed; noted because the file grows ~100 lines/cycle and the tax
+  scales with it.
+- **Spec-authoring precision:** see L4 — the only friction the
+  implementer hit was correcting the spec's arithmetic (cost: a few
+  turns of empirical re-derivation).
 
 ## 4. Capability gaps (against the human specs' direction)
 
-- **Budget observability in events — open, filed (T17).** The one gap
-  this corpus actually demonstrates.
-- **K2 codification (human decision, carried):** the events-harvest
-  convention has now been practiced two cycles running; amending LOOP-SPEC
-  §2.5 to *require* it — and whether to also harvest child
-  transcripts/ledgers (the T15 child's final-turn reasoning died with its
-  worktree) — is the operator's call; LOOP-SPEC is a human spec.
-- **Child launch budgets (human decision, new):** LOOP-SPEC §2's child
-  template carries `--max-iters 40 --max-minutes 35` but no `--max-tokens`
-  — T15's knob exists but the doctrine doesn't use it yet.
-- **Single-driver tooling (`chug doctor`) — human decision (carried).**
-  This cycle's invariant check was two `ps` greps; not needed, but the
-  hand-rolling continues.
-- **Model routing/escalation (carried):** four glm children across cycles
-  2–3, zero fallbacks to kimi needed; manual fallback remains sufficient.
+- **K2 codification — filed (T19)** with the failure evidence attached.
+- **Worktree identity at startup — filed (T20).**
+- **Child launch budgets (human decision, carried, reinforced):**
+  LOOP-SPEC's child template still lacks `--max-tokens`; the T18 glm
+  impl burned 179,400 cumulative input on a one-constant change
+  (edit-heavy style + big-file re-reads). Iteration economics are fine
+  (26/40); token economics argue for the ceiling.
+- **`chug doctor` single-driver tooling (carried).** Two `ps` greps
+  again; fine, still hand-rolled.
+- **Model routing/escalation (carried):** zero glm fallbacks needed
+  across cycles 2–5; manual remains sufficient.
 - **Sandbox policy / stray I7 cargo symlink (carried, unchanged).**
 
 ## 5. Top 3 priorities
 
-1. **T17 — budget telemetry in events.jsonl (observability, pri 3).** The
-   only new gap in an otherwise clean corpus; small (one Event variant +
-   three run_start fields), and it makes T13/T15's legs and J6 empirically
-   verifiable from harvested child streams alone.
-2. **(No second row filed.)** The T15 validator's three weak-test
-   survivors stay carried per cycle-3 doctrine ("if a third one
-   accumulates" — none did); T17's validation sweep re-kills those
-   mutants as adjacency smoke instead.
-3. **(No third row filed.)** Queue honesty over queue mass: everything
-   else is verified-fixed, resolved-with-data (J5), doctrine for the
-   human, or a single-occurrence watch item (J6).
+1. **T19 — codify the events harvest (robustness of the loop's own
+   evidence trail, pri 3).** Fresh failure case; one-paragraph doctrine
+   edit; the whole evaluation pipeline depends on these streams.
+2. **T20 — banner/run_start worktree HEAD (DX, pri 3).** Twice-observed
+   confusion class with a cheap, well-seamed fix; pays off every child
+   launch from now on.
+3. **(No third row filed.)** Queue honesty: J7 is a watch item, J6 is
+   fix-shipped-awaiting-evidence, everything else is verified-fixed or
+   a human-decision carry.
 
 ## 6. Handoff — recommended execution order
 
-**LOOP-SPEC Phase 2 (this cycle):**
-1. **T17** — touches `src/driver.rs` + `src/events.rs` (+ `eventlog.rs`,
-   `chat.rs` call sites) → adversarial validation **REQUIRED** (kimi);
-   ask the validator to also re-kill the carried T15 budget mutants as
-   adjacency smoke.
+**LOOP-SPEC Phase 2 (next cycle):**
+1. **T19** — doctrine edit to LOOP-SPEC.md → adversarial validation
+   **REQUIRED** (loop/spec doctrine itself, §2.4). No code; the
+   validator checks internal consistency + harvest-before-removal
+   ordering.
+2. **T20** — touches `src/build_info.rs`, `src/main.rs`, `src/eventlog.rs`
+   (the events surface) → adversarial validation **REQUIRED**; mutation
+   legs named in the spec (Some/None render, never-fail invariant).
 
 **Human-decision items (no rows filed):**
-1. LOOP-SPEC §2.5: codify the events-harvest convention (K2, practiced
-   2×); decide whether child transcripts/ledgers harvest too (L2's "why"
-   currently dies with the worktree).
-2. LOOP-SPEC §2 child template: add `--max-tokens` (T15's knob, unused by
-   doctrine so far).
-3. `chug doctor` single-driver/process inspection (carried).
-4. Automatic model routing/escalation vs manual fallback (carried).
-5. Bash sandbox policy; stray I7 cargo symlink (carried).
+1. LOOP-SPEC §2 child template: add `--max-tokens` (reinforced: 179k
+   input for a one-constant glm impl).
+2. `chug doctor` (carried). 3. Model routing/escalation (carried).
+4. Bash sandbox policy; stray I7 cargo symlink (carried).
+5. J7: whether kimi usage under-reporting matters for `--max-tokens`
+   semantics on kimi runs (needs proxy-side evidence).
 
 ## Outcomes (filled at cycle wrap — LOOP-SPEC Phase 3)
 
-Cycle 4 executed 2026-09-25 ~13:00–13:40 EDT, one `chug run --spec
-LOOP-SPEC.md` session (kimi-k3 orchestrator; glm-5-3-flash implementation
-children; kimi-k3 validators), wrapped on the T13 warning with 5
-iterations to spare — the warning working as designed on the orchestrator
-itself.
+Cycle 5 executed 2026-09-25 ~13:29–14:05 EDT, one `chug run --spec
+LOOP-SPEC.md` session (kimi-k3 orchestrator; glm-5-3-flash impl child;
+kimi-k3 validator).
 
 **Landed (1/1 queued rows):**
-- **T17 — budget telemetry in events.jsonl** (impl `0abc5de`, merge
-  `96cc8ef`, row flip `a74e979`). The glm child ran 40/40 iterations and
-  died pre-commit (J1, 2nd post-T13); the orchestrator harvested the
-  complete on-spec diff (6 files, +283/−15, gates 353+3 + clippy green).
-  Validation took three children: validator 1 (kimi) died 40/40 with the
-  review done and mutants 1/2/4 killed but the verdict unwritten (J1,
-  3rd post-T13); validator 2 was killed early after forming a wrong-HEAD
-  belief; the orchestrator ran the remaining 3 mutants itself (all died,
-  including the T15 adjacency smoke — the `max_tokens>0` guard and the
-  iteration-abort boundary); validator 3 signed off **VERDICT: PASS**
-  (re-killed 2/2 samples, full correctness pass against spec reqs 1–5,
-  bounded gate 353+3, goal accepted at 35.5k/11k tokens).
+- **T18 — WARN_REMAINING_ITERS 5→8** (impl `9056c78`, ff merge, row flip
+  `019cfa8`, pushed `068ebc8..019cfa8`). glm impl green first try (26/40
+  iters, self-committed, non-vacuousness self-demonstrated). The spec's
+  fire-time "7" was an off-by-one slip; the true value 8 was derived
+  independently by implementer, validator, and orchestrator and matches
+  the code (`remaining = max_iters − iteration`, 0-based, checked
+  pre-increment). kimi adversarial validation **VERDICT: PASS** — 2/2
+  mutants died (revert-to-5 killed by all three moved pins; `<=`→`<`
+  killed by the boundary pin + latch mirror), no pin weakened, README
+  bullet updated in the impl commit.
 
-**Filed but unworked (budget, per Phase-2 budget check):**
-- **T18 — WARN_REMAINING_ITERS 5→8** (row + spec `edd636b`, pushed). J6
-  fired mid-cycle: 3 of the last 4 children died at the iteration ceiling
-  with work complete but wrap unfinished (T15 impl, T17 impl, T17
-  validator 1 — which acknowledged the warning at 36 and still fell ~3
-  turns short). Next cycle's first row; spec names every pin to flip.
+**Filed for the next queue:** T19 (events-harvest codification) + T20
+(banner/run_start worktree HEAD), each with a full spec.
 
-**What the validators caught:** no implementation defects — third
-consecutive clean glm implementation round. The catch this cycle was
-process-shaped: validator 1's death proved J6 better than any transcript
-archaeology could, and validator 2's confusion showed that "confirm vs
-commit <sha>" instructions invite git-probe misreads (validator 3's goal
-used `git diff main` ground truth instead — worked first try).
+**What the validators caught:** no implementation defects — fourth
+consecutive clean glm round. The catches were again process-shaped: the
+spec's arithmetic slip (caught 3×), and the cycle's one real process
+failure was the orchestrator's own (L1, harvest skipped → T19).
 
-**Process notes:** glm-5-3-flash ran ~3s/iteration — child economics are
-now iteration-bound, not wall-clock-bound (a 40-iteration child finished
-in ~4 min). K2 harvest practiced: all four T17 child event streams are in
-the main `.chug/` (`events-t17-impl/validate/validate2/validate3-*`).
-The orchestrator garbled two launch commands (shell-quoting); both were
-caught by polling within minutes, one cost validator 2's early kill.
-T17's own feature shipped mid-cycle too late to help this cycle's
-diagnosis — next cycle's children will have their warning injections on
-the jq record.
+**Process notes:** ground-truth wording + hard schedules in child goals
+converted validation from a 3-child saga (cycle 4) to a first-try PASS.
+K2 harvest regressed (L1) in the same cycle it mattered least (both
+children's outcomes were fully knowable from console logs). J6's fix is
+live but unexercised: neither child approached its ceiling.
 
-**Final state:** TODO.md T1–T17 `done` with commit refs, T18 `todo`;
-`tests/todo_consistency.rs` green; main-tree gates 353+3 green, clippy
-clean; README documents T17 (rode the impl commit `0abc5de`); eval +
-merge + row flips + T18 filing all pushed to origin.
+**Final state:** TODO.md T1–T18 `done` with commit refs, T19–T20 `todo`
+with specs; `tests/todo_consistency.rs` green; main-tree gates 353+3
+green, clippy clean; README documents T18 (rode the impl commit
+`9056c78`); eval + rows + specs committed and pushed.
