@@ -52,9 +52,11 @@ For each `todo` row, ONE at a time (backgrounded child + polling, per step 2):
      --goal "Implement TODO item t<N> ONLY. Keep cargo build + clippy + test
              green. Commit your work here. DO NOT touch TODO.md or LEDGER.md —
              bookkeeping is the orchestrator's." \
-     --model anthropic-system.ai.glm-5-3-flash --max-iters 40 --max-minutes 35 \
+     --model anthropic-system.ai.glm-5-3-flash --max-iters 50 --max-minutes 35 \
      > /tmp/chug-loop-t<N>.log 2>&1 & echo "child pid: $!"
    ```
+   (50, not 40: 3 of the last 5 glm impl children died at 40/40 with the work
+   done — T15/T17/T20; minutes were never binding, T20 used 6 of 35.)
    Poll every ~60–110s (`ps -p <pid>` + `tail` the log + watch the
    worktree's `.chug/events.jsonl` mtime) — each poll is its own short bash
    call, safely under the cap. Exit of the pid = child done; then review.
