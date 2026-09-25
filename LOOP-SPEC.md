@@ -72,7 +72,8 @@ For each `todo` row, ONE at a time (backgrounded child + polling, per step 2):
    silently — the cycle-5 T18 loss), harvest every child run's
    `.chug/events.jsonl` from the worktree into the main repo's `.chug/` as
    `events-t<N>-<role>-<yyyymmdd>-<hhmmss>.jsonl` (impl and validator
-   alike; precedent `events-t17-impl-20260925-170831.jsonl`), plus the
+   alike; precedents `events-t17-impl-20260925-170831.jsonl` and
+   `events-t17-validate3-20260925.jsonl`), plus the
    child's `LEDGER.md` as `LEDGER-t<N>-<role>-<ts>.md` when it carried a
    verdict or non-trivial findings; transcript harvest is the operator's
    choice (size). Only then merge to main, re-run gates in main, then flip
