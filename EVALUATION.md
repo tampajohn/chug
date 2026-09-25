@@ -201,3 +201,70 @@ live but unexercised: neither child approached its ceiling.
 with specs; `tests/todo_consistency.rs` green; main-tree gates 353+3
 green, clippy clean; README documents T18 (rode the impl commit
 `9056c78`); eval + rows + specs committed and pushed.
+
+### Cycle 6 (2026-09-25, ~14:03–14:40 EDT) — queue drained 2/2
+
+One `chug run --spec LOOP-SPEC.md` session (kimi-k3 orchestrator;
+glm-5-3-flash impl children; kimi-k3 validators). Freshness rule fired
+(same-day eval + todo rows present) → Phase 1 skipped, straight to the
+queue.
+
+**Landed (2/2 queued rows):**
+- **T19 — harvest-before-removal codified** (impl `1e26acc`, validator
+  nit `0dc6ec5`, row flip `8360ba4`, pushed). glm impl green first try
+  (~20/40 iters) with a correct design call: fold the harvest INTO §2
+  step 5 rather than renumber (preserves `specs/t13-budget-low-warning.md:20`'s
+  "LOOP-SPEC §2.5" reference — verified by orchestrator grep). kimi
+  validator **VERDICT: PASS** at 10/40 iters (6/6 consistency checks,
+  gates re-run independently). The validator's one nit (only one of two
+  precedent files named) was fixed by the orchestrator as a trivial docs
+  edit (`0dc6ec5`).
+- **T20 — banner/run_start name the cwd's worktree HEAD** (impl+merge
+  `f08ea04`, row flip `09496eb`, pushed). glm impl committed green
+  (9 new tests: Some/None banner pins, byte-exact pre-T20 fallback pin,
+  non-vacuousness seam, real-repo/non-repo/broken-.git/missing-git/
+  detached-HEAD legs, run_start serialization both legs; README bullets).
+  kimi validator **VERDICT: PASS** (goal accepted): 3/3 mutants died
+  (banner render revert, resolve_head→None, serialization swap),
+  pin audit showed zero pre-existing assertions weakened, never-fail
+  proven with scratch PATH experiments, seam purity confirmed (git spawn
+  only in build_info.rs). Live dogfood post-merge: rebuilt binary in
+  main prints `head=main@09496eb`.
+
+**What the validators caught:** one docs nit (T19, fixed same cycle);
+zero implementation defects — fifth consecutive clean glm
+implementation round.
+
+**J6 exercised for the first time (partial success):** the T20 impl
+child's stream records `budget_low` at `remaining_iters: 8` (T18's
+widened margin firing exactly as designed, T17's telemetry capturing
+it). The child then **committed `f08ea04` before** dying at the 40/40
+ceiling mid-wrap (ledger left a seed stub) — contrast T15/T17's
+pre-commit deaths. The margin bought the commit; it did not buy the
+wrap. Evidence: `.chug/events-t20-impl-20260925-182346.jsonl`.
+
+**K2/T19 practiced immediately:** both items' child artifacts harvested
+BEFORE worktree removal per the just-landed doctrine — 7 files
+(4 for T19: events+LEDGER × impl/validate; 3 for T20: events ×2 +
+validator LEDGER carrying the mutation-leg record). Transcripts left
+behind by operator's choice (size; verdicts ride the events streams).
+
+**Watch-item updates:** J7-adjacent anomaly in the OTHER direction —
+the T20 glm impl printed 27,280 in / 32,456 out cumulative for 40
+iterations of real multi-file work (cycle 5's glm impl: 179,400 in for
+26 iters). Usage telemetry per model family stays a watch item, now
+with data on both sides. The T19/T20 children's own `run_start` lines
+lack `head_branch`/`head_commit` keys — they ran the pre-T20 main-tree
+binary (expected; the feature dogfoods from the next child launch on).
+
+**Queue state at wrap:** EMPTY — T1–T20 all `done` with commit refs.
+The next cycle cannot skip Phase 1 (freshness rule requires todo rows
+to skip), so it will evaluate fresh: this paragraph plus the harvested
+streams are its corpus. Human-decision carries unchanged: child-launch
+`--max-tokens` (reinforced again: no token ceiling on any child this
+cycle), `chug doctor`, model routing/escalation, sandbox policy, J7.
+
+**Final state:** main-tree gates 362+3 green, clippy clean; README
+documents T20 (rode the impl commit); T19 internal (README untouched
+per spec); todo_consistency guard green; all commits pushed through
+`09496eb`.
