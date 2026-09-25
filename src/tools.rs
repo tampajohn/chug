@@ -729,7 +729,7 @@ fn delegate_launch(input: &Value) -> anyhow::Result<ToolResult> {
 fn delegate_status(input: &Value) -> anyhow::Result<ToolResult> {
     let cwd = delegate_cwd(input)?;
     let pid = input.get("pid").and_then(Value::as_u64);
-    let alive = pid.and_then(process_alive);
+    let alive = pid.and_then(reap_and_alive);
 
     let events_path = cwd.join(".chug").join("events.jsonl");
     let (summary, events_note) = match read_tail_lines(&events_path, DELEGATE_EVENTS_TAIL_BYTES) {
@@ -833,9 +833,13 @@ impl DelegateSummary {
     }
 }
 
-/// Liveness probe for a child pid: `kill(pid, 0)` delivers no signal but
-/// reports existence (`EPERM` = exists, owned by someone else). No such probe
-/// on non-unix → liveness reports unknown there.
+/// The plain liveness probe: `kill(pid, 0)` delivers no signal but reports
+/// existence (`EPERM` = exists, owned by someone else). No such probe on
+/// non-unix → liveness reports unknown there.
+///
+/// This is the FALLBACK leg only — [`reap_and_alive`] layers the zombie reap
+/// (T28) on top for the `status` poll. It stays standalone so its semantics
+/// are exactly the pre-T28 ones: alive / not-alive / EPERM-means-alive.
 fn process_alive(pid: u64) -> Option<bool> {
     #[cfg(unix)]
     {
@@ -851,6 +855,44 @@ fn process_alive(pid: u64) -> Option<bool> {
         let _ = pid;
         None
     }
+}
+
+/// The `status` liveness seam: reap our own exited children before probing
+/// (T28). Launch drops the child handle without ever waiting on it, so the
+/// orchestrator is a parent that never reaps — an exited child stays a
+/// ZOMBIE, and `kill(pid, 0)` succeeds on zombies, which had `status`
+/// reporting `alive: true` for children whose events stream already said
+/// done (cycle-11 eval O2: three `state: done` children, three `alive:
+/// true` polls). So before the plain probe, offer the pid a non-blocking
+/// wait:
+/// - returns `pid`: ours and had exited — now REAPED, truthfully `false`;
+/// - returns `0`: ours, still running → plain probe (says alive);
+/// - `-1` (`ECHILD`: foreign pid or already reaped — and any other errno):
+///   plain probe, semantics UNCHANGED.
+///
+/// No panic paths: every waitpid leg degrades to the plain probe.
+fn reap_and_alive(pid: u64) -> Option<bool> {
+    #[cfg(unix)]
+    {
+        // A pid of 0 (or one too big for i32) is not a child pid — and
+        // waitpid(0, …) would mean "any child in our process group", so the
+        // reap leg is skipped for it and the plain probe answers unchanged.
+        let pid_i = pid as i32;
+        if pid_i > 0 {
+            let mut status: libc::c_int = 0;
+            // SAFETY: waitpid on our own child pid with a valid status
+            // pointer; WNOHANG means it never blocks. It can only reap a
+            // child of THIS process — a foreign pid just yields ECHILD.
+            let rc = unsafe { libc::waitpid(pid_i, &mut status, libc::WNOHANG) };
+            if rc == pid_i {
+                // Our child had exited; this wait reaped it — it is gone.
+                return Some(false);
+            }
+            // rc == 0 (ours, still running) and rc == -1 (ECHILD, or any
+            // other errno) both fall through to the plain probe below.
+        }
+    }
+    process_alive(pid)
 }
 
 /// The last `bound` bytes of `path`, as the complete lines inside that
@@ -1824,6 +1866,95 @@ mod tests {
         let pid = child.id();
         assert!(child.wait().unwrap().success());
         assert_eq!(process_alive(u64::from(pid)), Some(false));
+    }
+
+    // ---- T28: status reaps zombie children ----
+
+    /// T28 test 1. An exited own child is a ZOMBIE until reaped, and the
+    /// orchestrator never reaps (launch drops the handle) — `kill(pid, 0)`
+    /// answers "alive" for zombies, so `status` reported `alive: true` for
+    /// children whose events stream already recorded done (cycle-11 eval O2).
+    ///
+    /// NON-VACUOUSNESS (T28 spec test item 5): this test FAILS pre-T28 —
+    /// with no waitpid leg the zombie keeps answering the probe, so the
+    /// bounded loop below times out holding `Some(true)` instead of ever
+    /// seeing the `Some(false)` that only the reap produces.
+    #[cfg(unix)]
+    #[test]
+    fn delegate_status_reaps_own_exited_child_and_reports_false_twice() {
+        let child = Command::new("true").spawn().unwrap();
+        let pid = child.id();
+        drop(child); // the launch contract: detached, handle dropped, never waited
+
+        // Wait for the child to exit WITHOUT reaping it ourselves: poll the
+        // seam until it reports dead — the reap inside the seam is what turns
+        // the zombie into a reaped, truly-gone pid.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let first = loop {
+            match reap_and_alive(u64::from(pid)) {
+                Some(false) => break Some(false),
+                other => {
+                    if Instant::now() >= deadline {
+                        break other;
+                    }
+                    thread::sleep(Duration::from_millis(10));
+                }
+            }
+        };
+        assert_eq!(first, Some(false), "exited own child must reap to dead");
+        // Second poll: already reaped, so waitpid says ECHILD and the plain
+        // probe (ESRCH) still reports dead — no error, and not alive.
+        assert_eq!(reap_and_alive(u64::from(pid)), Some(false));
+    }
+
+    /// T28 test 2. A still-running own child stays alive: the reap leg must
+    /// not misreport it (waitpid WNOHANG returns 0 → plain probe → true).
+    /// Cleanup kills and reaps, so the suite leaks no zombie or stray sleeper.
+    #[cfg(unix)]
+    #[test]
+    fn delegate_status_reports_own_running_child_alive_then_cleans_up() {
+        let mut child = Command::new("sleep").arg("30").spawn().unwrap();
+        let pid = child.id();
+        assert_eq!(reap_and_alive(u64::from(pid)), Some(true));
+        child.kill().expect("kill the sleep child");
+        assert!(!child.wait().expect("reap the sleep child").success());
+    }
+
+    /// T28 test 3. A pid that is NOT our child keeps the plain probe's
+    /// semantics exactly: waitpid says ECHILD, so the kill(pid, 0)/EPERM
+    /// answer is unchanged from pre-T28 — both for an existing foreign pid
+    /// and for a provably dead never-our-child pid.
+    #[cfg(unix)]
+    #[test]
+    fn delegate_status_foreign_pid_keeps_probe_semantics() {
+        // pid 1 exists on every unix (init/launchd) and is never our child:
+        // alive via the probe's ok/EPERM leg, same answer as pre-T28.
+        assert_eq!(reap_and_alive(1), Some(true));
+        // Provably dead and never an unreaped child of ours: fully reaped via
+        // wait() first, so the seam's waitpid says ECHILD and the plain
+        // probe's ESRCH reports false.
+        let mut child = Command::new("true").spawn().unwrap();
+        let pid = child.id();
+        assert!(child.wait().expect("reap the true child").success());
+        assert_eq!(reap_and_alive(u64::from(pid)), Some(false));
+    }
+
+    /// T28 test 4. Liveness without a pid stays `unknown (no pid given)` —
+    /// the reap leg must not leak into the no-pid path.
+    #[test]
+    fn delegate_status_without_pid_still_reports_alive_unknown() {
+        let tmp = tempfile::tempdir().unwrap();
+        let result = dispatch(
+            &delegate_ctx(tmp.path()),
+            "delegate",
+            &json!({"action": "status", "cwd": tmp.path()}),
+        );
+        assert!(!result.is_error, "{}", result.content);
+        assert!(
+            result.content.contains("alive: unknown (no pid given)"),
+            "{}",
+            result.content
+        );
     }
 
     #[test]
