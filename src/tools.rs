@@ -88,7 +88,7 @@ pub fn tool_schemas() -> Vec<Value> {
         }),
         json!({
             "name": "bash",
-            "description": "Run a shell command via `sh -c` in the working directory. Captures stdout+stderr and the exit code. 120s timeout; long output is truncated (head+tail kept).",
+            "description": "Run a shell command via `sh -c` in the working directory. Captures stdout+stderr and the exit code. 120s timeout; long output is truncated (head+tail kept). On macOS there is no `timeout` command; bound long commands with `perl -e 'alarm N; exec @ARGV' <cmd>` instead.",
             "input_schema": {
                 "type": "object",
                 "properties": {
@@ -1836,6 +1836,51 @@ mod tests {
         assert!(required.contains(&"cwd"), "cwd must be required");
         // No other schema may shadow or duplicate the name.
         assert!(schemas.iter().any(|s| s.get("name").and_then(Value::as_str) == Some("goal_complete")));
+    }
+
+    /// T22: the bash description must carry the macOS `timeout` mirage note.
+    /// Models reach for GNU `timeout` (absent on macOS) and exit 127 — twice
+    /// in one day across two model families — and the one surface every
+    /// session of every role sees is the tool description itself. The platform
+    /// fact and the `perl -e 'alarm` idiom are pinned against the LIVE schema
+    /// (`tool_schemas()`, not a copied literal), so reverting the description
+    /// or corrupting the idiom fails here.
+    #[test]
+    fn bash_description_warns_macos_has_no_timeout_and_pins_perl_alarm_idiom() {
+        let schemas = tool_schemas();
+        let entries: Vec<&Value> = schemas
+            .iter()
+            .filter(|s| s.get("name").and_then(Value::as_str) == Some("bash"))
+            .collect();
+        assert_eq!(entries.len(), 1, "exactly one bash schema");
+        let desc = entries[0]
+            .get("description")
+            .and_then(Value::as_str)
+            .expect("bash schema has a description");
+        // The warning, in its warning context (not just any `timeout` token —
+        // the driver's own cap mentions that word too), and the idiom, whose
+        // load-bearing prefix is `perl -e 'alarm`.
+        assert!(
+            desc.contains("no `timeout` command"),
+            "bash description lost the macOS `timeout` warning: {desc}"
+        );
+        assert!(
+            desc.contains("perl -e 'alarm"),
+            "bash description lost the `perl -e 'alarm` idiom: {desc}"
+        );
+        // Appended as exactly ONE sentence (3 → 4), at the end.
+        assert_eq!(
+            desc.split(". ").count(),
+            4,
+            "description did not gain exactly one sentence: {desc}"
+        );
+        assert!(desc.ends_with("instead."), "note is not the final sentence: {desc}");
+        // The 120s phrase is the DRIVER's kill cap, not the model's command
+        // budget — that wording must survive untouched.
+        assert!(
+            desc.contains("120s timeout; long output is truncated"),
+            "driver 120s cap wording changed: {desc}"
+        );
     }
 
     /// End-to-end with a stub binary: `CHUG_DELEGATE_BIN` points at a script
