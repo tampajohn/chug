@@ -293,8 +293,17 @@ fn run_loop(
         trace: trace.as_deref(),
         obs,
     };
-    // T10: first line of the run's events log (model/spec/cwd/mode).
-    eventlog::run_start(&cfg.cwd, "run", Some(&cfg.spec_path), &cfg.model);
+    // T10: first line of the run's events log (model/spec/cwd/mode), plus
+    // the configured budget ceilings (T17).
+    eventlog::run_start(
+        &cfg.cwd,
+        "run",
+        Some(&cfg.spec_path),
+        &cfg.model,
+        cfg.max_iters,
+        cfg.max_minutes,
+        cfg.max_tokens,
+    );
     match drive_loop(
         &ctx,
         &mut knobs,
@@ -509,6 +518,15 @@ fn drive_loop(
             let msg = Message::user(vec![ContentBlock::text_block(notice)]);
             transcript::append(ctx.cwd, &msg)?;
             messages.push(msg);
+            // T17: put the injection on the events record, with the remaining
+            // counts at fire time — one event per actual injection (the
+            // one-shot latches cap a run at three). Telemetry only: the
+            // notice itself already reached the user as the message above.
+            sink.emit(Event::BudgetLow {
+                remaining_iters,
+                remaining_secs,
+                remaining_tokens,
+            });
         }
         warned_iter |= remaining_iters <= WARN_REMAINING_ITERS;
         warned_time |= remaining_secs <= WARN_REMAINING_SECS;
@@ -1346,6 +1364,10 @@ mod tests {
         assert_eq!(first["model"], "test-model");
         assert_eq!(first["version"], crate::build_info::VERSION);
         assert_eq!(first["commit"], crate::build_info::GIT_COMMIT);
+        // T17: the run's configured ceilings ride the banner.
+        assert_eq!(first["max_iters"], 5);
+        assert_eq!(first["max_minutes"], 10);
+        assert!(first["max_tokens"].is_null(), "no token budget → null");
     }
 
     // ---------- T3: fresh-run ledger archiving ----------
@@ -1965,6 +1987,100 @@ mod tests {
                 i + 1
             );
         }
+    }
+
+    /// T17: the injection lands in `.chug/events.jsonl` as exactly one
+    /// `budget_low` line — the remaining counts at fire time (the iteration
+    /// leg fires with 5 remaining) and `remaining_tokens` null when no token
+    /// budget is configured — recorded before the run ends.
+    #[test]
+    fn budget_low_injection_lands_in_events_jsonl() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (_utx, urx) = mpsc::channel::<SlashUpdate>();
+        let controls = Controls::detached();
+        let ctx = ctx_for(&tmp, Mode::Autonomous, &controls, &urx, None, &observ::Sink::Noop);
+        let mut knobs = knobs_with(8);
+        let mut responses = vec![text_only_response("working"); 7];
+        responses.push(tool_use_response("goal_complete", json!({"summary": "wrapped up"})));
+        let mut llm = ScriptedLlm::new(responses);
+        let mut gate = None;
+        let mut messages = Vec::new();
+        let outcome = drive_loop(
+            &ctx,
+            &mut knobs,
+            &mut llm,
+            &mut gate,
+            &mut messages,
+            Some("check: true".to_string()),
+            &mut RecordingSink::default(),
+            &mut McpRegistry::new(tmp.path(), true, None).unwrap(),
+        )
+        .unwrap();
+        assert!(matches!(outcome, DriveOutcome::RunFinished(0)));
+
+        let lines = events_jsonl(&tmp);
+        let lows: Vec<&Value> = lines
+            .iter()
+            .filter(|l| l["type"] == "budget_low")
+            .collect();
+        assert_eq!(lows.len(), 1, "one injection → one budget_low line: {lines:?}");
+        let remaining = lows[0]["remaining_iters"].as_u64().unwrap();
+        assert!(
+            remaining <= u64::from(WARN_REMAINING_ITERS),
+            "remaining at fire time is in the warn zone, got {remaining}"
+        );
+        assert_eq!(remaining, 5, "the fire-time count, not the threshold");
+        assert!(
+            lows[0]["remaining_tokens"].is_null(),
+            "no token budget → null, never a phantom number"
+        );
+        // Telemetry of a mid-run injection: before the terminal goal line.
+        let low_idx = lines
+            .iter()
+            .position(|l| l["type"] == "budget_low")
+            .unwrap();
+        let goal_idx = lines.iter().position(|l| l["type"] == "goal").unwrap();
+        assert!(low_idx < goal_idx);
+    }
+
+    /// T17 control: a run that never approaches any budget writes no
+    /// `budget_low` line at all.
+    #[test]
+    fn no_budget_low_line_when_far_from_budget() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (_utx, urx) = mpsc::channel::<SlashUpdate>();
+        let controls = Controls::detached();
+        let ctx = ctx_for(&tmp, Mode::Autonomous, &controls, &urx, None, &observ::Sink::Noop);
+        let mut knobs = knobs_with(50);
+        let mut llm = ScriptedLlm::new(vec![
+            text_only_response("working"),
+            tool_use_response("goal_complete", json!({"summary": "wrapped up"})),
+        ]);
+        let mut gate = None;
+        let mut messages = Vec::new();
+        let outcome = drive_loop(
+            &ctx,
+            &mut knobs,
+            &mut llm,
+            &mut gate,
+            &mut messages,
+            Some("check: true".to_string()),
+            &mut RecordingSink::default(),
+            &mut McpRegistry::new(tmp.path(), true, None).unwrap(),
+        )
+        .unwrap();
+        assert!(matches!(outcome, DriveOutcome::RunFinished(0)));
+
+        let lines = events_jsonl(&tmp);
+        assert!(
+            lines.iter().all(|l| l["type"] != "budget_low"),
+            "no budget_low when budgets stay far away: {lines:?}"
+        );
+        // And no notice reached the transcript either.
+        let on_disk = transcript::load(tmp.path()).unwrap();
+        assert!(!on_disk.iter().any(|m| m.content.iter().any(|b| b
+            .text()
+            .is_some_and(|t| t.starts_with("chug: budget low")))));
     }
 
     // ---------- T15: token-denominated budget ----------

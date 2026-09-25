@@ -171,8 +171,17 @@ fn run_chat_with(
 ) -> anyhow::Result<i32> {
     ledger::ensure_seeded(&cfg.cwd)?;
     // T11: the session's events log opens with the banner fields (mode
-    // "chat"; a spec, if any, arrives later via /spec).
-    eventlog::run_start(&cfg.cwd, "chat", None, &cfg.model);
+    // "chat"; a spec, if any, arrives later via /spec) plus the configured
+    // per-turn budget ceilings (T17).
+    eventlog::run_start(
+        &cfg.cwd,
+        "chat",
+        None,
+        &cfg.model,
+        cfg.max_iters,
+        cfg.max_minutes,
+        cfg.max_tokens,
+    );
     // No goal text at session start (objectives arrive turn by turn); the
     // trace is identified by its id, mode metadata, and tags.
     let trace = obs.trace_started("", &cfg.model, &cfg.cwd.display().to_string(), "chat", None);
@@ -556,6 +565,38 @@ mod tests {
         assert_eq!(first["version"], crate::build_info::VERSION);
         assert_eq!(first["commit"], crate::build_info::GIT_COMMIT);
         assert!(first["spec"].is_null(), "chat starts spec-less: {first}");
+        // T17: the session's per-turn budget ceilings ride the banner too.
+        assert_eq!(first["max_iters"], 40);
+        assert_eq!(first["max_minutes"], 120);
+        assert!(first["max_tokens"].is_null(), "no token budget → null");
+    }
+
+    /// T17: a chat session with configured budgets (token budget set) opens
+    /// its events log with those ceilings as numbers, so jq can distinguish
+    /// unset from set.
+    #[test]
+    fn chat_run_start_records_configured_budgets() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut h = harness(&tmp, vec![text_response("hi")]);
+        h.cfg.max_iters = 7;
+        h.cfg.max_minutes = 9;
+        h.cfg.max_tokens = 250_000;
+        let (code, _, _, cwd) = run_session(h, |objective_tx, _| {
+            objective_tx.send("hello".into()).unwrap();
+        });
+        assert_eq!(code, 0);
+        let first: serde_json::Value = serde_json::from_str(
+            std::fs::read_to_string(cwd.join(".chug/events.jsonl"))
+                .expect("events.jsonl written")
+                .lines()
+                .next()
+                .expect("run_start line"),
+        )
+        .expect("first line parses");
+        assert_eq!(first["type"], "run_start");
+        assert_eq!(first["max_iters"], 7);
+        assert_eq!(first["max_minutes"], 9);
+        assert_eq!(first["max_tokens"], 250_000);
     }
 
     #[test]

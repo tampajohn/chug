@@ -42,9 +42,20 @@ pub fn rotate_fresh(cwd: &Path) -> archive::Outcome {
 }
 
 /// The run-start record: version, commit, model, spec path, cwd, mode —
-/// the same fields as the T11 startup banner. Written once per autonomous
-/// run and once per chat session.
-pub fn run_start(cwd: &Path, mode: &str, spec: Option<&Path>, model: &str) {
+/// the same fields as the T11 startup banner — plus the configured budget
+/// ceilings (T17), so a post-hoc `jq` pass can ask "how close to the ceiling
+/// did this run sail" even for runs that never aborted. `max_tokens` is
+/// `null` when unset (0), never a phantom number. Written once per
+/// autonomous run and once per chat session.
+pub fn run_start(
+    cwd: &Path,
+    mode: &str,
+    spec: Option<&Path>,
+    model: &str,
+    max_iters: u32,
+    max_minutes: u64,
+    max_tokens: u64,
+) {
     append_line(
         cwd,
         json!({
@@ -56,6 +67,9 @@ pub fn run_start(cwd: &Path, mode: &str, spec: Option<&Path>, model: &str) {
             "cwd": cwd.display().to_string(),
             "version": crate::build_info::VERSION,
             "commit": crate::build_info::GIT_COMMIT,
+            "max_iters": max_iters,
+            "max_minutes": max_minutes,
+            "max_tokens": (max_tokens > 0).then_some(max_tokens),
         }),
     );
 }
@@ -129,6 +143,17 @@ impl EventSink for EventLogSink<'_> {
                     "output_tokens": output,
                 }),
             }),
+            Event::BudgetLow {
+                remaining_iters,
+                remaining_secs,
+                remaining_tokens,
+            } => Some(json!({
+                "type": "budget_low",
+                "ts": now_rfc3339(),
+                "remaining_iters": remaining_iters,
+                "remaining_secs": remaining_secs,
+                "remaining_tokens": remaining_tokens,
+            })),
             Event::ToolResult {
                 name,
                 ok,
@@ -222,6 +247,9 @@ mod tests {
             "run",
             Some(Path::new("/repo/SPEC.md")),
             "test-model",
+            40,
+            120,
+            0,
         );
         let lines = read_lines(tmp.path());
         assert_eq!(lines.len(), 1);
@@ -233,13 +261,76 @@ mod tests {
         // T11: the banner's build identification rides along.
         assert_eq!(lines[0]["version"], crate::build_info::VERSION);
         assert_eq!(lines[0]["commit"], crate::build_info::GIT_COMMIT);
+        // T17: the configured ceilings are on the record.
+        assert_eq!(lines[0]["max_iters"], 40);
+        assert_eq!(lines[0]["max_minutes"], 120);
+        assert!(
+            lines[0]["max_tokens"].is_null(),
+            "no token budget → null, never a phantom 0"
+        );
         assert!(lines[0]["ts"].as_str().unwrap().ends_with('Z'));
+    }
+
+    /// T17: a configured token budget is recorded as a number, so jq can
+    /// distinguish "unset" from "set" on the opening line.
+    #[test]
+    fn run_start_records_token_budget_when_set() {
+        let tmp = tempfile::tempdir().unwrap();
+        run_start(tmp.path(), "run", None, "m", 8, 35, 250_000);
+        let lines = read_lines(tmp.path());
+        assert_eq!(lines[0]["max_iters"], 8);
+        assert_eq!(lines[0]["max_minutes"], 35);
+        assert_eq!(lines[0]["max_tokens"], 250_000);
+    }
+
+    /// T17: a BudgetLow event serializes as one jq-mineable line, with
+    /// `remaining_tokens` null when no token budget is set.
+    #[test]
+    fn sink_logs_budget_low_without_token_budget() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut inner = NullSink;
+        let mut sink = EventLogSink::new(tmp.path(), &mut inner);
+        sink.emit(Event::BudgetLow {
+            remaining_iters: 3,
+            remaining_secs: 150,
+            remaining_tokens: None,
+        });
+        let lines = read_lines(tmp.path());
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0]["type"], "budget_low");
+        assert_eq!(lines[0]["remaining_iters"], 3);
+        assert_eq!(lines[0]["remaining_secs"], 150);
+        assert!(
+            lines[0]["remaining_tokens"].is_null(),
+            "unset token budget stays null: {lines:?}"
+        );
+        assert!(lines[0]["ts"].as_str().unwrap().ends_with('Z'));
+    }
+
+    /// T17: the same line carries the remaining tokens when a token budget
+    /// is configured.
+    #[test]
+    fn sink_logs_budget_low_with_remaining_tokens() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut inner = NullSink;
+        let mut sink = EventLogSink::new(tmp.path(), &mut inner);
+        sink.emit(Event::BudgetLow {
+            remaining_iters: 50,
+            remaining_secs: 7_000,
+            remaining_tokens: Some(49_000),
+        });
+        let lines = read_lines(tmp.path());
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0]["type"], "budget_low");
+        assert_eq!(lines[0]["remaining_iters"], 50);
+        assert_eq!(lines[0]["remaining_secs"], 7_000);
+        assert_eq!(lines[0]["remaining_tokens"], 49_000);
     }
 
     #[test]
     fn rotate_fresh_archives_non_empty_events_log() {
         let tmp = tempfile::tempdir().unwrap();
-        run_start(tmp.path(), "run", None, "m");
+        run_start(tmp.path(), "run", None, "m", 5, 120, 0);
 
         let out = rotate_fresh(tmp.path());
         let Outcome::Archived(dst) = out else {
@@ -357,6 +448,6 @@ mod tests {
             model: "m".into(),
             budget: None,
         });
-        run_start(tmp.path(), "run", None, "m");
+        run_start(tmp.path(), "run", None, "m", 5, 120, 0);
     }
 }
