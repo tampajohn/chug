@@ -256,6 +256,40 @@ phases 2–3 deferral stands.
   backfill) + validator 1 — first child-side organic adoption. Post-merge
   gates 563/563 + clippy in main under target-shared-main. 5 artifacts
   harvested (2 events, 2 ledgers, child decisions.jsonl).
+- **T73 MID-ARC at budget wrap** (recovery recipe on its row, T28/T69/T70
+  precedent; per-item entry written at wrap, T34). glm impl 50/50 abort
+  with uncommitted work → T63 FIFTH resume, goal accepted 48/50
+  (`dbda51a`, +1270/-16: src/plan.rs 421 new — five-tool schema filter +
+  dispatch rejection of every excluded name incl. `mcp__*`; driver
+  Mode::Plan + run_plan_loop + submit_plan→GoalAccepted-exit-0; main.rs
+  clap subcommand 30/20 defaults; README integrated section). Orchestrator
+  review passed: 580/580 + clippy under target-shared, production hunks
+  read. **kimi round 1 VERDICT FAIL — weak tests, not correctness**
+  (validator 50/50 pre-verdict → T63 SIXTH resume accepted 2/50): impl
+  CORRECT reqs 1-8, gates re-run under target-shared-validate, M1-M6 all
+  RED; 3 SURVIVORS one class — run_plan_loop startup/exit guarantees
+  unpinned at loop level (concrete Client blocks ScriptedLlm): M7
+  run_start mode, M7b ensure_seeded insertion, M11 dropped is_error
+  guard (a rejected submit_plan would exit 0 — the real hole). GLM
+  FIX-UP CHILD IN FLIGHT at wrap (pid 94084, same preserved worktree;
+  goal carries the findings + class + 5-leg sweep-the-family directive,
+  T72 doctrine's first live use). 4 completed-segment artifacts harvested;
+  the in-flight stream + validator-resume segment harvest next cycle.
+  Next cycle: collect fix-up verdict → kimi round 2 → merge/flip/
+  FEATURES.md F2 SPLIT annotation per the row recipe.
+- **T75 deferred with a ready spec** (doctrine, runs alone — never
+  dispatched this cycle; the wrap-checklist sentence it adds was
+  nevertheless exercised THIS cycle: 17 decision_log records incl. the
+  3 filed-row triages, 4 rejects, 2 recovery-routings, 2
+  validation-routings, 1 verdict, 3 outcome backfills + child-side
+  records — adoption is now organic, the row pins it).
+- **Cycle-level notes:** T44 overlap #4 (T73 impl during T74 validator,
+  disjoint file lists — clean). T63 exercised twice more (6 total, all
+  accepted on resumed segments). The kimi round-1 FAIL is the second
+  consecutive cycle where mutation testing caught a coverage-class hole
+  a green suite masked (T69's vacuous latches, now T73's loop-level
+  startup/exit guarantees) — the validator's root-cause framing
+  (concrete Client blocks ScriptedLlm) gave the fix-up its shape.
 
 ### Cycle 35 (2026-09-26, ~10:42– EDT) — T70 recovered mid-arc + landed (merge 572ec5a); T71/T72 next
 
