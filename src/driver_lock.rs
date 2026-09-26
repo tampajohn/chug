@@ -37,7 +37,9 @@
 //! `chug chat` NEVER acquires, refuses, or removes this lock (LOOP-SPEC hard
 //! rule: chat does not block a cycle; shared `.chug/` appends interleave
 //! harmlessly). The call site lives only in the run startup path
-//! (`driver::run_loop`); a static pin in `tests/` keeps chat lock-free.
+//! (`driver::run_loop`); a static pin keeps chat lock-free: the
+//! `chat_turn_never_creates_or_removes_the_driver_lock` unit test in
+//! `src/driver.rs`'s test module.
 
 use std::fs;
 use std::path::{Path, PathBuf};
