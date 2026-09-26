@@ -153,8 +153,10 @@ reports the child's liveness (when you pass the `pid`), a summary of its
 abort reason) — and the tail of its console log — instant polling never
 blocks. Optionally pass `wait_secs` (status-only;
 0/absent = instant, max 600) to collapse each idle wait window into one
-blocking status call: it returns early when the child's state changes or
-its liveness flips to dead, else at the deadline, and names the actual
+blocking status call: it returns early when the child's iteration
+advances, a verdict or budget-low flag appears, or its liveness flips to
+dead (per-tool-call `last_event` churn renders at the deadline but never
+wakes it), else at the deadline, and names the actual
 elapsed seconds on a `waited:` line. `cwd` and `spec` must be absolute and
 may target child worktrees outside your own `--cwd`; worktree creation,
 building, harvest/merge, and killing the child stay with your `bash`.
