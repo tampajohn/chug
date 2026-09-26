@@ -220,7 +220,39 @@ adoption remains watch-only.
 
 ## Outcomes (filled at cycle wrap — LOOP-SPEC Phase 3)
 
-### Cycle 19 (2026-09-26, ~01:23 EDT–, in flight) — freshness-skip; T46 + T45 (operator pri-2 speed initiative) landed
+### Cycle 19 (2026-09-26, ~01:23 EDT–, in flight) — freshness-skip; T46 + T45 + T39 landed
+
+**T39 (delegate launch max_tokens passthrough — FEATURE) → done 52ec8ab.**
+The queue's feature row, worked third after the two pri-2 speed rows.
+glm impl 30/50 first-try. `delegate` launch gains optional integer
+`max_tokens` (schema `minimum: 1`): present → `--max-tokens N` appended at
+the child argv tail (T15 parity); absent → argv byte-identical to pre-T39
+(children keep no-ceiling behavior unless the orchestrator opts in).
+Implementation shape: `delegate_child_argv` pure seam (whole-list pinned
+in tests, plus end-to-end argv dumps through the `CHUG_DELEGATE_BIN`
+stub), `delegate_max_tokens` parse (`< 1` → tool error naming the
+constraint — 0 would read as "unlimited" on the child CLI, the
+silent-unbounded-launch failure the guard exists to prevent), return-text
+echo `max_tokens: N` only when configured (absent → byte-identical),
+status ignores it exactly as it ignores max_iters today (pinned), README
+launch sentence gains one hyphenated clause matching how
+`--max-iters`/`--max-minutes` are presented. 8 new tests (444+6+3 total).
+kimi validation VERDICT: PASS 38/50 — all 5 reqs hand-verified (incl. the
+child CLI's u64/0=unlimited semantics confirming the reject-0 guard is
+correct, not a behavior change), gates re-run on the pristine tree, both
+spec-named acceptance mutants KILLED (drop-argv-append, accept-0) plus
+drop-return-echo and drop-schema-minimum; M3 (as_u64 for as_i64) survives
+adjudicated spec-neutral (both error legs name the constraint; 0/neg
+still rejected pre-spawn); 3 non-blocking findings (negative-leg message
+not uniquely pinned, >i64::MAX rejects as "non-integer" fail-closed, stub
+`sleep 60` linger matches pre-existing delegate test pattern). 3
+artifacts harvested pre-removal (impl events, validate events, verdict
+LEDGER — the impl's own LEDGER was overwritten by the validator's
+fresh-run reseed before archiving; its substance survives in the impl
+events stream + commit message). Gates re-run in main green.
+LOOP-SPEC's child-launch templates deliberately do NOT pass max_tokens
+yet — spec's out-of-scope: adoption is a doctrine decision for a later
+evaluation (the T37-validate 169k-token datum is the motivating case).
 
 **T45 (trivial-row bundling doctrine) → done 3efb98d.** Second speed row,
 LOOP-SPEC-only (+39/−5). glm impl 28/50 first-try — the doctrine-item
