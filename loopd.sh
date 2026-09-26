@@ -95,7 +95,14 @@ while [ ! -f "$STOP" ]; do
     exec "$ROOT/loopd.sh" run
   fi
   # Single-driver: never overlap another LOOP-SPEC run (e.g. a manual one).
-  if pgrep -f "chug run --spec LOOP-SPEC.md" > /dev/null 2>&1; then
+  # ps, never pgrep: on this host pgrep persistently fails to enumerate the
+  # launchd-spawned loopd tree — pgrep -f/-l/-P all miss a live in-tree
+  # driver while ps -ax lists it every time (argv intact) — so a pgrep-based
+  # guard fails OPEN and duplicate drivers become possible (cycle-24 eval
+  # I1). The [c]hug bracket keeps the grep pipeline's own argv out of the
+  # match; the supervisor's own argv (`bash .../loopd.sh`) holds no needle
+  # and `chug chat` must not match by design.
+  if ps -ax -o command= | grep -q "[c]hug run --spec LOOP-SPEC.md"; then
     echo "$(ts) another LOOP-SPEC driver active; skipping" >> "$LOG"
     sleep 120
     continue
