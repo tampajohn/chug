@@ -37,7 +37,10 @@ Features are first-class: the mandate is closing capability gaps (a missing
 When the queue holds both a credible feature row and a DX-friction row of
 the same pri, work the feature first.
 
-For each `todo` row, ONE at a time (backgrounded child + polling, per step 2):
+For each `todo` row, ONE impl child at a time (backgrounded + polled, per
+step 2); adjacent rows may overlap ONLY under the **Pipeline overlap** rule
+at the end of this phase — at most 2 children in flight (1 validator + 1
+impl, never 2 impls):
 
 1. **Worktree.** `git -C /Users/jadams/workspace/chug worktree add
    /tmp/chug-loop-t<N> -b loop-t<N>`; `cargo build` there.
@@ -121,6 +124,28 @@ For each `todo` row, ONE at a time (backgrounded child + polling, per step 2):
 6. **Budget check.** Fewer than 15 iterations left → stop dispatching, go to
    wrap. Unworked rows stay `todo` — that is a fine outcome.
 
+**Pipeline overlap (T44) — when a second child may fly.** Steps 1–6 remain
+the per-row arc; adjacent rows may overlap in exactly one pattern. After
+impl child N completes (its step-3 review passed) and its validator
+(step 4) has launched, you MAY create item N+1's worktree (step 1) and
+launch impl child N+1 (step 2) — **iff** the two items' spec-named target
+files are DISJOINT: read both specs, list the files each names as its
+targets, and overlap only when no file appears on both lists. The safety
+basis: the validator reads main read-only and impl N+1 writes only its own
+worktree, so no two processes ever write the same file — the merge into
+main is the one shared surface, and it stays serial (below). Doctrine
+items NEVER overlap: a spec touching LOOP-SPEC.md, META-SPEC.md,
+META-META-SPEC.md, SELF-SPEC.md, or TODO.md's row format runs alone, with
+NO other child in flight (a mid-flight doctrine change would govern work
+that was launched under the old rules). Hard cap: at most 2 children in
+flight — 1 validator + 1 impl, never 2 impls, never 3+. Merges stay
+STRICTLY serial in queue order: N merges (step 5) before N+1 even if N+1
+finished first; a FAIL verdict on N blocks N+1's merge until the fix-up
+arc resolves — N+1's branch may need a rebase onto the updated main, and
+you own that. Harvest still precedes removal for BOTH children (step 5,
+T19): no worktree — N's or N+1's — is removed until every child run it
+hosted (impl and validator alike) has been harvested.
+
 ## Phase 3 — Wrap
 
 - TODO.md truthful (every `done` row has a commit ref).
@@ -143,10 +168,16 @@ For each `todo` row, ONE at a time (backgrounded child + polling, per step 2):
 
 ## Hard rules
 
-- ONE child at a time, foreground, bounded gates — all of META-SPEC's hard
-  rules apply (never reset/remove worktrees with unmerged work, never
-  force-push, wedge protocol); `delegate` (launch + status) is that one
-  child's launch/observation surface (step 2).
+- ONE WRITER per file set, serial merges, bounded gates (T44): at most 2
+  children in flight — 1 validator + 1 impl, never 2 impls — and an impl
+  may overlap a validator only when the two items' spec-named target files
+  are disjoint; doctrine items (LOOP/META/META-META/SELF-SPEC or TODO.md
+  row format) never overlap, and merges stay strictly serial in queue
+  order. This overrides META-SPEC's "ONE child at a time" for launch
+  concurrency ONLY; all of META-SPEC's other hard rules apply (never
+  reset/remove worktrees with unmerged work, never force-push, wedge
+  protocol); `delegate` (launch + status) is each child's
+  launch/observation surface (step 2).
 - Single-driver invariant: another **`chug run`** (autonomous driver) with
   `/Users/jadams/workspace/chug` as its cwd blocks the cycle. When tripped:
   do NO mutating work, verify the untouched tree's gates once, then
