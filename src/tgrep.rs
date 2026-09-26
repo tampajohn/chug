@@ -58,6 +58,14 @@ const SYMBOL_SIG_MAX_CHARS: usize = 200;
 const SYMBOL_SIG_LOOKAHEAD: usize = 8;
 /// Chars reserved for the omission marker when packing, so header + clusters
 /// + marker together never exceed the budget.
+///
+/// Honest bound (validator M-K edge): the widest reachable marker is
+/// `"[more: N clusters omitted] — raise `budget` or narrow `path`"` = 59 +
+/// digits(N). N (omitted clusters) can never exceed the searched line count,
+/// and the byte caps bound that: 64 MiB / 1 byte-per-line = 67,108,864 lines
+/// → 8 digits → marker ≤ 67 chars < 96. The symbols-side marker (`"…
+/// narrow the file"`) over a ≤ 1 MiB file is ≤ 67 too. A hand-wavy "~69-char
+/// overflow edge" was never reachable; the arithmetic here is the proof.
 const MARKER_RESERVE_CHARS: usize = 96;
 
 /// Directories never searched. `target*` covers `target/` and the T47/T52
@@ -654,9 +662,16 @@ fn search(
 ///   (multi-line fn signatures); the body is never included — everything
 ///   from the first `{` is cut, rendered as `{ ... }`;
 /// - comment lines (`//`) are skipped;
-/// - a `mod <name containing "test">` suppresses everything until the
-///   matching column-0 `}` (rustfmt closes top-level items at column 0), so
-///   test helpers do not drown the real skeleton.
+/// - a `mod tests` / `mod test` declaration (EXACT idents — `mod latest`,
+///   `mod attest`, `mod tests_utils` are real modules and stay) suppresses
+///   its contents: the BLOCK form (`mod tests {`, any `pub` prefix) until
+///   the matching column-0 `}` (rustfmt closes top-level items at column
+///   0), the FILE form (`mod tests;`) only its own line — a file-style mod
+///   has no body, so the old latch waited for a `}` that never comes and
+///   ate every declaration after it (validator probe P1);
+/// - a signature that already ends with `;` (no body: trait method, extern-
+///   block fn, unit struct) is emitted verbatim — the old rendering bolted
+///   a misleading ` { ... }` onto body-less signatures.
 fn symbols_skeleton(
     path: &Path,
     cwd: &Path,
@@ -677,15 +692,18 @@ fn symbols_skeleton(
         .unwrap_or_else(|_| path.display().to_string());
 
     let mut decls: Vec<(usize, String)> = Vec::new();
-    let mut suppress_tests: Option<()> = None;
+    // Inside a `mod tests {` block: suppress until the matching column-0
+    // close brace. File-style `mod tests;` never latches (no block to
+    // close — the old latch ate the whole rest of the file, probe P1b).
+    let mut in_test_mod = false;
     let mut i = 0; // 0-based
     while i < lines.len() {
         let line = lines[i];
         let lineno = i + 1;
-        if let Some(()) = suppress_tests {
+        if in_test_mod {
             // Inside a test module: resume at the column-0 close brace.
             if line.starts_with('}') {
-                suppress_tests = None;
+                in_test_mod = false;
             }
             i += 1;
             continue;
@@ -696,8 +714,18 @@ fn symbols_skeleton(
             continue;
         }
         if let Some(kind) = decl_kind(trimmed) {
-            if kind == "mod" && mod_name(trimmed).is_some_and(|n| n.contains("test")) {
-                suppress_tests = Some(());
+            if kind == "mod" && is_test_mod_name(mod_name(trimmed).as_deref()) {
+                if mod_name_tail(trimmed)
+                    .is_some_and(|(_, tail)| tail.trim_start().starts_with(';'))
+                {
+                    // File-style `mod tests;`: the body lives in another
+                    // file, so there is nothing to suppress beyond this one
+                    // line — keep walking (probe P1b).
+                    i += 1;
+                    continue;
+                }
+                // Block-style `mod tests {`: suppress the block's contents.
+                in_test_mod = true;
                 i += 1;
                 continue;
             }
@@ -720,7 +748,12 @@ fn symbols_skeleton(
                 i += 1;
                 continue;
             }
-            sig.push_str(" { ... }");
+            // Body-less signatures (`fn f(&self);`, `struct S;`) already end
+            // in `;` — they have no body to elide, so render them verbatim
+            // instead of appending a lying ` { ... }`.
+            if !sig.ends_with(';') {
+                sig.push_str(" { ... }");
+            }
             let mut rendered = format!("{lineno}: {sig}");
             if rendered.chars().count() > SYMBOL_SIG_MAX_CHARS {
                 rendered = format!(
@@ -785,47 +818,42 @@ fn symbols_skeleton(
 
 /// The declaration keyword a (trimmed) line opens with, after the `pub` and
 /// fn-qualifier prefixes. `None` = not a declaration line.
+///
+/// Qualifier chains (validator probe P2): `const`/`async`/`unsafe` are
+/// stripped in a LOOP, so any order and combination works — the old one-shot
+/// handling dropped everything past the first qualifier (`async unsafe fn`
+/// resolved to None and the fn vanished from the skeleton). Each strip
+/// requires a word boundary (whitespace) after the keyword so identifiers
+/// like `unsafefn()` or `constants:` are never mis-split into a fake `fn`.
 fn decl_kind(trimmed: &str) -> Option<&'static str> {
-    let mut t = trimmed;
-    // Most specific first: `pub(crate)` must win over `pub`.
-    for prefix in ["pub(crate)", "pub(super)", "pub(in", "pub"] {
-        if let Some(rest) = t.strip_prefix(prefix) {
-            let rest = rest.trim_start();
-            // `pub(in path)` carries a parenthesized scope.
-            let rest = if prefix == "pub(in" {
-                match rest.find(')') {
-                    Some(pos) => rest[pos + 1..].trim_start(),
-                    None => rest,
-                }
-            } else {
-                rest
-            };
-            t = rest;
+    let mut t = strip_visibility(trimmed);
+    // fn qualifiers, any order/combination: `const fn`, `async fn`,
+    // `unsafe fn`, `async unsafe fn`, `const unsafe fn`, `unsafe const fn`.
+    loop {
+        let before = t;
+        for qualifier in ["const", "async", "unsafe"] {
+            if let Some(rest) = t.strip_prefix(qualifier)
+                && rest.starts_with(char::is_whitespace)
+            {
+                t = rest.trim_start();
+            }
+        }
+        if t == before {
             break;
         }
     }
-    // fn qualifiers: `async fn`, `unsafe fn`, `const fn`, `extern "C" fn`.
-    for qualifier in ["async", "unsafe", "const"] {
-        if let Some(rest) = t.strip_prefix(qualifier) {
-            let rest = rest.trim_start();
-            if rest.starts_with("fn ") || rest.starts_with("fn(") {
-                return Some("fn");
-            }
-            // A qualifier we do not follow (e.g. `const X: u32 = ...`) is a
-            // const item — not part of the skeleton.
-            if qualifier == "const" {
-                return None;
-            }
-            t = rest;
-            break;
-        }
-    }
+    // `extern ["ABI"] fn` — positionally after the other qualifiers
+    // (`const unsafe extern "C" fn`); `extern"C"` needs no space.
     if let Some(rest) = t.strip_prefix("extern") {
         let rest = rest.trim_start();
-        let rest = rest.strip_prefix('"').map(|r| match r.find('"') {
-            Some(end) => r[end + 1..].trim_start(),
-            None => rest,
-        }).unwrap_or(rest);
+        let rest = if let Some(quoted) = rest.strip_prefix('"') {
+            match quoted.find('"') {
+                Some(end) => quoted[end + 1..].trim_start(),
+                None => rest,
+            }
+        } else {
+            rest
+        };
         if rest.starts_with("fn ") || rest.starts_with("fn(") {
             return Some("fn");
         }
@@ -839,6 +867,10 @@ fn decl_kind(trimmed: &str) -> Option<&'static str> {
         ("union ", "union"),
         ("trait ", "trait"),
         ("impl ", "impl"),
+        // Generic-parameterized impls attach `<` directly to the keyword —
+        // `impl<T> Trait for Type` matched neither "impl " nor anything else
+        // and was dropped (same drop class as probe P2).
+        ("impl<", "impl"),
         ("type ", "type"),
         ("mod ", "mod"),
     ] {
@@ -849,38 +881,60 @@ fn decl_kind(trimmed: &str) -> Option<&'static str> {
     None
 }
 
-/// The module name of a `mod <name>` line, given the RAW trimmed line:
-/// `pub`-visibility prefixes are stripped first (decl_kind sees through
-/// `pub mod` to return kind `mod`, but suppression needs the NAME from the
-/// same line — pre-fix `pub mod tests {` resolved to no name and its test
-/// fns leaked into the skeleton).
-fn mod_name(trimmed: &str) -> Option<String> {
-    let mut t = trimmed;
-    for prefix in ["pub(crate)", "pub(super)", "pub(in", "pub"] {
-        if let Some(rest) = t.strip_prefix(prefix) {
-            let rest = rest.trim_start();
-            let rest = if prefix == "pub(in" {
-                match rest.find(')') {
-                    Some(pos) => rest[pos + 1..].trim_start(),
-                    None => rest,
-                }
-            } else {
-                rest
-            };
-            t = rest;
-            break;
+/// Strip a leading visibility qualifier: `pub`, `pub(crate)`, `pub(super)`,
+/// `pub(self)`, `pub(in path)` — the parenthesized scope is skipped to its
+/// close paren, so ANY `pub(...)` form works (the old enumeration missed
+/// `pub(self)` and dropped those declarations). Requires a boundary after
+/// `pub` (whitespace or `(`) so identifiers like `publication` are not
+/// mis-split. Returns the remainder, trimmed.
+fn strip_visibility(t: &str) -> &str {
+    let Some(rest) = t.strip_prefix("pub") else {
+        return t;
+    };
+    if !(rest.starts_with(char::is_whitespace) || rest.starts_with('(')) {
+        return t; // no boundary: `publication…` — `pub` is part of the word
+    }
+    let rest = rest.trim_start();
+    if let Some(paren) = rest.strip_prefix('(') {
+        match paren.find(')') {
+            Some(close) => paren[close + 1..].trim_start(),
+            // Unterminated scope on this line: not a usable declaration
+            // opener under line-oriented heuristics.
+            None => "",
         }
-    }
-    let rest = t.strip_prefix("mod ")?;
-    let name: String = rest
-        .chars()
-        .take_while(|c| c.is_alphanumeric() || *c == '_')
-        .collect();
-    if name.is_empty() {
-        None
     } else {
-        Some(name)
+        rest
     }
+}
+
+/// The module name of a `mod <name>` line and the text following it, given
+/// the RAW trimmed line: `pub`-visibility prefixes are stripped first
+/// (decl_kind sees through `pub mod` to return kind `mod`, but suppression
+/// needs the NAME from the same line — `pub mod tests {` must resolve to
+/// name `tests` or its test fns leak into the skeleton).
+fn mod_name_tail(trimmed: &str) -> Option<(&str, &str)> {
+    let t = strip_visibility(trimmed);
+    let rest = t.strip_prefix("mod ")?;
+    let name_end = rest
+        .find(|c: char| !(c.is_alphanumeric() || c == '_'))
+        .unwrap_or(rest.len());
+    if name_end == 0 {
+        return None;
+    }
+    Some((&rest[..name_end], &rest[name_end..]))
+}
+
+/// The module name alone (test compatibility + simple callers).
+fn mod_name(trimmed: &str) -> Option<String> {
+    mod_name_tail(trimmed).map(|(n, _)| n.to_string())
+}
+
+/// Test-module suppression fires ONLY on the exact idents `tests`/`test` —
+/// any other spelling is a REAL module whose contents belong in the
+/// skeleton. The old `contains("test")` check ate `mod latest {` (la-TEST),
+/// `mod attest {` (at-TEST), and `mod tests_utils {` (validator probe P1).
+fn is_test_mod_name(name: Option<&str>) -> bool {
+    matches!(name, Some("tests") | Some("test"))
 }
 
 #[cfg(test)]
@@ -1232,22 +1286,6 @@ mod tests {
         assert!(!result.is_error, "{}", result.content);
         assert!(result.content.contains("0 clusters"), "{}", result.content);
         assert!(result.content.contains("searched 1 files"), "{}", result.content);
-    }
-
-    /// Determinism: identical calls give byte-identical output (spec req 2),
-    /// and a repo-sized search is fast (<100ms, spec req 2).
-    #[test]
-    fn deterministic_and_fast() {
-        let tmp = tempfile::tempdir().unwrap();
-        tier_fixtures(&tmp);
-        let ctx = ctx_for(&tmp);
-        let input = json!({"query": "alpha beta"});
-        let start = Instant::now();
-        let first = dispatch(&ctx, "tgrep", &input);
-        let elapsed = start.elapsed();
-        let second = dispatch(&ctx, "tgrep", &input);
-        assert_eq!(first.content, second.content);
-        assert!(elapsed < std::time::Duration::from_millis(100), "{elapsed:?}");
     }
 
     /// Schema pins (T22/T41 doctrine: assert the LIVE schema, not a copy):
@@ -1661,6 +1699,358 @@ mod tests {
         assert!(!c.contains("hidden_a"), "pub mod tests leaked: {c}");
         assert!(!c.contains("hidden_b"), "pub(crate) mod tests leaked: {c}");
         assert!(!c.contains("hidden_c"), "bare mod tests leaked: {c}");
+    }
+
+    /// Probe P1a (round-2 BLOCKING): suppression fires ONLY on the exact
+    /// idents `mod tests` / `mod test` — the old `contains("test")` ate REAL
+    /// modules (`mod latest`, `mod attest`, `mod tests_utils`) and silently
+    /// dropped their contents from the skeleton.
+    #[test]
+    fn symbols_mode_test_mod_suppression_is_exact_ident() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(
+            tmp.path().join("exact.rs"),
+            r#"mod latest {
+    fn kept_latest() {}
+}
+
+mod attest {
+    fn kept_attest() {}
+}
+
+mod tests_utils {
+    fn kept_utils() {}
+}
+
+mod tests {
+    fn hidden_plain() {}
+}
+
+mod test {
+    fn hidden_singular() {}
+}
+"#,
+        )
+        .unwrap();
+        let ctx = ctx_for(&tmp);
+        let result = dispatch(
+            &ctx,
+            "tgrep",
+            &json!({"query": "ignored", "symbols": true, "path": "exact.rs"}),
+        );
+        assert!(!result.is_error, "{}", result.content);
+        let c = &result.content;
+        assert!(c.contains("fn kept_latest() { ... }"), "mod latest eaten: {c}");
+        assert!(c.contains("fn kept_attest() { ... }"), "mod attest eaten: {c}");
+        assert!(c.contains("fn kept_utils() { ... }"), "mod tests_utils eaten: {c}");
+        assert!(!c.contains("hidden_plain"), "{c}");
+        assert!(!c.contains("hidden_singular"), "{c}");
+    }
+
+    /// Probe P1b (round-2 BLOCKING): file-style `mod tests;` has no block —
+    /// it suppresses ONLY its own line. The old latch set suppression for the
+    /// file form too and then waited for a column-0 `}` that never comes,
+    /// eating every declaration after it (here: ALL of them, since each latch
+    /// is only released by the other items' stray column-0 braces).
+    #[test]
+    fn symbols_mode_file_style_test_mod_suppresses_only_its_own_line() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(
+            tmp.path().join("filemod.rs"),
+            r#"pub mod tests;
+
+pub struct Real {
+    field: u32,
+}
+
+pub(crate) mod test;
+
+fn survivor() -> u32 {
+    7
+}
+"#,
+        )
+        .unwrap();
+        let ctx = ctx_for(&tmp);
+        let result = dispatch(
+            &ctx,
+            "tgrep",
+            &json!({"query": "ignored", "symbols": true, "path": "filemod.rs"}),
+        );
+        assert!(!result.is_error, "{}", result.content);
+        let c = &result.content;
+        assert!(c.starts_with("symbols filemod.rs: 2 declarations in "), "{c}");
+        assert!(c.contains("pub struct Real { ... }"), "struct eaten: {c}");
+        assert!(c.contains("fn survivor() -> u32 { ... }"), "fn eaten: {c}");
+        // The suppressed lines themselves stay out of the skeleton.
+        assert!(!c.contains("mod tests"), "{c}");
+        assert!(!c.contains("mod test;"), "{c}");
+    }
+
+    /// Probe P2 (round-2 BLOCKING): qualifier chains in any combination and
+    /// order — the old one-shot qualifier handling resolved everything past
+    /// the first qualifier to None and silently dropped the fn
+    /// (`async unsafe fn`, `const unsafe fn`, `pub async unsafe fn`, …).
+    #[test]
+    fn symbols_mode_qualifier_chains_any_order() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(
+            tmp.path().join("quals.rs"),
+            r#"async fn qa() { 1 }
+const fn qc() { 2 }
+unsafe fn qu() { 3 }
+async unsafe fn qau() { 4 }
+const unsafe fn qcu() { 5 }
+unsafe const fn quc() { 6 }
+pub async unsafe fn qpu() { 7 }
+pub(crate) const fn qpc() { 8 }
+const unsafe extern "C" fn qce() { 9 }
+"#,
+        )
+        .unwrap();
+        let ctx = ctx_for(&tmp);
+        let result = dispatch(
+            &ctx,
+            "tgrep",
+            &json!({"query": "ignored", "symbols": true, "path": "quals.rs"}),
+        );
+        assert!(!result.is_error, "{}", result.content);
+        let c = &result.content;
+        assert!(c.starts_with("symbols quals.rs: 9 declarations in "), "{c}");
+        for sig in [
+            "async fn qa() { ... }",
+            "const fn qc() { ... }",
+            "unsafe fn qu() { ... }",
+            "async unsafe fn qau() { ... }",
+            "const unsafe fn qcu() { ... }",
+            "unsafe const fn quc() { ... }",
+            "pub async unsafe fn qpu() { ... }",
+            "pub(crate) const fn qpc() { ... }",
+            "const unsafe extern \"C\" fn qce() { ... }",
+        ] {
+            assert!(c.contains(sig), "missing `{sig}`: {c}");
+        }
+        // Bodies are cut in every case.
+        assert!(!c.contains("{ 9 }"), "{c}");
+    }
+
+    /// decl_kind unit pins: every qualifier chain (any order) plus the
+    /// boundary cases — a qualifier NOT followed by whitespace is part of a
+    /// longer identifier and must not manufacture a fake `fn` (`unsafefn()`
+    /// mislabeled as a declaration under the old boundary-less strip), and
+    /// `const` items stay out of the skeleton.
+    #[test]
+    fn decl_kind_pins_qualifier_chains_visibility_and_boundaries() {
+        for line in [
+            "async fn a()",
+            "const fn a()",
+            "unsafe fn a()",
+            "async unsafe fn a()",
+            "const unsafe fn a()",
+            "unsafe const fn a()",
+            "pub async unsafe fn a()",
+            "pub(crate) const fn a()",
+            "pub(self) async fn a()",
+            "extern fn a()",
+            "extern \"C\" fn a()",
+            "extern\"C\" fn a()",
+            "pub extern \"C\" fn a()",
+            "const unsafe extern \"C\" fn a()",
+        ] {
+            assert_eq!(decl_kind(line), Some("fn"), "{line}");
+        }
+        assert_eq!(decl_kind("impl<T> Send for W<T> {"), Some("impl"));
+        assert_eq!(decl_kind("pub(self) struct S;"), Some("struct"));
+        assert_eq!(decl_kind("const MAX: usize = 3;"), None);
+        assert_eq!(decl_kind("constants: Vec<u8>,"), None);
+        assert_eq!(decl_kind("unsafefn();"), None);
+        assert_eq!(decl_kind("asyncfn();"), None);
+        assert_eq!(decl_kind("publication note;"), None);
+    }
+
+    /// In-family sweep (visibility): `pub(self)` — and any `pub(scope)` the
+    /// enumeration forgot — must not drop the declaration. The old prefix
+    /// list handled only crate/super/in and silently dropped `pub(self)`.
+    #[test]
+    fn symbols_mode_pub_self_visibility_not_dropped() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(
+            tmp.path().join("scope.rs"),
+            "pub(self) fn scoped() -> u32 { 1 }\n\npub(in crate::deep) fn deep_scoped() {}\n",
+        )
+        .unwrap();
+        let ctx = ctx_for(&tmp);
+        let result = dispatch(
+            &ctx,
+            "tgrep",
+            &json!({"query": "ignored", "symbols": true, "path": "scope.rs"}),
+        );
+        assert!(!result.is_error, "{}", result.content);
+        let c = &result.content;
+        assert!(c.contains("pub(self) fn scoped() -> u32 { ... }"), "{c}");
+        assert!(c.contains("pub(in crate::deep) fn deep_scoped() { ... }"), "{c}");
+    }
+
+    /// In-family sweep (generics): `impl<T> Trait for Type` attaches `<`
+    /// directly to the keyword and matched no prefix — the whole impl was
+    /// dropped from the skeleton.
+    #[test]
+    fn symbols_mode_generic_impl_kept() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(
+            tmp.path().join("generic.rs"),
+            "impl<T> Send for Wrapper<T> {\n    fn send(&mut self) {}\n}\n",
+        )
+        .unwrap();
+        let ctx = ctx_for(&tmp);
+        let result = dispatch(
+            &ctx,
+            "tgrep",
+            &json!({"query": "ignored", "symbols": true, "path": "generic.rs"}),
+        );
+        assert!(!result.is_error, "{}", result.content);
+        let c = &result.content;
+        assert!(c.contains("impl<T> Send for Wrapper<T> { ... }"), "{c}");
+        assert!(c.contains("fn send(&mut self) { ... }"), "{c}");
+    }
+
+    /// In-family sweep (body-less signatures): a signature that already ends
+    /// in `;` (trait method, extern-block fn, unit struct) has no body to
+    /// elide — the old rendering bolted a lying ` { ... }` onto it.
+    #[test]
+    fn symbols_mode_bodyless_signature_rendered_verbatim() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(
+            tmp.path().join("bodyless.rs"),
+            r#"pub trait Speaker {
+    fn speak(&self) -> String;
+    fn loud(&self);
+}
+
+struct Unit;
+"#,
+        )
+        .unwrap();
+        let ctx = ctx_for(&tmp);
+        let result = dispatch(
+            &ctx,
+            "tgrep",
+            &json!({"query": "ignored", "symbols": true, "path": "bodyless.rs"}),
+        );
+        assert!(!result.is_error, "{}", result.content);
+        let c = &result.content;
+        assert!(c.contains("fn speak(&self) -> String;"), "{c}");
+        assert!(c.contains("fn loud(&self);"), "{c}");
+        assert!(c.contains("struct Unit;"), "{c}");
+        assert!(!c.contains("; { ... }"), "lying body on a `;` signature: {c}");
+    }
+
+    /// M-F fold (cluster packing): the loop stops at the FIRST cluster that
+    /// does not fit — best-first means later clusters are worse, so a
+    /// break→continue mutant (skip the big one, keep packing smaller later
+    /// ones) must go RED: `c_fit.rs` would fit after the oversized
+    /// `b_big.rs` but must NOT be rendered, and the marker must count BOTH
+    /// omitted clusters. Sizing is path-length robust: a_first + c_fit stay
+    /// ≪ the 200-token limit even with long tmpdir paths, while b_big's
+    /// 2000-char line can never fit after them.
+    #[test]
+    fn packing_stops_at_first_non_fitting_cluster() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("a_first.rs"), "needle here\n").unwrap();
+        fs::write(tmp.path().join("b_big.rs"), format!("needle {}\n", "x".repeat(2000))).unwrap();
+        fs::write(tmp.path().join("c_fit.rs"), "needle\n").unwrap();
+        let ctx = ctx_for(&tmp);
+        let result = dispatch(
+            &ctx,
+            "tgrep",
+            &json!({"query": "needle", "budget": 200}),
+        );
+        assert!(!result.is_error, "{}", result.content);
+        let c = &result.content;
+        assert!(c.contains("a_first.rs:1"), "best cluster missing: {c}");
+        assert!(!c.contains("c_fit.rs:"), "packed past a non-fitting cluster: {c}");
+        assert!(c.contains("[more: 2 clusters omitted]"), "{c}");
+    }
+
+    /// M-F fold (symbols packing): same policy at the symbols loop — a
+    /// declaration that does not fit stops packing even though a later,
+    /// smaller one would fit; a break→continue mutant renders `fn tiny()`.
+    #[test]
+    fn symbols_packing_stops_at_first_non_fitting_decl() {
+        let tmp = tempfile::tempdir().unwrap();
+        let params = "a: ParamType, ".repeat(12);
+        fs::write(
+            tmp.path().join("sk.rs"),
+            format!("pub fn huge({params}) -> u32 {{ 1 }}\n\nfn tiny() {{}}\n"),
+        )
+        .unwrap();
+        let ctx = ctx_for(&tmp);
+        let result = dispatch(
+            &ctx,
+            "tgrep",
+            &json!({"query": "ignored", "symbols": true, "path": "sk.rs", "budget": 80}),
+        );
+        assert!(!result.is_error, "{}", result.content);
+        let c = &result.content;
+        assert!(!c.contains("fn tiny()"), "packed past a non-fitting declaration: {c}");
+        assert!(c.contains("[more: 2 symbols omitted]"), "{c}");
+    }
+
+    /// M-K fold: the packing reserve is PROVABLY wide enough — the widest
+    /// reachable marker (max omitted count bounded by the byte caps: 64 MiB /
+    /// 1 byte-per-line = 8 digits for clusters; 1 MiB / line = 7 digits for
+    /// symbols) stays under MARKER_RESERVE_CHARS. RED vs any reserve < 67.
+    #[test]
+    fn marker_reserve_holds_at_max_reachable_marker_width() {
+        let clusters = format!(
+            "[more: {} clusters omitted] — raise `budget` or narrow `path`",
+            99_999_999usize
+        );
+        assert!(
+            clusters.chars().count() <= MARKER_RESERVE_CHARS,
+            "cluster marker {clusters:?} ({} chars) overflows the reserve",
+            clusters.chars().count()
+        );
+        let symbols = format!(
+            "[more: {} symbols omitted] — raise `budget` or narrow the file",
+            9_999_999usize
+        );
+        assert!(
+            symbols.chars().count() <= MARKER_RESERVE_CHARS,
+            "symbols marker {symbols:?} ({} chars) overflows the reserve",
+            symbols.chars().count()
+        );
+    }
+
+    /// Determinism: identical calls give byte-identical output (spec req 2),
+    /// and a REPO-SIZED search is fast (<100ms, spec req 2). The fixture is
+    /// calibrated to this repo's src/ scale (26 files, ~29k lines, ~1.2 MB,
+    /// measured 2026-09-26) — the 3-file toy fixture this test shipped with
+    /// could not support the "repo-sized" claim in its own doc comment.
+    #[test]
+    fn deterministic_and_fast() {
+        let tmp = tempfile::tempdir().unwrap();
+        let files = 26;
+        let lines_per_file = 1105; // 26 * 1105 ≈ 28.7k lines ≈ repo src/
+        for f in 0..files {
+            let mut body = String::with_capacity(lines_per_file * 40);
+            for l in 0..lines_per_file {
+                if l % 110 == 0 {
+                    body.push_str(&format!("fn needle_{f}_{l}(alpha: u32, beta: u32) {{}}\n"));
+                } else {
+                    body.push_str(&format!("// filler {f}:{l} padding padding padding\n"));
+                }
+            }
+            fs::write(tmp.path().join(format!("mod{f}.rs")), body).unwrap();
+        }
+        let ctx = ctx_for(&tmp);
+        let input = json!({"query": "alpha beta"});
+        let start = Instant::now();
+        let first = dispatch(&ctx, "tgrep", &input);
+        let elapsed = start.elapsed();
+        let second = dispatch(&ctx, "tgrep", &input);
+        assert_eq!(first.content, second.content);
+        assert!(elapsed < std::time::Duration::from_millis(100), "{elapsed:?}");
     }
 
     /// mod_name resolves the module name through `pub`-visibility prefixes
