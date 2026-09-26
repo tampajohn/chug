@@ -66,10 +66,10 @@ while [ ! -f "$STOP" ]; do
   cargo build >> "$LOG" 2>&1
   cycle_log="$STATE/cycle-$(date -u +%Y%m%d-%H%M%S).log"
   echo "$(ts) cycle start -> $cycle_log" >> "$LOG"
-  # cycle budget: fresh Phase 1 ≈45 iters + ~30–35/item (cycle-11 eval O1); 120 fits eval + 2 items + wrap
+  # cycle budget: fresh Phase 1 ≈45–55 iters + ~28–35/item + ~10 wrap (cycle-16 eval Q1); 160 fits eval + 3 items + wrap; minutes never binding (56–117 of 240)
   ./target/debug/chug run --spec LOOP-SPEC.md \
     --goal "Run the full self-improvement cycle per LOOP-SPEC: evaluate or skip per the freshness rule, work the queue (features are first-class per the amended doctrine — close capability gaps, not only harden), adversarial validation for core-logic items, you own all bookkeeping, push after each item lands green + remainder at wrap. Your wrap IS the next cycle's input — leave TODO.md, EVALUATION.md and specs/ such that a cold next cycle needs zero human words." \
-    --model anthropic-system.ai.kimi-k3 --max-iters 120 --max-minutes 240 \
+    --model anthropic-system.ai.kimi-k3 --max-iters 160 --max-minutes 240 \
     > "$cycle_log" 2>&1
   if grep -q "chug: goal complete" "$cycle_log"; then
     summary=$(grep "^summary:" "$cycle_log" | head -1 | cut -c1-200)
