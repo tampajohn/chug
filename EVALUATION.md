@@ -220,6 +220,8 @@ adoption remains watch-only.
 
 ## Outcomes (filled at cycle wrap — LOOP-SPEC Phase 3)
 
+### Cycle 20 (2026-09-26, ~02:17– EDT) — freshness-skip; T40 recovered, T47+T41+T42 landed; T43 deferred
+
 **T41 (sandbox-candor tool descriptions — DX friction) → done 7170fb4.**
 glm impl 37/50 first-try: all five filesystem tools (read_file, write_file,
 edit_file, glob, list_dir) now name the `path escapes cwd` refusal and the
@@ -233,7 +235,16 @@ unmodified. Landed under the FIRST live T44 overlap: T42's impl ran
 concurrently (disjoint files — tools.rs+README vs webfetch.rs), both
 children finished within 7 minutes, merges stayed serial.
 
-### Cycle 20 (2026-09-26, ~02:17– EDT) — freshness-skip; T40 recovered, T47+T41 landed
+**T42 (webfetch timeout const pins — robustness nit) — done 7ff8bfa.**
+glm impl 9ebd55d 28/50 first-try under the first live T44 overlap (ran
+concurrent with T41's kimi validator — disjoint files, tools.rs+README vs
+webfetch.rs; both children finished ~7 min; merges stayed serial). Pins
+WEB_FETCH_CONNECT_TIMEOUT == 10s and WEB_FETCH_TOTAL_TIMEOUT == 30s in
+webfetch.rs's test module so a const-only edit now fails the suite (T37
+validator's non-blocking observation, closed). Tests-only item —
+adversarial validation optional per T16/T31 precedent; orchestrator gates
+(452+6+6+3 in main) + diff review sufficed. 1 artifact harvested
+pre-removal.
 
 **T47 (shared CARGO_TARGET_DIR for worktree builds — operator speed
 initiative) → done 2f4cefc.** The cycle's adversarial-validation showcase:
@@ -265,6 +276,21 @@ the validator launch (the T39 reseed lesson), validator events + verdict
 LEDGER harvested pre-removal; gates re-run in main post-merge. The new
 doctrine was practiced at its own row flip: no pipe in the notes cell,
 `cargo test --test todo_consistency` run before committing.
+
+**Cycle-level notes.** Four items landed (T40 recovery, T47, T41, T42);
+T43 (Outcomes pruning, pri 4, doctrine) deferred on the step-6 budget rule
+— its spec is ready and its check is self-contained; work it FIRST next
+cycle (it bounds the very carry-forward cost this cycle's four Outcomes
+entries just added to). Validators earned their budget all cycle: T47's
+round-1 FAIL caught a proven cross-cycle loopd bug simulation-verified;
+T41's killed 10/10 mutants. First live T44 overlap ran clean (T41 validator
++ T42 impl, ~7 min wall for both). T47's warm cache dogfooded immediately:
+every child build this cycle was seconds, not minutes. Watch items carried:
+T46 golden-section pin test (cycle-19), T36/T47 loopd restart still pending
+operator (the env-prefix reaches cycles only after the next supervisor
+start), README gate: all four items integrated (T40/T47 doctrine is in-spec,
+T41 README two-exceptions line + T47 loopd paragraph landed in their merge
+commits; T42 is tests-only, no user surface).
 
 ### Cycle 19 (2026-09-26, ~01:23–02:20 EDT) — freshness-skip; T46 + T45 + T39 landed
 
