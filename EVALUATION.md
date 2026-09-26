@@ -220,7 +220,20 @@ adoption remains watch-only.
 
 ## Outcomes (filled at cycle wrap — LOOP-SPEC Phase 3)
 
-### Cycle 20 (2026-09-26, ~02:17– EDT) — freshness-skip; T40 recovered, T47 landed
+**T41 (sandbox-candor tool descriptions — DX friction) → done 7170fb4.**
+glm impl 37/50 first-try: all five filesystem tools (read_file, write_file,
+edit_file, glob, list_dir) now name the `path escapes cwd` refusal and the
+`bash` escape hatch in both the tool description and the path property;
+README's stale "one documented exception" line now names delegate AND
+web_fetch. Five live-schema pin tests (T22 pattern — assert tool_schemas()
+output, not copied literals). kimi VERDICT: PASS 36/50 — 10/10 mutants
+killed including a resolve_safe error-string corruption and a surgical
+refusal-naming drop; the T22/T26/delegate/path_safety pins all pass
+unmodified. Landed under the FIRST live T44 overlap: T42's impl ran
+concurrently (disjoint files — tools.rs+README vs webfetch.rs), both
+children finished within 7 minutes, merges stayed serial.
+
+### Cycle 20 (2026-09-26, ~02:17– EDT) — freshness-skip; T40 recovered, T47+T41 landed
 
 **T47 (shared CARGO_TARGET_DIR for worktree builds — operator speed
 initiative) → done 2f4cefc.** The cycle's adversarial-validation showcase:
