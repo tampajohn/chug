@@ -1,5 +1,24 @@
 # EVALUATION — chug, assessed by chug-loop (2026-09-26, cycle 31)
 
+**CYCLE-32 DELTA (2026-09-26, ~08:52 EDT, written ~3 min after cycle 31
+wrapped — queue EMPTY at 08:49, so a fresh eval is mandatory and a full
+re-read 3 minutes later would burn ~45 iterations for zero new corpus):
+corpus delta = the cycle-31 orchestrator stream
+`.chug/events-20260926-125133.jsonl` (goal accepted, T67 + T68 landed
+green, queue DRAINED) + the five t67/t68 child streams (4/4 impl+validate
+goal-accepted first try: t67 glm 27/50 + kimi 23/50, t68 glm 49/50 + kimi
+39/50) + the cycle-31 wrap commit `132ec68` + the operator's mid-cycle-31
+landings `259b5ed` (FEATURES.md roadmap) + `dc18a7a` (F13 operator-directed
+after F1). Digest regenerated manually at 08:52 (FIFTH manual regeneration
+— I1 stands: the running supervisor pid 90114 still predates T36/T46/T47/
+T50/T53; THIS eval's own launch line shows `--max-iters 120`, T36's 160
+dormant, seventh confirmation). Findings: NO new incident rows — cycle
+31's wrap is clean (T63 resume armed 0 exercises; T44/T45 unused; the
+t68-impl 49/50 accepted inside the T18 margin; the pre-merge 2s-wake
+sightings were the T68 leak's last raw evidence, now fixed). The one
+mandatory output is the §4 ROADMAP PULL → T69 (F1). All cycle-31 sections
+below stand as written except §4/§5/Handoff, which carry cycle-32 updates.**
+
 Corpus: `.chug/eval-digest.md` FIRST (STALE at eval start — regenerated
 manually 12:06:55Z, the FOURTH manual regeneration after cycles 22, 24 and
 29; the running supervisor still predates T46's refresh line, I1; 127 event
@@ -142,6 +161,25 @@ new. Nothing else crosses the row threshold.
 
 ## 4. Capability gaps — FEATURE SCAN (required)
 
+**CYCLE-32 UPDATE — ROADMAP PULL EXECUTED (the scan below predates the
+roadmap: it was written at cycle 31 before the operator landed
+`FEATURES.md` mid-cycle, which is exactly why it found "no feature row";
+the wrap commit `132ec68` records the mandate: "next fresh eval MUST pull
+F1 then F13").** Pulled: **F1 → T69 (pri 2, spec
+`specs/t69-delegate-collect.md`)** — delegate `collect` action: a finished
+child's structured result (verdict + goal_complete summary + check cmd +
+commit refs) returned in one bounded non-blocking call, replacing today's
+git/files archaeology; carries its own LOOP-SPEC §2-step-3 adoption
+sentence per the T23→T24 zero-calls lesson (cycle-9 eval N5). **F13
+(decision logs → Laya distillation) is the NEXT fresh eval's mandated
+pull** — one item per evaluation pull per FEATURES.md's working rules;
+the operator's `dc18a7a` fixes F13 as the item immediately after F1, so
+no re-triage is needed or permitted next eval. No new capability finds
+beyond the roadmap this cycle.
+
+Cycle-31 scan (kept for the record, superseded by the roadmap pull
+above):
+
 Audited against the META-META-SPEC candidate classes on the post-T66
 surface: **parallel tool calls — PRESENT. `delegate` — PRESENT and
 doctrine-complete** (launch/status/`wait_secs`/`resume` — T58 shipped,
@@ -171,6 +209,16 @@ resources/prompts, web_fetch POST/HEAD, delegate fleet view — zero
 demand, third/fourth cycle rejected.
 
 ## 5. Top 3 priorities
+
+**Cycle-32 delta:** 1. **HUMAN: restart the supervisor (I1, RESTATED a
+seventh time — evidence: this eval's own launch line is `--max-iters
+120`, T36's 160 dormant; loopd.sh unchanged since `5c842a6`/T53, so the
+pileup is exactly the six stale revisions cycle 31 named).** 2. **T69
+(the ROADMAP PULL, only queued row).** 3. nothing else queued — the
+queue is T69 alone; F13 enters at the next fresh eval by mandate.
+
+Cycle-31 priorities (executed: T67 + T68 both landed green, queue
+drained):
 
 1. **HUMAN: restart the supervisor (I1)** — six stale revisions; every
    cycle launches at 120 not 160 (T36 dormant) and both cycles wrapped at
@@ -212,6 +260,30 @@ audit since the §6 audits began; the de-accretion rows (T51/T56/T60/T65)
 are compounding.
 
 ## Handoff — recommended execution order
+
+**CYCLE-32 HANDOFF (current):** Human-decision item FIRST (unchanged,
+restated): restart the supervisor — `launchctl kickstart -k
+gui/$(id -u)/com.tampajohn.chug-loopd` — activates T36 (160-iter cycles;
+cycle 31 wrapped 115/120, THIS cycle launched at 120 too), T46 (digest
+refresh — 5 manual regenerations now), T47, T50, T53. KeepAlive=false
+means chug must never kill it (I1).
+
+Queue order: **T69 (pri 2, the ROADMAP PULL) is the only row.** It
+touches src/tools.rs AND LOOP-SPEC.md → REQUIRED kimi validation
+(§2 step 4's core list + doctrine), and as a doctrine-touching item it
+runs ALONE (no T44 overlap). Files: src/tools.rs (collect action +
+schema + unknown-action message/pin), LOOP-SPEC.md (one §2-step-3
+sentence), README.md (delegate paragraph clause). Spec written and
+ready; todo_consistency 5/5 green at filing.
+
+Next fresh eval (after T69's cycle): pull **F13** (decision logs →
+Laya distillation, `dc18a7a` operator-directed) — mandated, no
+re-triage. The cycle-31 handoff below is kept for the record (both its
+rows landed).
+
+---
+
+Cycle-31 handoff (kept for the record):
 
 **Human-decision item FIRST (blocks nothing chug-side but caps every
 cycle): restart the supervisor.** `launchctl kickstart -k
