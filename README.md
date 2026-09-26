@@ -127,8 +127,8 @@ panic-safe terminal restore.
 `read_file` (`offset`/`limit` page past the 2000-line cap), `write_file`,
 `edit_file` (+`replace_all`), `bash`, `grep`,
 `glob`, `list_dir`, `update_ledger`, `goal_complete`, `delegate`, `web_fetch`.
-All paths sandboxed to `--cwd` (`delegate` and `web_fetch` are the two
-documented exceptions — `delegate`'s absolute `cwd`/`spec` target child
+All paths sandboxed to `--cwd` (`delegate` and `web_fetch` are
+the two documented exceptions — `delegate`'s absolute `cwd`/`spec` target child
 worktrees by design; `web_fetch` is network, not filesystem). `bash` runs in its own process group —
 timeouts SIGKILL the whole group, so orphaned grandchildren can't wedge the
 driver (120s default; `--bash-timeout` / `CHUG_BASH_TIMEOUT` overrides).
@@ -138,22 +138,19 @@ worktree). Two actions: **`launch`** spawns a detached child (`--spec`,
 `--goal`, `--model` required; `--max-iters`/`--max-minutes` optional,
 defaults 40/35; `--max-tokens` optional — the child's cumulative
 input+output token ceiling, omitted = no token ceiling) against an
-absolute `cwd` you prepared, appends its
-stdout+stderr to `<cwd>/.chug/delegate.log`, and returns immediately with
-the child `pid` and the log/events paths — it never waits on the child
-(own process group, SIGHUP ignored, `nohup … &` parity). **`status`**
+absolute `cwd` you prepared, appends its stdout+stderr to
+`<cwd>/.chug/delegate.log`, and returns immediately with the child `pid`
+and the log/events paths — it never waits on the child. **`status`**
 reports the child's liveness (when you pass the `pid`), a summary of its
 `.chug/events.jsonl` (state, `last_iteration` + `max_iters`, budget-low /
 goal / abort flags with the abort reason) and the tail of its console log —
-bounded tail reads only, so instant polling never blocks. Optionally pass
-`wait_secs` (status-only; 0/absent = instant, max 600) to collapse each idle
-wait window into one blocking status call: it returns early when the child's
-state changes or its liveness flips to dead, else at the deadline, and names
-the actual elapsed seconds on a `waited:` line. Delegate paths are the
-one exception to cwd sandboxing: `cwd` and `spec` must be absolute and may
-lie outside your `--cwd`, because children live in scratch worktrees by
-design. Worktree creation, building, harvest/merge, and killing the child
-stay with your `bash`.
+instant polling never blocks. Optionally pass `wait_secs` (status-only;
+0/absent = instant, max 600) to collapse each idle wait window into one
+blocking status call: it returns early when the child's state changes or
+its liveness flips to dead, else at the deadline, and names the actual
+elapsed seconds on a `waited:` line. `cwd` and `spec` must be absolute and
+may target child worktrees outside your own `--cwd`; worktree creation,
+building, harvest/merge, and killing the child stay with your `bash`.
 
 `web_fetch` — read-only HTTP(S) GET with hard bounds: `http://`/`https://` only,
 ≤5 redirects, connect 10s / total 30s, output capped at `max_chars` (default
