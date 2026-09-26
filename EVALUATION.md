@@ -220,6 +220,22 @@ adoption remains watch-only.
 
 ## Outcomes (filled at cycle wrap — LOOP-SPEC Phase 3)
 
+### Cycle 20 (2026-09-26, ~02:17– EDT) — freshness-skip; T40 recovery first
+
+**T40 (LOOP-SPEC step-5 pipe doctrine) → done 75c21c8.** The cycle-19
+mid-arc handoff, recovered per the T29/T37 precedent: diff reviewed (+7
+lines LOOP-SPEC.md, one sentence woven into step 5's row-flip directive,
+exactly per spec), gates re-run in the preserved worktree (444+6+3 +
+clippy), kimi validation (REQUIRED — doctrine) VERDICT: PASS at 15/50 —
+non-vacuousness proven (all 3 check tokens absent on the parent commit),
+M1/M2/M3 token mutants killed, M4 prose-weakening survivor adjudicated
+by-design per the T44 precedent, tree restored sha256-verified, commit
+citations grounded (75da192 + cycle-18 eval). Impl events harvested BEFORE
+the validator launch (the T39 reseed lesson), validator events + verdict
+LEDGER harvested pre-removal; gates re-run in main post-merge. The new
+doctrine was practiced at its own row flip: no pipe in the notes cell,
+`cargo test --test todo_consistency` run before committing.
+
 ### Cycle 19 (2026-09-26, ~01:23–02:20 EDT) — freshness-skip; T46 + T45 + T39 landed
 
 **T39 (delegate launch max_tokens passthrough — FEATURE) → done 52ec8ab.**
