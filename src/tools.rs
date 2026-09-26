@@ -37,7 +37,8 @@ const DELEGATE_LOG_LINE_MAX: usize = 200;
 const DELEGATE_WAIT_MAX_SECS: u64 = 600;
 /// T29: internal poll cadence of the wait loop (spec: 2–5 s). Each poll is
 /// the same cheap bounded tail read the instant leg does, so polling often
-/// is harmless and returns promptly on a state change.
+/// is harmless and returns promptly on a significant change (T68:
+/// `last_event` churn is filtered out before the wake fires).
 const DELEGATE_WAIT_POLL: Duration = Duration::from_millis(2500);
 
 #[derive(Debug, Clone)]
@@ -153,7 +154,7 @@ pub fn tool_schemas() -> Vec<Value> {
         }),
         json!({
             "name": "delegate",
-            "description": "Launch or observe a bounded child `chug run` (e.g. in a worktree you created). action=launch: spawns a detached child with its working directory at `cwd` (absolute), spec/goal/model required, max_iters/max_minutes optional (defaults 40/35), max_tokens optional (child token ceiling; omitted = unlimited), resume optional (true = append --resume, continue the child's prior run instead of starting fresh); returns immediately with the child pid and the log/events paths — it never waits on the child. action=status: reports the child's liveness (when you pass the `pid` from launch), a summary of its .chug/events.jsonl (state, last_iteration, budget-low/goal/abort flags — covering the child's latest run segment), and the tail of its console log. Never blocks: launch returns at spawn, status reads tails only. Optionally pass `wait_secs` on status (0/absent = instant, max 600) to block up to that many seconds, returning early when the child's events state changes or its liveness flips to dead.",
+            "description": "Launch or observe a bounded child `chug run` (e.g. in a worktree you created). action=launch: spawns a detached child with its working directory at `cwd` (absolute), spec/goal/model required, max_iters/max_minutes optional (defaults 40/35), max_tokens optional (child token ceiling; omitted = unlimited), resume optional (true = append --resume, continue the child's prior run instead of starting fresh); returns immediately with the child pid and the log/events paths — it never waits on the child. action=status: reports the child's liveness (when you pass the `pid` from launch), a summary of its .chug/events.jsonl (state, last_iteration, budget-low/goal/abort flags — covering the child's latest run segment), and the tail of its console log. Never blocks: launch returns at spawn, status reads tails only. Optionally pass `wait_secs` on status (0/absent = instant, max 600) to block up to that many seconds, returning early when the child's iteration advances, a verdict or budget-low flag appears, or its liveness flips to dead — per-tool-call last_event churn renders at the deadline but never wakes it.",
             "input_schema": {
                 "type": "object",
                 "properties": {
@@ -167,7 +168,7 @@ pub fn tool_schemas() -> Vec<Value> {
                     "max_tokens": {"type": "integer", "minimum": 1, "description": "Child token budget: cumulative input+output tokens across the child run (launch only; omitted = no token ceiling)"},
                     "resume": {"type": "boolean", "description": "launch only (default false): append `--resume` to the child argv, continuing the child's prior run from its .chug/transcript.jsonl instead of starting fresh"},
                     "pid": {"type": "integer", "description": "The pid launch returned (status only, optional; omit → liveness is reported unknown)"},
-                    "wait_secs": {"type": "integer", "minimum": 0, "maximum": 600, "description": "Seconds to block on status waiting for a child state change, a liveness flip to dead, or this deadline (0/absent = instant; status only — launch rejects it)"}
+                    "wait_secs": {"type": "integer", "minimum": 0, "maximum": 600, "description": "Seconds to block on status waiting for a significant child change (iteration advance, verdict or budget-low flag, liveness flip to dead; last_event churn renders at the deadline but never wakes) or this deadline (0/absent = instant; status only — launch rejects it)"}
                 },
                 "required": ["action", "cwd"]
             }
@@ -840,7 +841,9 @@ fn delegate_launch(input: &Value) -> anyhow::Result<ToolResult> {
 /// Observe a previously launched child. Without `wait_secs` (or with `0`)
 /// this is the pre-T29 instant render, byte-identical for identical state
 /// (pinned by test); with `wait_secs > 0` it is a bounded long-poll that
-/// blocks until the first state change, liveness flip, or deadline.
+/// blocks until the first significant change (T68 — iteration advance or
+/// verdict/budget-low flag; `last_event` churn never wakes), a liveness
+/// flip, or the deadline.
 fn delegate_status(input: &Value) -> anyhow::Result<ToolResult> {
     // Parse the knob before any I/O so a bad value errors instantly even
     // when `cwd` is also bad.
@@ -906,12 +909,19 @@ fn read_events(events_path: &Path) -> (DelegateSummary, Option<String>) {
     }
 }
 
-/// T29: the bounded long-poll. Block until the FIRST of:
-/// (a) the child's events-derived state changes vs. the snapshot at entry —
-///     any [`DelegateSummary`] field differing (new last_event,
-///     goal_seen/abort_seen flip, last_iteration advance, max_iters or
-///     budget_low_seen appearing) or the events file's creation when it was
-///     missing at entry (the launch→build window is exactly this state);
+/// T29 + T68: the bounded long-poll. Block until the FIRST of:
+/// (a) the child's events-derived state changes SIGNIFICANTLY vs. the
+///     snapshot at entry — the wake set is `max_iters`, `last_iteration`,
+///     `budget_low_seen`, `goal_seen`, `abort_seen`, `abort_reason`
+///     ([`DelegateSummary::significant_ne`]) — or the events file's
+///     creation when it was missing at entry (the launch→build window is
+///     exactly this state). `last_event_type`/`last_event_ts` churn is
+///     deliberately NOT wake-worthy (T68): an active child appends a
+///     `tool_result` event every 2–10 s, so the pre-T68 any-field wake
+///     fired at the first poll tick almost every time and every
+///     `wait_secs: 90–110` long-poll collapsed back into per-tool-call
+///     polling. Churn is still RENDERED — the deadline leg's final read
+///     carries it — it just never wakes the wait;
 /// (b) the observed liveness flips alive → dead;
 /// (c) the deadline elapses (`wait_secs`, already hard-capped at 600).
 ///
@@ -979,10 +989,14 @@ fn delegate_status_wait(
                 is_error: false,
             });
         }
-        // Req 2(a): any summary-field diff, or the events file appearing
-        // when it was missing at entry.
-        let state_changed =
-            now_summary != entry_summary || (now_existed && !entry_existed);
+        // Req 2(a) + T68: a SIGNIFICANT summary-field diff (an iteration
+        // advance, max_iters appearing, a budget-low/goal/abort flag or the
+        // abort reason — [`DelegateSummary::significant_ne`]), or the events
+        // file appearing when it was missing at entry. A diff confined to
+        // `last_event_type`/`last_event_ts` (per-tool-call churn) must NOT
+        // wake — it would fire at the first poll tick nearly every time.
+        let state_changed = now_summary.significant_ne(&entry_summary)
+            || (now_existed && !entry_existed);
         // Req 2(b): the observed liveness flipped alive → dead.
         let liveness_flipped = entry_alive == Some(true) && now_alive == Some(false);
         if state_changed || liveness_flipped {
@@ -1090,6 +1104,24 @@ impl DelegateSummary {
         } else {
             "starting"
         }
+    }
+
+    /// T68: whether the SIGNIFICANT fields differ from `other` — the wake set
+    /// of the `status` long-poll: `max_iters`, `last_iteration`,
+    /// `budget_low_seen`, `goal_seen`, `abort_seen`, `abort_reason`.
+    /// Deliberately EXCLUDES `last_event_type`/`last_event_ts`: an active
+    /// child appends a `tool_result` event every 2–10 s, so the pre-T68
+    /// any-field wake fired at the first poll tick almost every time
+    /// (cycles 29–30: every `wait_secs: 90–110` long-poll woke at 2–7 s and
+    /// pacing fell back to bash sleeps + instant status). Churn stays
+    /// RENDERED (the deadline leg's final read) — it just never wakes.
+    fn significant_ne(&self, other: &Self) -> bool {
+        self.max_iters != other.max_iters
+            || self.last_iteration != other.last_iteration
+            || self.budget_low_seen != other.budget_low_seen
+            || self.goal_seen != other.goal_seen
+            || self.abort_seen != other.abort_seen
+            || self.abort_reason != other.abort_reason
     }
 }
 
@@ -2824,6 +2856,239 @@ log_tail: (none)";
         assert!(result.content.contains("last_event: iteration t8"), "{}", result.content);
         let waited = waited_secs_of(&result.content).expect("waited: line present");
         assert!((1..=10).contains(&waited), "waited: {waited}s");
+    }
+
+    /// T68: `significant_ne` is EXACTLY the six-field wake set. A diff
+    /// confined to `last_event_type`/`last_event_ts` (the per-tool-call
+    /// churn an active child emits every 2–10 s) is NOT significant; a diff
+    /// in each of the six significant fields IS. Pinned field-by-field so a
+    /// field cannot silently migrate between the wake set and the churn set.
+    #[test]
+    fn delegate_summary_significant_ne_is_exactly_the_six_field_wake_set() {
+        let base = DelegateSummary {
+            max_iters: Some(50),
+            last_iteration: Some(7),
+            last_event_type: Some("iteration".to_string()),
+            last_event_ts: Some("t1".to_string()),
+            budget_low_seen: true,
+            goal_seen: false,
+            abort_seen: false,
+            abort_reason: Some("iteration budget exceeded".to_string()),
+        };
+        // Churn only (new last_event): never significant — the T68 defect
+        // was exactly this diff waking the wait at the first poll tick.
+        let churn = DelegateSummary {
+            last_event_type: Some("tool_result".to_string()),
+            last_event_ts: Some("t9".to_string()),
+            ..base.clone()
+        };
+        assert!(!base.significant_ne(&churn), "last_event churn must not be significant");
+        assert!(!churn.significant_ne(&base), "significance must be symmetric");
+        // Identical: not significant.
+        assert!(!base.significant_ne(&base.clone()));
+        // Each significant field alone IS significant.
+        let significant = [
+            DelegateSummary { max_iters: None, ..base.clone() },
+            DelegateSummary { last_iteration: Some(8), ..base.clone() },
+            DelegateSummary { budget_low_seen: false, ..base.clone() },
+            DelegateSummary { goal_seen: true, ..base.clone() },
+            DelegateSummary { abort_seen: true, ..base.clone() },
+            DelegateSummary { abort_reason: None, ..base.clone() },
+        ];
+        for sig in &significant {
+            assert!(
+                base.significant_ne(sig),
+                "a diff in a significant field must wake: {base:?} vs {sig:?}"
+            );
+        }
+    }
+
+    /// T68 (churn pin): a mid-wait `tool_result` append — the `last_event`
+    /// churn an active child emits every 2–10 s — must NOT wake the wait.
+    /// Timing: the writer lands at ~0.3 s; with `wait_secs: 3` and the 2.5 s
+    /// cadence there is exactly one mid-wait poll tick (~2.5 s), where the
+    /// churn IS visible — so the pre-T68 any-field wake returned there
+    /// (~2.5 s, `waited: 2`) while the significant wake set must run to the
+    /// deadline. The payload still carries the NEW last_event: the deadline
+    /// leg's final read renders the churn it declined to wake on.
+    ///
+    /// NON-VACUOUSNESS (validator-recorded): reverting the wake condition to
+    /// any-field-diff turns this red — the wake fires at the ~2.5 s tick,
+    /// under the elapsed lower bound and with `waited: 2 < 3`. Gutting the
+    /// significant comparison so NOTHING wakes keeps this green but turns
+    /// T29's iteration-append pin and the goal-append pin below red.
+    #[test]
+    fn delegate_status_wait_last_event_churn_does_not_wake() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_events_fixture(tmp.path(), &[T29_RUN_START]);
+        let events = tmp.path().join(".chug/events.jsonl");
+        // The realistic churn line: name/ok/is_error/duration_ms/preview.
+        // It moves ONLY last_event_type/ts — no significant field changes
+        // (state stays `running`, no iteration, no verdict flag).
+        let writer = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(300));
+            append_events_line(
+                &events,
+                "{\"type\":\"tool_result\",\"ts\":\"t2\",\"name\":\"edit\",\"ok\":true,\"is_error\":false,\"duration_ms\":3,\"preview\":\"edited\"}",
+            );
+        });
+        let ctx = delegate_ctx(tmp.path());
+        let started = Instant::now();
+        let result = dispatch(
+            &ctx,
+            "delegate",
+            &json!({"action": "status", "cwd": tmp.path(), "wait_secs": 3}),
+        );
+        let elapsed = started.elapsed();
+        writer.join().unwrap();
+        assert!(!result.is_error, "{}", result.content);
+        // NOT early: the churn was on disk before the ~2.5 s poll tick, so an
+        // any-field wake returns there — under this bound, which only the
+        // deadline leg (≥ 3 s) can satisfy.
+        assert!(
+            elapsed >= Duration::from_millis(2900),
+            "last_event churn woke the wait early: {elapsed:?}"
+        );
+        assert!(elapsed < Duration::from_secs(30), "churn wait hung: {elapsed:?}");
+        // `waited:` ≈ the request — the pre-T68 any-field wake reports 2.
+        let waited = waited_secs_of(&result.content).expect("waited: line present");
+        assert!(waited >= 3, "waited: {waited}s — churn woke the wait early");
+        // Churn is RENDERED: the deadline's final read carries the new
+        // last_event (not an entry-snapshot render).
+        assert!(result.content.contains("last_event: tool_result t2"), "{}", result.content);
+        // …while every significant field is unchanged.
+        assert!(result.content.contains("state: running"), "{}", result.content);
+        assert!(result.content.contains("last_iteration: none"), "{}", result.content);
+        assert!(result.content.contains("goal_seen: false"), "{}", result.content);
+    }
+
+    /// T68 (significant-wake pin): a mid-wait `goal` append — a verdict flag
+    /// flipping with NO `last_iteration` movement — must still wake the wait
+    /// EARLY carrying the flag. T29's early-return pin covers the
+    /// `last_iteration` advance; this covers the verdict-flag half of the
+    /// significant set, so the T68 narrowing cannot over-correct into
+    /// "nothing wakes".
+    ///
+    /// NON-VACUOUSNESS: the over-correction mutant (significant comparison
+    /// gutted so nothing wakes) fails the elapsed bound — the goal is on
+    /// disk at the ~2.5 s tick and the 30 s deadline is far; an
+    /// entry-snapshot render fails the `goal_seen: true` / `state: done`
+    /// pins. (The pre-T68 any-field revert passes this test — it is the
+    /// churn pin above that kills it.)
+    #[test]
+    fn delegate_status_wait_wakes_early_on_goal_flag() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_events_fixture(tmp.path(), &[T29_RUN_START]);
+        let events = tmp.path().join(".chug/events.jsonl");
+        let writer = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(300));
+            append_events_line(
+                &events,
+                "{\"type\":\"goal\",\"ts\":\"t2\",\"outcome\":\"accepted\",\"summary\":\"all done\"}",
+            );
+        });
+        let ctx = delegate_ctx(tmp.path());
+        let started = Instant::now();
+        let result = dispatch(
+            &ctx,
+            "delegate",
+            &json!({"action": "status", "cwd": tmp.path(), "wait_secs": 30}),
+        );
+        let elapsed = started.elapsed();
+        writer.join().unwrap();
+        assert!(!result.is_error, "{}", result.content);
+        // Early: well under the 30 s deadline (CI slack).
+        assert!(
+            elapsed < Duration::from_secs(15),
+            "goal flag did not wake the wait early: {elapsed:?}"
+        );
+        // The verdict flag, rendered from the woken state — not the entry
+        // snapshot (`goal_seen: false`, `state: running`).
+        assert!(result.content.contains("goal_seen: true"), "{}", result.content);
+        assert!(result.content.contains("state: done"), "{}", result.content);
+        assert!(result.content.contains("last_event: goal t2"), "{}", result.content);
+        let waited = waited_secs_of(&result.content).expect("waited: line present");
+        assert!(waited < 30, "waited: {waited}s");
+    }
+
+    /// T68 schema pin (T22/T41 convention): the LIVE `tool_schemas()` delegate
+    /// entry names the significant-change wake set in BOTH the tool
+    /// description's wait_secs sentence and the `wait_secs` property
+    /// description — and the stale any-field phrasing ("events state
+    /// changes" / "child state change") is gone. Doc honesty: the schema is
+    /// what a cold orchestrator reads; describing an any-field wake would
+    /// promise more than the (deliberately narrowed) code delivers.
+    #[test]
+    fn delegate_schema_describes_significant_wake_set() {
+        let schemas = tool_schemas();
+        let schema = schemas
+            .iter()
+            .find(|s| s.get("name").and_then(Value::as_str) == Some("delegate"))
+            .expect("exactly one delegate schema (pinned elsewhere)");
+        let tool_desc = schema
+            .get("description")
+            .and_then(Value::as_str)
+            .expect("delegate tool description");
+        assert!(
+            tool_desc.contains("iteration advances"),
+            "tool description must name the iteration-advance wake: {tool_desc}"
+        );
+        assert!(
+            tool_desc.contains("verdict or budget-low flag"),
+            "tool description must name the verdict/budget-low wake: {tool_desc}"
+        );
+        assert!(
+            tool_desc.contains("never wakes it"),
+            "tool description must say last_event churn never wakes: {tool_desc}"
+        );
+        assert!(
+            !tool_desc.contains("events state changes"),
+            "stale any-field phrasing must be gone from the tool description: {tool_desc}"
+        );
+        let wait_desc = schema["input_schema"]["properties"]["wait_secs"]
+            .get("description")
+            .and_then(Value::as_str)
+            .expect("wait_secs property carries a description");
+        assert!(
+            wait_desc.contains("significant child change"),
+            "wait_secs description must name the significant set: {wait_desc}"
+        );
+        assert!(
+            wait_desc.contains("never wakes"),
+            "wait_secs description must exclude last_event churn: {wait_desc}"
+        );
+        assert!(
+            !wait_desc.contains("child state change"),
+            "stale any-field phrasing must be gone from the wait_secs description: {wait_desc}"
+        );
+    }
+
+    /// T68 README pin (T41 convention): the `delegate` paragraph's wait_secs
+    /// clause names the significant wake set — no stale "state changes"
+    /// phrasing. Whitespace-normalized so markdown rewrapping cannot unpin it.
+    #[test]
+    fn readme_delegate_wait_clause_names_significant_wake_set() {
+        let readme = fs::read_to_string(
+            std::env::current_dir()
+                .expect("cargo sets the test cwd to the package root")
+                .join("README.md"),
+        )
+        .expect("README.md readable from the crate root");
+        let flat: String = readme.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(
+            flat.contains(
+                "it returns early when the child's iteration advances, a verdict or budget-low flag appears, or its liveness flips to dead"
+            ),
+            "README wait_secs clause lost the significant wake set: {flat}"
+        );
+        assert!(
+            flat.contains("per-tool-call `last_event` churn renders at the deadline but never wakes it"),
+            "README wait_secs clause must exclude last_event churn: {flat}"
+        );
+        assert!(
+            !flat.contains("when the child's state changes or"),
+            "stale any-field phrasing must be gone from the README clause: {flat}"
+        );
     }
 
     #[test]
