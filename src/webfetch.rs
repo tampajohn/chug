@@ -70,11 +70,29 @@ const NON_2XX_PREVIEW_BYTE_CAP: usize = 2_048;
 /// Longest `&entity;` name scanned before giving up and emitting the `&`.
 const MAX_ENTITY_LEN: usize = 32;
 
+/// The user-facing timeout phrase, shared by the schema description and both
+/// timeout error messages (caller-side `recv_timeout` expiry and the
+/// reqwest-level timeout classification). Built from the constants instead of
+/// spelled out, so the strings that promise "connect 10s, total 30s" cannot
+/// drift from the deadlines actually enforced (T42): a const-only edit moves
+/// every surface at once, and the test-module pins catch the move.
+fn timeout_phrase() -> String {
+    format!(
+        "connect {}s, total {}s",
+        WEB_FETCH_CONNECT_TIMEOUT.as_secs(),
+        WEB_FETCH_TOTAL_TIMEOUT.as_secs()
+    )
+}
+
 /// JSON schema for the `web_fetch` tool, registered alongside the builtins.
 pub fn schema() -> Value {
+    let description = format!(
+        "Fetch a URL over HTTP(S) and return its text. GET only, http:// or https:// only (any other scheme is refused); follows up to 5 redirects; {}. Output is size-capped at max_chars (default 20000; a request above the 100000 hard ceiling is clamped, not rejected); text/html is tag-stripped to visible text, other text/* and application/json return the body verbatim, and any other content type (binaries) is refused. Unlike the filesystem tools this reaches OUTSIDE the cwd sandbox by design — it is network, not filesystem. Non-2xx statuses and transport failures return as tool errors, never aborts; one attempt, no retry.",
+        timeout_phrase()
+    );
     json!({
         "name": "web_fetch",
-        "description": "Fetch a URL over HTTP(S) and return its text. GET only, http:// or https:// only (any other scheme is refused); follows up to 5 redirects; connect 10s, total 30s. Output is size-capped at max_chars (default 20000; a request above the 100000 hard ceiling is clamped, not rejected); text/html is tag-stripped to visible text, other text/* and application/json return the body verbatim, and any other content type (binaries) is refused. Unlike the filesystem tools this reaches OUTSIDE the cwd sandbox by design — it is network, not filesystem. Non-2xx statuses and transport failures return as tool errors, never aborts; one attempt, no retry.",
+        "description": description,
         "input_schema": {
             "type": "object",
             "properties": {
@@ -144,8 +162,9 @@ pub(crate) fn fetch_text(url: &str, max_chars: usize) -> anyhow::Result<String> 
     match rx.recv_timeout(WEB_FETCH_TOTAL_TIMEOUT) {
         Ok(result) => result,
         Err(mpsc::RecvTimeoutError::Timeout) => bail!(
-            "web_fetch timed out after {}s (connect 10s, total 30s)",
-            WEB_FETCH_TOTAL_TIMEOUT.as_secs()
+            "web_fetch timed out after {}s ({})",
+            WEB_FETCH_TOTAL_TIMEOUT.as_secs(),
+            timeout_phrase()
         ),
         Err(mpsc::RecvTimeoutError::Disconnected) => {
             bail!("web_fetch worker exited without a result (internal panic)")
@@ -245,7 +264,11 @@ fn classify_transport(e: &reqwest::Error) -> anyhow::Error {
         return anyhow!("connection failed (DNS or connect): {}", root_message(e));
     }
     if e.is_timeout() {
-        return anyhow!("request timed out (connect 10s, total 30s): {}", root_message(e));
+        return anyhow!(
+            "request timed out ({}): {}",
+            timeout_phrase(),
+            root_message(e)
+        );
     }
     anyhow!("request failed: {}", root_message(e))
 }
@@ -982,6 +1005,50 @@ mod tests {
         assert!(
             elapsed < WEB_FETCH_CONNECT_TIMEOUT,
             "connection-refused leg took {elapsed:?}"
+        );
+    }
+
+    // ---------- PIN (T42): the timeout constants and the strings that promise them ----------
+    //
+    // T37's validator flagged the two timeout constants as not value-pinned:
+    // a const-only edit (10s→60s) passed the whole suite while the schema
+    // description and the timeout errors kept promising "connect 10s, total
+    // 30s". Three legs close that:
+    //   1. the constants themselves are pinned (mcp_http's T16 precedent);
+    //   2. every user-facing surface is BUILT from the constants via
+    //      `timeout_phrase()` — the schema description, the caller-side
+    //      expiry error, and the reqwest timeout classification all
+    //      interpolate it — so a const-only edit moves the strings too, and
+    //      drift between the real deadlines and the promised ones is
+    //      structurally impossible;
+    //   3. the rendered strings are pinned byte-identical to the pre-T42
+    //      literals, proving the const-driven refactor changed nothing
+    //      visible.
+
+    #[test]
+    fn timeout_constants_are_value_pinned() {
+        assert_eq!(WEB_FETCH_CONNECT_TIMEOUT, Duration::from_secs(10));
+        assert_eq!(WEB_FETCH_TOTAL_TIMEOUT, Duration::from_secs(30));
+    }
+
+    #[test]
+    fn timeout_phrase_is_built_from_the_constants() {
+        assert_eq!(timeout_phrase(), "connect 10s, total 30s");
+    }
+
+    #[test]
+    fn schema_description_is_byte_identical_and_carries_the_pinned_phrase() {
+        let registered = schema();
+        let description = registered["description"].as_str().unwrap();
+        assert_eq!(description, "Fetch a URL over HTTP(S) and return its text. GET only, http:// or https:// only (any other scheme is refused); follows up to 5 redirects; connect 10s, total 30s. Output is size-capped at max_chars (default 20000; a request above the 100000 hard ceiling is clamped, not rejected); text/html is tag-stripped to visible text, other text/* and application/json return the body verbatim, and any other content type (binaries) is refused. Unlike the filesystem tools this reaches OUTSIDE the cwd sandbox by design — it is network, not filesystem. Non-2xx statuses and transport failures return as tool errors, never aborts; one attempt, no retry.");
+        // The phrase inside it is exactly the const-built one — not a second
+        // literal that could drift the other way — and it appears exactly
+        // once, so the description stays single-sourced on `timeout_phrase`.
+        let phrase = timeout_phrase();
+        assert_eq!(
+            description.matches(phrase.as_str()).count(),
+            1,
+            "description must carry the const-built phrase exactly once: {description}"
         );
     }
 }
