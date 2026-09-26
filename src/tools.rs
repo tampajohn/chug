@@ -854,12 +854,19 @@ fn delegate_status_wait(
     };
 
     loop {
-        // Deadline first: never sleep past it, never poll past it.
+        // Deadline first: never sleep past it, never poll past it. One FINAL
+        // read before rendering: a change can land inside the last sleep
+        // window (the cadence sleep is capped at the remaining time, so
+        // nothing polls between the last check and the deadline — always the
+        // case when wait_secs ≤ the cadence), and the rendered payload must
+        // reflect the true final state, not the entry snapshot. This read IS
+        // the instant leg's read, so the payload is "the same payload as the
+        // instant leg" at the moment the wait returns.
         if Instant::now() >= deadline {
-            // Nothing changed since entry (any change returns below), so the
-            // entry snapshot IS the current state.
+            let (final_summary, final_note) = read_events(&events_path);
+            let final_alive = pid.and_then(reap_and_alive);
             return Ok(ToolResult {
-                content: render(&entry_summary, entry_alive, entry_note.as_deref()),
+                content: render(&final_summary, final_alive, final_note.as_deref()),
                 is_error: false,
             });
         }
@@ -2383,6 +2390,104 @@ log_tail: (none)";
             assert!(result.is_error, "{}", result.content);
             assert!(result.content.contains("integer"), "{}", result.content);
         }
+    }
+
+    /// T29 fix-up, FINDING 1 (spec req 2(b) shipped untested): the
+    /// liveness-flip wake leg. A REAL own child (the T28 fixtures' pattern) is
+    /// spawned with a static events fixture — so the ONLY thing that changes
+    /// during the wait is liveness — and its handle is dropped per the launch
+    /// contract, making the waitpid reap inside [`reap_and_alive`] the only
+    /// observer of the exit. It is SIGKILLed mid-wait; the wait must wake well
+    /// before the deadline with liveness flipped to dead.
+    ///
+    /// NON-VACUOUSNESS (validator mutant M7: the `liveness_flipped` check
+    /// gutted): the events stream never changes, so the gutted wait sleeps to
+    /// the full 30 s deadline — the elapsed bound below kills it. A mutant
+    /// that skips the waitpid reap keeps answering the zombie's `alive: true`
+    /// and fails the `alive: false` pin instead.
+    #[cfg(unix)]
+    #[test]
+    fn delegate_status_wait_wakes_early_when_child_dies_liveness_flip() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_events_fixture(tmp.path(), &[T29_RUN_START, T29_ITERATION]);
+        let child = Command::new("sleep").arg("30").spawn().unwrap();
+        let pid = child.id();
+        drop(child); // launch contract: detached, never waited by the handle
+        // The wait call blocks this thread, so the kill fires from a helper
+        // thread: the child dies mid-wait and stays a zombie for the seam.
+        let killer = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(300));
+            unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) };
+        });
+        let started = Instant::now();
+        let result = dispatch(
+            &delegate_ctx(tmp.path()),
+            "delegate",
+            &json!({"action": "status", "cwd": tmp.path(), "pid": pid, "wait_secs": 30}),
+        );
+        let elapsed = started.elapsed();
+        killer.join().unwrap();
+        assert!(!result.is_error, "{}", result.content);
+        // The flip woke the wait: well under the 30 s deadline (CI slack).
+        assert!(
+            elapsed < Duration::from_secs(15),
+            "liveness flip did not wake the wait early: {elapsed:?}"
+        );
+        // Liveness flipped to dead, with the wait leg's `waited:` line.
+        assert!(result.content.contains("alive: false"), "{}", result.content);
+        let waited = waited_secs_of(&result.content).expect("waited: line present");
+        assert!(waited < 30, "waited: {waited}s");
+        // The events state is unchanged (`last_iteration: 7`) — the wake came
+        // from the liveness flip, not from a state change.
+        assert!(result.content.contains("last_iteration: 7"), "{}", result.content);
+    }
+
+    /// T29 fix-up, FINDING 2 (spec req 2's "FIRST of" + "same payload as the
+    /// instant leg"): the deadline leg must render the FINAL state, not the
+    /// entry snapshot. With the 2.5 s cadence and `wait_secs: 2` there is
+    /// exactly ONE poll — at entry; the cadence sleep is capped at the
+    /// remaining 2 s, so nothing reads between the entry poll and the
+    /// deadline — and a writer landing inside that window is therefore
+    /// invisible to every intermediate poll: only a final read at the
+    /// deadline can see it.
+    ///
+    /// NON-VACUOUSNESS: removing the final read (the pre-fix deadline leg,
+    /// which rendered the entry snapshot) fails the `last_iteration: 8` pin —
+    /// that render carries the entry state, `last_iteration: none`. An
+    /// instant-return mutant fails the same pin (the writer has not run yet),
+    /// and both pass no timing bound to hide behind.
+    #[test]
+    fn delegate_status_wait_deadline_renders_final_state_not_entry_snapshot() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_events_fixture(tmp.path(), &[T29_RUN_START]);
+        let events = tmp.path().join(".chug/events.jsonl");
+        // Lands ~1 s in: after the entry poll (~0 ms) and before the 2 s
+        // deadline wake, with a full second of scheduling slack each side.
+        let writer = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(1000));
+            append_events_line(&events, "{\"type\":\"iteration\",\"ts\":\"t8\",\"n\":8}");
+        });
+        let ctx = delegate_ctx(tmp.path());
+        let started = Instant::now();
+        let result = dispatch(
+            &ctx,
+            "delegate",
+            &json!({"action": "status", "cwd": tmp.path(), "wait_secs": 2}),
+        );
+        let elapsed = started.elapsed();
+        writer.join().unwrap();
+        assert!(!result.is_error, "{}", result.content);
+        // The deadline leg ran: at least the entry poll's window elapsed.
+        assert!(
+            elapsed >= Duration::from_millis(1500),
+            "returned before the deadline could elapse: {elapsed:?}"
+        );
+        assert!(elapsed < Duration::from_secs(30), "overshot the 2s deadline: {elapsed:?}");
+        // The deadline render carries the FINAL state, not the entry snapshot.
+        assert!(result.content.contains("last_iteration: 8"), "{}", result.content);
+        assert!(result.content.contains("last_event: iteration t8"), "{}", result.content);
+        let waited = waited_secs_of(&result.content).expect("waited: line present");
+        assert!((1..=10).contains(&waited), "waited: {waited}s");
     }
 
     #[test]
