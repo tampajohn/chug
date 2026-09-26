@@ -10,6 +10,7 @@ re-read every iteration, so context trimming can never kill the run.
 
 ```bash
 cargo build
+cargo install --path .   # puts the chug binary on PATH (~/.cargo/bin)
 # Zero setup if you have Claude Code configured: chug reads
 # ANTHROPIC_BASE_URL / ANTHROPIC_AUTH_TOKEN / ANTHROPIC_API_KEY from
 # ~/.claude/settings.json when the process env doesn't have them.
