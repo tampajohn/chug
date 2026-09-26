@@ -7,7 +7,6 @@
 //! ledger of record cannot silently drift from the repo again.
 
 use std::collections::HashSet;
-use std::path::Path;
 
 const STATUSES: [&str; 4] = ["todo", "in-progress", "blocked", "done"];
 
@@ -132,7 +131,8 @@ fn table(rows: &str) -> String {
 
 #[test]
 fn todo_md_is_consistent_with_specs_on_disk() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    // T48: cargo runs test binaries with cwd = the package root; the compile-time env! path is wrong under the T47 shared cache (cycle-21) — resolve at runtime.
+    let root = std::env::current_dir().expect("cargo sets the test cwd to the package root");
     let md = std::fs::read_to_string(root.join("TODO.md")).expect("TODO.md readable");
     let problems = validate_todo_table(&md, |spec| root.join(spec).is_file());
     assert!(
