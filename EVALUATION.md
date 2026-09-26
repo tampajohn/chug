@@ -274,7 +274,7 @@ words. If the queue outlives this cycle's budget, unworked rows stay
 
 ## Outcomes (filled at cycle wrap — LOOP-SPEC Phase 3)
 
-### Cycle 27 (2026-09-26, from ~06:15 EDT) — freshness-skip; working T58–T62 (per-item entries land per T34)
+### Cycle 27 (2026-09-26, ~06:15–06:40 EDT) — freshness-skip; T59 landed; T58 + T62 IN-FLIGHT at budget wrap (recovery recipes on their rows)
 
 **T59 — mcp_http dead_port tests: bounded retry on port-theft (pri 3,
 robustness, tests-only) → done `062c175` (fast-forward merge).** glm impl
@@ -297,6 +297,42 @@ kimi round skipped per the row's T16/T31 tests-only precedent;
 orchestrator gates independently re-run 507/507 (475+6+9+1+13+3) +
 clippy clean by the child. 2 artifacts harvested pre-removal (impl
 events + LEDGER). The last known organic flake in the suite is closed.
+
+**Wrap (budget_low at 8 iters; main pushed through `f73cd70`, final
+gates green there — 507/507 post-T59-merge under `target-shared-main`,
+main unchanged since).** **In-flight, worktrees PRESERVED with recovery
+recipes on their TODO rows:** **T58** — glm impl died 50/50 (iteration
+budget) with the work COMPLETE but UNCOMMITTED (fifth occurrence of the
+pattern: t15/t17/t20/t55/t58 — the exact failure T58's resume feature
+addresses; the demand signal is now overwhelming — next eval should
+weigh a larger impl-child iteration default or auto-resume-on-budget).
+Orchestrator finish per the T55 precedent: full diff review (all 5 reqs
++ all spec'd test legs present, e2e via the stub harness), committed
+`b189517` on `loop-t58`; orchestrator gates independently re-run 516/516
++ clippy clean. The REQUIRED kimi validator (pid 20915,
+`target-shared-validate` per T52) was mid-mutation-phase at wrap — its
+verdict lands in the preserved worktree's `.chug/`; doctrine forbids
+merging src/tools.rs without it, so the merge defers to cycle 28.
+**T62** — glm impl (pid 21055) at iter 27/50 in gates phase at wrap; its
+commit (or orchestrator finish) + review + merge also defers. **Deferred
+`todo` with ready specs:** T60 (pri 4 docs), T61 (pri 4, strictly after
+T58 merges). **Cycle notes:** (a) T44 planning catch — T58 and T60 BOTH
+name README.md (T58 req 5's delegate paragraph, T60's layout line), so
+the originally-planned T58-validator ∥ T60-impl overlap was FORBIDDEN;
+T62 (tests/eval_digest.rs only) was the disjoint partner instead. The
+disjointness check must enumerate both specs' FULL file lists, not just
+headline files. (b) The freshness rule fired cleanly; T59's full arc
+cost ~25 min wall (worktree → impl 8 min → review/gates → merge → flip
+→ push). (c) 5 artifacts harvested at wrap (t58 impl events+LEDGER from
+the rotated archive — the validator's fresh run rotated them, a clean
+per-role split; t58-validate + t62-impl live-stream snapshots named
+`-inflight-` so cycle 28 knows the FINAL streams are in the worktrees).
+(d) Freshness fires again for cycle 28 (this eval is same-day + todo
+rows exist) — it resumes T58's verdict + T62's landing, then T61
+(after T58 merges), then T60. (e) Human-decision carry RESTATED:
+restart the stale loopd supervisor (pid 90114, 5 script revisions
+stale; launchd KeepAlive=false so chug must never kill it) —
+`launchctl kickstart -k gui/$(id -u)/com.tampajohn.chug-loopd`.
 
 ### Cycle 26 (2026-09-26, ~05:46–06:40 EDT) — MANDATORY fresh eval (queue empty) + T57 landed (main-dedicated gates dir); wrap at budget margin
 
