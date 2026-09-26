@@ -271,22 +271,22 @@ the `.chug/events*.jsonl` corpus (per-file iterations, wall time, tool
 distribution, error classes, token curve, aborts, budget-low fires, TODO
 status counts, staleness flag) so the evaluation phase reads one file instead
 of re-mining raw archives.
-The supervisor also creates `target-shared/` (gitignored) and hands
-`CARGO_TARGET_DIR` to each cycle's orchestrator as a per-invocation env
-prefix on the `chug` call — never a supervisor-wide `export`, which would
-persist across loop iterations and redirect the supervisor's own `cargo
-build` into the shared cache from cycle 2 on, leaving `./target/debug/chug`
-stale — so worktree builds — implementation children and the orchestrator's
-own gates — share one warm incremental cache, kept separate from the repo's
-own `target/`; validators and overlap-window gates use gitignored sibling
-caches (`target-shared-validate/`, `target-shared-gates/`) so concurrent
-cargo consumers never share an artifact slot, while post-merge and final
-main gates build into `target-shared-main/` — a dir only main checkouts
-ever populate, so its artifacts are main content by construction (cargo's
-artifact filename doesn't encode the checkout path, so one shared dir is
-last-builder-wins). Nothing cleans them automatically: reclaiming is
-the operator's call (`du -sh target-shared`; `rm -rf target-shared` resets it —
-cheap, rebuilt once and warm for every worktree again).
+The supervisor creates four gitignored build caches, one per cargo-consumer
+role, warm after first use: `target-shared/` (implementation children and
+worktree-review gates), `target-shared-validate/` (validators),
+`target-shared-gates/` (overlap-window gates), and `target-shared-main/`
+(post-merge and final main gates). The supervisor hands `CARGO_TARGET_DIR`
+to each cycle as a per-invocation env prefix; loopd.sh carries the
+rationale. Why role-keyed: cargo's artifact filename excludes the checkout
+path, so one shared dir is last-builder-wins — role-keyed dirs keep each
+consumer's artifacts its own. Nothing cleans them automatically; reclaiming
+is the operator's call (`du -sh target-shared` to size it,
+`rm -rf target-shared` to reset it; rebuilt once, warm for every worktree
+again).
+
+The mechanism and rationale live in the work specs:
+`specs/t47-shared-target-dir.md`, `specs/t52-overlap-shared-cache-race.md`,
+and `specs/t57-main-dedicated-gates-target-dir.md`.
 State in `.chug/loopd/` (cycle logs, pidfile). Three consecutive cycles
 without `goal_complete` → HALTED marker + exit. A second supervisor refuses
 to start (pidfile); a manual `LOOP-SPEC` run makes it skip a cycle rather
