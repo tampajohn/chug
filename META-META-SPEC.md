@@ -19,7 +19,8 @@ check: test -f EVALUATION.md && grep -q "specs/t" TODO.md
 4. The code: `src/` layout + `wc -l` per file; skim `api.rs`, `driver.rs`,
    `tools.rs`, `chat.rs` for structural smells (don't deep-read everything —
    this is an evaluation, not an implementation).
-5. `README.md` — docs-vs-reality drift.
+5. `README.md` — docs-vs-reality drift AND a full cold-read usability
+   audit (see §6 in the EVALUATION.md section list below).
 
 ## Write `EVALUATION.md`
 
@@ -44,6 +45,17 @@ you can). Sections:
    credible gap exists; features are no longer the bottom of the priority
    stack (LOOP-SPEC §2).
 5. **Top 3 priorities** — what you'd fix FIRST and why.
+6. **README audit (usability, not just accuracy)** — read the README top to
+   bottom as someone who has never seen chug. Report: (a) reading order —
+   does the structure guide a newcomer (what it is → install → run →
+   features → internals), or is it append-only accretion where each cycle
+   glued bullets onto the nearest section? (b) redundancy — claims stated
+   twice with drift between the copies; (c) staleness — superseded behavior
+   presented at the same prominence as current behavior; (d) balance —
+   sections carrying detail that belongs in a spec file; (e) quickstart
+   truth — do the commands work as written, in the order given? File a docs
+   row (`t<N>-readme-*`) when the audit finds structural debt. A README
+   that grows by accretion is a bug class, not a style choice.
 
 ## Extend `TODO.md`
 

@@ -143,4 +143,7 @@ For each `todo` row, ONE at a time (backgrounded child + polling, per step 2):
   trusted not to run chat turns in the repo mid-cycle).
 - Children never edit TODO.md or LEDGER.md in the main tree.
 - README gate before `goal_complete`: it must document everything the cycle
-  landed.
+  landed — INTEGRATED into the existing structure, not a bullet appended to
+  the nearest section. If the structure fights the addition, that's a docs
+  finding for the next evaluation (META-META-SPEC §6), not a reason to
+  force-fit it.
