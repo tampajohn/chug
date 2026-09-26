@@ -223,6 +223,51 @@ phases 2–3 deferral stands.
 
 ## Outcomes (filled at cycle wrap — LOOP-SPEC Phase 3)
 
+### Cycle 37 (2026-09-26, ~13:22– EDT) — freshness-skip; T73 recovered mid-arc + landed (merge 87fe53f); I1 RESOLVED
+
+- **T73 landed** (`chug plan` read-only planning mode, FEATURES.md F2
+  phase 1; merge `87fe53f`, row flip this cycle). Recovery arc per the
+  cycle-36 row recipe: fix-up child (pid 94084) budget-died 50/50 with
+  the seam half-written → T63 SEVENTH resume (pid 2638, decision
+  d1790443812-1) goal accepted 12/50 → `3b90103` (run_turn seam:
+  `run_plan_loop` takes `&mut dyn Llm` + `McpRegistry`, ZERO impl
+  semantic changes; 5 loop-level killing tests each RED-proven — M7
+  run_start mode, M7b ensure_seeded, M7c archive_stale, M11 dropped
+  is_error guard = the real exit-semantics hole, M-ext live-MCP-registry;
+  hand-written run_start mirror deleted). Orchestrator gates
+  independently re-run 585/585 + clippy under target-shared. Kimi round
+  2 VERDICT PASS 0 blocking findings (46/50, routing d1790444316-2,
+  verdict d1790444813-3): 9 mutants ALL caught RED, gates re-run under
+  target-shared-validate; 3 non-blocking observations (sandbox-escape
+  pins assert against the shared $TMPDIR root — escaped writes land for
+  real during mutation runs, non-hermetic/sticky-RED, follow-up
+  candidate; submit_plan schema minLength:1 nit, runtime-enforced +
+  RED-pinned; MCP no-extension leg premise-asserted not mutated).
+  **Merge incident absorbed:** the fix-up child had cherry-picked
+  dbda51a onto main at cycle 36's tail (5464878) and reset main twice;
+  cycle 37 opened by verifying main at the true tip (7de118a =
+  origin/main), confirmed cherry-pick↔dbda51a driver.rs byte-identical,
+  and resolved the merge's 7 add/add driver.rs hunks (cherry-pick broke
+  shared ancestry) `--theirs` byte-exact to loop-t73. Post-merge gates
+  585/585 + clippy in main under target-shared-main. FEATURES.md F2
+  annotated SPLIT/phase-1-landed. 5 artifacts harvested (fixup +
+  validate2 events/ledgers, child decisions.jsonl — 2 child-side verdict
+  records); validate1 ledger verified identical to the cycle-36 harvest.
+  8 outcome backfills (all fixed-up — the arc ran a fix-up).
+- **I1 RESOLVED (operator):** loopd restarted between cycles 36/37 (new
+  supervisor pid 94890, 17:21Z) — digest auto-regenerated pre-cycle
+  (157 streams/7194 iters, the SEVENTH-manual-regen pattern ends), the
+  launch line runs 160/240 not 120, T36/T46/T50/T53 all live. Nine
+  restatements of the human item close here.
+- **Cycle-level notes:** T63 resume exercised a SEVENTH time (7/7
+  accepted on resumed segments). The T72 sweep-the-family directive
+  closed the round-1 FAIL in ONE fix-up round (vs T69's three) — first
+  live evidence the doctrine shortens the vacuous-class arc. Cycle-36
+  wrap artifact (EVALUATION.md Outcomes) committed by cycle 37 at open
+  (7de118a) — the T34 per-item rule kept the mid-arc death lossless.
+- **T76 (pri 1, tgrep) next; T77 (pri 2); T75 (pri 3 doctrine, runs
+  alone, REQUIRED kimi).**
+
 ### Cycle 36 (2026-09-26, ~11:52– EDT) — MANDATORY fresh eval (F2 SPLIT → T73/T74/T75 filed); T74 landed; T73/T75 next
 
 - **Eval committed `4db039d` + pushed.** ROADMAP PULL F2 executed as a
