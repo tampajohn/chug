@@ -242,6 +242,39 @@ words. If the queue outlives this cycle's budget, unworked rows stay
 
 ## Outcomes (filled at cycle wrap — LOOP-SPEC Phase 3)
 
+### Cycle 30 (2026-09-26, ~07:28 EDT–) — freshness-skip; T64 landed (validator-survivor pins); T65 queued
+
+**T64 — Pin the two validator survivor classes (pri 4, tests-only:
+tests/shared_target_dir.rs +62, src/tools.rs test module +88) → done
+`1859b21` (impl `95bc91a`, merge commit).** glm impl completed the work
+and self-committed at 48/50, then hit the cycle's notable finding:
+goal_complete was REJECTED not by the work but by the spec check line's
+own defect — `cargo test --lib` exits 101 on this binary-only crate
+("no library targets found"), a defect pre-observed in eight prior child
+streams (t22/t25/t26/t29/t39/t42/t58/t59) and now a candidate row for
+the next eval (check lines should say `cargo test --bin chug`). Leg 1
+(`--test shared_target_dir`) had passed 14/14 first. Nothing was
+incomplete, so no T63 resume — orchestrator review + gates + independent
+mutant reproduction substituted per T55/T62. Pin (a)
+`loop_spec_step5_window_carries_the_always_form_exactly_once` scopes
+step 5 heading-to-heading with four legs (MAIN exactly 1×, "ALWAYS,
+never conditionally" exactly 1×, the byte-exact combined carrier 1×, the
+NOT-step-3 disambiguator) — the mechanism sentence's "ALWAYS main
+checkouts" can no longer stand in for the rule form. Pin (b)
+`delegate_summary_run_start_gap_keeps_last_seen_max_iters_and_iteration`
+asserts the gap window after segment-2's run_start (max_iters Some(50)
+from the latest run_start, last_iteration Some(40) still segment 1's —
+deliberately unequal values prove provenance), then segment-2 values
+after its first iteration. Child's non-vacuousness evidence reproduced
+BOTH survivor stories with before/after output; the orchestrator
+independently re-ran the M5 mutant → new pin RED (13 passed/1 failed,
+old T57 pin staying green — the exact survivor mechanism), revert →
+14/14. Gates: 523/523 + clippy under target-shared in-worktree, then
+523/523 + clippy post-merge under target-shared-main. kimi skipped per
+the row's optional-validation + T16/T31/T59/T62 precedent. 2 artifacts
+harvested (events + non-trivial LEDGER carrying the check-line defect
+report).
+
 ### Cycle 29 (2026-09-26, ~07:10–07:30 EDT) — MANDATORY fresh eval (queue EMPTY); T63 landed (doctrine: delegate resume recovery)
 
 **T63 — LOOP-SPEC adopts `delegate resume:true` as the standard child
