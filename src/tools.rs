@@ -4406,6 +4406,11 @@ log_tail: (none)";
     /// T58's segment reset, collect-side: a pre-resume `abort` must not
     /// outlive the resume's `run_start` — post-resume acceptance reports
     /// `goal-accepted`, and the segment's check cmd is the RESUMED segment's.
+    /// The verdict-latch reset has its own tooth (finding-2 pin): a resume
+    /// that has NOT reached a verdict yet must render `running`, not leak
+    /// segment 1's verdict or summary — a post-resume-accepted leg alone
+    /// would overwrite the latch and leave the reset vacuous (the
+    /// mutant-kill leg: deleting the `run_start` latch reset turns this red).
     #[test]
     fn delegate_collect_parse_run_start_resets_verdict_and_check() {
         let lines = [
@@ -4423,6 +4428,28 @@ log_tail: (none)";
         assert_eq!(s.abort_reason, None, "pre-resume abort reason must reset");
         assert_eq!(s.check_cmd.as_deref(), Some("check B"), "the segment's LATEST gate wins");
         assert_eq!(s.goal_summary.as_deref(), Some("resumed run passed"));
+
+        // Post-resume-NO-verdict leg: segment 1 reached an ACCEPTED verdict
+        // (with its summary), then the resume's segment holds only ordinary
+        // tool events — no goal, no abort. The pre-resume verdict and
+        // summary must NOT leak: the verdict latch resets to `running`.
+        let resumed_mid_run = [
+            "{\"type\":\"run_start\",\"ts\":\"t0\",\"max_iters\":40}",
+            "{\"type\":\"verifying\",\"ts\":\"t1\",\"cmd\":\"check A\"}",
+            &goal_line("accepted", "summary", "pre-resume summary must not leak"),
+            T58_RESUME_RUN_START,
+            "{\"type\":\"iteration\",\"ts\":\"t4\",\"n\":1}",
+        ];
+        let s2 = summarize_collect(&resumed_mid_run);
+        assert_eq!(
+            s2.verdict(),
+            "running",
+            "a pre-resume verdict must not leak into a verdict-less resume"
+        );
+        assert_eq!(
+            s2.goal_summary, None,
+            "a pre-resume summary must not leak either"
+        );
     }
 
     /// Torn/malformed lines are skipped, never fatal — collecting is safe at
@@ -4532,6 +4559,47 @@ log_tail: (none)";
             "not-a-repo git leg degrades to a note: {}",
             result.content
         );
+    }
+
+    /// The abort render path END-TO-END at dispatch level (finding-1 pin):
+    /// a stream whose latest segment ends in an `abort` line carrying a
+    /// reason renders BOTH the `aborted` verdict AND the `abort_reason:`
+    /// line — the bail story is the failure surface the caller greps, and
+    /// without the render leg the parse pin alone leaves the render block
+    /// dead per the suite (the mutant-kill leg: deleting the render block
+    /// turns this red).
+    #[test]
+    fn delegate_collect_dispatch_renders_aborted_verdict_and_reason() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_events_fixture(
+            tmp.path(),
+            &[
+                T29_RUN_START,
+                T29_ITERATION,
+                "{\"type\":\"verifying\",\"ts\":\"t1\",\"cmd\":\"cargo test --bin chug delegate\"}",
+                "{\"type\":\"abort\",\"ts\":\"t2\",\"reason\":\"iteration budget exceeded\",\"model\":\"glm\",\"budget_kind\":\"iterations\",\"budget_max\":50}",
+            ],
+        );
+        let result = dispatch(
+            &delegate_ctx(tmp.path()),
+            "delegate",
+            &json!({"action": "collect", "cwd": tmp.path()}),
+        );
+        assert!(!result.is_error, "{}", result.content);
+        assert!(result.content.contains("verdict: aborted"), "{}", result.content);
+        assert!(
+            result.content.contains("abort_reason: iteration budget exceeded"),
+            "{}",
+            result.content
+        );
+        // The gate that ran before the bail is still the segment's check cmd.
+        assert!(
+            result.content.contains("check_cmd: cargo test --bin chug delegate"),
+            "{}",
+            result.content
+        );
+        // An aborted segment carries no accepted-goal summary.
+        assert!(!result.content.contains("summary:"), "{}", result.content);
     }
 
     /// Mid-run child: events exist without a verdict → `running`, without
