@@ -242,7 +242,43 @@ words. If the queue outlives this cycle's budget, unworked rows stay
 
 ## Outcomes (filled at cycle wrap — LOOP-SPEC Phase 3)
 
-### Cycle 30 (2026-09-26, ~07:28–07:52 EDT) — freshness-skip; T64 + T65 landed — QUEUE DRAINED
+### Cycle 30 (2026-09-26, ~07:28–08:05 EDT) — freshness-skip; T64 + T65 landed, then goal-gate flake sighting → T66 filed + landed — QUEUE DRAINED
+
+**T66 — dead_port_probe drop→probe leg bounded theft-retry (pri 2,
+robustness, tests-only: src/mcp_http.rs test module +146/−14) → done
+`ac2ea36` (impl `e418b8e`, merge commit).** Filed LIVE at the cycle's
+own goal gate: the wrap's first goal_complete was REJECTED by
+`dead_port_probe_distinguishes_live_from_dead` failing at
+default-parallel `cargo test` — "dropped port 50956 did not refuse
+connections" (src/mcp_http.rs:1747), the first post-T59 organic
+sighting of the port-theft class. Diagnosis before dispatch: T59
+wrapped only the test's third (acquire-verify) leg; the second
+(bind→drop→re-probe) leg carries the identical window unretried —
+passes isolated, 4 green runs at `--test-threads=4`, nothing in the
+cycle touched mcp_http. glm impl first-try goal-accepted at 27/50 in
+~8 min: new sibling driver `dead_port_probe_retry_with` (the spec's
+endorsed fallback — `dead_port_retry_with` not contorted: its acquire
+yields a bare u16 while this attempt must own the listener across the
+live probe). One attempt = bind + live-probe + drop + dead-probe; the
+live leg's failure panics un-retried (no theft window → real
+regression); a live reading after the drop goes through
+`theft_or_regression` UNCHANGED (still live at catch → theft → fresh
+stub; refuses → regression panics, never retried into green); bounded
+by the reused `DEAD_PORT_RETRY_ATTEMPTS`; exhaustion names the
+attempts + mechanism. Two scripted-theft pins use a try_clone-dup'd
+socket to keep attempt 1's port genuinely live across the whole drop
+window — mechanically identical to a thief, deterministic, race-free —
+pinning exactly-once retry and exhaustion naming. Non-vacuousness run
+both directions by the child (probe gutted to `false` → retried test
+exhausts and panics, never masked into green; `true` → live-leg assert
+catches it; revert → green). kimi skipped per the row (tests-only,
+T16/T31/T59/T62). Orchestrator gates independently re-run: 525/525 at
+BOTH `--test-threads=4` AND default parallelism (the exact goal-gate
+invocation that false-red) + clippy under target-shared in-worktree,
+then 525/525 post-merge under target-shared-main at default
+parallelism. 1 artifact harvested. The class is now closed at all
+three legs of the probe test; a FUTURE sighting elsewhere in mcp_http
+is a new row, not a retry of this one.
 
 **T65 — README Continuous-mode target-cache paragraph de-accretion (pri
 4, docs-only: README.md single hunk 16+/16−, net 0) → done `458751c`
@@ -300,7 +336,8 @@ the row's optional-validation + T16/T31/T59/T62 precedent. 2 artifacts
 harvested (events + non-trivial LEDGER carrying the check-line defect
 report).
 
-**Skipped/deferred:** none — queue drained 2/2 (T64, T65).
+**Skipped/deferred:** none — queue drained 3/3 (T64, T65, then T66
+filed LIVE at the wrap's goal gate and landed in-cycle).
 
 **Cycle notes.** (a) The cycle's payload finding is the **spec
 check-line defect**: T64's goal_complete was rejected by the spec's own
@@ -325,11 +362,19 @@ status — still watch-level, not row-level. (e) Both children were glm
 one-arcs: T64 48/50 committed (rejection + 2-iter tail), T65 19/50
 first-try goal-accepted ~4 min — no model fallback needed. (f) The
 README gate is satisfied intrinsically: T65's edit IS the README
-integration, at the paragraph's original position. **Final state:** main
-pushed through the wrap; post-merge gates 523/523 + clippy under
-target-shared-main at both landings; todo_consistency 3/3 green before
-every TODO commit; 3 events files + 1 non-trivial LEDGER harvested to
-.chug (gitignored, local); both worktrees removed post-harvest.
+integration, at the paragraph's original position. (g) **The wrap's
+first goal_complete was itself the T66 trigger** — the goal gate
+(default-parallel `cargo test` in the repo target/) caught what four
+`--test-threads=4` gate runs had not: the last unretried port-theft
+window. The arc — diagnose (passes isolated, class signature,
+nothing touched mcp_http) → file pri-2 row + spec → standard child arc
+→ land → re-attempt — cost ~20 min wall and closes the class at all
+three legs; the goal gate is no longer a coin flip on this flake.
+**Final state:** main pushed through the wrap; post-merge gates
+523/523 (T64, T65) then 525/525 (T66, at DEFAULT parallelism — the
+goal-gate invocation) + clippy under target-shared-main at all
+landings; todo_consistency 3/3 green before every TODO commit; 3 events files + 1 non-trivial LEDGER (4 artifacts) harvested to .chug (gitignored,
+local); all three worktrees removed post-harvest.
 **loopd-restart human carry RESTATED:** supervisor pid 90114 still
 running 5+ revisions stale (started 8:43PM, pre-T57) — the next manual
 restart picks up everything since; no automated restart is safe
