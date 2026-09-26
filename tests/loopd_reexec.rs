@@ -193,3 +193,54 @@ fn loopd_single_driver_check_grep_excludes_itself_via_bracket_idiom() {
          in loopd.sh — inside the single-driver check (T53)"
     );
 }
+
+/// T54 — exact-count pins for the T50 self-re-exec machinery. The four
+/// positional pins above assert existence + order but never COUNTS, so an
+/// additive duplicate of the fingerprint machinery inside the while body
+/// silently defeats the re-exec with every pin still green: a second
+/// `SELF_CKSUM=` assignment refreshes the fingerprint every cycle, so the
+/// while-top comparison never fires and script changes stop activating.
+/// The T47 carrier doctrine (tests/shared_target_dir.rs) applies: exact
+/// counts are strictly stronger than `>=` bounds.
+#[test]
+fn loopd_has_exactly_one_self_cksum_assignment() {
+    let loopd = read("loopd.sh");
+    let count = loopd.lines().filter(|l| l.contains("SELF_CKSUM=")).count();
+    assert_eq!(
+        count, 1,
+        "loopd.sh must contain EXACTLY ONE `SELF_CKSUM=` assignment (the \
+         fingerprint recorded before the cycle loop, T50) — a second one \
+         (e.g. an additive duplicate at the while-body end) refreshes the \
+         fingerprint every cycle, so the while-top comparison never fires \
+         and the re-exec is silently defeated with all positional pins \
+         green (T54, T50 validator finding)"
+    );
+}
+
+#[test]
+fn loopd_has_exactly_one_self_cksum_comparison() {
+    let loopd = read("loopd.sh");
+    let count = loopd.matches("!= \"$SELF_CKSUM\"").count();
+    assert_eq!(
+        count, 1,
+        "loopd.sh must contain EXACTLY ONE `!= \"$SELF_CKSUM\"` comparison \
+         (the while-top re-exec gate, T50) — a second comparison is the \
+         other half of a duplicated fingerprint block and re-introduces the \
+         additive-mutant defeat surface (T54, T50 validator finding)"
+    );
+}
+
+#[test]
+fn loopd_self_cksum_string_occurs_exactly_twice() {
+    let loopd = read("loopd.sh");
+    let count = loopd.matches("SELF_CKSUM").count();
+    assert_eq!(
+        count, 2,
+        "the literal SELF_CKSUM must occur EXACTLY TWICE in loopd.sh — once \
+         in the pre-loop assignment and once in the while-top comparison; \
+         any other additive reference (an exported copy, a second \
+         conditional shape the assignment/comparison pins miss) would make \
+         the re-exec machinery diverge from the T50 design (T54, T50 \
+         validator finding)"
+    );
+}
