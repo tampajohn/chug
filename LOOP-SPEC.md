@@ -23,7 +23,9 @@ upgrade: **prefer `.chug/events.jsonl` over transcripts** — it is
 jq-mineable and untrimmed (`jq -r '.type' .chug/events.jsonl | sort | uniq -c`
 is a good first look). Write/refresh `EVALUATION.md`, extend `TODO.md` with
 new rows (numbering continues from the max existing id) each with its own
-`specs/t<N>-<slug>.md`.
+`specs/t<N>-<slug>.md`. Every filed row AND every weighed-and-rejected
+candidate gets an `eval-triage` record via `decision_log` (the reject half
+is what teaches a future classifier the negative class).
 
 Skip straight to Phase 2 if TODO.md already has `todo` rows AND
 EVALUATION.md is fresh (same day) — re-evaluating for its own sake burns
@@ -115,7 +117,10 @@ impl, never 2 impls):
    unaffected — they start fresh by design. If
    `delegate` itself errors persistently (the tool, not the child),
    META-SPEC §4's hand-rolled nohup launch template remains the fallback
-   launch path — note the fallback in your ledger.
+   launch path — note the fallback in your ledger. A child budget-death
+   recovery routing (resume / orchestrator-finish / next-cycle) AND any
+   glm→kimi model fallback are each logged via `decision_log` (classes
+   `recovery-routing` / `model-fallback`).
 3. **Review.** After the child exits, the review's first look is one
    `delegate{action:"collect", cwd, pid}` call — it returns the latest run
    segment's verdict, the accepted goal's summary, the check cmd, and the
@@ -157,7 +162,11 @@ impl, never 2 impls):
    accepted one-time cost per role; this
    paragraph is a LOOP-SPEC override of §6's launch
    mechanics only, and META-SPEC.md is not edited. FAIL → fix-up child
-   with the findings pasted into its goal, then re-validate.
+   with the findings pasted into its goal, then re-validate. The per-item
+   validation routing call (REQUIRED / optional / skipped + why) and the
+   validator verdict received (PASS/FAIL + findings count + survivor
+   count) are each logged via `decision_log` (classes `validation-routing`
+   / `validation-verdict`).
 5. **Harvest, then merge + close — you own the books.** Before any
    `git worktree remove` (which deletes the worktree's untracked `.chug/`
    silently — the cycle-5 T18 loss), harvest every child run's
@@ -187,6 +196,9 @@ impl, never 2 impls):
    the TODO row to `done` **with the merge commit ref in the same commit**
    (or an immediately following `todo:` commit; bundled rows may share one
    such `todo:` commit naming every row + its ref — Trivial-row bundling).
+   The row-flip commit appends an `outcome` record via `decision_log` per
+   decision id logged for the item — `landed-clean`, or `fixed-up` when a
+   fix-up arc ran; a later revert appends `reverted`.
    When editing TODO.md (row flips, notes annotations), the notes cell
    must contain no `|` — the T8 guard splits every row on it, so a stray
    pipe splits one cell into two and fails the guard (cycle-16's
