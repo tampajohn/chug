@@ -306,12 +306,48 @@ mod tests {
             .get("description")
             .and_then(Value::as_str)
             .expect("description");
-        for token in SEED_CLASSES.iter() {
+        // HARDCODED literals, deliberately NOT `SEED_CLASSES`. This pin
+        // exists to catch an accidental rename inside SEED_CLASSES, and
+        // looping over the const under test moves the expectations with the
+        // code — the M1a mutant lesson (renaming `eval-triage` →
+        // `eval-triage-X` kept this leg GREEN while it iterated SEED_CLASSES,
+        // because the description and the expectations changed together).
+        // Changing a seed class is a contract change: update both lists
+        // consciously.
+        const PINNED_SEED_CLASSES: [&str; 6] = [
+            "validation-routing",
+            "validation-verdict",
+            "recovery-routing",
+            "model-fallback",
+            "eval-triage",
+            "outcome",
+        ];
+        for token in PINNED_SEED_CLASSES {
             assert!(
                 desc.contains(token),
                 "description must name seed class {token:?} verbatim: {desc}"
             );
         }
+        // Exact rendered-list leg, needed because per-token `contains` cannot
+        // kill a rename (`"eval-triage-X"` still contains `"eval-triage"`):
+        // the description must carry the six hardcoded tokens joined exactly,
+        // so a rename OR reorder in SEED_CLASSES breaks this needle.
+        let pinned_list = PINNED_SEED_CLASSES.join(", ");
+        assert!(
+            desc.contains(&pinned_list),
+            "description must carry the seed-class list verbatim ({pinned_list}): {desc}"
+        );
+        // The `class` property description renders the same list for the
+        // model — pin it against the same hardcoded needle.
+        let class_desc = props["class"]
+            .get("description")
+            .and_then(Value::as_str)
+            .expect("class property description");
+        assert!(
+            class_desc.contains(&pinned_list),
+            "class property description must carry the seed-class list verbatim \
+             ({pinned_list}): {class_desc}"
+        );
         // Outcome backfill contract + free-string classes + the confidence
         // range, all in the description the model actually sees.
         for token in [
