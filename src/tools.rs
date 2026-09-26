@@ -156,6 +156,9 @@ pub fn tool_schemas() -> Vec<Value> {
                 "required": ["content"]
             }
         }),
+        // T70: schema lives in decisions.rs (single source of truth for the
+        // description the model sees), registered here alongside the builtins.
+        crate::decisions::schema(),
         json!({
             "name": "delegate",
             "description": "Launch, observe, or collect a bounded child `chug run` (e.g. in a worktree you created). action=launch: spawns a detached child with its working directory at `cwd` (absolute), spec/goal/model required, max_iters/max_minutes optional (defaults 40/35), max_tokens optional (child token ceiling; omitted = unlimited), resume optional (true = append --resume, continue the child's prior run instead of starting fresh); returns immediately with the child pid and the log/events paths — it never waits on the child. action=status: reports the child's liveness (when you pass the `pid` from launch), a summary of its .chug/events.jsonl (state, last_iteration, budget-low/goal/abort flags — covering the child's latest run segment), and the tail of its console log. action=collect: returns the child's structured result in ONE bounded non-blocking read — the latest run segment's verdict (goal-accepted / goal-rejected / aborted with reason / running / starting), the accepted goal's summary, the segment's latest check cmd, and best-effort commit refs of the child's cwd (optional `base` scopes the range <base>..HEAD; every git failure degrades to a note, never an error). Never blocks: launch returns at spawn, status reads tails only, collect reads tails only. Optionally pass `wait_secs` on status (0/absent = instant, max 600) to block up to that many seconds, returning early when the child's iteration advances, a verdict or budget-low flag appears, or its liveness flips to dead — per-tool-call last_event churn renders at the deadline but never wakes it (status only — launch and collect reject it).",
@@ -218,6 +221,7 @@ fn inner(ctx: &ToolCtx, name: &str, input: &Value) -> anyhow::Result<ToolResult>
         "list_dir" => list_dir(ctx, input),
         "delegate" => delegate(ctx, input),
         "web_fetch" => crate::webfetch::web_fetch(input),
+        "decision_log" => crate::decisions::decision_log(&ctx.cwd, input),
         "update_ledger" => update_ledger(ctx, input),
         "goal_complete" => Ok(ToolResult {
             content: "goal_complete acknowledged. Verification will run; do not assume acceptance until the loop confirms it.".to_string(),
