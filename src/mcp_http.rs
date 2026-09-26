@@ -1378,6 +1378,66 @@ pub(crate) mod tests {
         );
     }
 
+    // ---------- T66: bounded retry-on-theft for the probe test's drop→probe leg ----------
+
+    /// Retry-on-theft driver for the drop→dead-probe leg of
+    /// [`dead_port_probe_distinguishes_live_from_dead`] (T66 sibling of
+    /// [`dead_port_retry_with`]; first organic sighting: cycle-30's goal
+    /// gate, default-parallel `cargo test`, port 50956 — "dropped port did
+    /// not refuse connections"). T59 covered only that test's third
+    /// (acquire-verify) leg; this leg carries the identical theft window —
+    /// between `drop(stub)` and the dead-probe connect a parallel test or
+    /// the OS ephemeral allocator can claim the just-freed port, the probe
+    /// reads LIVE, the gate false-reds.
+    ///
+    /// ONE attempt = bind via `bind` + live-probe + drop + dead-probe. The
+    /// live leg has NO theft window (we hold the listener throughout), so a
+    /// live-port-reads-dead failure panics directly — that is a real probe
+    /// regression, never retried. After the drop, a live reading goes
+    /// through [`theft_or_regression`] UNCHANGED: re-probe at catch still
+    /// live → thief confirmed → `PortTheft` → the WHOLE unit retries with a
+    /// FRESHLY bound stub (the old port stays poisoned — the thief holds it
+    /// — so re-probing it can never recover); refuses at catch → the drop
+    /// released the port yet the probe read live → real probe bug, panicked
+    /// immediately, un-retried, never masked into green by a retry. Bounded
+    /// by `DEAD_PORT_RETRY_ATTEMPTS` (reused — no new const); exhaustion
+    /// panics naming the attempts. The `bind` seam is the unit seam: the T66
+    /// pin scripts a port that is genuinely live across the drop window so
+    /// the theft branch is exercised deterministically, not by racing.
+    fn dead_port_probe_retry_with(bind: impl Fn() -> TcpListener) {
+        let mut last_theft: Option<PortTheft> = None;
+        for attempt_no in 1..=DEAD_PORT_RETRY_ATTEMPTS {
+            let listener = bind();
+            let port = listener.local_addr().unwrap().port();
+            assert!(
+                !port_refuses_connections(port),
+                "live port {port} probed as dead (listener held throughout the live leg, \
+                 no theft window: real probe regression, not port-theft)"
+            );
+            drop(listener);
+            if port_refuses_connections(port) {
+                return;
+            }
+            let theft = theft_or_regression(
+                port,
+                "dropped port did not refuse connections (probe read LIVE after the drop)",
+            );
+            eprintln!(
+                "dead_port_probe_retry: attempt {attempt_no}/{DEAD_PORT_RETRY_ATTEMPTS} hit \
+                 port-theft ({}); retrying with a freshly bound stub",
+                theft.0
+            );
+            last_theft = Some(theft);
+        }
+        panic!(
+            "dead_port_probe_retry: port-theft persisted across all \
+             {DEAD_PORT_RETRY_ATTEMPTS} attempts (mechanism: another test's listener or the \
+             OS ephemeral allocator claimed the just-freed port between the stub drop and the \
+             dead-probe connect — T31 residual race, retried per T66); last theft: {}",
+            last_theft.map(|t| t.0).unwrap_or_else(|| "unknown".to_string())
+        );
+    }
+
     /// Stub-side I/O ceiling (T6): every blocking operation a stub thread
     /// performs is bounded so a broken client fails the test in seconds
     /// instead of hanging the whole suite on `accept()`/`read()`/`write()`.
@@ -1734,20 +1794,16 @@ pub(crate) mod tests {
     /// dead_port would exhaust its attempts and panic.
     #[test]
     fn dead_port_probe_distinguishes_live_from_dead() {
-        let (listener, _) = bind_stub();
-        let port = listener.local_addr().unwrap().port();
-        // Live: something is listening → must NOT read as dead. (The probe's
-        // connection queues in our own listener's backlog, never accepted.)
-        assert!(
-            !port_refuses_connections(port),
-            "live port {port} probed as dead"
-        );
-        // Dead: with the listener dropped, a connect must be refused.
-        drop(listener);
-        assert!(
-            port_refuses_connections(port),
-            "dropped port {port} did not refuse connections"
-        );
+        // T66: live-probe + drop + dead-probe run as ONE bounded-retry
+        // attempt. The live leg holds the listener (no theft window); only
+        // the drop→dead-probe window is exposed — first organic sighting:
+        // cycle-30's goal gate, default-parallel `cargo test`, port 50956
+        // ("dropped port did not refuse connections"), the same T31/T59
+        // class T59 fixed for the acquire-verify leg below. A detected
+        // theft retries the whole unit with a freshly bound stub; a real
+        // probe regression still panics un-retried (see
+        // [`dead_port_probe_retry_with`]).
+        dead_port_probe_retry_with(|| bind_stub().0);
         // And the acquisition helper hands out a port that refuses right now.
         // T59: this acquire-verify leg IS the sighted flake (t48/t55
         // validators: "dead_port_probe flake") — a thief claiming the port
@@ -1832,6 +1888,82 @@ pub(crate) mod tests {
         );
         assert_eq!(
             attempts.get(),
+            DEAD_PORT_RETRY_ATTEMPTS,
+            "bounded: exactly the cap, never an unbounded storm"
+        );
+    }
+
+    // ---------- T66: unit pins for the drop→probe retry driver ----------
+
+    /// Scripted-theft success (mirror of
+    /// [`dead_port_retry_succeeds_after_scripted_theft`] for the drop→probe
+    /// leg): attempt 1's binder hands out a stub whose socket is ALSO held
+    /// by a second open handle the helper does not own, so after the helper
+    /// drops the stub the port stays GENUINELY live through the whole
+    /// dead-probe window — mechanically identical to a thief binding the
+    /// freed port in that window (probe and [`theft_or_regression`]
+    /// classification cannot tell the two apart, and the connect genuinely
+    /// succeeds) — while attempt 2 binds clean. The bind-call counter pins
+    /// that the retry executed exactly once: the pre-T66 shape (single
+    /// attempt, bare panicking assert) cannot pass this test — it dies on
+    /// attempt 1's live-after-drop reading.
+    #[test]
+    fn dead_port_probe_retry_recovers_after_scripted_theft() {
+        let bind_calls = Cell::new(0usize);
+        let thief_handle = RefCell::new(None::<TcpListener>);
+        dead_port_probe_retry_with(|| {
+            bind_calls.set(bind_calls.get() + 1);
+            let listener = bind_stub().0;
+            if bind_calls.get() == 1 {
+                // Keep attempt 1's port live across the drop window: a
+                // real, open listener handle (try_clone dups the socket;
+                // dropping the stub leaves this one holding the port).
+                *thief_handle.borrow_mut() = Some(listener.try_clone().unwrap());
+            }
+            listener
+        });
+        drop(thief_handle);
+        assert_eq!(
+            bind_calls.get(),
+            2,
+            "theft on attempt 1 must retry exactly once, not loop and not panic"
+        );
+    }
+
+    /// T66 theft on EVERY attempt: the driver gives up after exactly
+    /// `DEAD_PORT_RETRY_ATTEMPTS` (bounded — no retry storm) and the
+    /// exhaustion panic names the attempt count and the theft mechanism, so
+    /// this bounded flake signature stays distinguishable from a real probe
+    /// regression (which panics un-retried inside the attempt). Mirror of
+    /// [`dead_port_retry_exhaustion_names_attempts_and_mechanism`].
+    #[test]
+    fn dead_port_probe_retry_exhaustion_names_attempts_and_mechanism() {
+        let bind_calls = Cell::new(0usize);
+        let thief_handle = RefCell::new(None::<TcpListener>);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            dead_port_probe_retry_with(|| {
+                bind_calls.set(bind_calls.get() + 1);
+                let listener = bind_stub().0;
+                *thief_handle.borrow_mut() = Some(listener.try_clone().unwrap());
+                listener
+            });
+        }));
+        let err = result.expect_err("theft on every attempt must exhaust and panic");
+        let msg = err
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| err.downcast_ref::<&'static str>().copied())
+            .expect("panic payload is a string");
+        assert!(
+            msg.contains("3 attempts"),
+            "exhaustion panic must name the attempt count: {msg}"
+        );
+        assert!(
+            msg.contains("theft") && msg.contains("T31"),
+            "exhaustion panic must name the theft mechanism: {msg}"
+        );
+        assert_eq!(
+            bind_calls.get(),
             DEAD_PORT_RETRY_ATTEMPTS,
             "bounded: exactly the cap, never an unbounded storm"
         );
