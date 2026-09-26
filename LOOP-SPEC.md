@@ -162,7 +162,13 @@ impl, never 2 impls):
    accepted one-time cost per role; this
    paragraph is a LOOP-SPEC override of §6's launch
    mechanics only, and META-SPEC.md is not edited. FAIL → fix-up child
-   with the findings pasted into its goal, then re-validate. The per-item
+   with the findings pasted into its goal — and when a finding names one
+   instance of a class (a vacuous pin, a missing reset, an unchecked error
+   leg), the goal ALSO names the class and requires
+   EVERY instance swept with its own RED-proven killing test — the
+   cycle-33 lesson (T69's run_start latch resets took three rounds one leg
+   at a time; the sweep-the-family goal closed it in one) — then re-validate.
+   The per-item
    validation routing call (REQUIRED / optional / skipped + why) and the
    validator verdict received (PASS/FAIL + findings count + survivor
    count) are each logged via `decision_log` (classes `validation-routing`
