@@ -319,6 +319,24 @@ No new carries this eval; two retired (§4).
 ---
 ## Outcomes (filled at cycle wrap — LOOP-SPEC Phase 3)
 
+### Cycle 14 (2026-09-25, ~22:50–23:59 EDT) — fresh eval + worked 4/5 rows; T34's per-item doctrine applied retroactively in this entry
+
+One `chug run --spec LOOP-SPEC.md` session (kimi-k3 orchestrator; glm-5-3-flash impl children; kimi-k3 validators), launched by loopd (pid 90114, T27's 120-cap active). Queue empty at start → Phase 1 evaluated fresh (corpus: cycle-12/13 streams + t28–t30 harvested children), filed T31–T35 with specs, committed `dd857c2`, pushed, then worked the queue in doctrine order.
+
+**Landed (4/5 queued rows):**
+- **T31 — deflake the parallel-load family** (pri 1, robustness; impl `f8012c2` glm goal-accepted 44/50 ~11 min, merge `e765de2`, flip `65b99fb`, pushed). `dead_port()` probe-verified refused-port acquisition (bounded re-bind + pre-connect re-verify + live/dead pin) kills the mcp_http bind-:0-drop TOCTOU that once rejected a `goal_complete`; `RUN_SHELL_TIMING_LOCK` static-Mutex serializes the 3 wall-clock run_shell tests. Tests-only (all hunks in `mod tests`), ZERO timeout/grace/slack constants touched, all elapsed bounds byte-identical. Validation: §2.4 optional (tests-only, T16 precedent) — orchestrator gates (8 consecutive full-suite green runs: 5 child + 3 mine) + independent probe-mutant kill sufficed. 2 artifacts harvested.
+- **T32 — validation-child template 40→50** (pri 2, doctrine; impl `a173ff2` glm 11/50 ~3 min, merge `a3d60ad`, flip `723912e`, pushed). One hunk LOOP-SPEC §2 step 4; parenthetical truthful; META-SPEC.md untouched. kimi VERDICT: PASS 12/40 — byte-diff verified, 4/4 budget mutants killed by the spec check, gates re-run. Self-reference: T32's own validator ran at the pre-T32 40/30 budget.
+- **T33 — META-META priority-line alignment** (pri 3, doctrine; impl `4b409c0` glm 16/50 ~4 min, merge `0ee166b`, flip `e9853ce`, pushed). One hunk: "bugs > robustness > features > DX friction > performance — features are first-class (LOOP-SPEC §2)…"; T30 check: sentence byte-identical. kimi VERDICT: PASS 12/50 — FIRST validator at the T32-widened budget; swap mutants killed; clause-drop survivor inherent to spec-dictated check (R1 by inspection); check non-vacuous on parent; EVALUATION.md:129 adjudication citation verified. 3 artifacts harvested.
+- **T34 — Outcomes per-item at landing** (pri 3, doctrine; impl `a965053` glm 14/50 ~4 min, merge `dcbff00`, flip in the immediately-preceding `todo:` commit). §2 step 5 gains the per-item directive (cycle-12 bite named inline, `697a6b6` lesson quoted); Phase 3 re-scoped to assembly + gap-check. kimi VERDICT: PASS 11/50 — 3/3 check mutants killed, non-vacuous on parent, grounding fact-checked (EVALUATION.md:608 + `697a6b6` real). 3 artifacts harvested. This very entry is the doctrine's retroactive application: T31–T34's per-item narratives land in this immediately-following `eval:` commit rather than at a deferred wrap.
+
+**Skipped/deferred:** **T35 (README quickstart `cargo install --path .`)** stays `todo` with a ready spec — budget_low@8 fired after the T34 merge; the cold next cycle picks it up with zero human words (docs-only, §2.4 validation optional).
+
+**What the validators caught:** no implementation defects this cycle — all three kimi validations PASS first-try (T32/T33/T34; T31 unvalidated per §2.4 tests-only-optional with orchestrator-side mutant kill instead). glm impls: 4/4 first-try clean (the T29 fix-up streak-break fully recovered).
+
+**Cycle-level notes:** (a) **wait_secs adoption verified** — first cycle with the wait clause in-prompt: ~9 bash sleeps / ~15 delegate polls for 4 items vs cycle-13's 15 sleeps + 30 polls for 2 items; learned usage nuance recorded for the next eval: a `wait_secs` poll on an ALREADY-TERMINAL child waits the full deadline (no change to wake on) — instant-poll first after a sleep, wait_secs only while running. (b) Cycle burned ~105/120 iterations for a fresh eval + 4 items — T27's headroom is now the normal operating point. (c) The T31 impl finished at budget_low@8 (44/50) — T18's margin held again.
+
+**Final state:** main `dcbff00` + todo:/eval: commits; gates 416+3 green in main, clippy clean; TODO.md truthful (T31–T34 done with refs; T35 todo with ready spec); 10 child artifacts in `.chug/` (t31: 2, t32: 2, t33: 3, t34: 3 — impl+validate events, validate LEDGERs where non-trivial); README gate satisfied (no user-visible surface this cycle — T31 test-only, T32–T34 doctrine; T35's quickstart fix is the deferred docs row); everything pushed. Human-decision carries unchanged from the cycle-14 eval handoff.
+
 ### Cycle 8 (2026-09-25, ~16:29–16:47 EDT) — freshness-skip + drained 1/1
 
 One `chug run --spec LOOP-SPEC.md` session (kimi-k3 orchestrator;
