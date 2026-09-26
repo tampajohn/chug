@@ -274,6 +274,39 @@ words. If the queue outlives this cycle's budget, unworked rows stay
 
 ## Outcomes (filled at cycle wrap — LOOP-SPEC Phase 3)
 
+### Cycle 28 (2026-09-26, ~06:39– EDT) — freshness-skip; T58 + T62 resumed from cycle-27 wrap and landed; T61, T60 queued
+
+**T58 — delegate launch gains `resume: true` + status summarizes the
+latest run segment (pri 3, FEATURE, src/tools.rs) → done `5145536`
+(impl `b189517`, merge commit).** Cycle-27's in-flight recovery
+executed per the row's own recipe: the kimi validator finished 2 min
+before cycle-27's budget wrap (VERDICT: PASS — gates 516/516
+independently re-run under `target-shared-validate`; 5/6 mutants
+killed: argv-append drop, latch-reset drop, default flip, echo drop,
+non-boolean coercion; 1 survivor = over-reset of
+max_iters/last_iteration at run_start, a weak test on spec req 4's
+stream-scope sentence, non-blocking — the code is spec-correct).
+Orchestrator step-3 gates independently re-run in-worktree (516 +
+clippy clean), both child streams harvested (7 artifacts incl. the
+rotated impl stream + validator LEDGER with the verdict; cycle-27's
+`-inflight-` snapshots superseded + removed per the T28 precedent),
+then merged before T61 per the row's ordering. What landed: launch's
+optional `resume` boolean appends `--resume` as the argv tail (absent/
+false = byte-identical whole-list pinned; non-boolean is a tool error,
+never a silent fresh start), the return text echoes `resume: true`
+(T39 pattern), and `summarize_events` resets the verdict latches
+(goal/abort/budget_low + abort_reason) at each new `run_start` so a
+resumed child's summary describes its LATEST segment — the cycle-18
+bite (hand-rolled nohup resume + a healthy resumed validator reporting
+`aborted`) is now expressible and correctly observed through the tool.
+8 new test legs (argv pin, parse, two-segment summaries a/b/c +
+single-segment regression, schema pin, e2e stub argv, synthetic
+two-segment status) + README delegate paragraph clause integrated.
+Dogfood note: the impl child itself died 50/50 with the work complete
+but uncommitted — the fifth occurrence of the pattern this feature
+addresses (t15/t17/t20/t55/t58); orchestrator finish per the T55
+precedent produced `b189517`.
+
 ### Cycle 27 (2026-09-26, ~06:15–06:40 EDT) — freshness-skip; T59 landed; T58 + T62 IN-FLIGHT at budget wrap (recovery recipes on their rows)
 
 **T59 — mcp_http dead_port tests: bounded retry on port-theft (pri 3,
