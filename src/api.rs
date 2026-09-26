@@ -13,6 +13,15 @@ const READ_TIMEOUT_SECS: u64 = 600;
 /// (T2: a stalled connection is distinct from the 600s total read timeout).
 /// The attempt then fails as a connection error and T1's retry applies.
 const ACTIVITY_TIMEOUT_SECS: u64 = 180;
+/// Connect-phase timeout (T49): reqwest has no default connect timeout, so a
+/// blackholed endpoint (SYNs dropped — firewall rule, wedged NAT, a host that
+/// is up but not refusing) blocks the connect until the OS TCP stack gives up
+/// (~75s on macOS, 2min+ on Linux) — and T1's retry loop multiplies that stall
+/// per attempt, while T2's activity watchdog cannot help because it arms only
+/// after the connection exists. Failing the connect fast gets the retry to a
+/// recovered endpoint sooner. Mirrors the sibling clients:
+/// `mcp_http::CONNECT_TIMEOUT` and `webfetch::WEB_FETCH_CONNECT_TIMEOUT`.
+const CONNECT_TIMEOUT_SECS: u64 = 10;
 const ANTHROPIC_VERSION: &str = "2023-06-01";
 /// Connection-level retry backoff (T1): 1s..240s — 9 retries (10 attempts),
 /// ~8 min total, enough to outlive a real endpoint restart (30-60s+).
@@ -614,6 +623,7 @@ impl Client {
 
 fn build_http_client() -> anyhow::Result<reqwest::blocking::Client> {
     reqwest::blocking::Client::builder()
+        .connect_timeout(Duration::from_secs(CONNECT_TIMEOUT_SECS))
         .timeout(Duration::from_secs(READ_TIMEOUT_SECS))
         .use_rustls_tls()
         .build()
@@ -699,6 +709,25 @@ impl Llm for ScriptedLlm {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// T49: the three api.rs timeout constants are value-pinned (T42 pattern —
+    /// a const-only edit must fail the suite). Each assert names its const so
+    /// a mutation points at the right one.
+    #[test]
+    fn timeout_constants_are_value_pinned() {
+        assert_eq!(
+            CONNECT_TIMEOUT_SECS, 10u64,
+            "CONNECT_TIMEOUT_SECS drifted from 10 (mcp_http/webfetch parity)"
+        );
+        assert_eq!(
+            READ_TIMEOUT_SECS, 600u64,
+            "READ_TIMEOUT_SECS drifted from 600 (total read timeout)"
+        );
+        assert_eq!(
+            ACTIVITY_TIMEOUT_SECS, 180u64,
+            "ACTIVITY_TIMEOUT_SECS drifted from 180 (T2 body watchdog)"
+        );
+    }
 
     #[test]
     fn response_parses_tool_use_ignoring_other_blocks() {
