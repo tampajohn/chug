@@ -274,6 +274,59 @@ words. If the queue outlives this cycle's budget, unworked rows stay
 
 ## Outcomes (filled at cycle wrap — LOOP-SPEC Phase 3)
 
+### Cycle 26 (2026-09-26, ~05:46–06:40 EDT) — MANDATORY fresh eval (queue empty) + T57 landed (main-dedicated gates dir); wrap at budget margin
+
+**Fresh evaluation (committed `67374a9`).** Queue was drained at cycle
+start → Phase 1 mandatory per the freshness rule. Digest-first
+(regenerated 09:46:52Z; T46's forward-looking acceptance HELD: writing
+reached at ~iteration 18 vs the 45–55 pre-T46 baseline). Filed 6 rows
+T57–T62 with specs. Dispositions: T55 validator finding (ii) ACCEPTED
+(`acquire`'s write-then-verify loop already mitigates the non-atomic
+window; documented in eval §2); the cycle-19 T39 LEDGER mystery CLOSED —
+the impl made zero `update_ledger` calls, so the worktree ledger was
+still SEED and T3's archive_stale correctly skipped it (no bug).
+PROMOTED human carry: live loopd pid 90114 is five script revisions
+stale (T36/T46/T47/T50/T53 dormant — cycles still launch 120 iters, 0
+re-execs, pgrep skip dead → T55's lock now turns a manual-run collision
+into FAILED cycles, 3 = HALT); launchd KeepAlive=false so chug must
+never kill it; the operator restart one-liner is in the eval handoff.
+
+**T57 — post-merge + final main gates use a main-dedicated target dir
+(`target-shared-main`) (pri 1, doctrine) → done `2f8bbe4`.** glm impl
+32/50 first-try (~7 min, `1c2beee`): LOOP-SPEC step-5 post-merge gates
+and Phase-3 final gates now ALWAYS run under
+`CARGO_TARGET_DIR=.../target-shared-main` (step-3 worktree-review gates
+keep their T52 `target-shared`/`target-shared-gates` split) with the
+mtime-freshness mechanism + the T55 false-red receipt in-line;
+`.gitignore` gains the dir contiguously; README's target-cache clause
+gains it integrated; 4 new pins in `tests/shared_target_dir.rs` (13
+total; the T52 pins byte-untouched — validator-verified). kimi VERDICT:
+**PASS** 18/50 — all 5 reqs verified, gates independently re-run green
+(505) under `target-shared-validate`, 13/14 mutants killed; 1 weak-pin
+survivor (M5: the step-5 ALWAYS-form assertion is also satisfied by an
+adjacent mechanism sentence — pin-window imprecision, the doctrine text
+itself correct) + 2 non-blocking coherence notes (validator transcript;
+events + LEDGERs harvested). Carried to the next eval as a watch item,
+non-blocking. Post-merge gates in main ran under the NEW dir — cold
+build 25.7s (the spec's acceptance evidence) + clippy + full suite green
+(505). 4 artifacts harvested pre-removal (impl/validate events + both
+LEDGERs). Acceptance is forward-looking: no future post-merge or final
+gate run can execute a non-main binary by construction.
+
+**Wrap.** Final gates green in main under `target-shared-main` (first
+T57 dogfood: build + clippy + 505 tests). Cycle-18 double-heading merged
+(carry (e), done below; the other Cycle-18 grep matches are backtick
+references in the cycle-25/26 notes, intentional). Bulk compaction of
+cycles ≤19 DEFERRED to cycle-27 (budget margin at wrap; hygiene, same
+disposition as cycles 19/20/25 — size bound not yet critical at ~640
+lines). Deferred rows, all `todo` with ready specs: T58 (pri 3 feature —
+delegate resume), T59 (pri 3 — dead_port retry), T60 (pri 4 docs), T61
+(pri 4 — error string names bash, strictly after T58), T62 (pri 4 —
+digest golden pin); recommended order + overlap plan in the eval
+handoff. Human-decision carry RESTATED at top of that handoff: restart
+the supervisor (`launchctl kickstart -k
+gui/$(id -u)/com.tampajohn.chug-loopd`).
+
 ### Cycle 25 (2026-09-26, ~05:21–05:45 EDT) — freshness-skip; T55 recovered + landed (driver.lock feature) + T56 landed (README) — queue DRAINED
 
 **Landed:**
@@ -536,7 +589,7 @@ have archived a non-seed ledger — worth one jq query next eval).
 Freshness rule fires again next cycle (EVALUATION.md same-day, todo rows
 remain): skip Phase 1, recover T40 first.
 
-### Cycle 18 (2026-09-26, ~00:41–01:30 EDT, continued) — T44 (operator pri-1 speed initiative) landed
+### Cycle 18 (2026-09-26, ~00:41–01:30 EDT) — fresh eval (queue EMPTY at start) + T38 landed; T44 (operator pri-1 speed initiative) landed; TWO 50/50 child deaths, both recovered
 
 **T44 (pipeline overlap doctrine) → done 41f61a1.** Operator filed
 T44–T47 mid-cycle (58be922, "feels awfully slow"); priority doctrine
@@ -562,7 +615,7 @@ next cycle per priority doctrine: T45 (pri 2 bundling — compounds with
 T44; T40/T41/T42/T43 are its first bundle candidates), T46 (pri 2), T39
 (pri 3 feature), T47 (pri 3), then the pri-4 set.**
 
-### Cycle 18 (2026-09-26, ~00:41–01:10 EDT) — fresh eval (queue EMPTY at start) + T38 landed; TWO 50/50 child deaths, both recovered
+**(continued — same cycle, second half:)**
 
 **T38 (truncated-response advisory) → done a686522.** Fresh evaluation filed
 6 rows (T38–T43); T38 worked first (pri 2). glm impl died 50/50 mid-wrap
