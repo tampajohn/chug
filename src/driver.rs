@@ -2715,7 +2715,8 @@ mod tests {
 
     /// T38: no advisory message, no event, no log line — the control for
     /// every non-truncated stop reason (`tool_use`, `end_turn`, absent).
-    fn assert_untouched(llm: &ScriptedLlm, events: &[Event], lines: &[Value]) {        for (_, seen) in &llm.calls {
+    fn assert_untouched(llm: &ScriptedLlm, events: &[Event], lines: &[Value]) {
+        for (_, seen) in &llm.calls {
             assert_eq!(
                 advisory_count(seen),
                 0,
@@ -4468,9 +4469,10 @@ for line in sys.stdin:
     }
 
     /// Regression pin: the run-mode advertised tool list equals the exact
-    /// pre-change set — twelve tools today (T73 added plan mode's surface
-    /// without touching this list). If a rebase changes the set, update this
-    /// pin in the same diff and say so.
+    /// pre-change set — thirteen tools today (T73 added plan mode's surface
+    /// without touching this list; T76 added tgrep and updated this pin in
+    /// the same diff). If a rebase changes the set, update this pin in the
+    /// same diff and say so.
     #[test]
     fn run_mode_advertised_tool_list_is_exactly_the_pre_change_set() {
         let schemas = crate::tools::tool_schemas();
