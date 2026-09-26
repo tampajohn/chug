@@ -153,7 +153,7 @@ pub fn tool_schemas() -> Vec<Value> {
         }),
         json!({
             "name": "delegate",
-            "description": "Launch or observe a bounded child `chug run` (e.g. in a worktree you created). action=launch: spawns a detached child with its working directory at `cwd` (absolute), spec/goal/model required, max_iters/max_minutes optional (defaults 40/35), max_tokens optional (child token ceiling; omitted = unlimited); returns immediately with the child pid and the log/events paths — it never waits on the child. action=status: reports the child's liveness (when you pass the `pid` from launch), a summary of its .chug/events.jsonl (state, last_iteration, budget-low/goal/abort flags), and the tail of its console log. Never blocks: launch returns at spawn, status reads tails only. Optionally pass `wait_secs` on status (0/absent = instant, max 600) to block up to that many seconds, returning early when the child's events state changes or its liveness flips to dead.",
+            "description": "Launch or observe a bounded child `chug run` (e.g. in a worktree you created). action=launch: spawns a detached child with its working directory at `cwd` (absolute), spec/goal/model required, max_iters/max_minutes optional (defaults 40/35), max_tokens optional (child token ceiling; omitted = unlimited), resume optional (true = append --resume, continue the child's prior run instead of starting fresh); returns immediately with the child pid and the log/events paths — it never waits on the child. action=status: reports the child's liveness (when you pass the `pid` from launch), a summary of its .chug/events.jsonl (state, last_iteration, budget-low/goal/abort flags — covering the child's latest run segment), and the tail of its console log. Never blocks: launch returns at spawn, status reads tails only. Optionally pass `wait_secs` on status (0/absent = instant, max 600) to block up to that many seconds, returning early when the child's events state changes or its liveness flips to dead.",
             "input_schema": {
                 "type": "object",
                 "properties": {
@@ -165,6 +165,7 @@ pub fn tool_schemas() -> Vec<Value> {
                     "max_iters": {"type": "integer", "description": "Child iteration budget (launch only; default 40)"},
                     "max_minutes": {"type": "integer", "description": "Child wall-clock budget in minutes (launch only; default 35)"},
                     "max_tokens": {"type": "integer", "minimum": 1, "description": "Child token budget: cumulative input+output tokens across the child run (launch only; omitted = no token ceiling)"},
+                    "resume": {"type": "boolean", "description": "launch only (default false): append `--resume` to the child argv, continuing the child's prior run from its .chug/transcript.jsonl instead of starting fresh"},
                     "pid": {"type": "integer", "description": "The pid launch returned (status only, optional; omit → liveness is reported unknown)"},
                     "wait_secs": {"type": "integer", "minimum": 0, "maximum": 600, "description": "Seconds to block on status waiting for a child state change, a liveness flip to dead, or this deadline (0/absent = instant; status only — launch rejects it)"}
                 },
@@ -675,6 +676,12 @@ fn delegate_spec(input: &Value) -> anyhow::Result<PathBuf> {
 /// `--max-tokens n` (T15 parity for children), `None` produces the
 /// pre-T39 argv byte-for-byte (no flag), so children keep their current
 /// no-token-ceiling behavior unless the orchestrator opts in.
+///
+/// T58: `resume == true` appends the bare `--resume` flag as the new tail
+/// (after any `--max-tokens` pair), purely additive to the argv — the abort
+/// output's own resume line shows spec/goal/model (and any budgets) are all
+/// still passed on a resume. Absent/false produces the pre-T58 argv
+/// byte-for-byte (whole-list pinned).
 fn delegate_child_argv(
     spec: &Path,
     goal: &str,
@@ -682,6 +689,7 @@ fn delegate_child_argv(
     max_iters: u64,
     max_minutes: u64,
     max_tokens: Option<u64>,
+    resume: bool,
 ) -> Vec<OsString> {
     let mut argv = vec![
         OsString::from("run"),
@@ -699,6 +707,9 @@ fn delegate_child_argv(
     if let Some(tokens) = max_tokens {
         argv.push(OsString::from("--max-tokens"));
         argv.push(OsString::from(tokens.to_string()));
+    }
+    if resume {
+        argv.push(OsString::from("--resume"));
     }
     argv
 }
@@ -723,6 +734,22 @@ fn delegate_max_tokens(input: &Value) -> anyhow::Result<Option<u64>> {
     Ok(Some(n as u64))
 }
 
+/// T58: parse the optional launch-only `resume` (continue the child's prior
+/// run from its `.chug/transcript.jsonl` via `--resume`, instead of starting
+/// fresh). Absent or `false` → `false` (child starts fresh, exactly as
+/// before); `true` → `true`. A non-boolean value is a tool error, never a
+/// silent ignore — a caller that asked to resume and got a fresh child would
+/// silently throw away the prior run's context, which is the one failure this
+/// flag exists to prevent.
+fn delegate_resume(input: &Value) -> anyhow::Result<bool> {
+    match input.get("resume") {
+        None | Some(Value::Null) => Ok(false),
+        Some(value) => value.as_bool().ok_or_else(|| {
+            anyhow!("delegate: `resume` must be a boolean (true = continue the child's prior run with --resume)")
+        }),
+    }
+}
+
 /// Spawn a detached `chug run` child and return immediately. Never waits on
 /// the child — no sleeps, no retries, no waiting anywhere in this function.
 fn delegate_launch(input: &Value) -> anyhow::Result<ToolResult> {
@@ -739,6 +766,7 @@ fn delegate_launch(input: &Value) -> anyhow::Result<ToolResult> {
         .and_then(Value::as_u64)
         .unwrap_or(DELEGATE_DEFAULT_MAX_MINUTES);
     let max_tokens = delegate_max_tokens(input)?;
+    let resume = delegate_resume(input)?;
 
     // Binary resolution: the test seam wins, else the running chug itself —
     // children run the same binary, exactly like today's template line does.
@@ -760,6 +788,7 @@ fn delegate_launch(input: &Value) -> anyhow::Result<ToolResult> {
         max_iters,
         max_minutes,
         max_tokens,
+        resume,
     ))
     .current_dir(&cwd)
     .stdin(Stdio::null())
@@ -791,15 +820,16 @@ fn delegate_launch(input: &Value) -> anyhow::Result<ToolResult> {
     // never waited on or reaped here.
     drop(child);
 
-    // T39: the configured token budget is echoed back only when configured —
-    // absent, the return text is byte-identical to pre-T39.
+    // T39/T58: the configured token budget and the resume leg are echoed back
+    // only when set — absent, the return text is byte-identical to pre-T39.
     let tokens_note = match max_tokens {
         Some(tokens) => format!(" max_tokens: {tokens}"),
         None => String::new(),
     };
+    let resume_note = if resume { " resume: true" } else { "" };
     Ok(ToolResult {
         content: format!(
-            "launched: pid {pid}\nlog: {}\nevents: {}\nmodel: {model} max_iters: {max_iters} max_minutes: {max_minutes}{tokens_note}",
+            "launched: pid {pid}\nlog: {}\nevents: {}\nmodel: {model} max_iters: {max_iters} max_minutes: {max_minutes}{tokens_note}{resume_note}",
             log_path.display(),
             chug_dir.join("events.jsonl").display(),
         ),
@@ -993,6 +1023,20 @@ fn summarize_events(lines: &[&str]) -> DelegateSummary {
         s.last_event_ts = obj.get("ts").and_then(Value::as_str).map(str::to_string);
         match ev_type {
             "run_start" => {
+                // T58: a new `run_start` begins a NEW run segment — a resumed
+                // child appends a fresh `run_start` + iterations to the same
+                // stream after its prior segment died. The verdict latches are
+                // segment-scoped, so reset them here: the summary must
+                // describe the LATEST segment (a pre-resume abort must not
+                // keep a healthy resumed child reporting `aborted`, the
+                // cycle-18 bite). `max_iters` and `last_iteration` deliberately
+                // keep their last-seen values (the latter until the new
+                // segment writes its first iteration) — they are stream-scope
+                // observations, not verdicts.
+                s.budget_low_seen = false;
+                s.goal_seen = false;
+                s.abort_seen = false;
+                s.abort_reason = None;
                 if let Some(max) = obj.get("max_iters").and_then(Value::as_u64) {
                     s.max_iters = Some(max);
                 }
@@ -2004,6 +2048,94 @@ mod tests {
         assert!(!s.goal_seen);
     }
 
+    /// T58 (a): a resumed child appends a NEW `run_start` + iterations to the
+    /// same stream after its first segment aborted — the summary must describe
+    /// the LATEST segment (`running`, `abort_seen` reset), not keep the
+    /// pre-resume abort latched (the cycle-18 bite that had the orchestrator
+    /// fall back to `ps`). `last_iteration` keeps last-seen values: here the
+    /// new segment's own iteration 2.
+    #[test]
+    fn delegate_summary_two_segment_abort_then_run_start_reports_running() {
+        let lines = [
+            // Segment 1: ran, then died mid-arc.
+            "{\"type\":\"run_start\",\"ts\":\"t0\",\"max_iters\":40}",
+            "{\"type\":\"iteration\",\"ts\":\"t1\",\"n\":12}",
+            "{\"type\":\"abort\",\"ts\":\"t2\",\"reason\":\"llm request failed\",\"model\":\"kimi\"}",
+            // Segment 2: the resume — fresh run_start, fresh iterations.
+            "{\"type\":\"run_start\",\"ts\":\"t3\",\"max_iters\":40}",
+            "{\"type\":\"iteration\",\"ts\":\"t4\",\"n\":1}",
+            "{\"type\":\"iteration\",\"ts\":\"t5\",\"n\":2}",
+        ];
+        let s = summarize_events(&lines);
+        assert_eq!(s.state(), "running", "resumed child mid-run is running, not aborted");
+        assert!(!s.abort_seen, "pre-resume abort must not stay latched");
+        assert_eq!(s.abort_reason, None, "pre-resume abort reason must reset");
+        assert_eq!(s.max_iters, Some(40));
+        assert_eq!(s.last_iteration, Some(2), "iteration takes the last-seen value");
+        assert_eq!(s.last_event_type.as_deref(), Some("iteration"));
+        assert_eq!(s.last_event_ts.as_deref(), Some("t5"));
+        assert!(!s.goal_seen && !s.budget_low_seen);
+    }
+
+    /// T58 (b): goal in the second segment after an abort in the first —
+    /// `done`, not `aborted`.
+    #[test]
+    fn delegate_summary_goal_in_second_segment_after_abort_reports_done() {
+        let lines = [
+            "{\"type\":\"run_start\",\"ts\":\"t0\",\"max_iters\":40}",
+            "{\"type\":\"iteration\",\"ts\":\"t1\",\"n\":7}",
+            "{\"type\":\"abort\",\"ts\":\"t2\",\"reason\":\"model stream cut\",\"model\":\"kimi\"}",
+            "{\"type\":\"run_start\",\"ts\":\"t3\",\"max_iters\":40}",
+            "{\"type\":\"iteration\",\"ts\":\"t4\",\"n\":1}",
+            "{\"type\":\"goal\",\"ts\":\"t5\",\"outcome\":\"accepted\",\"summary\":\"VERDICT PASS\"}",
+        ];
+        let s = summarize_events(&lines);
+        assert_eq!(s.state(), "done");
+        assert!(s.goal_seen);
+        assert!(!s.abort_seen, "segment-1 abort must not outlive the resume");
+        assert_eq!(s.abort_reason, None);
+        assert_eq!(s.last_event_type.as_deref(), Some("goal"));
+    }
+
+    /// T58 (c): `budget_low` only in the first segment — a resumed child that
+    /// has not gone budget-low again must not report the stale latch.
+    #[test]
+    fn delegate_summary_budget_low_in_first_segment_only_resets_on_resume() {
+        let lines = [
+            "{\"type\":\"run_start\",\"ts\":\"t0\",\"max_iters\":40}",
+            "{\"type\":\"iteration\",\"ts\":\"t1\",\"n\":33}",
+            "{\"type\":\"budget_low\",\"ts\":\"t2\",\"remaining_iters\":8,\"remaining_secs\":100}",
+            "{\"type\":\"abort\",\"ts\":\"t3\",\"reason\":\"iteration budget exceeded\",\"model\":\"glm\"}",
+            // The resume: fresh segment, budget_low never fires again.
+            "{\"type\":\"run_start\",\"ts\":\"t4\",\"max_iters\":40}",
+            "{\"type\":\"iteration\",\"ts\":\"t5\",\"n\":1}",
+        ];
+        let s = summarize_events(&lines);
+        assert!(!s.budget_low_seen, "segment-1 budget_low must reset at the new run_start");
+        assert!(!s.abort_seen && !s.goal_seen);
+        assert_eq!(s.state(), "running");
+    }
+
+    /// T58 (d) regression pin: a SINGLE-segment stream — the only kind before
+    /// resume existed — summarizes exactly as before T58. This is the same
+    /// event sequence as the two-segment test minus the second `run_start`:
+    /// the abort stays latched and the state is `aborted`.
+    #[test]
+    fn delegate_summary_single_segment_stream_unchanged_by_t58() {
+        let lines = [
+            "{\"type\":\"run_start\",\"ts\":\"t0\",\"max_iters\":40}",
+            "{\"type\":\"iteration\",\"ts\":\"t1\",\"n\":12}",
+            "{\"type\":\"abort\",\"ts\":\"t2\",\"reason\":\"llm request failed\",\"model\":\"kimi\"}",
+        ];
+        let s = summarize_events(&lines);
+        assert!(s.abort_seen);
+        assert_eq!(s.abort_reason.as_deref(), Some("llm request failed"));
+        assert_eq!(s.state(), "aborted");
+        assert_eq!(s.max_iters, Some(40));
+        assert_eq!(s.last_iteration, Some(12));
+        assert!(!s.goal_seen && !s.budget_low_seen);
+    }
+
     #[test]
     fn delegate_summary_malformed_lines_skipped_not_fatal() {
         let lines = [
@@ -2222,6 +2354,9 @@ mod tests {
     const T29_RUN_START: &str = "{\"type\":\"run_start\",\"ts\":\"t0\",\"mode\":\"run\",\"model\":\"m\",\"max_iters\":50,\"max_minutes\":35,\"max_tokens\":null}";
     const T29_ITERATION: &str =
         "{\"type\":\"iteration\",\"ts\":\"t1\",\"n\":7,\"input_tokens\":1,\"output_tokens\":1}";
+    /// T58: the resumed segment's fresh `run_start` — same shape, later ts.
+    const T58_RESUME_RUN_START: &str =
+        "{\"type\":\"run_start\",\"ts\":\"t3\",\"max_iters\":40}";
 
     /// A fixed fake `.chug/` with the given events lines.
     fn write_events_fixture(cwd: &Path, lines: &[&str]) {
@@ -2889,9 +3024,10 @@ log_tail: (none)";
 
     // ---- T39: delegate launch optional max_tokens passthrough ----
 
-    /// T39: the pure argv builder — with a token budget the flag pair is
+    /// T39/T58: the pure argv builder — with a token budget the flag pair is
     /// appended at the tail (after `--max-minutes`); without one the argv is
-    /// byte-identical to pre-T39, pinned as the whole list.
+    /// byte-identical to pre-T39 (also pre-T58: `resume` false), pinned as
+    /// the whole list.
     #[test]
     fn delegate_child_argv_appends_max_tokens_only_when_present() {
         let spec = PathBuf::from("/tmp/spec.md");
@@ -2908,9 +3044,10 @@ log_tail: (none)";
             OsString::from("--max-minutes"),
             OsString::from("35"),
         ];
-        // Absent: byte-identical to pre-T39 — no `--max-tokens` anywhere.
+        // Absent: byte-identical to pre-T39/pre-T58 — no `--max-tokens`
+        // anywhere, no `--resume`.
         assert_eq!(
-            delegate_child_argv(&spec, "g", "m", 40, 35, None),
+            delegate_child_argv(&spec, "g", "m", 40, 35, None, false),
             base,
             "absent max_tokens must not change the child argv"
         );
@@ -2919,14 +3056,82 @@ log_tail: (none)";
         with.push(OsString::from("--max-tokens"));
         with.push(OsString::from("250000"));
         assert_eq!(
-            delegate_child_argv(&spec, "g", "m", 40, 35, Some(250_000)),
+            delegate_child_argv(&spec, "g", "m", 40, 35, Some(250_000), false),
             with
         );
         // Boundary: 1 is accepted and passes through verbatim.
         let mut one = base;
         one.push(OsString::from("--max-tokens"));
         one.push(OsString::from("1"));
-        assert_eq!(delegate_child_argv(&spec, "g", "m", 40, 35, Some(1)), one);
+        assert_eq!(
+            delegate_child_argv(&spec, "g", "m", 40, 35, Some(1), false),
+            one
+        );
+    }
+
+    /// T58: the pure argv builder with `resume` — `true` appends the bare
+    /// `--resume` flag as the very last argument (after any `--max-tokens`
+    /// pair), purely additive: spec/goal/model and the budget flags pass
+    /// through exactly as today. Absent and `false` both produce the pre-T58
+    /// argv byte-for-byte (whole-list pin, T39 style) — children keep their
+    /// fresh-start behavior unless the orchestrator opts in.
+    #[test]
+    fn delegate_child_argv_resume_appends_flag_last_absent_false_byte_identical() {
+        let spec = PathBuf::from("/tmp/spec.md");
+        let base = vec![
+            OsString::from("run"),
+            OsString::from("--spec"),
+            OsString::from("/tmp/spec.md"),
+            OsString::from("--goal"),
+            OsString::from("g"),
+            OsString::from("--model"),
+            OsString::from("m"),
+            OsString::from("--max-iters"),
+            OsString::from("40"),
+            OsString::from("--max-minutes"),
+            OsString::from("35"),
+        ];
+        // Absent (parsed to false upstream) == false == pre-T58, whole list.
+        assert_eq!(
+            delegate_child_argv(&spec, "g", "m", 40, 35, None, false),
+            base,
+            "resume=false must not change the child argv"
+        );
+        // With resume: `--resume` is the last argument, nothing else moves.
+        let mut resumed = base.clone();
+        resumed.push(OsString::from("--resume"));
+        assert_eq!(
+            delegate_child_argv(&spec, "g", "m", 40, 35, None, true),
+            resumed,
+            "--resume must be appended after all other flags"
+        );
+        // Resume composes with the token budget: still the very tail.
+        let mut tokens_then_resume = base;
+        tokens_then_resume.push(OsString::from("--max-tokens"));
+        tokens_then_resume.push(OsString::from("250000"));
+        tokens_then_resume.push(OsString::from("--resume"));
+        assert_eq!(
+            delegate_child_argv(&spec, "g", "m", 40, 35, Some(250_000), true),
+            tokens_then_resume,
+            "--resume must stay last even after the --max-tokens pair"
+        );
+    }
+
+    /// T58: the parse — absent → `false`; `false` → `false`; `true` → `true`;
+    /// a non-boolean (string "true", number 1) is a tool error naming the
+    /// boolean requirement, never a silent fresh start (a caller that asked to
+    /// resume and silently got a fresh child would lose the prior run).
+    #[test]
+    fn delegate_resume_parse_absent_false_true_and_rejects_non_boolean() {
+        assert!(!delegate_resume(&json!({})).unwrap());
+        assert!(!delegate_resume(&json!({"resume": false})).unwrap());
+        assert!(delegate_resume(&json!({"resume": true})).unwrap());
+        for bad in [json!("true"), json!(1), json!(0)] {
+            let err = delegate_resume(&json!({"resume": bad}))
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("boolean"), "{bad} → {err}");
+        }
     }
 
     /// T39: the parse — absent → `None`; valid → `Some`; `< 1` (0, negative)
@@ -3197,6 +3402,136 @@ log_tail: (none)";
             .filter_map(Value::as_str)
             .collect();
         assert_eq!(required, vec!["action", "cwd"], "required list must be unchanged");
+    }
+
+    /// T58 schema pin (T22/T39 convention): the LIVE `tool_schemas()` delegate
+    /// entry names the `resume` property for launch — optional boolean, and
+    /// its description says what it does (append `--resume`, continue the
+    /// child's prior run). The tool description also names the resume leg and
+    /// the latest-segment status summary; `required` stays unchanged.
+    #[test]
+    fn delegate_schema_pins_optional_resume() {
+        let schemas = tool_schemas();
+        let schema = schemas
+            .iter()
+            .find(|s| s.get("name").and_then(Value::as_str) == Some("delegate"))
+            .expect("exactly one delegate schema (pinned elsewhere)");
+        let prop = schema["input_schema"]["properties"]["resume"]
+            .as_object()
+            .expect("resume property missing from the delegate schema");
+        assert_eq!(prop.get("type").and_then(Value::as_str), Some("boolean"));
+        let desc = prop
+            .get("description")
+            .and_then(Value::as_str)
+            .expect("resume property carries a description");
+        assert!(
+            desc.contains("--resume"),
+            "resume description must name the appended flag: {desc}"
+        );
+        assert!(
+            desc.contains("prior run"),
+            "resume description must say it continues the child's prior run: {desc}"
+        );
+        let tool_desc = schema
+            .get("description")
+            .and_then(Value::as_str)
+            .expect("delegate tool description");
+        assert!(
+            tool_desc.contains("resume optional"),
+            "tool description lost the resume clause: {tool_desc}"
+        );
+        assert!(
+            tool_desc.contains("latest run segment"),
+            "tool description lost the latest-segment status clause: {tool_desc}"
+        );
+        let required: Vec<&str> = schema["input_schema"]["required"]
+            .as_array()
+            .expect("required list")
+            .iter()
+            .filter_map(Value::as_str)
+            .collect();
+        assert_eq!(required, vec!["action", "cwd"], "required list must be unchanged");
+    }
+
+    /// T58 end-to-end: launch with `resume: true` → the child's argv ends
+    /// with `--resume` (after any `--max-tokens` pair), and the return text
+    /// names the resume leg (`resume: true`, T39 echo pattern). NON-VACUOUSNESS:
+    /// dropping the argv append fails the dump assert; dropping the echo fails
+    /// the content assert.
+    #[test]
+    fn delegate_launch_with_resume_appends_flag_to_child_argv() {
+        let _guard = DELEGATE_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let child_dir = tempfile::tempdir().unwrap();
+        let ctx_cwd = tempfile::tempdir().unwrap();
+        // SAFETY: serialized by DELEGATE_ENV_LOCK; no other test reads this var.
+        unsafe { std::env::set_var("CHUG_DELEGATE_BIN", write_argv_stub(ctx_cwd.path())) };
+        let launch = dispatch(
+            &delegate_ctx(ctx_cwd.path()),
+            "delegate",
+            &json!({
+                "action": "launch",
+                "cwd": child_dir.path(),
+                "spec": "/tmp/chug-stub-spec.md",
+                "goal": "g",
+                "model": "m",
+                "max_tokens": 250_000,
+                "resume": true,
+            }),
+        );
+        assert!(!launch.is_error, "{}", launch.content);
+        let argv = wait_for_argv_dump(child_dir.path());
+        assert_eq!(
+            argv.last().map(String::as_str),
+            Some("--resume"),
+            "--resume must be the child argv's last argument: {}",
+            argv.join(" | ")
+        );
+        let pos = argv
+            .iter()
+            .position(|a| a == "--max-tokens")
+            .expect("--max-tokens in the child argv");
+        assert_eq!(argv[pos + 1], "250000", "{}", argv.join(" | "));
+        // The return text names the resume leg alongside the other budgets.
+        assert!(
+            launch
+                .content
+                .contains("max_iters: 40 max_minutes: 35 max_tokens: 250000 resume: true"),
+            "{}",
+            launch.content
+        );
+        let pid = spawn_pid_of(&launch);
+        kill_pid_group(pid);
+        // SAFETY: serialized by DELEGATE_ENV_LOCK; no other test reads this var.
+        unsafe { std::env::remove_var("CHUG_DELEGATE_BIN") };
+    }
+
+    /// T58 end-to-end through the status action over a synthetic two-segment
+    /// events file (abort in segment 1, `run_start` + iterations in segment
+    /// 2): the summary describes the LATEST segment — `state: running`,
+    /// `abort_seen: false` — not the latched pre-resume abort.
+    #[test]
+    fn delegate_status_two_segment_events_reports_latest_segment() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_events_fixture(
+            tmp.path(),
+            &[
+                "{\"type\":\"run_start\",\"ts\":\"t0\",\"max_iters\":40}",
+                "{\"type\":\"iteration\",\"ts\":\"t1\",\"n\":12}",
+                "{\"type\":\"abort\",\"ts\":\"t2\",\"reason\":\"llm request failed\",\"model\":\"kimi\"}",
+                T58_RESUME_RUN_START,
+                "{\"type\":\"iteration\",\"ts\":\"t4\",\"n\":1}",
+            ],
+        );
+        let result = dispatch(
+            &delegate_ctx(tmp.path()),
+            "delegate",
+            &json!({"action": "status", "cwd": tmp.path()}),
+        );
+        assert!(!result.is_error, "{}", result.content);
+        assert!(result.content.contains("state: running"), "{}", result.content);
+        assert!(result.content.contains("abort_seen: false"), "{}", result.content);
+        assert!(!result.content.contains("abort_reason"), "{}", result.content);
+        assert!(result.content.contains("last_iteration: 1"), "{}", result.content);
     }
 
     /// T39: `max_tokens` on the `status` action is IGNORED, not rejected —

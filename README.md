@@ -142,14 +142,16 @@ driver (120s default; `--bash-timeout` / `CHUG_BASH_TIMEOUT` overrides).
 worktree). Two actions: **`launch`** spawns a detached child (`--spec`,
 `--goal`, `--model` required; `--max-iters`/`--max-minutes` optional,
 defaults 40/35; `--max-tokens` optional — the child's cumulative
-input+output token ceiling, omitted = no token ceiling) against an
-absolute `cwd` you prepared, appends its stdout+stderr to
+input+output token ceiling, omitted = no token ceiling; `resume: true`
+optional to continue the child's aborted run instead of starting fresh)
+against an absolute `cwd` you prepared, appends its stdout+stderr to
 `<cwd>/.chug/delegate.log`, and returns immediately with the child `pid`
 and the log/events paths — it never waits on the child. **`status`**
 reports the child's liveness (when you pass the `pid`), a summary of its
-`.chug/events.jsonl` (state, `last_iteration` + `max_iters`, budget-low /
-goal / abort flags with the abort reason) and the tail of its console log —
-instant polling never blocks. Optionally pass `wait_secs` (status-only;
+`.chug/events.jsonl` — the child's latest run segment (state,
+`last_iteration` + `max_iters`, budget-low / goal / abort flags with the
+abort reason) — and the tail of its console log — instant polling never
+blocks. Optionally pass `wait_secs` (status-only;
 0/absent = instant, max 600) to collapse each idle wait window into one
 blocking status call: it returns early when the child's state changes or
 its liveness flips to dead, else at the deadline, and names the actual
