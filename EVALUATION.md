@@ -220,7 +220,35 @@ adoption remains watch-only.
 
 ## Outcomes (filled at cycle wrap — LOOP-SPEC Phase 3)
 
-### Cycle 19 (2026-09-26, ~01:23 EDT–, in flight) — freshness-skip; T46 (operator pri-2 speed initiative) landed
+### Cycle 19 (2026-09-26, ~01:23 EDT–, in flight) — freshness-skip; T46 + T45 (operator pri-2 speed initiative) landed
+
+**T45 (trivial-row bundling doctrine) → done 3efb98d.** Second speed row,
+LOOP-SPEC-only (+39/−5). glm impl 28/50 first-try — the doctrine-item
+landing class holds (T32/T33/T34/T44/T45 all ≤28 iters). §2 gains
+"Trivial-row bundling (T45)": ONE impl child may take up to 3 rows under a
+CONJUNCTIVE four-condition eligibility gate ((a) ≤ ~30 changed lines per
+row, (b) same 1–2 files or docs/doctrine-only, (c) no driver.rs/api.rs
+core loop, (d) every pri ≤ 3 — "when any one is in doubt, run the rows
+separately"); never bundled: features, cross-area, >3 rows. Child goal =
+step-2 template + explicit row list + spec paths, ONE commit PER ROW in
+queue order; ONE kimi round covers a bundle (mutation-test per row where
+feasible; any core-adjacent row → REQUIRED validation covers the set;
+docs/pins-only bundles may rely on orchestrator gates per T16/T31/T35);
+bundled rows may flip in ONE `todo:` commit naming every row + ref; T44
+interplay written in (bundle = ONE impl child under the 2-in-flight cap;
+a doctrine-containing bundle never overlaps). kimi validation VERDICT:
+PASS 20/50 — all 4 reqs verified against the on-disk spec, gates
+independently re-run (436+6+3 + clippy), M3 mutant (TODO spec-cell
+corruption) KILLED by todo_consistency (the T8 guard the doctrine leans
+on is live and toothy), M1 (ALL→ANY conjunctivity flip) / M2
+(squash-commit inversion) prose mutants by-design survivors per the T44
+precedent (the spec's Tests leg designates review as the check), tree
+restored byte-identical hash-verified. One non-blocking finding, recorded
+for the first bundle dispatch: delegate's mandatory `spec:` field takes
+exactly one path — use the first row's spec, the child reads the rest
+from its worktree checkout. 4 artifacts harvested pre-removal; gates
+re-run in main green. Acceptance is forward-looking: a later cycle lands
+a ≥2-row bundle with per-row commits under one verdict.
 
 **T46 (eval digest) → done 6a3fa98.** Freshness rule fired (EVALUATION.md
 same-day + 8 todo rows) → Phase 1 skipped, straight to the queue. Queue
