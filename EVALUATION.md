@@ -309,6 +309,55 @@ check-line defect class (t22–t64) is now closed by convention + lint +
 pin; the next eval that writes `--lib` into a spec check line fails
 `cargo test` at commit time.
 
+**Skipped/deferred:** none — queue drained 2/2 (T67, T68).
+
+**Cycle notes.** (a) **The operator landed doctrine mid-cycle** —
+`259b5ed` (FEATURES.md capability roadmap + META-META-SPEC §4 rewritten
+to the mandatory ROADMAP PULL + README pointer) and `dc18a7a` (F13
+directed to pull right after F1), committed 08:14/08:17 EDT during the
+T67 arc. The T67 merge absorbed them; gates ran green on the combined
+tree and BOTH META-META needles (`ROADMAP PULL` + `no library targets`)
+verified co-present with the guard 5/5 — the operator's edit and T67's
+survived each other. Human commits, not a second driver; the invariant
+never tripped. (b) **Next cycle: queue EMPTY → MANDATORY fresh eval, and
+the roadmap pull is now mandatory** (amended META-META §4): pull **F1
+(delegate collect)** into TODO.md with a full FEATURE-class spec (the
+working rules allow splitting into 2–3 rows when scope blows a 50-iter
+child budget), then **F13 (decision logs → Laya distillation)** per the
+operator's explicit ordering; check items off in FEATURES.md in the
+row-flip commit. (c) T44 unused (serial 2-row queue; T67 doctrine runs
+alone and nothing sat behind T68); T45 not applicable (doctrine row +
+different file areas). (d) **T63 resume armed, 0 exercises** — t68-impl
+hit 49/50 with budget_low@8 but goal-accepted inside the T18 margin; the
+first live resume remains the acceptance datapoint. (e) **The T68 leak
+produced its last raw evidence in this very cycle**: pre-merge, four
+`wait_secs: 100–110` long-polls during T67/T68 child waits woke at 2s on
+tool-call churn before pacing fell back to bash sleeps; post-merge the
+fix IS main's behavior, and the first long-poll that holds to a real
+window is the live acceptance. (f) glm one-arcs all four children
+(27/50 + 49/50 impls, 23/50 + 39/50 validators — no model fallback);
+validators killed 15/15 mutant legs (9 + 6) with one non-blocking
+observation (churn pin's 30s upper bound loose; the 2.9s lower bound +
+`waited ≥ 3` tripwire are load-bearing). (g) **Self-scrub lesson**:
+t67's own spec carried the literal token its gate greps for (pre-fix
+acceptance grep matched t64 AND t67) — the impl bracket-scrubbed its
+spec (T53's `[c]hug` idiom) with an explanatory note and the validator
+verified the scrub was forced. Watch-level: future evaluators writing
+grep-gated specs must check the spec's own prose against its gate; file
+a doctrine row if it recurs. (h) Outcomes compaction this wrap: cycle 25
+→ one-liner (last-6-full now 31–26); the stale cycle-18 double-heading
+note from cycle 25 was overtaken — only one `### Cycle 18` heading
+remains after earlier compactions. (i) **loopd-restart human carry
+RESTATED**: supervisor pid 90114 now SIX revisions stale (T36/T46/
+T47×2/T50/T53) — this cycle again ran 120 iters not T36's 160 and the
+digest was stale at eval start (4th manual regen); the operator
+one-liner is in the Handoff above.
+**Final state:** main pushed through `3600061`; post-merge gates 532/532
++ clippy under target-shared-main at both landings; todo_consistency
+5/5 green before every TODO commit; 7 artifacts harvested to .chug
+(gitignored, local) — 4 T67 + 3 T68; both worktrees removed, both
+merged branches deleted; wrap landed at ~111/120 iterations.
+
 ### Cycle 30 (2026-09-26, ~07:28–08:05 EDT) — freshness-skip; T64 + T65 landed, then goal-gate flake sighting → T66 filed + landed — QUEUE DRAINED
 
 **T66 — dead_port_probe drop→probe leg bounded theft-retry (pri 2,
@@ -764,13 +813,7 @@ handoff. Human-decision carry RESTATED at top of that handoff: restart
 the supervisor (`launchctl kickstart -k
 gui/$(id -u)/com.tampajohn.chug-loopd`).
 
-### Cycle 25 (2026-09-26, ~05:21–05:45 EDT) — freshness-skip; T55 recovered + landed (driver.lock feature) + T56 landed (README) — queue DRAINED
-
-**Landed:**
-- **T56 — README: loopd self-re-exec documented + output_truncated gloss deduped** (pri 4, docs-only; impl `34554e4` glm 17/50 goal-accepted ~2.5 min first-try — recovered instantly from 2 edit_file errors caused by an ASCII-vs-Unicode-arrow mismatch; merge `611af46`; flip + this entry per T34). Continuous-mode section gains one integrated sentence in the state/pidfile/HALTED paragraph: between cycles the supervisor fingerprints its own script and re-execs itself when the file changed, so merged loopd edits activate without an operator restart — a pending stop still wins (no cksum/same-pid mechanism detail, per spec). Events-log bullet drops the repeated `output-token ceiling` mechanism gloss — the Truncated-output advisory bullet stays the single definition (the string now occurs EXACTLY once); everything else byte-identical (2 hunks, README only). Docs-only → kimi round skipped per T16/T31/T35/T51 + the cycle-24 handoff plan; orchestrator gates independently re-run 501 + clippy, spec check verbatim PASS (ceiling-count==1, re-exec present, 'one exception' absent). 2 artifacts harvested pre-removal (impl events + delegate log; LEDGER trivial).
-- **T55 — .chug/driver.lock: same-cwd mutual exclusion for concurrent chug runs** (pri 2, FEATURE — in-harness layer of the defense-in-depth: doctrine → loopd skip → this lock; recovered per its own row recipe from the cycle-24 preserved worktree: glm impl pid 55328 had died 50/50 with the work complete but UNCOMMITTED and 3 compile/clippy fixes short — `drive_turn`→`drive_loop` + the `initial_spec: None` arg in the chat-exemption test, clippy `single_match`→`if let` in acquire, one needless borrow; orchestrator finished, impl `cb5906f`; merge `2e7945b`; flip + this entry per T34). New `src/driver_lock.rs` (495 lines): `holder_status` pure decision matrix behind injectable `pid_alive`/`argv_names_chug` probe seams (T28/T20 style); refusal ONLY on the alive+chug double-positive (kill(pid,0) AND `ps -o command= -p <pid>` names chug — NEVER pgrep, cycle-24 eval I1); every other leg (dead pid, argv mismatch = PID-reuse, malformed/empty/unreadable, probe error) degrades to reclaim, never aborts (T20 never-fail); RAII Guard compare-then-delete release on every normal exit, SIGKILL-stale by design; acquire at run_loop top BEFORE the T3/T7/T10 rotations; chat structurally exempt (never reaches run_loop). 20 new tests (16 module + 4 run-path incl. real-sleep reclaim, SIGKILL-stale reclaim, release-on-goal-acceptance + same-cwd successor, chat never-creates-never-removes). kimi VERDICT: **PASS** 45/50 (target-shared-validate per T52 ALWAYS; budget_low@8 fired at 42, verdict delivered inside the T18 margin) — all 9 reqs hand-verified, gates independently re-run green, 6 mutants: 4 KILLED (drop-argv-leg incl. the run-path pin, drop-compare-then-delete, remove-acquire-call → 2 run-path tests, acquire-in-drive_loop → chat pin has teeth), 2 SURVIVORS in the refuse-wiring/refusal-message cluster that the spec explicitly delegates to hand-verification — which the validator then performed with the REAL binary: live chug-argv holder → second run exit 1 + pid/remedy on stderr + zero transcript/events writes + holder unaffected; stale dead-pid lock → reclaimed <1s. 3 non-blocking findings carried to the next eval: (i) module-comment says a static pin in `tests/` guards chat, the pin is actually a unit test (doc drift); (ii) acquire's read-then-write window is non-atomic (latent, spec-silent — bounded 3-attempt re-verification mitigates); (iii) PRE-EXISTING mcp_http dead_port_probe flake under parallel load (passes isolated 3/3 — the T31 watch item). **Post-merge gates incident:** first main gate run showed loopd_reexec 3/4 FAILED — a T52-class FALSE RED: the step-3 worktree gates (target-shared, no child in flight) had compiled the worktree's PRE-T53/T54 4-test loopd_reexec.rs into the shared artifact slot; the merge didn't touch that file (old mtime) so cargo reused the stale binary against main's ps-based loopd.sh (needle mismatch). touch+rebuild recovered (T43's incident class, second sighting — now SEQUENTIAL not just concurrent): main 501 (473+6+9+1+9+3) green + clippy clean. 3 validate artifacts harvested pre-removal (impl's 3 harvested cycle-24).
-
-**Cycle notes:** (a) both queued rows landed, queue DRAINED — the freshness rule CANNOT fire next cycle (no todo rows): next cycle runs a MANDATORY fresh Phase-1 eval. (b) T55's post-merge false red is a NEW VARIANT of the T52/T43 stale-artifact class — SEQUENTIAL, not concurrent: step-3 worktree gates compiled the worktree's pre-T53/T54 4-test loopd_reexec.rs into the shared slot; the merge didn't touch that file (old mtime) so cargo's mtime freshness reused the stale binary against main's ps-based loopd.sh. Role-keyed dirs govern CONCURRENT builds only. Carry to next eval: post-merge main gates need a staleness flush (touch tests/ or a rebuild pin) whenever the worktree gates ran first in the same shared dir. (c) T55's kimi validator found the refuse-wiring/message mutant cluster untestable from the suite — spec-sanctioned hand-verification, which it performed with the real binary (exit 1 + pid/remedy, zero appends, holder unaffected; stale reclaim <1s); its 3 non-blocking findings (module-comment tests/-pin drift, non-atomic acquire window spec-silent, PRE-EXISTING mcp_http dead_port_probe flake — T31 watch item, passes isolated 3/3) are carried to the next eval. (d) T56's full arc cost ~7 min wall (worktree → impl 2.5 min → review/gates → merge → flip) — the T45-class fixed cost on a 2-hunk docs row remains the queue's dominant per-row overhead. (e) T43 cycle-18 double-heading compaction DEFERRED again (budget wrap): two `### Cycle 18` headings in Outcomes need one careful manual merge — hygiene, not loss, full narrative in git. (f) Final main gates 501 (473+6+9+1+9+3) + clippy green at the T56 flip; todo_consistency 3/3 green pre-commit.
+### Cycle 25 (2026-09-26) — freshness-skip; T55 (driver.lock same-cwd mutual exclusion, FEATURE; impl cb5906f, merge 2e7945b, kimi PASS 45/50 with real-binary hand-verification of the refusal cluster) + T56 (README loopd re-exec + ceiling dedupe; 611af46) landed — queue drained; SEQUENTIAL variant of the T52/T43 stale-artifact false-red observed at post-merge gates (touch+rebuild recovered, led to T57). Verdict: 2/2 landed, staleness class fully mapped
 
 ### Cycle 24 (2026-09-26) — MANDATORY fresh eval (queue EMPTY); T53 (loopd single-driver check ps-based, pgrep dead on this host — live 9/9 reproduction; impl 5c842a6) + T54 (loopd_reexec.rs exact-count SELF_CKSUM pins, additive-mutant survivor closed; impl 6587b22) landed as the FIRST T45 bundle (merge 8624078, kimi PASS 24/50, 8/8 bundle mutants); T55 mid-arc at budget (recovery recipe on its row, landed cycle 25); T56 deferred. Verdict: bundle arc ~7 min wall, pgrep blindness fixed within the hour
 
