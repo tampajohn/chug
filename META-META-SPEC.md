@@ -19,6 +19,8 @@ check: test -f EVALUATION.md && grep -q "specs/t" TODO.md
    `.chug/events*.jsonl` archives ONLY to drill into a specific incident the
    digest raised — the model evaluates, it does not do ETL.
 2. `TODO.md` — the live ledger (T1-T6, statuses). Your rows extend it.
+2a. `FEATURES.md` — the standing capability roadmap. Your §4 roadmap pull
+   comes from its top unworked item; new capability finds are appended here.
 3. `LEDGER.md` + `.chug/transcript.jsonl` (tail only) — the SPEC-9 saga and
    any other recent sessions: what actually went wrong, what was slow, what
    the validators caught.
@@ -43,16 +45,17 @@ you can). Sections:
 3. **Friction hot spots** — repeated patterns that burn tokens/turns
    (like the PATH tax, revert-thrash classes already in TODO — assess
    whether the fixes worked; don't re-file them).
-4. **Capability gaps — FEATURE SCAN (required)** — judged against the
-   direction in the human specs (meta loops, adversarial validation,
-   observability, fleet-driving) AND against what a coding harness of this
-   class should do. Name concrete MISSING capabilities, not just friction:
-   candidate classes to interrogate each cycle — delegation (a `delegate`
-   tool spawning a bounded child chug), web access, parallel tool calls,
-   richer MCP consumption, plan-then-execute modes, session/handoff UX,
-   steering depth. File at least one feature row per evaluation when a
-   credible gap exists; features are no longer the bottom of the priority
-   stack (LOOP-SPEC §2).
+4. **Capability gaps — ROADMAP PULL (required)** — `FEATURES.md` is the
+   standing capability roadmap (benchmarked against Claude Code / Codex /
+   unreal-agent). Every evaluation pulls the TOP UNWORKED roadmap item
+   into TODO.md with a full spec — this is mandatory, not "when a credible
+   gap exists": incident rows coexist with the roadmap pull, never replace
+   it. Skip an item only with a written reason in EVALUATION.md
+   (dependency, measured evidence it's unwanted). Completed items are
+   checked off in FEATURES.md by the orchestrator at merge (row-flip
+   commit). Beyond the pull, name concrete MISSING capabilities not yet on
+   the roadmap — new finds are APPENDED to FEATURES.md, then worked in
+   order. Features are not the bottom of the priority stack (LOOP-SPEC §2).
 5. **Top 3 priorities** — what you'd fix FIRST and why.
 6. **README audit (usability, not just accuracy)** — read the README top to
    bottom as someone who has never seen chug. Report: (a) reading order —

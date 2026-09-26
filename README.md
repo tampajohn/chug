@@ -240,6 +240,9 @@ otherwise. Config: `LANGFUSE_HOST` + `LANGFUSE_PUBLIC_KEY` +
   protocol; how SPEC-5 was implemented)
 - `META-META-SPEC.md` — the evaluator: reads the corpus (events.jsonl,
   ledgers, specs, code), writes EVALUATION.md + the next TODO rows/specs
+- `FEATURES.md` — the standing capability roadmap (benchmarked vs Claude
+  Code / Codex / unreal-agent); every evaluation pulls its top unworked
+  item into the queue, so capability work is the default, not the exception
 - `SELF-SPEC.md` — continuous self-improvement: chug writes improvement specs,
   maintains a TODO ledger, works items within budget
 - `specs/` — work-item specs: `t<N>-*.md` (the machine queue, one per TODO
