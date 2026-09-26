@@ -330,6 +330,30 @@ in-worktree, and the impl's LEDGER records the hand-mutation check
 (impl events + LEDGER + delegate.log; the cycle-27 `-inflight-`
 snapshot superseded + removed).
 
+**T61 — resolve_safe error string names the `bash` fallback at fire
+time (pri 4, DX friction, src/tools.rs) → done `c176321` (impl
+`9d8e613`, merge commit).** glm impl goal-accepted 16/50 ~5 min
+first-try: one shared `PATH_ESCAPES_CWD_SUFFIX` const (" — cross-tree
+paths go through bash") appended at BOTH refusal construction sites
+(`..`-past-root pop + outside-cwd prefix check), prefix byte-identical
+so the T41 `starts_with` pin holds; the pin gains `bash` + single-line
+assertions and two relative-cwd legs so the pop site is actually
+reached (an absolute cwd can only reach the prefix check). Impl
+hand-checked non-vacuousness (suffix removed → pin RED; restored →
+green). kimi VERDICT: PASS 26/50 — gates independently re-run 517/517
+under `target-shared-validate` (one transient mcp_http port flake,
+green on re-run, unrelated), mutation testing 5/5 killed (suffix
+dropped at either site, `bash`→`shell`, newline injected, prefix
+corrupted ×2 tests). Two non-blocking nits fixed by the orchestrator
+pre-merge (`b092e00`, comment-only): the new const had absorbed
+`resolve_safe`'s rustdoc (doc now split — const keeps the T61 lines,
+the fn keeps its own), and the test comment overclaimed leg-4's site
+attribution. REQUIRED-validation ordering held: merged strictly after
+T58 (same file). 5 artifacts harvested. Irony noted live: the
+orchestrator's own cross-tree `edit_file` to the worktree hit the OLD
+bare `path escapes cwd` error mid-arc — the last sighting of the
+pre-T61 string on this host.
+
 ### Cycle 27 (2026-09-26, ~06:15–06:40 EDT) — freshness-skip; T59 landed; T58 + T62 IN-FLIGHT at budget wrap (recovery recipes on their rows)
 
 **T59 — mcp_http dead_port tests: bounded retry on port-theft (pri 3,
