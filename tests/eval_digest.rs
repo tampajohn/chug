@@ -256,3 +256,220 @@ fn digest_reports_todo_status_counts_and_evaluation_age() {
         "EVALUATION.md age reported:\n{digest}"
     );
 }
+
+// --- T62: golden-section pin (the stable OUTPUT SKELETON) --------------------
+//
+// T46's mutation testing found a survivor class: mutants in the digest's
+// output FIELDS (headings, their order, a block's field order) that no test
+// pinned. The tests above pin counts and behaviors; this one pins the SHAPE
+// the evaluator parses-by-eye: the header line, the section-heading order,
+// the per-file field-line order/labels, and the staleness labels. Volatile
+// values (timestamps, token counts, durations) are matched by shape, never
+// by literal (req 2) — a legitimate data change must not go red.
+
+/// The per-file block's field-line prefixes, in the order the script emits
+/// them today (T62 req c). Order + labels only; values are shape-checked.
+const GOLDEN_BLOCK_FIELDS: [&str; 10] = [
+    "- runs: ",
+    "- iterations: ",
+    "- wall: ",
+    "- tokens (cumulative at last iteration): ",
+    "- input context curve (cumulative, iter quartiles): ",
+    "- tools: ",
+    "- failed tool results: ",
+    "- goal: ",
+    "- aborts: ",
+    "- budget_low fires: ",
+];
+
+/// The staleness block's field labels, in emission order (T62 req d).
+const GOLDEN_STALENESS_FIELDS: [&str; 4] = [
+    "- generated-at: ",
+    "- newest-events-mtime: ",
+    "- corpus age at generation: ",
+    "- events-moved-during-generation: ",
+];
+
+/// Tiny full-line shape matcher for the golden pin: `#` matches one-or-more
+/// ASCII digits, `*` matches any (possibly empty) character run, anything
+/// else matches literally. Pins labels + punctuation while leaving volatile
+/// values (timestamps, counts, durations) to the wildcards, so a legitimate
+/// data change cannot go red (T62 req 2).
+fn matches_shape(line: &str, pattern: &str) -> bool {
+    fn go(line: &[char], pat: &[char]) -> bool {
+        let Some((p, rest)) = pat.split_first() else {
+            return line.is_empty();
+        };
+        match *p {
+            '*' => (0..=line.len()).any(|n| go(&line[n..], rest)),
+            '#' => {
+                let n = line.iter().take_while(|c| c.is_ascii_digit()).count();
+                n > 0 && go(&line[n..], rest)
+            }
+            c => line.first() == Some(&c) && go(&line[1..], rest),
+        }
+    }
+    go(
+        &line.chars().collect::<Vec<_>>(),
+        &pattern.chars().collect::<Vec<_>>(),
+    )
+}
+
+/// Every `label` occurs exactly once as a line start, in the given order.
+fn assert_labels_in_order(text: &str, labels: &[&str], what: &str) {
+    let mut cursor = 0;
+    for label in labels {
+        let at = cursor
+            + text[cursor..].find(label).unwrap_or_else(|| {
+                panic!("{what}: label `{label}` missing or out of order:\n{text}")
+            });
+        assert!(
+            at == 0 || text.as_bytes()[at - 1] == b'\n',
+            "{what}: label `{label}` must start its own line:\n{text}"
+        );
+        cursor = at + label.len();
+    }
+}
+
+/// The one line of `text` starting with `label` matches `pattern`.
+fn assert_line_shape(text: &str, label: &str, pattern: &str, what: &str) {
+    let hits: Vec<&str> = text.lines().filter(|l| l.starts_with(label)).collect();
+    assert_eq!(
+        hits.len(),
+        1,
+        "{what}: expected exactly one `{label}` line:\n{text}"
+    );
+    assert!(
+        matches_shape(hits[0], pattern),
+        "{what}: line does not match pinned shape `{pattern}`:\n  {}",
+        hits[0]
+    );
+}
+
+/// One events archive exercising EVERY field line the digest can emit for a
+/// file (verifying call, ok + failed tool results, accepted goal, budget
+/// abort, budget_low fire, output truncation), so the golden pin covers the
+/// full block skeleton. Serialization shapes mirror src/eventlog.rs.
+fn golden_fixture_events() -> String {
+    let mut body = String::new();
+    body.push_str(concat!(
+        "{\"type\":\"run_start\",\"ts\":\"2026-09-25T17:08:31.100Z\",\"mode\":\"run\",",
+        "\"model\":\"golden-model\",\"spec\":\"/repo/specs/t62-golden.md\",\"cwd\":\"/tmp/w\",",
+        "\"version\":\"0.1.0\",\"commit\":\"4ea73e3\",\"head_branch\":\"loop-t62\",",
+        "\"head_commit\":\"4ea73e3\",\"max_iters\":50,\"max_minutes\":35,\"max_tokens\":null}\n"
+    ));
+    for n in 1..=4u32 {
+        let tokens = 1_000 * u64::from(n);
+        body.push_str(&format!(
+            "{{\"input_tokens\":{tokens},\"n\":{n},\"output_tokens\":{},\"ts\":\"2026-09-25T17:08:{:02}.000Z\",\"type\":\"iteration\"}}\n",
+            10 * u64::from(n),
+            31 + n
+        ));
+    }
+    body.push_str(concat!(
+        "{\"type\":\"tool_result\",\"ts\":\"2026-09-25T17:08:36.000Z\",\"name\":\"bash\",",
+        "\"ok\":false,\"is_error\":true,\"duration_ms\":7,",
+        "\"preview\":\"error[E0382]: use of moved value: `x`\\n2 | let y = x;\"}\n"
+    ));
+    body.push_str(concat!(
+        "{\"type\":\"tool_result\",\"ts\":\"2026-09-25T17:08:37.000Z\",\"name\":\"read_file\",",
+        "\"ok\":true,\"is_error\":false,\"duration_ms\":3,\"preview\":\"ok\"}\n"
+    ));
+    body.push_str("{\"type\":\"verifying\",\"ts\":\"2026-09-25T17:09:00.000Z\",\"cmd\":\"cargo test\"}\n");
+    body.push_str("{\"type\":\"goal\",\"ts\":\"2026-09-25T17:09:10.000Z\",\"outcome\":\"accepted\",\"summary\":\"done\"}\n");
+    body.push_str(concat!(
+        "{\"type\":\"abort\",\"ts\":\"2026-09-25T17:09:20.000Z\",",
+        "\"reason\":\"iteration budget exceeded\",\"model\":\"golden-model\",",
+        "\"budget_kind\":\"iterations\",\"budget_max\":50}\n"
+    ));
+    body.push_str(concat!(
+        "{\"type\":\"budget_low\",\"ts\":\"2026-09-25T17:09:25.000Z\",",
+        "\"remaining_iters\":3,\"remaining_secs\":120,\"remaining_tokens\":null}\n"
+    ));
+    body.push_str("{\"type\":\"output_truncated\",\"ts\":\"2026-09-25T17:09:30.000Z\"}\n");
+    body
+}
+
+/// T62 — the golden-section pin: header line, heading order, per-file field
+/// order/labels, staleness labels. Values stay shape-pinned, never literal.
+#[test]
+fn golden_section_pins_the_digest_output_skeleton() {
+    let tmp = tempfile::tempdir().unwrap();
+    let chug = tmp.path().join(".chug");
+    std::fs::create_dir_all(&chug).unwrap();
+    write_archive(&chug, "events.jsonl", &golden_fixture_events());
+
+    let digest = run_digest(tmp.path(), "2026-09-26T00:00:00Z");
+
+    // (a) the header line's shape, exactly.
+    assert!(
+        digest.starts_with("# Eval digest — T46 pre-computed Phase-1 corpus summary\n"),
+        "digest must open with the pinned header line:\n{digest}"
+    );
+    // The summary line under it carries the same four fields the empty digest
+    // pins — here shape-only (repo path + counts are corpus-dependent).
+    let summary = digest.lines().nth(2).expect("summary line after the header");
+    assert!(
+        summary.starts_with("generated-at: ")
+            && summary.contains(" | repo: ")
+            && summary.contains(" | events files: ")
+            && summary.contains(" | total iterations: "),
+        "summary line shape drifted:\n  {summary}"
+    );
+
+    // (b) the three section headings, each once, in this order.
+    for heading in ["## Events files", "## Corpus inputs", "## Staleness"] {
+        assert_eq!(
+            digest.matches(heading).count(),
+            1,
+            "heading `{heading}` appears exactly once:\n{digest}"
+        );
+    }
+    assert_labels_in_order(
+        &digest,
+        &[
+            "# Eval digest — T46 pre-computed Phase-1 corpus summary",
+            "Read this FIRST",
+            "## Events files",
+            "## Corpus inputs",
+            "## Staleness",
+        ],
+        "skeleton order",
+    );
+
+    // The one file's block: from its `### name` header to the next `## `.
+    let block = {
+        let marker = "### events.jsonl\n";
+        let start = digest.find(marker).expect("block header for events.jsonl");
+        let rest = &digest[start + marker.len()..];
+        let end = rest.find("\n## ").expect("## Corpus inputs closes the file block");
+        &rest[..end]
+    };
+    assert!(
+        block.trim_start().starts_with('('),
+        "block opens with the size/mtime metadata line:\n{block}"
+    );
+    assert_line_shape(block, "(", "(# bytes | mtime *)", "block metadata");
+
+    // (c) the block's field lines: pinned order (labels only) ...
+    assert_labels_in_order(block, &GOLDEN_BLOCK_FIELDS, "field-line order");
+    // ... then each field line's label/punctuation shape, values wild-carded.
+    assert_line_shape(block, "- runs: ", "- runs: # | model: * | spec: * | iters-ceil: #", "runs");
+    assert_line_shape(block, "- iterations: ", "- iterations: # (last n=#) | verifying calls: #", "iterations");
+    assert_line_shape(block, "- wall: ", "- wall: #s (* | * -> *", "wall");
+    assert_line_shape(block, "- tokens (cumulative at last iteration): ", "- tokens (cumulative at last iteration): #* in / #* out", "tokens");
+    assert_line_shape(block, "- input context curve (cumulative, iter quartiles): ", "- input context curve (cumulative, iter quartiles): #*@#* -> *", "curve");
+    assert_line_shape(block, "- tools: ", "- tools: *", "tools");
+    assert_line_shape(block, "- failed tool results: ", "- failed tool results: # — classes (first line, digits->N):", "failed tool results");
+    assert_line_shape(block, "- goal: ", "- goal: accepted #", "goal");
+    assert_line_shape(block, "- aborts: ", "- aborts: #:", "aborts");
+    assert_line_shape(block, "- budget_low fires: ", "- budget_low fires: # (first at remaining_iters=#) | output_truncated: #", "budget_low/output_truncated");
+
+    // (d) the staleness block's field labels, in order, shape-pinned.
+    let staleness = &digest[digest.find("## Staleness").expect("staleness heading")..];
+    assert_labels_in_order(staleness, &GOLDEN_STALENESS_FIELDS, "staleness labels");
+    assert_line_shape(staleness, "- generated-at: ", "- generated-at: *", "generated-at");
+    assert_line_shape(staleness, "- newest-events-mtime: ", "- newest-events-mtime: * (.chug/events.jsonl)", "newest-events-mtime");
+    assert_line_shape(staleness, "- corpus age at generation: ", "- corpus age at generation: *", "corpus age");
+    assert_line_shape(staleness, "- events-moved-during-generation: ", "- events-moved-during-generation: no", "events-moved-during-generation");
+}
