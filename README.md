@@ -266,10 +266,14 @@ the `.chug/events*.jsonl` corpus (per-file iterations, wall time, tool
 distribution, error classes, token curve, aborts, budget-low fires, TODO
 status counts, staleness flag) so the evaluation phase reads one file instead
 of re-mining raw archives.
-The supervisor also creates `target-shared/` (gitignored) and exports
-`CARGO_TARGET_DIR` into each cycle, so worktree builds — implementation and
-validation children alike — share one warm incremental cache, kept separate
-from the repo's own `target/`. Nothing cleans it automatically: reclaiming is
+The supervisor also creates `target-shared/` (gitignored) and hands
+`CARGO_TARGET_DIR` to each cycle's orchestrator as a per-invocation env
+prefix on the `chug` call — never a supervisor-wide `export`, which would
+persist across loop iterations and redirect the supervisor's own `cargo
+build` into the shared cache from cycle 2 on, leaving `./target/debug/chug`
+stale — so worktree builds — implementation and validation children alike —
+share one warm incremental cache, kept separate from the repo's own
+`target/`. Nothing cleans it automatically: reclaiming is
 the operator's call (`du -sh target-shared`; `rm -rf target-shared` resets it —
 cheap, rebuilt once and warm for every worktree again).
 State in `.chug/loopd/` (cycle logs, pidfile). Three consecutive cycles
