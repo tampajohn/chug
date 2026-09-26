@@ -2123,6 +2123,94 @@ mod tests {
         assert_eq!(s.state(), "running");
     }
 
+    /// T64 pin (b) — the t58-validate over-reset survivor. The T58
+    /// two-segment tests above all place segment 2's iterations AFTER its
+    /// `run_start`, so a mutant that over-resets `max_iters`/`last_iteration`
+    /// to `None` at `run_start` survives: the new segment's own lines refill
+    /// both fields before any assertion looks. T58 spec req 4 sentence 2
+    /// pins the other half — the fields "already take the last-seen values
+    /// and keep doing so" — so in the GAP window (after segment 2's
+    /// `run_start`, before its first iteration) the summary must still
+    /// report meaningful numbers, which is exactly what a resumed child's
+    /// `status` shows while the relaunched process spins up.
+    #[test]
+    fn delegate_summary_run_start_gap_keeps_last_seen_max_iters_and_iteration() {
+        // Segment 1: ran to its iteration-budget abort (max_iters 40, last
+        // iteration 40). Segment 2: the resume — a fresh `run_start`
+        // carrying its own max_iters (deliberately 50, so the assertions
+        // prove WHICH line each field came from), and NOTHING else yet:
+        // the gap window.
+        let gap = [
+            "{\"type\":\"run_start\",\"ts\":\"t0\",\"max_iters\":40}",
+            "{\"type\":\"iteration\",\"ts\":\"t1\",\"n\":39}",
+            "{\"type\":\"iteration\",\"ts\":\"t2\",\"n\":40}",
+            "{\"type\":\"abort\",\"ts\":\"t3\",\"reason\":\"iteration budget exceeded\",\"model\":\"glm\",\"budget_kind\":\"iterations\",\"budget_max\":40}",
+            "{\"type\":\"run_start\",\"ts\":\"t4\",\"max_iters\":50}",
+        ];
+        let s = summarize_events(&gap);
+        // The verdict latches describe segment 2: the pre-resume abort is
+        // gone, and a stream ending in a fresh `run_start` is `running`.
+        assert_eq!(
+            s.state(),
+            "running",
+            "segment-2's run_start resets the abort latch — the gap reports \
+             running, not aborted"
+        );
+        assert!(
+            !s.abort_seen,
+            "pre-resume abort must not outlive the new run_start"
+        );
+        assert_eq!(
+            s.abort_reason, None,
+            "pre-resume abort reason must reset at the new run_start"
+        );
+        assert!(!s.goal_seen && !s.budget_low_seen);
+        assert_eq!(s.last_event_type.as_deref(), Some("run_start"));
+        // The stream-scope fields KEEP LAST-SEEN across the boundary — NOT
+        // null/0: `max_iters` from the latest `run_start` seen (segment 2's
+        // 50), `last_iteration` still segment 1's final iteration (40) until
+        // segment 2 writes its first.
+        assert_eq!(
+            s.max_iters,
+            Some(50),
+            "max_iters keeps last-seen across the run_start boundary (the \
+             latest run_start's value) — an over-reset to null is the \
+             t58-validate survivor mutant"
+        );
+        assert_eq!(
+            s.last_iteration,
+            Some(40),
+            "last_iteration keeps last-seen across the run_start boundary \
+             (segment 1's final iteration) — an over-reset to null/0 is the \
+             t58-validate survivor mutant"
+        );
+
+        // After segment 2's first iteration event the fields reflect
+        // segment 2: its own iteration takes over, its max_iters stands.
+        let after = [
+            "{\"type\":\"run_start\",\"ts\":\"t0\",\"max_iters\":40}",
+            "{\"type\":\"iteration\",\"ts\":\"t1\",\"n\":39}",
+            "{\"type\":\"iteration\",\"ts\":\"t2\",\"n\":40}",
+            "{\"type\":\"abort\",\"ts\":\"t3\",\"reason\":\"iteration budget exceeded\",\"model\":\"glm\",\"budget_kind\":\"iterations\",\"budget_max\":40}",
+            "{\"type\":\"run_start\",\"ts\":\"t4\",\"max_iters\":50}",
+            "{\"type\":\"iteration\",\"ts\":\"t5\",\"n\":1}",
+        ];
+        let s2 = summarize_events(&after);
+        assert_eq!(s2.state(), "running");
+        assert_eq!(
+            s2.max_iters,
+            Some(50),
+            "segment 2's run_start max_iters wins once seen"
+        );
+        assert_eq!(
+            s2.last_iteration,
+            Some(1),
+            "segment 2's own iteration takes over from segment 1's last-seen 40"
+        );
+        assert_eq!(s2.last_event_type.as_deref(), Some("iteration"));
+        assert!(!s2.abort_seen && !s2.goal_seen && !s2.budget_low_seen);
+    }
+
     /// T58 (d) regression pin: a SINGLE-segment stream — the only kind before
     /// resume existed — summarizes exactly as before T58. This is the same
     /// event sequence as the two-segment test minus the second `run_start`:
