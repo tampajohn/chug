@@ -13,14 +13,14 @@ a written reason in EVALUATION.md. Orchestrators check items off at merge
 (in the row-flip commit).
 
 Already landed: delegate (T23), wait_secs long-poll (T29), web_fetch (T37),
-delegate resume (T61-63), driver.lock (T55). ~~Parallel tool calls~~ —
+delegate resume (T61-63), driver.lock (T55), delegate collect (T69). ~~Parallel tool calls~~ —
 retired: driver already batches (cycle-11 eval).
 
 ## Tier 1 — agentic core (pull first)
 
 | # | Feature | What | Benchmark |
 |---|---------|------|-----------|
-| F1 | **delegate collect** | Structured child result: goal_complete summary + commit refs + gates output returned to the caller (today: git/files archaeology). Makes delegate a real Task-tool equivalent for chat AND loops. | Claude Code Task |
+| F1 | ~~**delegate collect**~~ — LANDED T69 (cycle 33, merge c6ce238) | Structured child result: goal_complete summary + commit refs + gates output returned to the caller (today: git/files archaeology). Makes delegate a real Task-tool equivalent for chat AND loops. | Claude Code Task |
 | F13 | **Decision logs → Laya distillation** | Every loop judgment emits a structured decision record (`.chug/decisions.jsonl`): decision class, compact inputs, options, choice, model, confidence — with OUTCOME labels backfilled from git (landed-clean / fixed-up / reverted). Seed classes: validation verdicts (diff+spec→PASS/FAIL), does-this-item-need-kimi-validation (§2 step 4 routing), risk-gate (already logged), fallback/retry routing, eval accept/reject triage. Then: Laya fine-tune pipeline + confidence-gated first-pass (Laya decides ≥τ, else escalate to kimi) — classification ONLY, never completion/stuck/verdict-final judgments (measured failure class, SPEC-3 doctrine). Speeds the loop by shrinking kimi's share to the hard cases. | laya risk-gate precedent; risk_verdicts.jsonl corpus |
 | F2 | **Plan mode** | `chug plan` / `/plan` in chat: read-only tool subset, model produces an implementation plan to stdout/file, exits. Optional `--approve plan.md` gate for `chug run`. | Claude Code plan mode |
 | F3 | **Hooks** | `.chug/hooks.json` (or settings): shell commands on PreToolUse / PostToolUse / Stop / GoalComplete events. Policy-as-config, no doctrine forks. Laya stop-hook is the reference consumer. | Claude Code hooks |

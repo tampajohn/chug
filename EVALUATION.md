@@ -311,6 +311,41 @@ words. If the queue outlives this cycle's budget, unworked rows stay
 
 ## Outcomes (filled at cycle wrap — LOOP-SPEC Phase 3)
 
+### Cycle 33 (2026-09-26, ~09:20– EDT) — T69 (F1 delegate collect) recovered + landed (merge c6ce238); QUEUE DRAINED
+
+- **T69 recovery arc executed from the cycle-32 row recipe (per-item entry
+  written at landing, T34).** Validator seg-1 confirmed budget-aborted
+  50/50 pre-verdict; worktree tree verified BYTE-CLEAN of leftover mutants
+  pre-resume (git status empty, diff = exactly ccd9923 + 138d042). **T63's
+  SECOND live exercise: validator resume, goal accepted 3/50** — VERDICT:
+  FAIL, but implementation verified CORRECT on every reviewed leg (gates
+  independently re-run 550/550 + clippy + 70/70 under
+  target-shared-validate; 8 mutants, 6 caught): the 2 survivors were
+  vacuous-pin findings, not behavior bugs — (1) abort_reason render block
+  dead code per the suite, (2) verdict_latch leg of the run_start segment
+  reset vacuous (masked by post-resume accepted overwrite).
+- **Two fix-up rounds, each RED-proven.** glm fix-up 50dcbe7 (+68
+  tests-only, dispatch-level aborted-fixture render pin + post-resume
+  NO-verdict leg, both mutants proven RED then restored; accepted 27/50).
+  Kimi round 2 (accepted 45/50) confirmed both survivors killed + fix-up
+  tests-only + T68 contamination/churn mutants die — and found ONE new
+  survivor of the same class: the check_cmd latch reset (leak demonstrated
+  Some("check A") vs None). glm fix-up2 88227ab (+4, one assertion,
+  RED-proven; accepted 15/50). Kimi round 3 (accepted 22/50): **VERDICT
+  PASS, 0 findings** — all four run_start latch resets swept, each with a
+  killing test; gates 551/551 + clippy + 71/71; tree byte-clean.
+- **Landed: merge c6ce238**, post-merge gates 551/551 + clippy under
+  target-shared-main. FEATURES.md F1 checked off (Already landed + row
+  struck). 6 child-run event streams + 2 ledgers harvested to .chug
+  pre-merge. The lesson the arc teaches: the run_start latch-reset class
+  was vacuous as a FAMILY — each reset leg needed its own verdict-less
+  post-resume pin; validators catch survivors one leg per round when the
+  fix-up pins only the named leg. Sweep-the-family guidance went into the
+  round-3 goal and closed it.
+- **Verdict: T69 done; queue DRAINED at landing → the next cycle opens
+  with a mandatory fresh eval whose mandated ROADMAP PULL is F13
+  (decision logs → Laya distillation, operator directive dc18a7a).**
+
 ### Cycle 32 (2026-09-26, ~08:51–09:16 EDT) — delta eval + ROADMAP PULL (T69 = F1 delegate collect); T69 MID-ARC at budget wrap (validated-in-flight)
 
 - **Delta eval + mandatory pull (committed 50f1caf).** Queue was EMPTY 3 min
