@@ -45,7 +45,16 @@ the end of this phase — at most 2 children in flight (1 validator + 1
 impl, never 2 impls):
 
 1. **Worktree.** `git -C /Users/jadams/workspace/chug worktree add
-   /tmp/chug-loop-t<N> -b loop-t<N>`; `cargo build` there.
+   /tmp/chug-loop-t<N> -b loop-t<N>`; build warm (T47): `export
+   CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared` then
+   `cargo build` there — every worktree shares one incremental cache instead
+   of a cold 43s–6 min build per round. The dir is a NEW one, NOT the repo's
+   own `target/` — the operator's build cache stays separate so a wedge can't
+   poison daily builds. Tradeoff: a poisoned shared cache affects all
+   children; recovery is `rm -rf target-shared` (cheap, rebuild once). No
+   `git clean`/`cargo clean` is ever automatic — reclaiming is the
+   operator's call (`du -sh target-shared`). Cargo locks the target dir
+   during builds, so concurrent worktree builds (T44 overlap) queue safely.
 2. **Implementation child** (glm-5-3-flash, no env prefix; if it errors
    persistently — rate limit, repeated 5xx — rerun the child on
    `anthropic-system.ai.kimi-k3` and note the fallback in your ledger).
@@ -58,9 +67,12 @@ impl, never 2 impls):
    delegate  action: "launch"
      cwd:         "/tmp/chug-loop-t<N>"        (absolute — the one cwd NOT confined to yours)
      spec:        "/Users/jadams/workspace/chug/specs/t<N>-<slug>.md"  (absolute)
-     goal:        "Implement TODO item t<N> ONLY. Keep cargo build + clippy + test
-             green. Commit your work here. DO NOT touch TODO.md or LEDGER.md —
-             bookkeeping is the orchestrator's."
+     goal:        "Implement TODO item t<N> ONLY. export
+             CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared before
+             every cargo command (T47 shared build cache — delegate has no env
+             parameter, so the goal carries the export). Keep cargo build +
+             clippy + test green. Commit your work here. DO NOT touch TODO.md
+             or LEDGER.md — bookkeeping is the orchestrator's."
      model:       "anthropic-system.ai.glm-5-3-flash"
      max_iters:   50
      max_minutes: 35
@@ -69,6 +81,9 @@ impl, never 2 impls):
    defaults are 40/35, and T21's headroom must survive the migration.
    (50, not 40: 3 of the last 5 glm impl children died at 40/40 with the work
    done — T15/T17/T20; minutes were never binding, T20 used 6 of 35.)
+   The goal carries the T47 export because delegate cannot pass env — a child
+   that skips it just builds cold into its own worktree's target dir
+   (harmless, slow).
    Poll every ~60–110s with `delegate{action: "status", cwd:
    "/tmp/chug-loop-t<N>", pid: <pid launch returned>}` — each poll is a
    single non-blocking tool call reporting liveness, a summary of the
@@ -84,8 +99,11 @@ impl, never 2 impls):
    META-SPEC §4's hand-rolled nohup launch template remains the fallback
    launch path — note the fallback in your ledger.
 3. **Review.** Diff the branch, read the child's ledger if ambiguous, and run
-   bounded gates yourself (`perl -e 'alarm 600; exec @ARGV' cargo test --
-   --test-threads=4`). Never trust a claim of green without seeing it.
+   bounded gates yourself (`CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared
+   perl -e 'alarm 600; exec @ARGV' cargo test --
+   --test-threads=4` — the T47 env prefix keeps the gate on the shared warm
+   cache; bash tool calls don't share env, so the step-1 export doesn't
+   persist between calls). Never trust a claim of green without seeing it.
 4. **Adversarial validation (kimi, REQUIRED** for any item touching
    src/driver.rs, src/api.rs, src/tools.rs, src/events.rs, or the loop/spec
    doctrine itself; optional for docs/tests-only items): META-SPEC §6
@@ -95,7 +113,9 @@ impl, never 2 impls):
    `max_iters: 50`, `max_minutes: 30` (§6's budgets with T21-class
    widened iterations, passed explicitly — minutes is 30, not
    delegate's 35 default), and §6's goal text
-   verbatim; this paragraph is a LOOP-SPEC override of §6's launch
+   verbatim — which carries the T47 `CARGO_TARGET_DIR` export, so the
+   validator's mutate→test→revert→re-test cycle builds warm too; this
+   paragraph is a LOOP-SPEC override of §6's launch
    mechanics only, and META-SPEC.md is not edited. FAIL → fix-up child
    with the findings pasted into its goal, then re-validate.
 5. **Harvest, then merge + close — you own the books.** Before any

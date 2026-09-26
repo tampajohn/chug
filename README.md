@@ -266,6 +266,12 @@ the `.chug/events*.jsonl` corpus (per-file iterations, wall time, tool
 distribution, error classes, token curve, aborts, budget-low fires, TODO
 status counts, staleness flag) so the evaluation phase reads one file instead
 of re-mining raw archives.
+The supervisor also creates `target-shared/` (gitignored) and exports
+`CARGO_TARGET_DIR` into each cycle, so worktree builds — implementation and
+validation children alike — share one warm incremental cache, kept separate
+from the repo's own `target/`. Nothing cleans it automatically: reclaiming is
+the operator's call (`du -sh target-shared`; `rm -rf target-shared` resets it —
+cheap, rebuilt once and warm for every worktree again).
 State in `.chug/loopd/` (cycle logs, pidfile). Three consecutive cycles
 without `goal_complete` → HALTED marker + exit. A second supervisor refuses
 to start (pidfile); a manual `LOOP-SPEC` run makes it skip a cycle rather
