@@ -1,4 +1,6 @@
 /target
 target-shared/
+target-shared-validate/
+target-shared-gates/
 .chug/
 LEDGER.md
