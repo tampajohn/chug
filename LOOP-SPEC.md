@@ -145,8 +145,23 @@ impl, never 2 impls):
    `events-t17-validate3-20260925.jsonl`), plus the
    child's `LEDGER.md` as `LEDGER-t<N>-<role>-<ts>.md` when it carried a
    verdict or non-trivial findings; transcript harvest is the operator's
-   choice (size). Only then merge to main, re-run gates in main (step 3's
-   role-keyed dir rule applies here too), then flip
+   choice (size). Only then merge to main, re-run gates in main —
+   `CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-main`,
+   ALWAYS, never conditionally on the T44 overlap (this is NOT step 3's
+   role-keyed rule; step 3's worktree-review gates keep their T52
+   `target-shared`/`target-shared-gates` split, scoped to worktree-review
+   gates). Why a main-dedicated dir (T57):
+   cargo's artifact filename excludes the checkout path, so a shared dir's
+   artifact slots are last-builder-wins — and only a dir whose builders are
+   ALWAYS main checkouts keeps post-merge artifacts identical to main
+   content (the T55 false red: the step-3 worktree gates had compiled the
+   worktree's PRE-T53 `tests/loopd_reexec.rs` into `target-shared`; the
+   merge didn't touch that file, so its main-checkout mtime stayed OLDER
+   than the artifact and cargo ran the stale 4-test binary as fresh — 3/4
+   false red, touch + rebuild recovered; the symmetric false-GREEN leg — a
+   stale passing binary masking a real main failure — is silent). The dir
+   persists across cycles like the others (warm after a first cold
+   build). Then flip
    the TODO row to `done` **with the merge commit ref in the same commit**
    (or an immediately following `todo:` commit; bundled rows may share one
    such `todo:` commit naming every row + its ref — Trivial-row bundling).
@@ -242,7 +257,10 @@ hosted (impl and validator alike) has been harvested.
   that isn't one `git log` away.
 - Final gates green in main (build + clippy + test) → push anything
   remaining (eval commits, Outcomes) → `goal_complete` with the cycle
-  summary. Never force-push; a rejected push means the remote moved — stop
+  summary. Final gates run in main under the T57 main-dedicated cache:
+  `CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-main`, the
+  same ALWAYS rule as step 5's post-merge re-run. Never force-push; a
+  rejected push means the remote moved — stop
   and note it, don't reconcile mid-cycle.
 - **Your wrap is the next cycle's input.** `loopd.sh` relaunches this spec
   back-to-back with no human in the loop — TODO.md, EVALUATION.md and
