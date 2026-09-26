@@ -278,8 +278,10 @@ stale — so worktree builds — implementation children and the orchestrator's
 own gates — share one warm incremental cache, kept separate from the repo's
 own `target/`; validators and overlap-window gates use gitignored sibling
 caches (`target-shared-validate/`, `target-shared-gates/`) so concurrent
-cargo consumers never share an artifact slot (cargo's artifact filename
-doesn't encode the checkout path, so one shared dir is
+cargo consumers never share an artifact slot, while post-merge and final
+main gates build into `target-shared-main/` — a dir only main checkouts
+ever populate, so its artifacts are main content by construction (cargo's
+artifact filename doesn't encode the checkout path, so one shared dir is
 last-builder-wins). Nothing cleans them automatically: reclaiming is
 the operator's call (`du -sh target-shared`; `rm -rf target-shared` resets it —
 cheap, rebuilt once and warm for every worktree again).

@@ -19,6 +19,19 @@
 //! `target-shared-validate/` ALWAYS (serial role → one dir suffices);
 //! overlap-window gates into `target-shared-gates/`; impl children keep
 //! `target-shared/`. These pins guard the new carriers the same way.
+//!
+//! T57 — the main-dedicated gates dir: the SEQUENTIAL residue of that class.
+//! At T55's post-merge gates, step 3's worktree gates had compiled the
+//! worktree's PRE-T53 `tests/loopd_reexec.rs` into `target-shared`; the
+//! merge didn't touch that file, so its main-checkout mtime stayed OLDER
+//! than the artifact and cargo ran the stale binary as fresh (3/4 false
+//! red; the false-GREEN leg — a stale passing binary masking a real main
+//! failure — is silent). Post-merge (step 5) and final main (Phase 3)
+//! gates therefore build into `target-shared-main/` ALWAYS — a dir whose
+//! builders are ALWAYS main checkouts, so its artifacts are main content
+//! by construction. These pins guard the new carriers (step 5's re-run,
+//! Phase 3's final gates, the .gitignore line, the README clause) and that
+//! the dir never leaks into META-SPEC.md or loopd.sh.
 
 use std::path::PathBuf;
 
@@ -28,6 +41,11 @@ const VALIDATE: &str = "CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-sha
 /// T52: the orchestrator's gate dir for the T44 overlap window (incl.
 /// N+1's impl during N's post-merge gates).
 const GATES: &str = "CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-gates";
+/// T57: the main-dedicated gates dir — step 5's post-merge re-run and
+/// Phase 3's final gates build here ALWAYS, never conditionally on
+/// overlap (a dir whose builders are ALWAYS main checkouts keeps
+/// post-merge artifacts identical to main content by construction).
+const MAIN: &str = "CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-main";
 /// The repo's OWN target dir — no template may ever point CARGO_TARGET_DIR at
 /// it (that is the separation the T47 review is required to check).
 const REPO_TARGET: &str = "CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target";
@@ -373,6 +391,157 @@ fn no_template_points_cargo_target_dir_at_the_repo_own_target() {
             "{file} must never point CARGO_TARGET_DIR at the repo's own \
              target/ (offsets {offenders:?}) — the shared dir is \
              target-shared (T47 separation)"
+        );
+    }
+}
+
+#[test]
+fn gitignore_ignores_the_t57_main_dedicated_dir() {
+    let gitignore = read(".gitignore");
+    // (4a) Exact-count, not existence (T47/T52 carrier doctrine): the line
+    // must occur EXACTLY once.
+    count_eq(
+        &gitignore,
+        "target-shared-main/",
+        1,
+        ".gitignore target-shared-main line (T57)",
+    );
+    // Contiguous with the target-shared* family (req 2) — one four-line
+    // block, not appended at a distant end of the file.
+    let mut ats: Vec<usize> = Vec::new();
+    for dir in [
+        "target-shared/",
+        "target-shared-validate/",
+        "target-shared-gates/",
+        "target-shared-main/",
+    ] {
+        ats.push(gitignore.lines().position(|l| l.trim() == dir).unwrap_or_else(
+            || panic!(".gitignore must keep a `{dir}` line (T47/T52/T57); got:\n{gitignore}"),
+        ));
+    }
+    ats.sort_unstable();
+    assert_eq!(
+        ats[3] - ats[0],
+        3,
+        "the four target-shared* cache lines must form one contiguous block \
+         in .gitignore (T57); got:\n{gitignore}"
+    );
+}
+
+#[test]
+fn loop_spec_post_merge_gates_name_the_main_dedicated_dir() {
+    let spec = read("LOOP-SPEC.md");
+    // (4b) Strictly stronger than "named at least once": the full env
+    // prefix occurs EXACTLY twice — step 5's post-merge re-run + Phase 3's
+    // final gates. Dropping either carrier (or duplicating one) fails.
+    count_eq(
+        &spec,
+        MAIN,
+        2,
+        "LOOP-SPEC target-shared-main env-prefix carriers: step-5 post-merge \
+         re-run + Phase-3 final gates (T57)",
+    );
+    // The post-merge gate instruction itself names the dir: everything
+    // between `re-run gates in main` and the row-flip clause carries the
+    // full prefix and the unconditional ALWAYS form.
+    let at = spec
+        .find("re-run gates in main")
+        .expect("LOOP-SPEC step 5 keeps the `re-run gates in main` instruction (T57)");
+    let end = at
+        + spec[at..]
+            .find("the TODO row to `done`")
+            .expect("LOOP-SPEC step 5 keeps the row-flip clause (T57)");
+    let window = &spec[at..end];
+    assert!(
+        window.contains(MAIN),
+        "the step-5 post-merge gate instruction (`re-run gates in main`) must \
+         name {MAIN} (T57); got:\n{window}"
+    );
+    assert!(
+        window.contains("ALWAYS"),
+        "the step-5 post-merge rule must be stated in its unconditional ALWAYS \
+         form — never conditionally on the T44 overlap (T57); got:\n{window}"
+    );
+    // Phase 3's final gates carry the same rule.
+    let p3 = spec
+        .find("Final gates green in main")
+        .expect("LOOP-SPEC Phase 3 keeps the final-gates bullet (T57)");
+    let w3 = &spec[p3..(p3 + 500).min(spec.len())];
+    assert!(
+        w3.contains(MAIN),
+        "Phase 3's final-gates bullet must name {MAIN} (T57); got:\n{w3}"
+    );
+    // Mechanism sentence, T52 paragraph style: artifact filename excludes
+    // the checkout path → last-builder-wins → only a main-builders-only dir
+    // keeps post-merge artifacts identical to main content.
+    assert!(
+        spec.contains("artifact filename excludes the checkout path"),
+        "LOOP-SPEC must carry the T57 mechanism sentence (cargo's artifact \
+         filename excludes the checkout path)"
+    );
+    assert!(
+        spec.matches("last-builder-wins").count() >= 2,
+        "LOOP-SPEC must keep the T52 step-3 mechanism AND gain the T57 step-5 \
+         one (last-builder-wins twice)"
+    );
+    // The T55 false-red receipt, named in the parenthetical: the stale
+    // pre-T53 worktree binary executed as fresh.
+    assert!(
+        spec.contains("T55") && spec.contains("loopd_reexec"),
+        "the T57 mechanism parenthetical must name the T55 false-red receipt \
+         (the stale pre-T53 tests/loopd_reexec.rs binary)"
+    );
+    // The old crossover text is gone: step 3's role-keyed rule no longer
+    // claims to govern post-merge gates — they are ALWAYS main-dedicated.
+    assert!(
+        !spec.contains("applies here too"),
+        "step 5 must no longer defer post-merge gates to step 3's role-keyed \
+         rule (`applies here too`) — they use target-shared-main ALWAYS (T57)"
+    );
+}
+
+#[test]
+fn readme_target_cache_clause_names_the_main_dedicated_dir() {
+    let readme = read("README.md");
+    count_eq(
+        &readme,
+        "target-shared-main/",
+        1,
+        "README target-cache clause (T57)",
+    );
+    // Integrated into the existing continuous-mode paragraph (req 3), not a
+    // new bullet: the dir appears in the SAME paragraph as the T52 sibling
+    // caches, with its role spelled out.
+    let at = readme
+        .find("target-shared-validate/")
+        .expect("README keeps the T52 sibling-cache clause");
+    let start = readme[..at].rfind("\n\n").map(|i| i + 2).unwrap_or(0);
+    let end = at + readme[at..].find("\n\n").unwrap_or(readme.len() - at);
+    let para = &readme[start..end];
+    assert!(
+        para.contains("target-shared-main/"),
+        "README's target-cache clause must name target-shared-main/ in the \
+         same paragraph as the T52 sibling caches (T57); got:\n{para}"
+    );
+    assert!(
+        para.contains("post-merge"),
+        "the README clause must say the dir serves the post-merge (and final \
+         main) gates (T57); got:\n{para}"
+    );
+}
+
+#[test]
+fn t57_dir_stays_scoped_to_the_orchestrator_surfaces() {
+    // Req 5: META-SPEC.md and loopd.sh are untouched — the main-dedicated
+    // dir is a LOOP-SPEC orchestrator-gates carrier only (loopd.sh spawns
+    // the orchestrator with `target-shared`; it never gates in main, and
+    // the child-launch doctrine is unchanged).
+    for file in ["META-SPEC.md", "loopd.sh"] {
+        let text = read(file);
+        assert!(
+            !text.contains("target-shared-main"),
+            "{file} must NOT name the T57 main-dedicated dir — it is scoped \
+             to LOOP-SPEC.md (+ .gitignore/README) (T57 req 5)"
         );
     }
 }
