@@ -239,7 +239,43 @@ words. If the queue outlives this cycle's budget, unworked rows stay
 
 ## Outcomes (filled at cycle wrap — LOOP-SPEC Phase 3)
 
-### Cycle 31 (2026-09-26, ~08:06– EDT) — MANDATORY fresh eval (queue EMPTY); T67 landed (check-line doctrine + guard)
+### Cycle 31 (2026-09-26, ~08:06– EDT) — MANDATORY fresh eval (queue EMPTY); T67 + T68 landed — QUEUE DRAINED
+
+**T68 — `delegate status` `wait_secs` wakes on significant change only
+(pri 3, src/tools.rs + README clause, +283/−16) → done `362e9b9` (impl
+`6e10195`, merge commit).** glm impl goal-accepted at 49/50 (budget_low
+at 8, wrapped inside the T18 margin): `DelegateSummary::significant_ne`
+compares exactly the six-field wake set (max_iters, last_iteration,
+budget_low_seen, goal_seen, abort_seen, abort_reason) with a
+field-by-field pin so a field cannot silently migrate between the wake
+set and the churn set; `last_event` churn still renders (the deadline
+leg's final read) but never wakes; the creation/liveness/deadline legs
+are byte-unchanged and T29's byte-identical instant-leg pin passes
+untouched. The demand evidence got one more leg DURING this very arc:
+the T67/T68 child polls woke at 2s on `wait_secs: 100`–`110` four times
+before the orchestrator fell back to bash-sleep pacing — the leak
+fixing itself mid-cycle, recorded. Doc honesty at all three surfaces
+(doc comment, both schema descriptions, README clause); the child
+deliberately left LOOP-SPEC §2's polling sentence untouched
+(orchestrator-facing, makes no wake-condition claim — the validator
+agreed, finding 4). kimi VERDICT: PASS 39/50 — reqs 1–4 + acceptance
+verified point by point, gates independently re-run (532/532 + clippy +
+spec check 18+13 under target-shared-validate), 6/6 mutants killed
+(any-field revert RED at 2.650s vs the 2.9s lower bound — reproducing
+the child's own 2.651s evidence, gutted `significant_ne`, churn field
+added to the wake set, goal_seen dropped, stale schema description,
+stale README clause), tree restored byte-clean with final gates re-run;
+one non-blocking observation (the churn pin's 30s upper bound is loose;
+the 2.9s lower bound + `waited ≥ 3` tripwire are load-bearing).
+Orchestrator gates independently re-run 532/532 + clippy under
+target-shared in-worktree, then 532/532 + clippy post-merge under
+target-shared-main. 3 artifacts harvested (impl + validator events,
+validator verdict ledger; the impl's ledger was seed-trivial — zero
+`update_ledger` calls — skipped per T32). T29's long-poll premise
+(cycle 10: 13% of orchestrator iterations on instant polls) is finally
+realized: a healthy child now holds a `wait_secs` block until its
+iteration advances, a verdict/flag appears, it dies, or the deadline —
+the ~10–25-iteration-per-child leak on 120-iteration cycles is closed.
 
 **T67 — spec check lines never invoke `cargo test --lib` (pri 2,
 DOCTRINE: META-META-SPEC.md + tests/todo_consistency.rs + t64 spec
