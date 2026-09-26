@@ -1246,40 +1246,193 @@ pub fn estimate_tokens(messages: &[Message]) -> usize {
     chars / 4
 }
 
-/// Transcript trimming: above 120k estimated tokens, replace tool_result /
-/// tool_use payloads older than the last 20 messages with `"[trimmed]"` until
-/// under 80k. Message 0 and the last 20 messages are never touched.
-pub fn transcript_trim(messages: &mut [Message]) -> bool {
-    if estimate_tokens(messages) <= TRIM_ABOVE_TOKENS {
+/// T77: fixed 16k-token trim segments. Once a segment this size is collapsed
+/// its bytes never change again — only whole oldest-complete segments are
+/// ever edited, so each trim event appends one collapse at the frozen
+/// boundary and the request prefix stays byte-stable (prompt-cache friendly).
+const SEGMENT_TOKENS: usize = 16_000;
+
+/// Serialized length of one message, 0 when it cannot serialize (mirrors
+/// [`estimate_tokens`], which skips such messages).
+fn message_chars(msg: &Message) -> usize {
+    serde_json::to_string(msg).map(|s| s.len()).unwrap_or(0)
+}
+
+fn count_tool_results(msg: &Message) -> usize {
+    msg.content
+        .iter()
+        .filter(|b| matches!(b, ContentBlock::Known(KnownBlock::ToolResult { .. })))
+        .count()
+}
+
+/// A user message carrying tool_result blocks. In the loop's message flow
+/// such a message immediately follows the assistant message holding the
+/// matching tool_use, so a segment boundary must never fall right before it.
+fn is_tool_result_user(msg: &Message) -> bool {
+    msg.role == "user" && count_tool_results(msg) > 0
+}
+
+/// A T77 collapse marker written by an earlier trim: a user message whose
+/// single text block starts with `[trimmed:`. Assistant text can never match
+/// (role differs) and operator notes are prefixed `[operator]`, so detection
+/// needs no hidden state — a resumed transcript re-segments identically.
+fn is_trim_marker(msg: &Message) -> bool {
+    if msg.role != "user" || msg.content.len() != 1 {
         return false;
     }
-    let trim_end = messages.len().saturating_sub(KEEP_LAST_MESSAGES);
-    let mut changed = false;
-    let mut i = 1; // never trim message 0
-    while i < trim_end {
-        let mut replaced_any = false;
-        for block in messages[i].content.iter_mut() {
-            match block {
-                ContentBlock::Known(KnownBlock::ToolResult { content, .. }) => {
-                    *content = Value::String("[trimmed]".to_string());
-                    replaced_any = true;
-                }
-                ContentBlock::Known(KnownBlock::ToolUse { input, .. }) => {
-                    *input = json!({});
-                    replaced_any = true;
-                }
-                _ => {}
-            }
+    match &msg.content[0] {
+        ContentBlock::Known(KnownBlock::Text { text }) => text.starts_with("[trimmed:"),
+        _ => false,
+    }
+}
+
+/// T77: the segment-level collapse marker. One message stands in for the
+/// whole segment; `~Nk` is the segment's own token estimate rounded to the
+/// nearest 1k (canonical fixed 16k segments render exactly `~16k`), and the
+/// tool-result count is what the segment held.
+fn trim_marker_text(tokens: usize, tool_results: usize) -> String {
+    format!(
+        "[trimmed: ~{}k tokens, {} tool results]",
+        (tokens + 500) / 1000,
+        tool_results
+    )
+}
+
+/// One trimmable segment: the half-open message range `[start..end)` inside
+/// the trimmable window (never message 0, never the last
+/// [`KEEP_LAST_MESSAGES`] messages), its token estimate and tool-result
+/// count.
+struct TrimSegment {
+    start: usize,
+    end: usize, // exclusive
+    tokens: usize,
+    tool_results: usize,
+    /// Accumulated to a full [`SEGMENT_TOKENS`] block — the only kind T77
+    /// collapses. A segment younger than the threshold stays verbatim.
+    complete: bool,
+    /// Already collapsed to a marker on an earlier trim: frozen bytes, kept
+    /// as its own singleton segment so later segments chain from the same
+    /// position forever.
+    collapsed: bool,
+    /// Collapsing would strand a tool_use/tool_result pair across the
+    /// segment boundary.
+    pairing_unsafe: bool,
+}
+
+/// T77: partition the trimmable window into FIXED ~16k-token segments with a
+/// deterministic front-to-back walk, so the same message prefix always
+/// partitions identically and boundaries never move once written. Markers
+/// from earlier trims are singleton frozen segments; a segment completes
+/// when its accumulation reaches [`SEGMENT_TOKENS`], then absorbs the
+/// immediately following tool_result user message(s) so a collapse never
+/// separates an assistant tool_use from its result.
+fn plan_trim_segments(messages: &[Message], window_end: usize) -> Vec<TrimSegment> {
+    let mut segments = Vec::new();
+    let mut i = 1; // message 0 is never trimmed
+    while i < window_end {
+        if is_trim_marker(&messages[i]) {
+            segments.push(TrimSegment {
+                start: i,
+                end: i + 1,
+                tokens: 0,
+                tool_results: 0,
+                complete: false,
+                collapsed: true,
+                pairing_unsafe: false,
+            });
+            i += 1;
+            continue;
         }
-        if replaced_any {
-            changed = true;
-            if estimate_tokens(messages) <= TRIM_TARGET_TOKENS {
+        let start = i;
+        let (mut chars, mut tool_results) = (0usize, 0usize);
+        let mut end = i;
+        while end < window_end {
+            chars += message_chars(&messages[end]);
+            tool_results += count_tool_results(&messages[end]);
+            end += 1;
+            if chars / 4 >= SEGMENT_TOKENS {
                 break;
             }
         }
-        i += 1;
+        let complete = chars / 4 >= SEGMENT_TOKENS;
+        // Pairing extension: a complete segment must not end right before a
+        // tool_result message — the tool_use it answers sits inside the
+        // segment. Absorb the result while it is still inside the window.
+        while complete && end < window_end && is_tool_result_user(&messages[end]) {
+            chars += message_chars(&messages[end]);
+            tool_results += count_tool_results(&messages[end]);
+            end += 1;
+        }
+        // Pairing safety: a tool_result in the segment's FIRST message pairs
+        // with a tool_use before the segment, and a segment ending at the
+        // window edge must not leave the first protected message a stranded
+        // tool_result. Either way the segment is not safe to collapse.
+        let pairing_unsafe = count_tool_results(&messages[start]) > 0
+            || (complete && messages.get(end).is_some_and(is_tool_result_user));
+        segments.push(TrimSegment {
+            start,
+            end,
+            tokens: chars / 4,
+            tool_results,
+            complete,
+            collapsed: false,
+            pairing_unsafe,
+        });
+        i = end;
     }
-    changed
+    segments
+}
+
+/// Transcript trimming (T77 — cache-stable, segment-frozen): above
+/// [`TRIM_ABOVE_TOKENS`] estimated tokens, collapse whole oldest-complete
+/// [`SEGMENT_TOKENS`] segments until under [`TRIM_TARGET_TOKENS`]. Each
+/// collapse replaces the ENTIRE segment with one marker message —
+/// `[trimmed: ~16k tokens, N tool results]` — written once and never edited
+/// again: every trim event only appends collapses at the frozen boundary, so
+/// the request prefix up to the last marker stays byte-stable across
+/// assemblies (prompt-cache friendly, unlike the old mid-history `[trimmed]`
+/// gutting which re-edited bytes at an arbitrary message boundary). Message
+/// 0 and the last [`KEEP_LAST_MESSAGES`] messages are never touched; a
+/// segment younger than the threshold stays verbatim. Ledger, resume and
+/// rotation semantics are unchanged — the caller still rewrites the
+/// transcript file only when something collapsed.
+pub fn transcript_trim(messages: &mut Vec<Message>) -> bool {
+    if estimate_tokens(messages) <= TRIM_ABOVE_TOKENS {
+        return false;
+    }
+    let window_end = messages.len().saturating_sub(KEEP_LAST_MESSAGES);
+    if window_end <= 1 {
+        return false; // nothing outside message 0 + the protected tail
+    }
+    let segments = plan_trim_segments(messages, window_end);
+    // Choose oldest-first (the frozen boundary only ever moves forward),
+    // tracking the estimated total as each segment shrinks to its marker.
+    let mut total = estimate_tokens(messages);
+    let mut chosen: Vec<(usize, usize, Message)> = Vec::new();
+    for seg in &segments {
+        if total <= TRIM_TARGET_TOKENS {
+            break;
+        }
+        if seg.collapsed || !seg.complete || seg.pairing_unsafe {
+            continue;
+        }
+        let marker = Message::user(vec![ContentBlock::text_block(trim_marker_text(
+            seg.tokens, seg.tool_results,
+        ))]);
+        total = total
+            .saturating_sub(seg.tokens)
+            .saturating_add(message_chars(&marker) / 4);
+        chosen.push((seg.start, seg.end, marker));
+    }
+    if chosen.is_empty() {
+        return false;
+    }
+    // Splice back-to-front so earlier ranges stay valid.
+    chosen.sort_by_key(|(start, _, _)| std::cmp::Reverse(*start));
+    for (start, end, marker) in chosen {
+        messages.splice(start..end, std::iter::once(marker));
+    }
+    true
 }
 
 pub fn build_system_prompt(spec: &str, goal: &str, ledger_text: &str) -> String {
@@ -1392,6 +1545,23 @@ mod tests {
         Message::user(vec![ContentBlock::tool_result_block("t1", text.to_string(), false)])
     }
 
+    /// T77 fixture: one realistic exchange — assistant(tool_use) followed by
+    /// user(tool_result) — the shape every trimmable transcript region has.
+    fn use_result_pair(id: &str, payload: &str) -> Vec<Message> {
+        vec![
+            Message::assistant(vec![ContentBlock::Known(KnownBlock::ToolUse {
+                id: id.to_string(),
+                name: "bash".into(),
+                input: json!({ "command": payload }),
+            })]),
+            Message::user(vec![ContentBlock::tool_result_block(
+                id,
+                payload.to_string(),
+                false,
+            )]),
+        ]
+    }
+
     #[test]
     fn tripwire_fires_on_three_identical_errors() {
         let recent: Vec<ToolResult> = (0..3)
@@ -1489,25 +1659,41 @@ mod tests {
     #[test]
     fn trimming_preserves_last_20_and_first_message() {
         let long = "x".repeat(25_000);
-        let mut messages = vec![tool_result_msg("first message")];
-        for _ in 0..30 {
-            messages.push(tool_result_msg(&long));
+        let mut messages = vec![Message::user(vec![ContentBlock::text_block("first message")])];
+        for i in 0..15 {
+            messages.extend(use_result_pair(&format!("tu_{i}"), &long));
         }
         assert!(estimate_tokens(&messages) > TRIM_ABOVE_TOKENS);
         assert!(transcript_trim(&mut messages));
 
+        // Message 0 is never touched.
+        assert_eq!(messages[0].content[0].text(), Some("first message"));
+        // The trimmable pool collapses into segment markers; the protected
+        // tail keeps its bytes.
+        let markers = marker_texts(&messages);
+        assert!(!markers.is_empty(), "expected at least one segment marker");
+        // No gutted `"[trimmed]"` payloads anywhere — old-style edits are
+        // gone; whole segments become markers.
         for (i, msg) in messages.iter().enumerate() {
-            let ContentBlock::Known(KnownBlock::ToolResult { content, .. }) = &msg.content[0]
-            else {
-                panic!("expected tool_result at index {i}");
-            };
-            if i == 0 {
-                assert_eq!(content, "first message", "message 0 must never be trimmed");
-            } else if i < messages.len() - KEEP_LAST_MESSAGES {
-                assert_eq!(content, "[trimmed]", "index {i} should be trimmed");
-            } else {
-                assert_eq!(content, &long, "index {i} must stay intact");
+            if i == 0 || is_trim_marker(msg) {
+                if is_trim_marker(msg) {
+                    assert_eq!(msg.role, "user");
+                }
+                continue;
             }
+            match &msg.content[0] {
+                ContentBlock::Known(KnownBlock::ToolResult { content, .. }) => {
+                    assert_eq!(content, &long, "verbatim tool_result");
+                }
+                ContentBlock::Known(KnownBlock::ToolUse { input, .. }) => {
+                    assert_eq!(input["command"], json!(long), "verbatim tool_use");
+                }
+                other => panic!("unexpected block {other:?}"),
+            }
+        }
+        // The protected tail is untouched.
+        for msg in &messages[messages.len() - KEEP_LAST_MESSAGES..] {
+            assert!(!is_trim_marker(msg), "tail must never carry a marker");
         }
     }
 
@@ -1525,23 +1711,278 @@ mod tests {
     #[test]
     fn trimming_respects_target_or_exhausts() {
         let long = "y".repeat(10_000);
-        let mut messages = vec![tool_result_msg("first")];
-        for _ in 0..60 {
-            messages.push(tool_result_msg(&long));
+        let mut messages = vec![Message::user(vec![ContentBlock::text_block("first")])];
+        for i in 0..30 {
+            messages.extend(use_result_pair(&format!("tu_{i}"), &long));
         }
-        transcript_trim(&mut messages);
-        // 61 messages of ~10k chars start above the 120k-token threshold; the
-        // trimmable pool (everything older than the last 20) is big enough to
-        // reach the 80k-token target.
+        assert!(transcript_trim(&mut messages));
+        // 61 messages of ~10k-char payloads start above the 120k-token
+        // threshold; the trimmable pool (everything older than the last 20)
+        // is big enough to reach the 80k-token target.
         assert!(estimate_tokens(&messages) <= TRIM_TARGET_TOKENS);
         // The last 20 are untouched.
         for msg in &messages[messages.len() - KEEP_LAST_MESSAGES..] {
-            let ContentBlock::Known(KnownBlock::ToolResult { content, .. }) = &msg.content[0]
-            else {
-                panic!("expected tool_result");
-            };
-            assert_eq!(content, &long);
+            assert!(!is_trim_marker(msg), "tail never carries a marker");
         }
+    }
+
+    /// T77: a frozen segment is byte-identical after later trims — the
+    /// marker sequence only ever grows by appendage, and the request prefix
+    /// through the last frozen marker never changes.
+    #[test]
+    fn trim_frozen_segments_byte_identical_after_later_trims() {
+        let long = "z".repeat(25_000);
+        let mut messages = vec![Message::user(vec![ContentBlock::text_block("kick")])];
+        let mut pid = 0usize;
+        let add_pairs = |messages: &mut Vec<Message>, n: usize, pid: &mut usize| {
+            for _ in 0..n {
+                let payload = format!("{pid} {long}");
+                messages.extend(use_result_pair(&format!("tu_{pid}"), &payload));
+                *pid += 1;
+            }
+        };
+        add_pairs(&mut messages, 12, &mut pid);
+        assert!(transcript_trim(&mut messages), "first trim collapses");
+        let markers_after_1 = marker_texts(&messages);
+        assert!(!markers_after_1.is_empty());
+        // Frozen prefix: everything through the last marker, serialized.
+        let frozen_end = last_marker_index(&messages);
+        let frozen_1 = prefix_bytes(&messages, frozen_end);
+
+        // Grow past the next threshold and trim again.
+        add_pairs(&mut messages, 12, &mut pid);
+        assert!(transcript_trim(&mut messages), "second trim collapses");
+        let markers_after_2 = marker_texts(&messages);
+        assert!(
+            markers_after_2.len() > markers_after_1.len(),
+            "markers only grow: {} -> {}",
+            markers_after_1.len(),
+            markers_after_2.len()
+        );
+        assert_eq!(
+            &markers_after_2[..markers_after_1.len()],
+            &markers_after_1[..],
+            "old markers are frozen bytes, never rewritten"
+        );
+        assert_eq!(
+            prefix_bytes(&messages, frozen_end),
+            frozen_1,
+            "prefix up to the last frozen boundary is byte-stable"
+        );
+    }
+
+    /// T77: marker format — the segment-level marker `[trimmed: ~16k tokens,
+    /// N tool results]` stands in for the WHOLE segment (one edit per
+    /// segment, once ever). A pair of ~32k-char payloads is one canonical
+    /// ~16k segment, so every marker renders the exact spec format.
+    #[test]
+    fn trim_marker_format_is_canonical_16k() {
+        let long = "q".repeat(32_000);
+        let mut messages = vec![Message::user(vec![ContentBlock::text_block("kick")])];
+        for i in 0..10 {
+            messages.extend(use_result_pair(&format!("tu_{i}"), &long));
+        }
+        // 21 messages: the 20-message protected tail swallows the whole pool
+        // — nothing trimmable yet, no partial edits either.
+        assert!(!transcript_trim(&mut messages), "protected tail swallows all");
+        assert!(marker_texts(&messages).is_empty());
+        assert!(messages.iter().all(|m| !is_trim_marker(m)));
+
+        for i in 10..20 {
+            messages.extend(use_result_pair(&format!("tu_{i}"), &long));
+        }
+        assert!(transcript_trim(&mut messages));
+        let markers = marker_texts(&messages);
+        assert_eq!(markers.len(), 10, "one marker per collapsed pair-segment");
+        for m in &markers {
+            assert_eq!(
+                m, "[trimmed: ~16k tokens, 1 tool results]",
+                "canonical 16k segment marker format"
+            );
+        }
+        // Message 0 never touched.
+        assert_eq!(messages[0].content[0].text(), Some("kick"));
+    }
+
+    /// T77: threshold math at segment granularity — only whole
+    /// oldest-complete segments collapse until the target; complete segments
+    /// YOUNGER than the point where the target is met stay verbatim.
+    #[test]
+    fn trim_young_complete_segments_stay_verbatim() {
+        let long = "w".repeat(4_400);
+        let mut messages = vec![Message::user(vec![ContentBlock::text_block("kick")])];
+        for i in 0..60 {
+            messages.extend(use_result_pair(&format!("tu_{i}"), &long));
+        }
+        assert!(estimate_tokens(&messages) > TRIM_ABOVE_TOKENS);
+        assert!(transcript_trim(&mut messages));
+
+        let markers = marker_texts(&messages);
+        assert!(!markers.is_empty());
+        // The target was met before the pool ran out: young complete
+        // segments survive verbatim between the last marker and the tail.
+        let young: Vec<&Message> = messages[frozen_or_marker_end(&messages)..]
+            .iter()
+            .take(messages.len() - KEEP_LAST_MESSAGES - frozen_or_marker_end(&messages))
+            .collect();
+        assert!(
+            !young.is_empty(),
+            "target met with pool to spare leaves young segments"
+        );
+        for msg in &young {
+            assert!(!is_trim_marker(msg));
+            match &msg.content[0] {
+                ContentBlock::Known(KnownBlock::ToolResult { content, .. }) => {
+                    assert!(content.as_str().unwrap_or_default().contains(&long));
+                }
+                ContentBlock::Known(KnownBlock::ToolUse { .. }) => {}
+                other => panic!("unexpected block {other:?}"),
+            }
+        }
+        // The estimate landed at or under the target: trimming stops once
+        // under 80k, whole segments only.
+        assert!(estimate_tokens(&messages) <= TRIM_TARGET_TOKENS);
+    }
+
+    /// T77 integration: a scripted long run past two trim thresholds keeps
+    /// the request prefix up to the last frozen boundary byte-stable across
+    /// three consecutive API request assemblies, and the marker list only
+    /// ever grows by appendage.
+    #[test]
+    fn trim_requests_byte_stable_across_consecutive_assemblies() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (_utx, urx) = mpsc::channel::<SlashUpdate>();
+        let controls = Controls::detached();
+        let ctx = ctx_for(&tmp, Mode::Autonomous, &controls, &urx, None, &observ::Sink::Noop);
+        let mut knobs = knobs_with(30);
+        let loud = format!("printf '{}'", "x".repeat(25_000));
+        let mut responses = Vec::new();
+        for _ in 0..18 {
+            responses.push(tool_use_response("bash", json!({ "command": loud.clone() })));
+        }
+        responses.push(tool_use_response("goal_complete", json!({ "summary": "done" })));
+        let mut llm = ScriptedLlm::new(responses);
+        let mut gate = None;
+        let mut messages = Vec::new();
+        let outcome = drive_loop(
+            &ctx,
+            &mut knobs,
+            &mut llm,
+            &mut gate,
+            &mut messages,
+            Some("check: true".to_string()),
+            &mut RecordingSink::default(),
+            &mut McpRegistry::new(tmp.path(), true, None).unwrap(),
+        )
+        .unwrap();
+        assert!(matches!(outcome, DriveOutcome::RunFinished(0)));
+
+        // Per-assembly marker counts; each increase is one trim event.
+        let assemblies: Vec<Vec<Message>> =
+            llm.calls.iter().map(|(_, m)| m.clone()).collect();
+        let counts: Vec<usize> = assemblies
+            .iter()
+            .map(|m| m.iter().filter(|x| is_trim_marker(x)).count())
+            .collect();
+        assert!(
+            counts.iter().max().copied().unwrap_or(0) >= 3,
+            "run went past two trim thresholds: {counts:?}"
+        );
+        let increases: Vec<usize> = (1..counts.len())
+            .filter(|&i| counts[i] > counts[i - 1])
+            .collect();
+        assert!(increases.len() >= 2, "two trim events expected: {counts:?}");
+
+        // Across the assemblies straddling a trim event that extends an
+        // already-frozen prefix — the last pre-trim assembly and the two
+        // after it — the prefix through that assembly's last frozen marker
+        // is byte-identical.
+        let t = *increases
+            .iter()
+            .find(|&&i| counts[i - 1] > 0)
+            .expect("a trim extending existing frozen markers");
+        assert!(t + 2 < assemblies.len());
+        let frozen = assemblies[t - 1]
+            .iter()
+            .rposition(is_trim_marker)
+            .expect("pre-trim assembly carries frozen markers");
+        let want = prefix_bytes(&assemblies[t - 1], frozen);
+        assert_eq!(prefix_bytes(&assemblies[t], frozen), want);
+        assert_eq!(prefix_bytes(&assemblies[t + 1], frozen), want);
+        // Marker bytes only ever grow by appendage — never rewritten.
+        let m1 = marker_texts(&assemblies[t - 1]);
+        let m2 = marker_texts(&assemblies[t]);
+        let m3 = marker_texts(&assemblies[t + 1]);
+        assert_eq!(&m2[..m1.len()], &m1[..]);
+        assert_eq!(&m3[..m1.len()], &m1[..]);
+    }
+
+    /// T77: a collapse never splits a tool_use/tool_result pair — every
+    /// remaining tool_use id has its tool_result and vice versa.
+    #[test]
+    fn trim_never_splits_tool_pair() {
+        let long = "w".repeat(30_000);
+        let mut messages = vec![Message::user(vec![ContentBlock::text_block("kick")])];
+        // Paired exchanges: assistant(tool_use) + user(tool_result).
+        for i in 0..24 {
+            messages.push(Message::assistant(vec![ContentBlock::Known(
+                KnownBlock::ToolUse {
+                    id: format!("tu_{i}"),
+                    name: "bash".into(),
+                    input: json!({ "command": format!("run {i} {}", long) }),
+                },
+            )]));
+            messages.push(Message::user(vec![ContentBlock::tool_result_block(
+                &format!("tu_{i}"),
+                long.clone(),
+                false,
+            )]));
+        }
+        assert!(transcript_trim(&mut messages));
+        let mut uses = std::collections::BTreeSet::new();
+        let mut results = std::collections::BTreeSet::new();
+        for msg in messages.iter() {
+            for block in &msg.content {
+                match block {
+                    ContentBlock::Known(KnownBlock::ToolUse { id, .. }) => {
+                        uses.insert(id.clone());
+                    }
+                    ContentBlock::Known(KnownBlock::ToolResult { tool_use_id, .. }) => {
+                        results.insert(tool_use_id.clone());
+                    }
+                    _ => {}
+                }
+            }
+        }
+        assert_eq!(uses, results, "every remaining pair is intact");
+        assert!(!uses.is_empty(), "the tail keeps real pairs");
+    }
+
+    fn marker_texts(messages: &[Message]) -> Vec<String> {
+        messages
+            .iter()
+            .filter(|m| is_trim_marker(m))
+            .filter_map(|m| m.content[0].text().map(str::to_string))
+            .collect()
+    }
+
+    fn last_marker_index(messages: &[Message]) -> usize {
+        messages
+            .iter()
+            .rposition(is_trim_marker)
+            .expect("at least one marker")
+    }
+
+    fn prefix_bytes(messages: &[Message], through: usize) -> Vec<u8> {
+        let mut out = Vec::new();
+        for msg in &messages[..=through] {
+            out.extend_from_slice(serde_json::to_string(msg).unwrap().as_bytes());
+        }
+        out
+    }
+
+    fn frozen_or_marker_end(messages: &[Message]) -> usize {
+        last_marker_index(messages) + 1
     }
 
     #[test]

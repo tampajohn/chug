@@ -98,8 +98,11 @@ returns to idle, repeat. Natural stops end the turn; budgets are per turn.
   token cost is printed too (`tokens: <input> in / <output> out (cumulative)`)
   — on goal-complete output as well, right after the summary line — so a
   wrapped run's spend is visible without mining `.chug/events.jsonl`
-- **Transcript trimming** — old tool outputs collapse to `[trimmed]` past a
-  token estimate; the ledger carries durable state. A fresh `chug run`
+- **Transcript trimming** — past a token estimate, whole oldest-complete
+  16k-token segments of old history collapse to one frozen marker
+  (`[trimmed: ~16k tokens, N tool results]`) each, so the cached request
+  prefix stays byte-stable; the ledger carries durable state. A fresh
+  `chug run`
   rotates a non-empty `.chug/transcript.jsonl` to
   `.chug/transcript-<timestamp>.jsonl` before its first append, so
   `--resume` never splices foreign sessions into context

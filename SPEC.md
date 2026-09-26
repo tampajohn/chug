@@ -107,10 +107,15 @@ print summary + ledger, exit 0.
 identical `content` (first 500 chars), abort("stuck: repeated error") exit 2.
 Any abort prints the ledger and `chug run --resume` hint, exit non-zero.
 
-**Transcript trimming**: estimate tokens as total chars / 4. Above 120_000,
-walk from the 2nd message onward replacing tool_result/tool_use text older
-than the last 20 messages with `"[trimmed]"` until under 80_000. Never trim
-message 0 or the last 20. Ledger carries durable state — trimming is safe.
+**Transcript trimming** (T77): estimate tokens as total chars / 4. Above
+120_000, collapse whole oldest-complete 16k-token segments of history
+(everything older than the last 20 messages; message 0 never) until under
+80_000. Each collapse replaces the entire segment with one marker —
+`[trimmed: ~16k tokens, N tool results]` — written once and never edited
+again, so the request prefix up to the last marker stays byte-stable across
+assemblies (prompt-cache friendly). A segment younger than the threshold
+stays verbatim; tool_use/tool_result pairs are never split. Ledger carries
+durable state — trimming is safe.
 
 ## Structure (single crate, ~6 files)
 
