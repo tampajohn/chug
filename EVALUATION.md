@@ -251,6 +251,11 @@ until the operator restarts it).
 ---
 ## Outcomes (filled at cycle wrap — LOOP-SPEC Phase 3)
 
+### Cycle 16 (2026-09-26, ~23:55 EDT → ) — fresh eval (queue was EMPTY → rule couldn't fire) + T36 landed; T37 in flight
+
+**Landed:**
+- **T36 — loopd `--max-iters` 120→160** (pri 2, robustness/throughput; impl `d5141c9` glm goal-accepted 15/50 ~2.5 min first-try, merge `0586e1e`, flip + this entry in the same commit per T34 doctrine). +2/−2 loopd.sh only (line 72 code + line 69 comment, cycle-16 arithmetic: Phase 1 ≈45–55, item ≈28–35, wrap ≈10; minutes never binding 56–117 of 240). Spec check verbatim green in worktree AND main post-merge; `bash -n` clean; gates re-run independently — worktree 416+3 (14.6s), main 416+3 (14.8s), clippy `-D warnings` clean both trees. kimi adversarial validation **VERDICT: PASS** 11/50 ~2 min — 5/5 spec-check mutants killed (160→120, 160→999, duplicate-line→2 occurrences, 240→300, model→kimi-k9), baseline+restored PASS, all 4 requirements itemized, tree byte-identical post-mutations, no-supervisor-touch verified. 3 artifacts harvested pre-removal (impl + validate events, validate LEDGER; impl LEDGER seed-trivial, skipped per T32-cycle precedent). **Flake-watch note**: the impl child's full-suite run caught ONE transient `dead_port_probe_distinguishes_live_from_dead` failure under parallel load ("dropped port did not refuse connections") — 5/5 green isolated, child's full-suite re-run green, orchestrator's worktree + main gate runs both green; a shell-script number+comment cannot affect a TCP probe. First organic T31-residual sighting; carried to §3's watch line at wrap. Activation: operator's next loopd restart (human-decision carry, T27 path).
+
 ### Cycle 15 (2026-09-25, ~23:47–23:56 EDT) — freshness-skip; T35 landed, QUEUE DRAINED
 
 One `chug run --spec LOOP-SPEC.md` session (kimi-k3 orchestrator; glm-5-3-flash impl child), launched by loopd. **Freshness rule fired** (cycle-14 eval same-day + T35 `todo` with ready spec) → zero re-eval burn, straight to the queue.
