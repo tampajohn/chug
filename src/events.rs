@@ -164,7 +164,7 @@ impl ConsoleSink {
     }
 
     #[cfg(test)]
-    fn with_writers(out: Box<dyn Write>, err: Box<dyn Write>, cwd: PathBuf) -> Self {
+    pub(crate) fn with_writers(out: Box<dyn Write>, err: Box<dyn Write>, cwd: PathBuf) -> Self {
         ConsoleSink {
             out,
             err,

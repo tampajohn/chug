@@ -14,6 +14,7 @@ mod events;
 mod riskgate;
 mod ledger;
 mod observ;
+mod plan;
 mod tools;
 mod transcript;
 mod tui;
@@ -86,6 +87,36 @@ enum CliCommand {
         #[arg(long, default_value_t = false)]
         mcp_off: bool,
     },
+    /// Read-only planning session: explore the repo, draft an implementation
+    /// plan, end with `submit_plan`. Exactly five tools; no other write path.
+    Plan {
+        /// Goal text: what the plan should accomplish.
+        #[arg(long)]
+        goal: String,
+        /// Optional spec file (same resolution as `run`).
+        #[arg(long)]
+        spec: Option<PathBuf>,
+        /// Where to write the plan (cwd-sandboxed path; parent dirs created).
+        /// Absent → the plan prints to stdout.
+        #[arg(long)]
+        out: Option<PathBuf>,
+        /// Working directory; plan mode is read-only here. Defaults to `.`.
+        #[arg(long)]
+        cwd: Option<PathBuf>,
+        /// Model id. Order: --model, $CHUG_MODEL, claude-sonnet-4-6.
+        #[arg(long)]
+        model: Option<String>,
+        /// Iteration budget.
+        #[arg(long, default_value_t = 30)]
+        max_iters: u32,
+        /// Wall-clock budget in minutes.
+        #[arg(long, default_value_t = 20)]
+        max_minutes: u64,
+        /// Token budget: cumulative input+output tokens across the session.
+        /// 0 = unlimited.
+        #[arg(long, default_value_t = 0)]
+        max_tokens: u64,
+    },
     /// Print the current LEDGER.md.
     Ledger {
         /// Working directory. Defaults to `.`.
@@ -137,6 +168,18 @@ fn main() -> ExitCode {
     // the queued events still flush before the process exits.
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match cli.command {
         CliCommand::Ledger { cwd } => cmd_ledger(cwd),
+        CliCommand::Plan {
+            goal,
+            spec,
+            out,
+            cwd,
+            model,
+            max_iters,
+            max_minutes,
+            max_tokens,
+        } => cmd_plan(
+            goal, spec, out, cwd, model, max_iters, max_minutes, max_tokens,
+        ),
         CliCommand::Chat {
             cwd,
             model,
@@ -457,6 +500,50 @@ fn cmd_ledger(cwd: Option<PathBuf>) -> anyhow::Result<i32> {
     Ok(0)
 }
 
+/// T73: `chug plan` — the read-only planning session. Same model resolution
+/// and spec resolution as `run`; `--out` is passed through raw and resolved
+/// through the cwd sandbox when submit_plan writes.
+#[allow(clippy::too_many_arguments)] // one arg per clap flag, same shape as cmd_run
+fn cmd_plan(
+    goal: String,
+    spec: Option<PathBuf>,
+    out: Option<PathBuf>,
+    cwd: Option<PathBuf>,
+    model: Option<String>,
+    max_iters: u32,
+    max_minutes: u64,
+    max_tokens: u64,
+) -> anyhow::Result<i32> {
+    let cwd = resolve_cwd(cwd)?;
+    let spec = match spec {
+        Some(path) => Some(
+            path.canonicalize()
+                .with_context(|| format!("spec file {} not found", path.display()))?,
+        ),
+        None => None,
+    };
+    let model = model
+        .filter(|m| !m.trim().is_empty())
+        .or_else(|| std::env::var("CHUG_MODEL").ok().filter(|m| !m.trim().is_empty()))
+        .unwrap_or_else(|| driver::DEFAULT_MODEL.to_string());
+    // T11: same banner as run (the spec field is null when no --spec).
+    let head = build_info::resolve_head(&cwd);
+    build_info::print_startup_banner(&cwd, spec.as_deref(), &model, build_info::as_pair(&head));
+
+    let cfg = driver::PlanConfig {
+        cwd,
+        spec_path: spec,
+        goal,
+        model,
+        max_iters,
+        max_minutes,
+        max_tokens,
+        out_path: out,
+    };
+    let mut sink = events::ConsoleSink::new(cfg.cwd.clone());
+    driver::run_plan(cfg, &mut sink)
+}
+
 fn resolve_cwd(cwd: Option<PathBuf>) -> anyhow::Result<PathBuf> {
     let given = cwd.unwrap_or_else(|| PathBuf::from("."));
     given
@@ -539,5 +626,70 @@ mod tests {
             panic!("expected the chat subcommand");
         };
         assert_eq!(max_tokens, 1_000);
+    }
+
+    /// T73 clap pins: `chug plan` parses with the 30/20 defaults, carries the
+    /// full flag set, and rejects a missing --goal.
+    #[test]
+    fn cli_plan_parses_with_defaults_and_requires_goal() {
+        let cli = Cli::try_parse_from(["chug", "plan", "--goal", "x"]).expect("plan parses");
+        let CliCommand::Plan {
+            goal,
+            spec,
+            out,
+            max_iters,
+            max_minutes,
+            max_tokens,
+            ..
+        } = cli.command
+        else {
+            panic!("expected the plan subcommand");
+        };
+        assert_eq!(goal, "x");
+        assert!(spec.is_none() && out.is_none());
+        assert_eq!(max_iters, 30, "default iteration budget");
+        assert_eq!(max_minutes, 20, "default wall-clock budget");
+        assert_eq!(max_tokens, 0, "unset token budget = unlimited");
+
+        let cli = Cli::try_parse_from([
+            "chug",
+            "plan",
+            "--goal",
+            "draft it",
+            "--spec",
+            "SPEC.md",
+            "--out",
+            "p.md",
+            "--max-iters",
+            "5",
+            "--max-minutes",
+            "3",
+            "--max-tokens",
+            "1000",
+        ])
+        .expect("full flag set parses");
+        let CliCommand::Plan {
+            goal,
+            spec,
+            out,
+            max_iters,
+            max_minutes,
+            max_tokens,
+            ..
+        } = cli.command
+        else {
+            panic!("expected the plan subcommand");
+        };
+        assert_eq!(goal, "draft it");
+        assert_eq!(spec.as_deref(), Some(std::path::Path::new("SPEC.md")));
+        assert_eq!(out.as_deref(), Some(std::path::Path::new("p.md")));
+        assert_eq!((max_iters, max_minutes, max_tokens), (5, 3, 1_000));
+
+        // Missing --goal is a hard clap error (never silently accepted).
+        let err = Cli::try_parse_from(["chug", "plan"]).map(|_| ()).unwrap_err();
+        assert!(
+            err.to_string().contains("--goal"),
+            "missing --goal must be rejected: {err}"
+        );
     }
 }
