@@ -1068,8 +1068,11 @@ fn parse_call_response(resp: &Value) -> ToolResult {
     }
 }
 
+// `pub(crate)` (test-only module): T37's `web_fetch` tests reuse this T6
+// stub harness (bounded accept, socket timeouts) and the T31 `dead_port`
+// probe instead of duplicating them.
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::mcp::McpRegistry;
     use std::io::{Read, Write};
@@ -1079,14 +1082,14 @@ mod tests {
     // ---------- hand-rolled HTTP/1.1 stub (no crates, 127.0.0.1 only) ----------
 
     /// One observed request: request line, headers (original case), body.
-    struct Observed {
-        request_line: String,
+    pub(crate) struct Observed {
+        pub(crate) request_line: String,
         headers: Vec<(String, String)>,
         body: String,
     }
 
     impl Observed {
-        fn header(&self, name: &str) -> Option<&str> {
+        pub(crate) fn header(&self, name: &str) -> Option<&str> {
             self.headers
                 .iter()
                 .find(|(k, _)| k.eq_ignore_ascii_case(name))
@@ -1105,7 +1108,7 @@ mod tests {
     /// body bytes. Panics (loudly, failing the test via join) on any
     /// protocol surprise; STUB_IO_TIMEOUT read timeout keeps a broken
     /// client from hanging the suite (T6).
-    fn read_request(stream: &mut TcpStream) -> Observed {
+    pub(crate) fn read_request(stream: &mut TcpStream) -> Observed {
         read_request_within(stream, STUB_IO_TIMEOUT)
     }
 
@@ -1158,7 +1161,12 @@ mod tests {
     /// Same, but `connection: close` — forces the client's next request onto
     /// a FRESH connection, which makes the stub's accept() order
     /// deterministic when a listen stream is also open.
-    fn write_response_close(stream: &mut TcpStream, status: u16, headers: &[(&str, &str)], body: &[u8]) {
+    pub(crate) fn write_response_close(
+        stream: &mut TcpStream,
+        status: u16,
+        headers: &[(&str, &str)],
+        body: &[u8],
+    ) {
         write_response_impl(stream, status, headers, body, "close");
     }
 
@@ -1247,7 +1255,7 @@ mod tests {
     /// poisoned for dead-server duty — re-bind a fresh port and retry,
     /// bounded by `DEAD_PORT_ATTEMPTS` so a pathological environment fails
     /// loudly instead of looping forever.
-    fn dead_port() -> u16 {
+    pub(crate) fn dead_port() -> u16 {
         for _ in 0..DEAD_PORT_ATTEMPTS {
             let port = TcpListener::bind("127.0.0.1:0")
                 .unwrap()
@@ -1270,7 +1278,7 @@ mod tests {
     /// HERE, naming the theft, instead of desyncing a sibling stub (whose
     /// handshake asserts would fail in its own thread) or erroring
     /// confusingly downstream.
-    fn assert_dead_port(port: u16) {
+    pub(crate) fn assert_dead_port(port: u16) {
         assert!(
             port_refuses_connections(port),
             "dead-port {port} no longer refuses connections: claimed by another listener \
@@ -1281,14 +1289,14 @@ mod tests {
     /// Stub-side I/O ceiling (T6): every blocking operation a stub thread
     /// performs is bounded so a broken client fails the test in seconds
     /// instead of hanging the whole suite on `accept()`/`read()`/`write()`.
-    const STUB_IO_TIMEOUT: Duration = Duration::from_secs(10);
-    const STUB_ACCEPT_TIMEOUT: Duration = Duration::from_secs(10);
+    pub(crate) const STUB_IO_TIMEOUT: Duration = Duration::from_secs(10);
+    pub(crate) const STUB_ACCEPT_TIMEOUT: Duration = Duration::from_secs(10);
 
     /// Accept one connection with a deadline (nonblocking poll): a client
     /// that never connects panics the stub thread — failing the test via
     /// `join` — instead of blocking it forever. Accepted streams carry
     /// read+write timeouts so a wedged peer fails fast mid-exchange too.
-    fn accept_conn(listener: &TcpListener) -> TcpStream {
+    pub(crate) fn accept_conn(listener: &TcpListener) -> TcpStream {
         accept_conn_within(listener, STUB_ACCEPT_TIMEOUT)
     }
 

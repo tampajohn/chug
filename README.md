@@ -117,7 +117,7 @@ panic-safe terminal restore.
 
 `read_file` (`offset`/`limit` page past the 2000-line cap), `write_file`,
 `edit_file` (+`replace_all`), `bash`, `grep`,
-`glob`, `list_dir`, `update_ledger`, `goal_complete`, `delegate`.
+`glob`, `list_dir`, `update_ledger`, `goal_complete`, `delegate`, `web_fetch`.
 All paths sandboxed to `--cwd` (`delegate` is the one documented exception —
 its absolute `cwd`/`spec` target child worktrees by design). `bash` runs in its own process group —
 timeouts SIGKILL the whole group, so orphaned grandchildren can't wedge the
@@ -142,6 +142,17 @@ one exception to cwd sandboxing: `cwd` and `spec` must be absolute and may
 lie outside your `--cwd`, because children live in scratch worktrees by
 design. Worktree creation, building, harvest/merge, and killing the child
 stay with your `bash`.
+
+`web_fetch` — read-only HTTP(S) GET with hard bounds: `http://`/`https://` only,
+≤5 redirects, connect 10s / total 30s, output capped at `max_chars` (default
+20,000; a request above the 100,000 ceiling is clamped, not rejected), HTML
+tag-stripped to visible text, binary content types refused by name, and every
+non-2xx status or transport failure returned as a tool error — one attempt, no
+retry. Strictly less powerful than the `curl` already available through
+`bash`; the value is the bounded, audited, token-safe surface (caps, text
+extraction, `events.jsonl` previews) that a raw shell fetch doesn't give the
+loop. Like `delegate`, it reaches outside the cwd sandbox by design — it is
+network, not filesystem.
 
 ## Risk gate (`--risk-gate`)
 

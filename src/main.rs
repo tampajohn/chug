@@ -17,6 +17,7 @@ mod tui;
 mod mcp;
 mod mcp_http;
 mod sse;
+mod webfetch;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
