@@ -354,6 +354,24 @@ orchestrator's own cross-tree `edit_file` to the worktree hit the OLD
 bare `path escapes cwd` error mid-arc — the last sighting of the
 pre-T61 string on this host.
 
+**T60 — docs drift pass (pri 4, DX friction, docs-only) → done
+`2ce4f8c` (impl `5f6d4d8`, merge commit).** glm impl goal-accepted
+17/50 ~5 min first-try, exactly two hunks: (1) `src/driver_lock.rs`'s
+module comment now names the real pin — the
+`chat_turn_never_creates_or_removes_the_driver_lock` unit test in
+`src/driver.rs`'s test module — dropping the false "`tests/`" claim
+(T55 validator finding i); (2) README's Development layout brace list
+gains `archive`, `driver_lock`, `webfetch` (two of them this month's
+features, previously invisible in the newcomer map) — the
+orchestrator diffed the list against the actual tree: identical (20
+files + `main.rs` named separately). Docs-only → kimi skipped per
+T16/T31/T35/T51; orchestrator gates independently re-run 517/517 +
+clippy + the spec's grep legs green. Landed under the T44 overlap as
+the N+1 impl alongside T61's validator (disjoint file sets verified:
+src/tools.rs vs src/driver_lock.rs + README.md), merged strictly
+after T61 per the serial-merge rule. 3 artifacts harvested. Queue now
+DRAINED.
+
 ### Cycle 27 (2026-09-26, ~06:15–06:40 EDT) — freshness-skip; T59 landed; T58 + T62 IN-FLIGHT at budget wrap (recovery recipes on their rows)
 
 **T59 — mcp_http dead_port tests: bounded retry on port-theft (pri 3,
