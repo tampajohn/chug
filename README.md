@@ -258,6 +258,12 @@ nohup ./loopd.sh > /dev/null 2>&1 &   # start (detached)
 Per cycle: kimi-k3 orchestrates LOOP-SPEC (evaluate or skip per freshness,
 work the queue — bugs > robustness > **features** > DX > perf — glm-5-3-flash
 children implement, kimi validates adversarially, auto-push per item).
+Before each cycle the supervisor refreshes `.chug/eval-digest.md` via
+`scripts/eval-digest.sh` — a deterministic (jq/awk-only, sub-second) digest of
+the `.chug/events*.jsonl` corpus (per-file iterations, wall time, tool
+distribution, error classes, token curve, aborts, budget-low fires, TODO
+status counts, staleness flag) so the evaluation phase reads one file instead
+of re-mining raw archives.
 State in `.chug/loopd/` (cycle logs, pidfile). Three consecutive cycles
 without `goal_complete` → HALTED marker + exit. A second supervisor refuses
 to start (pidfile); a manual `LOOP-SPEC` run makes it skip a cycle rather

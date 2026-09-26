@@ -64,6 +64,9 @@ while [ ! -f "$STOP" ]; do
     continue
   fi
   cargo build >> "$LOG" 2>&1
+  # T46: refresh the Phase-1 corpus digest so every cycle's evaluation reads
+  # .chug/eval-digest.md instead of re-mining raw events archives.
+  scripts/eval-digest.sh >> "$LOG" 2>&1
   cycle_log="$STATE/cycle-$(date -u +%Y%m%d-%H%M%S).log"
   echo "$(ts) cycle start -> $cycle_log" >> "$LOG"
   # cycle budget: fresh Phase 1 ≈45–55 iters + ~28–35/item + ~10 wrap (cycle-16 eval Q1); 160 fits eval + 3 items + wrap; minutes never binding (56–117 of 240)
