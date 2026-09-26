@@ -216,6 +216,11 @@ hosted (impl and validator alike) has been harvested.
   entries were written at each landing (§2 step 5); wrap adds the
   skipped/deferred rows, the cycle-level notes (what the validators
   caught, final state), and fills any gap a mid-arc death left.
+  Outcomes keeps the last 6 cycles in full; older entries are compacted
+  at wrap time to one line each (`### Cycle N (date) — items landed +
+  refs, one-line verdict`) — the full narrative lives in git (row-flip
+  commits + TODO done rows carry the refs), so compaction drops nothing
+  that isn't one `git log` away.
 - Final gates green in main (build + clippy + test) → push anything
   remaining (eval commits, Outcomes) → `goal_complete` with the cycle
   summary. Never force-push; a rejected push means the remote moved — stop
