@@ -242,7 +242,7 @@ words. If the queue outlives this cycle's budget, unworked rows stay
 
 ## Outcomes (filled at cycle wrap — LOOP-SPEC Phase 3)
 
-### Cycle 30 (2026-09-26, ~07:28 EDT–) — freshness-skip; T64 + T65 landed — QUEUE DRAINED
+### Cycle 30 (2026-09-26, ~07:28–07:52 EDT) — freshness-skip; T64 + T65 landed — QUEUE DRAINED
 
 **T65 — README Continuous-mode target-cache paragraph de-accretion (pri
 4, docs-only: README.md single hunk 16+/16−, net 0) → done `458751c`
@@ -299,6 +299,47 @@ old T57 pin staying green — the exact survivor mechanism), revert →
 the row's optional-validation + T16/T31/T59/T62 precedent. 2 artifacts
 harvested (events + non-trivial LEDGER carrying the check-line defect
 report).
+
+**Skipped/deferred:** none — queue drained 2/2 (T64, T65).
+
+**Cycle notes.** (a) The cycle's payload finding is the **spec
+check-line defect**: T64's goal_complete was rejected by the spec's own
+`check:` — `cargo test --lib` exits 101 on this binary-only crate
+(src/main.rs, no lib target), AFTER leg 1 (`--test shared_target_dir`)
+had passed 14/14 — the NINTH child-stream sighting (t22/t25/t26/t29/
+t39/t42/t58/t59 + t64). The rejection burns the child's remaining
+budget on an unsatisfiable gate and could mask real red. The fix is
+evaluator-side, not historical-spec-side: META-META's spec-authoring
+convention should write `cargo test --bin chug` (the crate's unit-test
+target) or plain `cargo test`, never `--lib`. Candidate row for the next
+eval. (b) The T63 resume doctrine was NOT exercised: T64's impl had
+completed AND committed before its budget death, so the T55/T62
+orchestrator-finish recipe applied (nothing incomplete to resume into);
+resume remains the recipe for incomplete-in-worktree deaths. (c) T45
+bundling REJECTED at dispatch — both rows pri 4, failing conjunctive
+condition (d) (pri ≤ 3); T44 overlap unused (no validators in flight —
+both rows validation-skipped, so the overlap window never opened). (d)
+The `wait_secs` early-wake watch item fired on EVERY long-poll (woke at
+2–7s on a 90–110s request); pacing fell back to bash sleeps + instant
+status — still watch-level, not row-level. (e) Both children were glm
+one-arcs: T64 48/50 committed (rejection + 2-iter tail), T65 19/50
+first-try goal-accepted ~4 min — no model fallback needed. (f) The
+README gate is satisfied intrinsically: T65's edit IS the README
+integration, at the paragraph's original position. **Final state:** main
+pushed through the wrap; post-merge gates 523/523 + clippy under
+target-shared-main at both landings; todo_consistency 3/3 green before
+every TODO commit; 3 events files + 1 non-trivial LEDGER harvested to
+.chug (gitignored, local); both worktrees removed post-harvest.
+**loopd-restart human carry RESTATED:** supervisor pid 90114 still
+running 5+ revisions stale (started 8:43PM, pre-T57) — the next manual
+restart picks up everything since; no automated restart is safe
+mid-cycle.
+
+**Next cycle: queue EMPTY → MANDATORY fresh eval.** Carries for it:
+(i) the check-line defect candidate row (note a above — pri ~2, every
+impl child whose spec carries the `--lib` check burns budget on an
+unsatisfiable goal gate); (ii) `wait_secs` early-wake (note d); (iii)
+restart loopd (human).
 
 ### Cycle 29 (2026-09-26, ~07:10–07:30 EDT) — MANDATORY fresh eval (queue EMPTY); T63 landed (doctrine: delegate resume recovery)
 
@@ -619,13 +660,7 @@ gui/$(id -u)/com.tampajohn.chug-loopd`).
 
 **Cycle notes:** (a) both queued rows landed, queue DRAINED — the freshness rule CANNOT fire next cycle (no todo rows): next cycle runs a MANDATORY fresh Phase-1 eval. (b) T55's post-merge false red is a NEW VARIANT of the T52/T43 stale-artifact class — SEQUENTIAL, not concurrent: step-3 worktree gates compiled the worktree's pre-T53/T54 4-test loopd_reexec.rs into the shared slot; the merge didn't touch that file (old mtime) so cargo's mtime freshness reused the stale binary against main's ps-based loopd.sh. Role-keyed dirs govern CONCURRENT builds only. Carry to next eval: post-merge main gates need a staleness flush (touch tests/ or a rebuild pin) whenever the worktree gates ran first in the same shared dir. (c) T55's kimi validator found the refuse-wiring/message mutant cluster untestable from the suite — spec-sanctioned hand-verification, which it performed with the real binary (exit 1 + pid/remedy, zero appends, holder unaffected; stale reclaim <1s); its 3 non-blocking findings (module-comment tests/-pin drift, non-atomic acquire window spec-silent, PRE-EXISTING mcp_http dead_port_probe flake — T31 watch item, passes isolated 3/3) are carried to the next eval. (d) T56's full arc cost ~7 min wall (worktree → impl 2.5 min → review/gates → merge → flip) — the T45-class fixed cost on a 2-hunk docs row remains the queue's dominant per-row overhead. (e) T43 cycle-18 double-heading compaction DEFERRED again (budget wrap): two `### Cycle 18` headings in Outcomes need one careful manual merge — hygiene, not loss, full narrative in git. (f) Final main gates 501 (473+6+9+1+9+3) + clippy green at the T56 flip; todo_consistency 3/3 green pre-commit.
 
-### Cycle 24 (2026-09-26, ~04:57–05:19 EDT) — MANDATORY fresh eval (queue was EMPTY); T53+T54 bundle landed; T55 mid-arc at budget (recovery recipe on its row); T56 deferred unworked
-
-**Deferred:** **T55** (pri 2 feature) — glm impl died 50/50 with the work UNCOMMITTED in the preserved worktree /tmp/chug-loop-t55 (README.md, api.rs, driver.rs, main.rs modified + new src/driver_lock.rs); 3 artifacts harvested (events/LEDGER/delegate.log 20260926-091931); full recovery recipe on the TODO row. **T56** (pri 4 docs) — never dispatched (budget); row stays `todo` with its ready spec. **Cycle notes:** (a) the eval's live I1 reproduction is the cycle's payload — pgrep's blindness is persistent (9/9), process-specific (in-tree nohup'd sleep matched), and its enumeration flaps — the ps fix landed in T53 within the hour; (b) T45's bundle rule executed for the first time: one child, two commits in queue order, one kimi round, one flip commit — arc cost ~7 min wall vs two full serial arcs; (c) T44 overlap executed for the fourth time (T55 impl during the bundle validator, disjoint files); (d) the bundle validator's live smoke doubled as independent confirmation that the new ps pipeline sees the exact process class pgrep missed (the orchestrator itself, pid 37073, ONLY match); (e) wrap fired at budget_low@8 with the T55 impl's abort arriving mid-merge — the per-item Outcomes discipline (T34) meant T53+T54's narrative was already committed before the wrap; (f) T56's deferral leaves the README loopd section silent on re-exec for one more cycle — harmless, the spec is ready. **Final state:** main pushed through the wrap commit; gates 481 (453+6+9+1+9+3) green at the T53+T54 merge, `bash -n` clean; todo_consistency 3/3 green pre-commit; QUEUE: T55 in-progress (recipe on row), T56 todo — next cycle skips Phase 1 (this eval is same-day) and resumes T55 from the worktree. The standing restart-loopd carry is now self-terminating (T50 merged; the next restart is the last manual one — and T53's ps-based guard rides with it).
-
-**Landed:**
-- **T53 — loopd single-driver check goes ps-based (pgrep dead on this host)** (pri 1, BUG; T45 bundle with T54 — conjunctive eligibility verified at eval: ≤30 lines each, same 2 files, no core loop, pri ≤3; impl `5c842a6` glm 24/50 first-try goal-accepted; merge `8624078`; flip + this entry per T34). The guard (`pgrep -f "chug run --spec LOOP-SPEC.md"`) was dead code on the production host — the cycle-24 eval reproduced the blindness LIVE 9/9 (pgrep -f/-l/-P all miss the launchd-spawned loopd tree: the orchestrator pid 37073 and supervisor pid 90114 absent from pgrep's full list while `ps -ax` showed both, argv intact; enumeration also flapped for other processes; the skip line fired exactly once in supervisor history, against an out-of-tree driver) — so the single-driver guard failed OPEN. Fix: `ps -ax -o command= | grep -q "[c]hug run --spec LOOP-SPEC.md"` (bracket idiom excludes the grep's own argv; supervisor argv holds no needle; chat doesn't match by design), skip body (log line/sleep 120/continue) byte-identical, why-comment citing eval I1; tests/loopd_reexec.rs: driver_check anchor re-pinned (T50 positional assertion preserved verbatim) + 2 pins (pgrep form GONE — a revert fails the suite; bracket idiom present + needle exactly-once). kimi VERDICT: **PASS** 24/50 (target-shared-validate per T52 ALWAYS) — gates independently re-run 481 (453+6+9+1+9+3) + clippy + `bash -n`, 5/5 T53 mutants killed (restore-pgrep, drop-bracket, corrupt-needle, delete-pipeline, duplicate-block), live smoke independently re-demonstrated (real driver pid 37073 matched as the ONLY match; negative leg exit 1), worktree restored byte-clean, both spec checks PASS verbatim. Post-merge main gates 481 + `bash -n` green. Bundle artifacts harvested under `t53t54` names pre-removal.
-- **T54 — loopd_reexec.rs exact-count SELF_CKSUM pins (additive-mutant survivor closed)** (pri 3, robustness; T45 bundle with T53; impl `6587b22`; merge `8624078`; flip + this entry per T34). The T50 validator's non-blocking finding (cycle-23 carry ii): an additive second `SELF_CKSUM=` assignment inside the while body silently defeats the re-exec (fingerprint refreshes every cycle → while-top comparison never fires) with all 4 positional pins green — they asserted existence + order, never counts. Three exact-count pins per the T47-carrier doctrine: `SELF_CKSUM=` assignments ==1, `!= "$SELF_CKSUM"` comparisons ==1, literal occurrences ==2, each failure message naming the count + the defeat mechanism; tests-only, loopd.sh untouched. kimi VERDICT: **PASS** 24/50 covering the bundle — the ORIGINAL SURVIVOR now dies (additive 2nd assignment → pins 1+3), additive 2nd comparison → pins 2+3, delete-assignment → pin 1 + the pre-existing fingerprint pin; 8/8 bundle mutants killed total; the four pre-existing T50 pins stayed green throughout. Post-merge main gates 481 green.
+### Cycle 24 (2026-09-26) — MANDATORY fresh eval (queue EMPTY); T53 (loopd single-driver check ps-based, pgrep dead on this host — live 9/9 reproduction; impl 5c842a6) + T54 (loopd_reexec.rs exact-count SELF_CKSUM pins, additive-mutant survivor closed; impl 6587b22) landed as the FIRST T45 bundle (merge 8624078, kimi PASS 24/50, 8/8 bundle mutants); T55 mid-arc at budget (recovery recipe on its row, landed cycle 25); T56 deferred. Verdict: bundle arc ~7 min wall, pgrep blindness fixed within the hour
 
 ### Cycle 23 (2026-09-26) — freshness-skip; T49 (api.rs connect-timeout const + pins; 9a73b12), T52 (role-keyed target dirs; 4d4c383), T50 (loopd self-re-exec between cycles; 078cb77), T51 (README delegate paragraph trim; 372f920) landed 4/4 queued rows (kimi PASS x3: 17/50, 35/50, 41/50); T44 overlap #3 (T51 impl during T50 validator); QUEUE EMPTY → next cycle mandatory eval. Verdict: 4/4 landed, loopd-restart carry first stated
 
