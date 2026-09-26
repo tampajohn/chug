@@ -4450,6 +4450,10 @@ log_tail: (none)";
             s2.goal_summary, None,
             "a pre-resume summary must not leak either"
         );
+        assert_eq!(
+            s2.check_cmd, None,
+            "a pre-resume check cmd must not leak into a verdict-less resume"
+        );
     }
 
     /// Torn/malformed lines are skipped, never fatal — collecting is safe at
