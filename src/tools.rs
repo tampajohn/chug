@@ -1253,15 +1253,16 @@ fn open_append(path: &Path) -> anyhow::Result<fs::File> {
         .with_context(|| format!("opening {}", path.display()))
 }
 
-/// Resolve `path` lexically against `cwd`, rejecting anything that escapes it
-/// (`..` traversal, absolute paths outside cwd). No filesystem access, no
-/// symlink resolution: purely lexical, per spec.
-///
-/// Both refusal messages carry a suffix naming the `bash` escape hatch (T61):
-/// the tool descriptions are read once at turn 0, but this error string is
-/// what the model sees at the moment of need — it must name the fallback.
+/// Both refusal messages of `resolve_safe` carry a suffix naming the `bash`
+/// escape hatch (T61): the tool descriptions are read once at turn 0, but
+/// the error string is what the model sees at the moment of need — it
+/// must name the fallback.
 const PATH_ESCAPES_CWD_SUFFIX: &str = " — cross-tree paths go through bash";
 
+/// Resolve `path` lexically against `cwd`, rejecting anything that escapes it
+/// (`..` traversal, absolute paths outside cwd). No filesystem access, no
+/// symlink resolution: purely lexical, per spec. Both refusal messages carry
+/// the T61 `bash` suffix above.
 pub fn resolve_safe(cwd: &Path, path: &str) -> Result<PathBuf, String> {
     let given = Path::new(path);
     let combined = if given.is_absolute() {
@@ -3912,8 +3913,9 @@ log_tail: (none)";
         for err in [
             resolve_safe(tmp.path(), "/etc/passwd").unwrap_err(),
             resolve_safe(tmp.path(), "../out.txt").unwrap_err(),
-            // Relative cwd + leading `..` reaches the other refusal site:
-            // `pop` on an empty prefix, unreachable with an absolute cwd.
+            // Relative cwds reach both refusal sites: leg 3 (`.` + `..`)
+            // pops an empty prefix (unreachable with an absolute cwd);
+            // leg 4 (`a/b` + `../..`) normalizes into the prefix check.
             resolve_safe(Path::new("."), "../out.txt").unwrap_err(),
             resolve_safe(Path::new("a/b"), "../../out.txt").unwrap_err(),
         ] {
