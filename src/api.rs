@@ -1093,14 +1093,25 @@ mod tests {
             }
             other => panic!("expected connection error, got {other:?}"),
         }
-        // Fired at ~1s (the injected activity timeout), not the 600s total
-        // read timeout and not instantly.
+        // Not instant: the injected deadline must actually be awaited, not
+        // skipped (recv_timeout never returns Timeout early, so this lower
+        // bound only bites if the watchdog fired immediately).
         assert!(elapsed >= Duration::from_millis(900), "{elapsed:?}");
-        assert!(elapsed < Duration::from_millis(1900), "{elapsed:?}");
+        // T74 (cold-parallel flake, 2 sightings 2026-09-26): the old upper
+        // bound (< 1900ms) assumed this thread wakes within ~900ms of the 1s
+        // deadline expiring, but under a cold default-parallel full-suite
+        // build (all cores on rustc) the recv_timeout wakeup can be delayed
+        // past that, false-redding the gate. The bound's only job is to
+        // discriminate the ACTIVITY timeout (~1s) from the client-wide 600s
+        // TOTAL read timeout, and that discrimination survives a much wider
+        // bound: 15s is still 40x under 600s (T31 comment convention: name
+        // the discrimination the margin preserves).
+        assert!(elapsed < Duration::from_secs(15), "{elapsed:?}");
     }
 
-    /// A reader that dribbles chunks at a steady pace slower than the total
-    /// time budget but faster than the activity timeout.
+    /// A reader that dribbles chunks at a steady pace: every inter-chunk gap
+    /// far under the activity timeout while the TOTAL stream time crosses it
+    /// — the shape that separates per-chunk activity from a total deadline.
     struct SteadyReader {
         interval: Duration,
         chunks: usize,
@@ -1125,21 +1136,47 @@ mod tests {
     }
 
     /// T2: the watchdog is per-chunk activity, not a total read deadline — a
-    /// slow-but-steady stream (1.25s total > 1s activity) completes.
+    /// slow-but-steady stream whose TOTAL time (50ms × 60 chunks ≈ 3s)
+    /// exceeds the 1s injected activity timeout by 3x still completes.
+    ///
+    /// T74 margin audit (cold-parallel flake class, 2 sightings 2026-09-26):
+    /// the old shape (250ms × 5 = 1.25s total, only 1.25x the activity
+    /// timeout, gaps a bare 4x under it) false-redded under a cold
+    /// default-parallel build — one scheduler-starved stretch of the reader
+    /// thread pushed a 250ms sleep past the 1s deadline and the watchdog
+    /// fired on the green leg. New margins, each naming the discrimination
+    /// it preserves (T31 convention):
+    /// - Per-gap headroom: 50ms gaps sit 20x under the 1s activity timeout,
+    ///   so a false-fire needs ~a full second of continuous starvation of
+    ///   the reader thread, not one late wakeup. Only the READER's delay
+    ///   can arm the deadline (progress is channel-buffered, so main-thread
+    ///   starvation cannot), and sleep never undershoots, so load stretches
+    ///   the stream without ever firing the watchdog.
+    /// - Not-a-total-deadline: nominal total ~3s = 3x the activity timeout,
+    ///   and load can only grow it — if the watchdog were a TOTAL 1s
+    ///   deadline this stream could never complete (RED-proof b in the
+    ///   commit message).
     #[test]
     fn body_watchdog_allows_slow_steady_stream() {
         let reader = SteadyReader {
-            interval: Duration::from_millis(250),
-            chunks: 5,
+            interval: Duration::from_millis(50),
+            chunks: 60,
             sent: 0,
             next_at: std::time::Instant::now(),
         };
         let body = read_body_with_watchdog(reader, Duration::from_secs(1)).unwrap();
-        assert_eq!(body, "xxxxx");
+        assert_eq!(body, "x".repeat(60));
     }
 
     /// A mid-body connection reset is connection-level (retryable under T1);
     /// an unexpected io error is fatal (fail fast).
+    ///
+    /// T74 family sweep (cold-parallel timing-margin class): this test
+    /// injects the 1s activity timeout but asserts ERROR CLASS only — both
+    /// readers error on their very first `read`, so the deadline never arms
+    /// and there is no wall-clock bound to be load-fragile. No margin to
+    /// widen; the only other `read_body_with_watchdog` callers (the two
+    /// watchdog tests above) carry this row's reworked margins.
     #[test]
     fn body_read_error_classification() {
         struct ResetReader;
