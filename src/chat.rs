@@ -476,6 +476,46 @@ mod tests {
         assert_eq!(saved[1].role, "assistant");
     }
 
+    /// T38: a chat turn whose pure-text reply comes back truncated still
+    /// ends the turn (natural-stop semantics unchanged), but the advisory
+    /// follows the truncated assistant message in the transcript — the next
+    /// turn's model learns its output was cut short — and the events record
+    /// notes the injection.
+    #[test]
+    fn truncated_reply_injects_advisory_and_still_ends_turn() {
+        let tmp = tempfile::tempdir().unwrap();
+        let truncated = json!({
+            "stop_reason": "max_tokens",
+            "usage": {"input_tokens": 10, "output_tokens": 8192},
+            "content": [{"type": "text", "text": "partial ans"}],
+        });
+        let h = harness(&tmp, vec![truncated]);
+        let (code, events, _llm, cwd) = run_session(h, |objective_tx, _| {
+            objective_tx.send("answer me".into()).unwrap();
+        });
+        assert_eq!(code, 0);
+        // The advisory never changes turn semantics: still a natural stop.
+        assert_eq!(turn_ends(&events), vec![TurnEndReason::Completed]);
+        // Transcript: objective, truncated assistant, then the advisory.
+        let saved = transcript::load(&cwd).unwrap();
+        assert_eq!(saved.len(), 3);
+        assert_eq!(saved[1].role, "assistant");
+        let last = saved.last().unwrap();
+        assert_eq!(last.role, "user");
+        assert_eq!(
+            last.content[0].text(),
+            Some(driver::OUTPUT_TRUNCATED_ADVISORY)
+        );
+        // Telemetry: exactly one OutputTruncated event for the injection.
+        assert_eq!(
+            events
+                .iter()
+                .filter(|e| matches!(e, Event::OutputTruncated))
+                .count(),
+            1
+        );
+    }
+
     #[test]
     fn goal_complete_ends_turn_unverified_without_check() {
         let tmp = tempfile::tempdir().unwrap();

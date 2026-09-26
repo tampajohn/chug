@@ -171,6 +171,12 @@ impl EventSink for EventLogSink<'_> {
                 "remaining_secs": remaining_secs,
                 "remaining_tokens": remaining_tokens,
             })),
+            // T38: one line per injected truncation advisory — no dedup or
+            // latch here, so `jq` counts truncations by counting lines.
+            Event::OutputTruncated => Some(json!({
+                "type": "output_truncated",
+                "ts": now_rfc3339(),
+            })),
             Event::ToolResult {
                 name,
                 ok,
@@ -389,6 +395,24 @@ mod tests {
         assert_eq!(lines[0]["remaining_iters"], 50);
         assert_eq!(lines[0]["remaining_secs"], 7_000);
         assert_eq!(lines[0]["remaining_tokens"], 49_000);
+    }
+
+    /// T38: an OutputTruncated event serializes as one jq-mineable
+    /// `output_truncated` line, and two emissions write two lines — the sink
+    /// never latches, so `jq` counts truncations by counting lines.
+    #[test]
+    fn sink_logs_output_truncated_one_line_per_event() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut inner = NullSink;
+        let mut sink = EventLogSink::new(tmp.path(), &mut inner);
+        sink.emit(Event::OutputTruncated);
+        sink.emit(Event::OutputTruncated);
+        let lines = read_lines(tmp.path());
+        assert_eq!(lines.len(), 2);
+        for line in &lines {
+            assert_eq!(line["type"], "output_truncated");
+            assert!(line["ts"].as_str().unwrap().ends_with('Z'));
+        }
     }
 
     #[test]
