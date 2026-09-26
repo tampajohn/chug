@@ -220,6 +220,43 @@ adoption remains watch-only.
 
 ## Outcomes (filled at cycle wrap — LOOP-SPEC Phase 3)
 
+### Cycle 19 (2026-09-26, ~01:23 EDT–, in flight) — freshness-skip; T46 (operator pri-2 speed initiative) landed
+
+**T46 (eval digest) → done 6a3fa98.** Freshness rule fired (EVALUATION.md
+same-day + 8 todo rows) → Phase 1 skipped, straight to the queue. Queue
+order T46 → T45 → T39: the cycle-18 handoff recommended T45 first, but
+T46 is the same pri and its script is the more mechanical land; both are
+doctrine items (no overlap either way). glm impl 49/50 goal-accepted
+(budget_low@8 fired — wrapped inside T18's margin):
+`scripts/eval-digest.sh` (293 lines, jq/awk-only, `LC_ALL=C`, pinned-clock
+`CHUG_DIGEST_NOW`, BSD/GNU stat+date fallbacks, ~0.2s on the real corpus)
+writes `.chug/eval-digest.md`: per-archive iterations/wall/tool
+distribution/error classes/cumulative token totals (T14
+last-value-not-summed semantics, hand-verified by the validator against
+raw jq)/quartile input-context curve/aborts/budget_low/output_truncated,
+plus corpus-wide TODO counts, EVALUATION.md age, and a self-flagging
+staleness block (generated-at vs newest-events-mtime + write-race flag +
+reader-side `find -newer` check). loopd.sh refreshes it before every
+cycle (set -u-only → digest failure non-fatal). META-META-SPEC corpus
+item 1 = digest-FIRST, raw events only for incident drill-down
+(renumbered 1–6; the §6 cross-ref is to the EVALUATION section list,
+unaffected). tests/eval_digest.rs: 6 legs — spec-pinned jq baseline on 3
+sampled archives, empty + missing `.chug/`, malformed-line tolerance
+(digest=4 where the naive pipeline dies), pinned-clock byte-determinism,
+TODO/EVAL parsing. kimi validation VERDICT: PASS 31/50 — 5/5 reqs
+hand-verified, gates re-run twice (436+6+3 + clippy), 6/6 kill-mutants
+died; 7/7 survivors (unpinned spec-required output fields: tools top-N,
+quartile divisor, iters-ceil source, abort budget label, `dur()` hours
+branch, reader-check text, budget_low detail) adjudicated non-blocking
+per the T44 precedent (spec Tests scoped iteration-counts + empty-digest
+only) — **watch item for a future eval: one golden-section pin test per
+archive would close the survivor class**; 4 cosmetic observations (one —
+the corpus-item-3 backticks — orchestrator nit-fixed pre-merge, 6a3fa98).
+4 artifacts harvested pre-removal; gates re-run in main green.
+Acceptance is forward-looking per the spec: the next FRESH evaluation's
+events should show the digest read early and Phase-1 iterations visibly
+below the ~45–55 baseline — to be recorded in that cycle's Outcomes.
+
 ### Cycle 18 (2026-09-26, ~00:41–01:30 EDT, continued) — T44 (operator pri-1 speed initiative) landed
 
 **T44 (pipeline overlap doctrine) → done 41f61a1.** Operator filed
