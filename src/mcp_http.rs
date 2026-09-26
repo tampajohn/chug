@@ -1075,6 +1075,7 @@ fn parse_call_response(resp: &Value) -> ToolResult {
 pub(crate) mod tests {
     use super::*;
     use crate::mcp::McpRegistry;
+    use std::cell::{Cell, RefCell};
     use std::io::{Read, Write};
     use std::net::{SocketAddr, TcpListener, TcpStream};
     use tempfile::TempDir;
@@ -1283,6 +1284,97 @@ pub(crate) mod tests {
             port_refuses_connections(port),
             "dead-port {port} no longer refuses connections: claimed by another listener \
              between acquisition and use (T31 probe)"
+        );
+    }
+
+    // ---------- T59: bounded retry-on-theft for dead-port connect phases ----------
+
+    /// Re-acquire cap for [`dead_port_retry_with`] (T59): a DETECTED
+    /// port-theft — the re-verify failing, or a connect succeeding against
+    /// the supposedly-dead handout — retries the whole
+    /// acquire-probe-connect sequence with a fresh [`dead_port`] handout up
+    /// to this many attempts before the exhaustion panic. Spec-pinned at 3.
+    /// (Distinct from `DEAD_PORT_ATTEMPTS`, the acquisition probe's own
+    /// bind+probe bound.)
+    const DEAD_PORT_RETRY_ATTEMPTS: usize = 3;
+
+    /// Evidence that a dead-port attempt was invalidated by theft (T59).
+    /// Constructed ONLY for theft; ordinary test failures panic directly
+    /// inside the attempt closure, so a real regression is never retried
+    /// into a flake-shaped message.
+    struct PortTheft(String);
+
+    /// Non-panicking re-verify of a [`dead_port`] handout (T59 seam):
+    /// `Ok` while the port still refuses connections, `Err(theft)` once
+    /// claimed. Same mechanism and message as [`assert_dead_port`], which
+    /// remains the panicking form for callers without a retry path
+    /// (webfetch's T31 dead-port leg keeps it unchanged).
+    fn check_dead_port(port: u16) -> Result<(), PortTheft> {
+        if port_refuses_connections(port) {
+            Ok(())
+        } else {
+            Err(PortTheft(format!(
+                "dead-port {port} no longer refuses connections: claimed by another listener \
+                 between acquisition and use (T31 probe)"
+            )))
+        }
+    }
+
+    /// Classify an unexpected connect-phase outcome (T59). A connect can
+    /// only succeed if SOMETHING was listening, so first re-probe the
+    /// handout: if it is now LIVE the theft is confirmed (retryable); if it
+    /// still refuses, no listener existed and the unexpected outcome is a
+    /// REAL regression — panic immediately with the observation, un-retried,
+    /// so it stays distinguishable from a flake storm.
+    fn theft_or_regression(port: u16, observed: &str) -> PortTheft {
+        if port_refuses_connections(port) {
+            panic!(
+                "dead_port_retry: {observed} — but {port} still refuses connections, so no \
+                 listener existed and this is NOT port-theft: real regression in the code \
+                 under test (panicked immediately, not retried)"
+            );
+        }
+        PortTheft(format!(
+            "{observed}; port {port} is now live (claimed after handoff: thief listener)"
+        ))
+    }
+
+    /// Retry-on-theft driver (T59). Acquires a handout via `acquire`
+    /// (production callers pass [`dead_port`]) and runs `attempt` against
+    /// it; `attempt` returns `Err(PortTheft)` ONLY for a detected theft
+    /// (via [`check_dead_port`] or [`theft_or_regression`]). Each theft
+    /// retries the WHOLE sequence with a fresh handout — immediately, with
+    /// no sleep or wait (T31 doctrine: mechanism, not timeouts) — bounded by
+    /// `DEAD_PORT_RETRY_ATTEMPTS`. Exhaustion panics naming the attempt
+    /// count and the theft mechanism; a real regression never reaches this
+    /// message (it panics inside `attempt` first). `acquire` is the unit
+    /// seam: the T59 test scripts a REAL live listener as the handout so
+    /// the retry path is exercised deterministically, not by racing.
+    fn dead_port_retry_with<T>(
+        acquire: impl Fn() -> u16,
+        mut attempt: impl FnMut(u16) -> Result<T, PortTheft>,
+    ) -> T {
+        let mut last_theft: Option<PortTheft> = None;
+        for attempt_no in 1..=DEAD_PORT_RETRY_ATTEMPTS {
+            let port = acquire();
+            match attempt(port) {
+                Ok(value) => return value,
+                Err(theft) => {
+                    eprintln!(
+                        "dead_port_retry: attempt {attempt_no}/{DEAD_PORT_RETRY_ATTEMPTS} \
+                         hit port-theft ({}); retrying with a fresh dead_port handout",
+                        theft.0
+                    );
+                    last_theft = Some(theft);
+                }
+            }
+        }
+        panic!(
+            "dead_port_retry: port-theft persisted across all {DEAD_PORT_RETRY_ATTEMPTS} \
+             attempts (mechanism: another test's listener or the OS ephemeral allocator \
+             claimed the supposedly-dead handout between verify and connect — T31 residual \
+             race, retried per T59); last theft: {}",
+            last_theft.map(|t| t.0).unwrap_or_else(|| "unknown".to_string())
         );
     }
 
@@ -1555,53 +1647,83 @@ pub(crate) mod tests {
     fn dead_server_retries_then_tool_error_without_sleeping() {
         // T31: probe-verified dead port. A plain bind+drop is a TOCTOU under
         // parallel load — another test's bind_stub can claim the port between
-        // our drop and the client's connect (mechanism: see dead_port).
-        let port = dead_port();
-        let (sleeper, slept) = no_sleep();
-        let mut srv = HttpMcpServer::with_sleeper(
-            "remote".to_string(),
-            format!("http://127.0.0.1:{port}"),
-            vec![],
-            sleeper,
-        )
-        .unwrap();
+        // our drop and the client's connect (mechanism: see dead_port). T59:
+        // the residual verify-to-connect steal window (microseconds, but
+        // real — three organic sightings) is closed by RETRY: a detected
+        // theft re-runs the whole acquire-probe-connect sequence below with
+        // a fresh `dead_port()` handout, bounded — never a sleep (T31
+        // doctrine: mechanism, not timeouts).
+        dead_port_retry_with(dead_port, |port| {
+            let (sleeper, slept) = no_sleep();
+            let mut srv = HttpMcpServer::with_sleeper(
+                "remote".to_string(),
+                format!("http://127.0.0.1:{port}"),
+                vec![],
+                sleeper,
+            )
+            .unwrap();
 
-        // Re-verified dead immediately before the first connect: shrinks the
-        // residual steal window to verify-to-connect (microseconds).
-        assert_dead_port(port);
-        let res = srv.call("echo", json!({})).unwrap();
-        assert!(res.is_error);
-        assert!(
-            res.content.contains("POST failed after retries"),
-            "{}",
-            res.content
-        );
-        // Exactly the 1s/2s/4s schedule ran — through the injected sleeper,
-        // so the test never really slept.
-        assert_eq!(
-            slept.lock().unwrap().as_slice(),
-            &[Duration::from_secs(1), Duration::from_secs(2), Duration::from_secs(4)]
-        );
-        // Marked down: the next call short-circuits (no new retries).
-        assert!(!srv.is_alive());
-        let res = srv.call("echo", json!({})).unwrap();
-        assert!(res.is_error);
-        assert_eq!(res.content, "mcp server remote is down");
-        assert_eq!(slept.lock().unwrap().len(), 3, "no further retries once down");
+            // Re-verified dead immediately before the first connect: shrinks
+            // the residual steal window to verify-to-connect (microseconds).
+            // T59: a failed re-verify is THEFT (retryable), not a failure.
+            check_dead_port(port)?;
+            // Phase 1: the call must observe a REFUSED connect (the fail-soft
+            // retry schedule). Any other outcome means the handout was live —
+            // stolen mid-flight (retryable) or, if the port still refuses, a
+            // real regression (theft_or_regression panics, un-retried).
+            let res = match srv.call("echo", json!({})) {
+                Ok(res) => res,
+                Err(e) => {
+                    return Err(theft_or_regression(
+                        port,
+                        &format!("call against supposedly-dead port hard-errored: {e:#}"),
+                    ))
+                }
+            };
+            if !(res.is_error && res.content.contains("POST failed after retries")) {
+                return Err(theft_or_regression(
+                    port,
+                    &format!(
+                        "expected the refused-connect fail-soft outcome, got \
+                         is_error={} content={:?}",
+                        res.is_error, res.content
+                    ),
+                ));
+            }
+            // Exactly the 1s/2s/4s schedule ran — through the injected sleeper,
+            // so the test never really slept.
+            assert_eq!(
+                slept.lock().unwrap().as_slice(),
+                &[Duration::from_secs(1), Duration::from_secs(2), Duration::from_secs(4)]
+            );
+            // Marked down: the next call short-circuits (no new retries).
+            assert!(!srv.is_alive());
+            let res = srv.call("echo", json!({})).unwrap();
+            assert!(res.is_error);
+            assert_eq!(res.content, "mcp server remote is down");
+            assert_eq!(slept.lock().unwrap().len(), 3, "no further retries once down");
 
-        // The handshake against a dead server also fails (registry skips it).
-        let (sleeper2, _) = no_sleep();
-        let mut srv2 = HttpMcpServer::with_sleeper(
-            "remote".to_string(),
-            format!("http://127.0.0.1:{port}"),
-            vec![],
-            sleeper2,
-        )
-        .unwrap();
-        // Same re-verify before this phase's connect: a mid-test theft must
-        // fail HERE (named) rather than as a confusing handshake outcome.
-        assert_dead_port(port);
-        assert!(srv2.initialize().is_err());
+            // Phase 2: the handshake against a dead server also fails
+            // (registry skips it). Same re-verify immediately before this
+            // phase's connect; a mid-test theft is retried with a fresh
+            // handout (whole sequence, above) instead of failing here.
+            let (sleeper2, _) = no_sleep();
+            let mut srv2 = HttpMcpServer::with_sleeper(
+                "remote".to_string(),
+                format!("http://127.0.0.1:{port}"),
+                vec![],
+                sleeper2,
+            )
+            .unwrap();
+            check_dead_port(port)?;
+            if srv2.initialize().is_ok() {
+                return Err(theft_or_regression(
+                    port,
+                    "dead-server handshake unexpectedly SUCCEEDED (connect was not refused)",
+                ));
+            }
+            Ok(())
+        });
     }
 
     /// T31: the acquisition probe must distinguish live from dead — the
@@ -1627,10 +1749,91 @@ pub(crate) mod tests {
             "dropped port {port} did not refuse connections"
         );
         // And the acquisition helper hands out a port that refuses right now.
-        let fresh = dead_port();
+        // T59: this acquire-verify leg IS the sighted flake (t48/t55
+        // validators: "dead_port_probe flake") — a thief claiming the port
+        // between dead_port's internal probe and the re-verify connect is
+        // retried with a fresh handout, bounded, instead of false-reding a
+        // gate run. The outer re-check below stays: it pins that the helper
+        // really probed (a gutted retry returning an unchecked port dies
+        // here).
+        let fresh = dead_port_retry_with(dead_port, |port| check_dead_port(port).map(|_| port));
         assert!(
             port_refuses_connections(fresh),
             "dead_port handed out port {fresh} that no longer refuses connections"
+        );
+    }
+
+    // ---------- T59: unit pins for the retry helper ----------
+
+    /// Scripted-theft success: the acquire seam hands out the port of a
+    /// REAL live listener on attempt 1 (so the real `check_dead_port`
+    /// re-verify sees a genuine theft) and a real `dead_port()` on attempt
+    /// 2. The attempt counter pins non-vacuousness: the pre-T59 shape (one
+    /// acquire, one panicking re-verify) cannot pass this test — it would
+    /// panic on the scripted theft — so success at attempt 2 IS the retry
+    /// path executing.
+    #[test]
+    fn dead_port_retry_succeeds_after_scripted_theft() {
+        let thief = TcpListener::bind("127.0.0.1:0").unwrap();
+        let thief_port = thief.local_addr().unwrap().port();
+        let script = RefCell::new(vec![thief_port]);
+        let attempts = Cell::new(0usize);
+        let got = dead_port_retry_with(
+            || {
+                attempts.set(attempts.get() + 1);
+                script.borrow_mut().pop().unwrap_or_else(dead_port)
+            },
+            |port| check_dead_port(port).map(|_| port),
+        );
+        assert_eq!(
+            attempts.get(),
+            2,
+            "theft on attempt 1 must retry exactly once, not loop and not panic"
+        );
+        assert!(
+            port_refuses_connections(got),
+            "helper returned {got}, which does not refuse connections"
+        );
+    }
+
+    /// Theft on EVERY attempt: the helper gives up after exactly
+    /// `DEAD_PORT_RETRY_ATTEMPTS` (bounded — no retry storm) and the
+    /// exhaustion panic names the attempt count and the theft mechanism, so
+    /// this bounded flake signature stays distinguishable from a real
+    /// regression (which panics inside the attempt closure with its own
+    /// message and is never retried).
+    #[test]
+    fn dead_port_retry_exhaustion_names_attempts_and_mechanism() {
+        let thief = TcpListener::bind("127.0.0.1:0").unwrap();
+        let thief_port = thief.local_addr().unwrap().port();
+        let attempts = Cell::new(0usize);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            dead_port_retry_with(
+                || {
+                    attempts.set(attempts.get() + 1);
+                    thief_port
+                },
+                |port| check_dead_port(port).map(|_| port),
+            );
+        }));
+        let err = result.expect_err("theft on every attempt must exhaust and panic");
+        let msg = err
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| err.downcast_ref::<&'static str>().copied())
+            .expect("panic payload is a string");
+        assert!(
+            msg.contains("3 attempts"),
+            "exhaustion panic must name the attempt count: {msg}"
+        );
+        assert!(
+            msg.contains("theft") && msg.contains("T31"),
+            "exhaustion panic must name the theft mechanism: {msg}"
+        );
+        assert_eq!(
+            attempts.get(),
+            DEAD_PORT_RETRY_ATTEMPTS,
+            "bounded: exactly the cap, never an unbounded storm"
         );
     }
 
