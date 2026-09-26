@@ -223,6 +223,40 @@ phases 2–3 deferral stands.
 
 ## Outcomes (filled at cycle wrap — LOOP-SPEC Phase 3)
 
+### Cycle 36 (2026-09-26, ~11:52– EDT) — MANDATORY fresh eval (F2 SPLIT → T73/T74/T75 filed); T74 landed; T73/T75 next
+
+- **Eval committed `4db039d` + pushed.** ROADMAP PULL F2 executed as a
+  SPLIT (FEATURES.md working rules): phase 1 → T73 (`chug plan` read-only
+  mode, pri 2), phase 2 deferred (/plan chat + --approve gate +
+  web_fetch-in-plan — written reason §4). Incident rows T74 (api.rs
+  body_watchdog cold-parallel flake, 2 sightings one day, pri 2) + T75
+  (decision_log zero organic adoption cycles 34+35 — wrap-checklist
+  records sentence + pin, pri 3 doctrine). I1 loopd-restart carry
+  RESTATED 9th, mechanism fully nailed (supervisor pid 90114 predates
+  t36/T46/T50/T53; bash runs parsed compound commands from memory —
+  cycles run 120-not-160, digest 7th manual regen, 0 re-execs, pgrep
+  guard). driver.rs 3,607: ~4,500 trip line PRE-DECLARED. README audit:
+  3rd consecutive zero-finding. **First organic decision_log records: 7
+  eval-triage (3 filed + 4 rejected)** — T70 acceptance datapoint.
+- **T74 landed: merge `ef0c3eb`** (per-item entry written at landing,
+  T34). glm first-try goal accepted 46/50 (`0f1475e`, tests-only +46/-9
+  confined to src/api.rs mod tests): aborts_silent upper 1900ms → 15s
+  (activity-vs-600s-total discrimination kept, 40x under; 900ms
+  not-instant lower kept), allows_slow_steady 250ms×5 → 50ms×60 (total
+  3x the timeout, gaps 20x under, load-monotone), family sweep
+  documented in-code. RED-proofs both directions in the commit;
+  acceptance 10/10 consecutive default-parallel full suites 563/563.
+  Orchestrator gates independently re-run 563/563 + clippy under
+  target-shared. **kimi VERDICT PASS, 0 blocking findings** (24/50):
+  gates re-run under target-shared-validate + 3 more default-parallel
+  suites, 3 mutants ALL RED (gutted → aborts_silent only; total-deadline
+  → steady only; instant-fire → 900ms lower at 811µs, load-bearing), 2
+  non-blocking observations. Impl child logged 5 organic decision_log
+  records (margin designs ×2, family sweep, RED-proofs, outcome
+  backfill) + validator 1 — first child-side organic adoption. Post-merge
+  gates 563/563 + clippy in main under target-shared-main. 5 artifacts
+  harvested (2 events, 2 ledgers, child decisions.jsonl).
+
 ### Cycle 35 (2026-09-26, ~10:42– EDT) — T70 recovered mid-arc + landed (merge 572ec5a); T71/T72 next
 
 - **T70 recovery arc executed from the cycle-34 row recipe (per-item
