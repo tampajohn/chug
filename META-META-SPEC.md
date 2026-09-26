@@ -19,7 +19,7 @@ check: test -f EVALUATION.md && grep -q "specs/t" TODO.md
    `.chug/events*.jsonl` archives ONLY to drill into a specific incident the
    digest raised — the model evaluates, it does not do ETL.
 2. `TODO.md` — the live ledger (T1-T6, statuses). Your rows extend it.
-3. `LEDGER.md` + .chug/transcript.jsonl (tail only) — the SPEC-9 saga and
+3. `LEDGER.md` + `.chug/transcript.jsonl` (tail only) — the SPEC-9 saga and
    any other recent sessions: what actually went wrong, what was slow, what
    the validators caught.
 4. The specs: `SPEC.md`, `META-SPEC.md`, `SELF-SPEC.md` (root doctrine) and
