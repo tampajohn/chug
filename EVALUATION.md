@@ -220,7 +220,7 @@ adoption remains watch-only.
 
 ## Outcomes (filled at cycle wrap — LOOP-SPEC Phase 3)
 
-### Cycle 19 (2026-09-26, ~01:23 EDT–, in flight) — freshness-skip; T46 + T45 + T39 landed
+### Cycle 19 (2026-09-26, ~01:23–02:20 EDT) — freshness-skip; T46 + T45 + T39 landed
 
 **T39 (delegate launch max_tokens passthrough — FEATURE) → done 52ec8ab.**
 The queue's feature row, worked third after the two pri-2 speed rows.
@@ -316,6 +316,39 @@ the corpus-item-3 backticks — orchestrator nit-fixed pre-merge, 6a3fa98).
 Acceptance is forward-looking per the spec: the next FRESH evaluation's
 events should show the digest read early and Phase-1 iterations visibly
 below the ~45–55 baseline — to be recorded in that cycle's Outcomes.
+
+**Cycle-19 wrap.** Three rows landed (T46, T45, T39 — every impl glm
+first-try, every validation a first-arc PASS, zero fix-up rounds; each
+full arc cost ~13–15 orchestrator iterations with sleep-paced status
+polling). **T40 mid-arc handoff:** impl child goal-accepted 13/50,
+committed 311d305 on branch loop-t40 in the PRESERVED worktree
+/tmp/chug-loop-t40 (LOOP-SPEC.md +7, one file) — the orchestrator's
+budget-low (8 iterations left) hit before review/validation/merge. The
+child is dead (state: done), its cwd was the worktree, so no
+single-driver conflict. Recovery recipe is written on the T40 TODO row
+(T29/T37 precedent); the worktree must NOT be removed before its
+.chug/events.jsonl is harvested. **Deferred, all todo with ready specs:**
+T47 (pri 3, shared CARGO_TARGET_DIR), T41 (pri 4, sandbox-candor
+descriptions — NOT bundle-compatible with T42 under T45's same-1–2-files
+clause: T41 is tools.rs + README, T42 is webfetch tests), T42 (pri 4,
+webfetch timeout pins), T43 (pri 4, Outcomes pruning — increasingly
+load-bearing: this section grows every landing). **Doctrine landed this
+cycle, available but not yet exercised:** T44 pipeline overlap and T45
+trivial-row bundling (this cycle ran under the pre-T44/T45 launched spec;
+their acceptance markers are forward-looking). **Watch items for the next
+evaluation:** (a) T46 validator's golden-section pin recommendation (7/7
+survivor class: unpinned digest output fields); (b) T39 validator nits
+(negative-leg error message not uniquely pinned; delegate stub sleep-60
+linger, pre-existing pattern); (c) T46 acceptance — next FRESH eval must
+show the digest read early with Phase-1 iterations visibly below the
+~45–55 baseline; (d) T36's 160-iteration loopd budget is STILL pending an
+operator loopd restart — this cycle ran at 120 and fit only because
+Phase 1 was skipped; a fresh-eval cycle at 120 lands ~2 items; (e) small
+mystery for the corpus: T39's impl LEDGER.md was overwritten by the
+validator's fresh-run reseed without a .chug/LEDGER-\* archive (T3 should
+have archived a non-seed ledger — worth one jq query next eval).
+Freshness rule fires again next cycle (EVALUATION.md same-day, todo rows
+remain): skip Phase 1, recover T40 first.
 
 ### Cycle 18 (2026-09-26, ~00:41–01:30 EDT, continued) — T44 (operator pri-1 speed initiative) landed
 
