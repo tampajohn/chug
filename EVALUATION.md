@@ -242,7 +242,32 @@ words. If the queue outlives this cycle's budget, unworked rows stay
 
 ## Outcomes (filled at cycle wrap — LOOP-SPEC Phase 3)
 
-### Cycle 30 (2026-09-26, ~07:28 EDT–) — freshness-skip; T64 landed (validator-survivor pins); T65 queued
+### Cycle 30 (2026-09-26, ~07:28 EDT–) — freshness-skip; T64 + T65 landed — QUEUE DRAINED
+
+**T65 — README Continuous-mode target-cache paragraph de-accretion (pri
+4, docs-only: README.md single hunk 16+/16−, net 0) → done `458751c`
+(impl `99b78fa`, merge commit).** glm impl first-try goal-accepted at
+19/50 in ~4 min (the check line's two legs — `--test shared_target_dir`
++ `grep -c "target-shared-main" README.md` — are both satisfiable, so no
+repeat of T64's check-line rejection). The 17-line T47+T52+T57 sentence
+chain (three nested em-dash parentheticals) became two short paragraphs:
+(a) user semantics — the four gitignored role-keyed caches with their
+roles, warm-after-first-use, the per-invocation env-prefix fact
+compressed to a clause pointing at loopd.sh for the rationale, one why
+sentence (artifact filename excludes the checkout path → last-builder-
+wins → role-keyed keeps each consumer's artifacts its own), operator
+reclaim; (b) one pointer sentence naming specs t47/t52/t57 (all three
+filenames verified to exist). Pinned surface preserved with the pin file
+untouched: `target-shared-main/` still exactly 1× README-wide and still
+co-located with `target-shared-validate/` + `post-merge` in one
+paragraph — tests/shared_target_dir.rs 14/14 green unchanged. All other
+README sections byte-identical (single hunk). kimi skipped per the row
+(docs-only, T51/T56/T60). Orchestrator gates 523/523 + clippy under
+target-shared in-worktree, 523/523 + clippy post-merge under
+target-shared-main. 1 artifact harvested (events; child ledger was
+boilerplate, not harvested). The README gate is satisfied by the edit
+itself — the accretion spot is gone, integrated at its original
+position.
 
 **T64 — Pin the two validator survivor classes (pri 4, tests-only:
 tests/shared_target_dir.rs +62, src/tools.rs test module +88) → done
