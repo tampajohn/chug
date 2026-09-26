@@ -274,6 +274,30 @@ words. If the queue outlives this cycle's budget, unworked rows stay
 
 ## Outcomes (filled at cycle wrap — LOOP-SPEC Phase 3)
 
+### Cycle 27 (2026-09-26, from ~06:15 EDT) — freshness-skip; working T58–T62 (per-item entries land per T34)
+
+**T59 — mcp_http dead_port tests: bounded retry on port-theft (pri 3,
+robustness, tests-only) → done `062c175` (fast-forward merge).** glm impl
+27/50 goal-accepted ~8 min first-try: `dead_port_retry_with` driver
+(acquire/attempt seams, bounded 3 attempts, exhaustion panic names the
+attempt count + the T31 theft mechanism), `check_dead_port` non-panicking
+re-verify seam, and a `theft_or_regression` discriminator — a connect
+against a handout that STILL refuses is a real regression and panics
+immediately, un-retried (never retried into a flake-shaped message); only
+a now-live port is retryable theft. Both mcp_http connect-phase consumers
+converted (`dead_server_retries_then_tool_error_without_sleeping` whole
+body; the probe test's final acquire-verify leg = the sighted t48/t55
+flake). 2 unit pins: scripted real-thief theft succeeds at exactly
+attempt 2 (non-vacuous: the pre-T59 single-attempt shape cannot pass);
+all-attempts theft exhausts at exactly 3 with the mechanism named
+(catch_unwind). `assert_dead_port` behavior untouched (webfetch's T31 leg
+keeps it). No sleeps — retry-on-theft, T31 doctrine. All hunks inside
+`#[cfg(test)] mod tests` (diff --stat: src/mcp_http.rs only, +250/−47).
+kimi round skipped per the row's T16/T31 tests-only precedent;
+orchestrator gates independently re-run 507/507 (475+6+9+1+13+3) +
+clippy clean by the child. 2 artifacts harvested pre-removal (impl
+events + LEDGER). The last known organic flake in the suite is closed.
+
 ### Cycle 26 (2026-09-26, ~05:46–06:40 EDT) — MANDATORY fresh eval (queue empty) + T57 landed (main-dedicated gates dir); wrap at budget margin
 
 **Fresh evaluation (committed `67374a9`).** Queue was drained at cycle
