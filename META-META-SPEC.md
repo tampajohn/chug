@@ -63,7 +63,10 @@ Preserve the table format. For every accepted finding, add a row
 (`t7+` numbering, pri, status todo, notes with evidence) AND a spec file
 `specs/t<N>-<slug>.md` (create dir if needed). Spec quality bar: one
 concern, repo-context section, requirements, tests, acceptance, and its own
-`check:` line. Priority doctrine: bugs > robustness > DX friction >
+`check:` line, which MUST be worktree-relative — it runs in the impl child's
+worktree cwd, never `cd` to the main repo (content checks grep worktree;
+`cargo test` runs as-is); bites: T21 (self-merge anomaly), T26 (`1d6780d`
+pre-dispatch fix). Priority doctrine: bugs > robustness > DX friction >
 performance > features. **Verify T1/T2/T4/T5 actually worked before filing
 anything adjacent** (read the code, run the relevant tests if cheap).
 
