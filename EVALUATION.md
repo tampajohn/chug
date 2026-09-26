@@ -220,6 +220,32 @@ adoption remains watch-only.
 
 ## Outcomes (filled at cycle wrap — LOOP-SPEC Phase 3)
 
+### Cycle 18 (2026-09-26, ~00:41–01:30 EDT, continued) — T44 (operator pri-1 speed initiative) landed
+
+**T44 (pipeline overlap doctrine) → done 41f61a1.** Operator filed
+T44–T47 mid-cycle (58be922, "feels awfully slow"); priority doctrine
+re-planned the queue to T44 first (pri 1). glm impl 23/50 FIRST-TRY (the
+doctrine-item class: T32/T33/T34/T44 all land 11–23 iters) — §2 opening +
+new "Pipeline overlap (T44)" paragraph + Hard-rules rewrite (ONE WRITER
+per file set, serial merges; META-SPEC override scoped to launch
+concurrency only; stale "foreground" dropped). kimi validation VERDICT:
+PASS 19/50 — all 5 reqs verified, gates re-run independently (436+3 +
+clippy), guard-liveness mutant (removed t44 spec) killed by
+todo_consistency, prose-mutant survival adjudicated by-design (the suite
+cannot police prose; detection = review + next-cycle events per spec
+Tests), tree restored byte-identical (hash-object verified). 4
+non-blocking observations (empty-target-list edge, fix-up-child cap
+classification implicit, 2-validator sequencing implicit, prose
+unpoliceable). 4 artifacts harvested. Acceptance is forward-looking:
+observable when a later multi-item cycle's events.jsonl shows impl N+1's
+run_start before validator N's verdict. **Deferred this cycle (budget
+step-6 rule, ~10 iters left at T44 landing): T39, T40, T41, T42, T43,
+T45, T46, T47 — all todo with ready specs; the freshness rule lets the
+next cycle skip Phase 1 and start on the queue. Recommended order for the
+next cycle per priority doctrine: T45 (pri 2 bundling — compounds with
+T44; T40/T41/T42/T43 are its first bundle candidates), T46 (pri 2), T39
+(pri 3 feature), T47 (pri 3), then the pri-4 set.**
+
 ### Cycle 18 (2026-09-26, ~00:41–01:10 EDT) — fresh eval (queue EMPTY at start) + T38 landed; TWO 50/50 child deaths, both recovered
 
 **T38 (truncated-response advisory) → done a686522.** Fresh evaluation filed
