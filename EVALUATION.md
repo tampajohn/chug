@@ -1,313 +1,249 @@
-# EVALUATION — chug, assessed by chug-loop (2026-09-26, cycle 31)
+# EVALUATION — chug, assessed by chug-loop (2026-09-26, cycle 34)
 
-**CYCLE-32 DELTA (2026-09-26, ~08:52 EDT, written ~3 min after cycle 31
-wrapped — queue EMPTY at 08:49, so a fresh eval is mandatory and a full
-re-read 3 minutes later would burn ~45 iterations for zero new corpus):
-corpus delta = the cycle-31 orchestrator stream
-`.chug/events-20260926-125133.jsonl` (goal accepted, T67 + T68 landed
-green, queue DRAINED) + the five t67/t68 child streams (4/4 impl+validate
-goal-accepted first try: t67 glm 27/50 + kimi 23/50, t68 glm 49/50 + kimi
-39/50) + the cycle-31 wrap commit `132ec68` + the operator's mid-cycle-31
-landings `259b5ed` (FEATURES.md roadmap) + `dc18a7a` (F13 operator-directed
-after F1). Digest regenerated manually at 08:52 (FIFTH manual regeneration
-— I1 stands: the running supervisor pid 90114 still predates T36/T46/T47/
-T50/T53; THIS eval's own launch line shows `--max-iters 120`, T36's 160
-dormant, seventh confirmation). Findings: NO new incident rows — cycle
-31's wrap is clean (T63 resume armed 0 exercises; T44/T45 unused; the
-t68-impl 49/50 accepted inside the T18 margin; the pre-merge 2s-wake
-sightings were the T68 leak's last raw evidence, now fixed). The one
-mandatory output is the §4 ROADMAP PULL → T69 (F1). All cycle-31 sections
-below stand as written except §4/§5/Handoff, which carry cycle-32 updates.**
+**MANDATORY fresh eval** — cycle 33 drained the queue at landing (T69 done
+`da8ef10`), so the freshness-skip rule cannot fire; the cycle-33 wrap's
+mandate fixes this eval's ROADMAP PULL as **F13** (decision logs → Laya
+distillation, operator directive `dc18a7a`).
 
-Corpus: `.chug/eval-digest.md` FIRST (STALE at eval start — regenerated
-manually 12:06:55Z, the FOURTH manual regeneration after cycles 22, 24 and
-29; the running supervisor still predates T46's refresh line, I1; 127 event
-streams / 5,501 iterations), then the two orchestrator streams since the
-cycle-29 eval: `.chug/events-20260926-112826.jsonl` (**cycle 29**: 115/120
-iters, 18m11s, MANDATORY fresh eval + T63 landed, goal accepted, budget_low
-first at remaining_iters=8), `.chug/events-20260926-120615.jsonl` (**cycle
-30**: 114/120, 36m45s, freshness-skip, T64 + T65 landed, then the wrap's
-own goal gate false-red on the port-theft flake → T66 filed LIVE and landed
-in-cycle, goal accepted after 1 rejection, budget_low at 8), the 5 child
-streams t63–t66 (4 of 5 goal-accepted first try; t64-impl the one
-rejection — I2), `.chug/loopd/loopd.log` (cycles 29–30 OK unattended; 0
-re-execs — T50 dormant, I1), `TODO.md` (T1–T66 all done with refs — queue
-EMPTY → this eval mandatory per the cycle-30 wrap), git log `836ac42`
-(cycle-30 wrap), `src/` (23,593 lines incl. test modules; **tools.rs 4,050
-still the largest** — 3,962 → 4,050 via T64's +88, watch item continues),
-`README.md` (cold read, §6). Per the LOOP-SPEC upgrade, first look was
-`jq -r '.type'` counts over the two orchestrator streams; raw jq drills
-only for the wait_secs code read (I3) and the write_file fires (§3).
+Corpus: `.chug/eval-digest.md` FIRST (STALE at eval start — the T69 harvest
+landed after loopd's pre-cycle generation; SIXTH manual regeneration
+(cycles 22, 24, 29, 31, 32, now 34) — I1 stands, supervisor pid 90114
+still predates T46's refresh line; 141 event streams / 6,256 iterations
+post-regen), then the three orchestrator streams since the cycle-31/32
+eval: `.chug/events-20260926-125133.jsonl` (**cycle 31**: 116/120, goal
+accepted, T67+T68 landed, budget_low@8), `.chug/events-20260926-132024.jsonl`
+(**cycle 32**: **120/120 BUDGET ABORT**, no goal — the T69 arc wrapped
+mid-validation; 69 delegate calls, 66 with `wait_secs:110`),
+`.chug/events-20260926-135541.jsonl` (**cycle 33**: 98/120, goal accepted,
+T69 recovery arc completed end-to-end, 38 delegate calls, 32 with
+`wait_secs:90–240`), the seven t69 child streams (impl 50/50 abort → T63
+resume accepted 25/50; validator seg-1 50/50 abort pre-verdict → T63
+resume accepted 3/50; fix-ups 27/50 + 15/50; validators 45/50 FAIL, 22/50
+PASS), `.chug/loopd/loopd.log` (cycles 29–33 OK unattended except cycle
+32's budget death; 0 re-execs — T50 dormant, I1), `TODO.md` (T1–T69 all
+done with refs), git log `132495d` (cycle-33 wrap), `src/` (24,776 lines;
+**tools.rs 5,233 — the pre-declared ~4,500 trip line CROSSED**, I2), the
+T68/T69 wait-time distributions mined from the two rotated orchestrator
+transcripts (§1), `README.md` (cold read, §6).
 
 ## 1. What chug does well
 
-- **The goal gate caught a real flake the review gates missed — and the
-  loop turned it around in ~20 min.** Cycle 30's first `goal_complete` was
-  REJECTED by `dead_port_probe_distinguishes_live_from_dead` at
-  default-parallel `cargo test` (the goal-gate invocation, port 50956) —
-  the first post-T59 organic sighting of the port-theft class, which four
-  `--test-threads=4` gate runs that cycle had not caught. The wrap
-  diagnosed (passes isolated, class signature, nothing in the cycle
-  touched mcp_http), filed T66 pri 2 with spec, ran the standard child arc
-  (glm 27/50 first-try), landed it, and re-attempted — 525/525 at default
-  parallelism. Verification-as-designed, not ceremony.
-- **Queue drained 3/3 in cycle 30, all glm one-arcs** (T64 48/50 committed,
-  T65 19/50, T66 27/50) on top of cycle 29's T63 (glm 29/50 first-try +
-  kimi PASS 16/50, 5/5 mutants). The glm first-try rate across the last 14
-  impl children is 13/14.
-- **T61's fire-time remedy string was observed in the wild — twice,
-  including at this evaluator.** Cycle 29's single `path escapes cwd`
-  fire carried the new suffix ("cross-tree paths go through bash") and
-  self-recovered next iteration; and during THIS eval, the evaluator's own
-  `write_file` to /tmp fired the error with the suffix naming the exact
-  remedy (rerouted through bash, zero iterations lost).
-- **The T63 resume doctrine distinguished itself correctly at its first
-  opportunity**: t64-impl's budget death was complete-AND-committed, so
-  the T55/T62 orchestrator-finish recipe applied and resume stayed armed —
-  the doctrine's condition (incomplete work in the worktree) was checked,
-  not cargo-culted (cycle-30 wrap note b).
-- **The digest carried Phase 1 a fifth time**: this eval read one file,
-  then drilled raw only twice (the wait_secs wake condition in
-  src/tools.rs, the write_file fires in cycle 29's stream).
+- **T63 resume is now battle-tested twice in one item's arc — both times
+  accepted on the resumed segment.** t69-impl died 50/50 with the work
+  uncommitted → resume accepted 25/50 (cycle 32); t69-validator seg-1 died
+  50/50 pre-verdict → resume accepted 3/50 with VERDICT: FAIL (cycle 33).
+  The doctrine's condition (budget abort + incomplete work in the
+  worktree) was checked, not cargo-culted, each time; the standing
+  recipes covered the other shapes. The armed-0-exercises watch item is
+  CLOSED — resume is proven infrastructure.
+- **The vacuous-pin family got caught, chased, and closed — and the loop
+  distilled the general lesson in-cycle.** Kimi round 1: implementation
+  correct on every reviewed leg, 2 vacuous survivors. Fix-up RED-proven.
+  Round 2: ONE more same-family survivor. Fix-up RED-proven. Round 3
+  (sweep-the-family guidance in the goal): PASS 0 findings, all four
+  latch resets swept with killing tests. Three rounds of adversarial
+  validation doing exactly what it exists for — and the orchestrator
+  distilled the structural lesson (T72, this eval).
+- **Review gates caught what child gates missed, again.** Cycle 32's
+  orchestrator review fired on the live-state-coupled verdict pin (a test
+  whose truth depended on the run state of the checkout it ran in);
+  review-fix `138d042` pinned SHAPE not state. "Never trust a claim of
+  green without seeing it" keeps paying.
+- **The T68 wake fix is measurably live in production.** Cycle 32/33
+  transcripts show 98 long-polls with `wait_secs` (66 + 32) and wait
+  distributions matching per-iteration cadence (2–44s wakes on iteration
+  advance / verdict / liveness — not the pre-T68 every-poll-at-2s churn
+  pattern). Cycle 33 polled 38 times across ~112 child iterations (~1
+  poll per 3 child iters); the T29 premise is finally realized.
+- **First zero-spelunking eval:** digest regenerated in 8s; raw jq drills
+  needed only for the wait-time distributions (2 transcripts) and the
+  delegate-seam measurement. T46 keeps paying.
 
 ## 2. Incidents worth fixing
 
-**I1 — The live supervisor is STILL loopd.sh's pre-T36 revision — now SIX
-merges stale; only a human restart activates them (human-decision carry —
-RESTATED, top of handoff).** `ps` shows loopd pid 90114 started
-2026-09-25 20:43:53 EDT; `git log` since: `d5141c9` (T36 160-iters),
-`00469ed` (T46 digest), `c3e8942` + `a65904f` (T47), `ca11c6b` (T50
-re-exec), `5c842a6` (T53 ps-check). `grep -c re-exec loopd.log` still 0.
-New evidence this eval, fifth and sixth confirmations: (a) the digest was
-STALE at this eval's start — fourth manual regeneration (cycles 22, 24,
-29, now 31); (b) BOTH cycles 29 and 30 wrapped at the budget margin —
-115/120 and 114/120, `budget_low` first at remaining_iters=8 each time —
-the dormant +40 iterations (T36) is the difference between a comfortable
-wrap and a coin flip on every eval cycle. `launchctl` `KeepAlive =>
-false` stands — chug must NOT restart it; the operator one-liner is in
-the handoff.
+**I1 — The live supervisor is STILL loopd.sh's pre-T36 revision — EIGHTH
+restatement, and cycle 32 paid the price in full (human-decision carry —
+RESTATED, top of handoff).** `ps`: loopd pid 90114 started 2026-09-25
+20:43:53 EDT, predating T36 (160 iters) / T46 (digest refresh) / T47×2 /
+T50 (self re-exec) / T53 (ps-check). Evidence THIS eval, seventh and
+eighth confirmations: (a) the digest was STALE at this eval's start —
+sixth manual regeneration; (b) **cycle 32 died AT the ceiling — 120/120
+iteration-budget abort, mid-validation on T69, no goal** (loopd.log
+13:15:16 "cycle ended WITHOUT goal complete") — with T36's dormant +40
+iterations the T69 arc closes in-cycle instead of spanning two cycles
+with a preserved-worktree handoff. Cycle ceiling history at the 120 cap:
+115, 114, 116, **120-abort**, 98 (the 98 was a recovery arc — short by
+nature). `launchctl KeepAlive=false` stands — the operator one-liner is
+in the handoff.
 
-**I2 — The spec check-line defect: `cargo test --lib` exits 101 on this
-binary-only crate — NINE child-stream sightings, and t64 burned its goal
-gate on it this cycle (NEW ROW T67, pri 2).** Every `check:` line is
-evaluator-authored (META-META-SPEC "Extend TODO.md"), and evals keep
-writing `cargo test --lib`: sightings in t22/t25/t26/t29/t39/t42/t58/t59
-child streams, then t64-impl — work completed AND self-committed at 48/50,
-then `goal_complete` REJECTED because leg 2 of its own spec's check was
-unsatisfiable ("no library targets found"; leg 1 had passed 14/14). The
-orchestrator substituted review + gates + independent mutant reproduction
-(T55/T62) and the row landed, but the class has now burned budget in nine
-children and could mask real red behind a wrong-reason rejection.
-Reproduced at eval time on main: `cargo test --lib` → "error: no library
-targets found in package `chug`", exit 101. Fix (specced, T67): the
-convention sentence goes into META-META-SPEC (never `--lib`; plain
-`cargo test` or `cargo test --bin chug`), the T8 guard gains a lint leg
-over `specs/t*.md` check lines + a doctrine pin, and t64's historical
-check line (the only live spec still carrying it) is corrected.
+**I2 — tools.rs crossed the pre-declared ~4,500 trip line: 5,233 lines
+(NEW ROW T71, pri 3).** The monolith watch item (carried since cycle 30:
+"3,962 → 4,050; the ~4,500 trip line stands") is TRIPPED: T68 +283 and
+T69 +863 put it at 5,233 — 2.5× its size at the T26 eval (2,048). The
+growth driver is the delegate surface — eight items landed in it
+(T23/T28/T29/T39/T58/T61/T68/T69) — and it is self-contained:
+`DelegateSummary`, `CollectSummary`, and every helper are referenced
+ONLY inside tools.rs (grep-verified this eval). The extraction seam is
+clean and the precedent exists (webfetch.rs, 1,054 lines, zero
+wayfinding since T37). T71 is a pure byte-identical move; the spec names
+every symbol.
 
-**I3 — `delegate status` `wait_secs` wakes on per-tool-call churn, not
-significant change — the T29 long-poll's premise is unrealized (NEW ROW
-T68, pri 3; promoted from the cycle-29/30 watch item after two cycles of
-every-poll fires).** T29 (cycle 13) shipped the long-poll because cycle 10
-spent 9/68 iterations (~13%) on instant status polls — "idle waiting is
-the loop's largest remaining mechanical token sink". The wake condition is
-`now_summary != entry_summary` over ALL `DelegateSummary` fields
-(src/tools.rs ~:986), and the struct carries `last_event_type`/
-`last_event_ts` (~:1065); an active child appends `tool_result` events
-every 2–10 s, so the wait returns at the first 2.5 s poll tick almost
-every time. Observed: EVERY long-poll with `wait_secs: 90`–`110` woke at
-2–7 s, in cycle 29 AND cycle 30 (cycle-30 wrap note d — pacing fell back
-to bash sleeps + instant status, 2 iterations per window instead of 1).
-With cycles wrapping at 114–115/120 and `budget_low` at 8, ~10–25
-orchestrator iterations per child wait is a first-class budget leak. The
-rendered payload is fine (churn is worth showing) — the WAKE set should
-be: `max_iters`, `last_iteration`, `budget_low_seen`, `goal_seen`,
-`abort_seen`, `abort_reason` (+ the unchanged creation/liveness/deadline
-legs).
+**I3 — The vacuous-pin FAMILY pattern: fix-ups that pin only the named
+instance guarantee the next validator round finds the next one (NEW ROW
+T72, pri 3, doctrine).** Evidence in §1's second bullet and the T69
+Outcome entry: 3 kimi rounds × ~15 min for one family of 4 latch resets;
+the round-3 sweep goal closed it. One doctrine sentence at LOOP-SPEC
+§2 step 4's FAIL-arc dispatch point (the fix-up goal names the CLASS and
+requires every instance swept RED-proven) + a T63-precedent pin file.
 
-**Carries disposition (cycle-30 wrap):** check-line defect candidate →
-I2/T67 (filed, pri 2 as suggested); `wait_secs` early-wake → I3/T68
-(promoted watch → row); loopd restart → I1, RESTATED.
+**Carries disposition:** loopd restart → I1, RESTATED 8th; tools.rs
+trip → I2/T71 (filed); sweep-the-family → I3/T72 (filed); live-state
+pin lesson (cycle-32 review-fix `138d042`) — ONE bite, caught by
+existing review; watch item, filed on recurrence.
 
-**Watch items (continue unless noted):** `write_file` missing-path — 2
-fires in cycle 29 (same timestamp — one parallel double-call with
-malformed args, kimi fumble, self-recovered; the error message is clear),
-0 in cycle 30; glm `output_truncated` advisories — 1 fire each in t62 and
-t66 impls, both chunked-and-recovered goal-accepted (T38's advisory taken
-as designed); `dead_port_probe` — T66 closed the class at all three legs
-in-cycle; a future sighting elsewhere in mcp_http is a NEW row, not a
-retry (cycle-30 Outcomes); **tools.rs monolith** — 3,962 → 4,050 (T64's
-+88; the ~4,500 trip line stands, no new wayfinding miss this cycle);
-`path escapes cwd` — 1 fire in cycle 29 WITH the T61 suffix visible, 0 in
-cycle 30, plus the evaluator's own /tmp fire this eval — the remedy
-reaches the model at the moment of need; `web_fetch` organic adoption —
-0 calls across all 13 new streams (demand remains honestly absent);
-delegate no-verdict natural stop — 0 new; **T63 resume armed, 0
-exercises** — its first live exercise (a budget death with incomplete
-work in the worktree) is the acceptance datapoint.
+**Watch items (continue unless noted):** glm `output_truncated`
+advisories — 1 fire in t69-impl, chunked-and-recovered goal-accepted
+(T38 working as designed); `edit_file` non-unique match — 1 fire in
+t69-impl (a 5,233-line tools.rs makes duplicate-`old` likelier — T71 is
+the mechanism-level response; T5's line-number disambiguation aided
+recovery); 120s bash-cap fire — 1 in t69-fixup2 (a cargo leg under a
+cold-ish cache; self-recovered); `path escapes cwd` — 1 fire in cycle 32
+WITH the T61 remedy suffix, self-recovered (plus this evaluator's own
+/tmp write-fire this eval — the remedy keeps arriving at fire time);
+**validator 50-iter deaths on BIG items** — t69-validate seg-1 died
+50/50 mid-mutation on an 863-line diff (one data point post-T32; T63
+resume recovered it; a second occurrence → weigh a validator-iteration
+row); `web_fetch` organic adoption — 0 calls across the 7 t69 streams +
+3 orchestrator streams (demand honestly absent, 5th cycle); delegate
+no-verdict natural stop — 0 new.
 
 ## 3. Friction hot spots
 
-The check-line rejection (I2) is the cycle's top mechanical friction —
-nine sightings, one goal gate burned this cycle. Cycle-29's remaining
-failed-tool classes were model fumbles, all self-recovered in 1 iteration:
-`write_file` without `path` ×2 (one parallel double-call), `edit_file`
-`old` not found on scratch files (`/tmp/eval-outcomes-preserve.md`,
-`EVALUATION-head.md`) and once on TODO.md in cycle 30, the one cross-tree
-`path escapes cwd` (T61 suffix attached, watch item). The digest's
-blank/N error buckets in both orchestrator streams are benign exit-1
-classifications (bash greps printing counts). `timed out after 120s` — 0
-new. Nothing else crosses the row threshold.
+Cycle 32's 120/120 death is the cycle's dominant mechanical loss — a
+mid-arc handoff (preserved worktree + row recipe) costing ~24 min of
+cycle-33 wall to re-enter; the fix is I1's, not a row. Failed-tool
+classes across the 10 new streams are all single-fire and self-recovered
+within 1–2 iterations (enumerated in §2 watch items) — nothing crosses
+the row threshold. The cycle-33 "Traceback" fire was a python one-liner
+fumble in an orchestrator jq drill, retried successfully. Token economy:
+the T29/T68 long-poll is now the standard pacing surface (98 uses in 2
+cycles); the per-call `waited:` distribution (§1) is the acceptance
+datapoint T29's premise waited 20 cycles for.
 
-## 4. Capability gaps — FEATURE SCAN (required)
+## 4. Capability gaps — ROADMAP PULL (required)
 
-**CYCLE-32 UPDATE — ROADMAP PULL EXECUTED (the scan below predates the
-roadmap: it was written at cycle 31 before the operator landed
-`FEATURES.md` mid-cycle, which is exactly why it found "no feature row";
-the wrap commit `132ec68` records the mandate: "next fresh eval MUST pull
-F1 then F13").** Pulled: **F1 → T69 (pri 2, spec
-`specs/t69-delegate-collect.md`)** — delegate `collect` action: a finished
-child's structured result (verdict + goal_complete summary + check cmd +
-commit refs) returned in one bounded non-blocking call, replacing today's
-git/files archaeology; carries its own LOOP-SPEC §2-step-3 adoption
-sentence per the T23→T24 zero-calls lesson (cycle-9 eval N5). **F13
-(decision logs → Laya distillation) is the NEXT fresh eval's mandated
-pull** — one item per evaluation pull per FEATURES.md's working rules;
-the operator's `dc18a7a` fixes F13 as the item immediately after F1, so
-no re-triage is needed or permitted next eval. No new capability finds
-beyond the roadmap this cycle.
+**PULLED: F13 (decision logs → Laya distillation) → SPLIT per the
+FEATURES.md working rules ("items can shrink into 2-3 rows when the full
+scope blows a 50-iter child budget"); phase 1 filed as T70 (pri 2, spec
+`specs/t70-decision-log-tool.md`).** F13's full scope — decision-record
+emission + outcome backfill + Laya fine-tune pipeline + confidence-gated
+first-pass routing — is three separable deliverables with hard
+dependencies between them. Phase 1 (T70) is implementable now: a
+`decision_log` tool (new `src/decisions.rs` module on the webfetch.rs
+pattern — deliberately NOT growing tools.rs, I2) writing append-only
+`.chug/decisions.jsonl` (risk_verdicts.jsonl precedent), the five seed
+classes F13 names (validation-routing, validation-verdict,
+recovery-routing, model-fallback, eval-triage) plus the `outcome` class
+for git-backed backfill at row-flip, and LOOP-SPEC adoption sentences at
+the four decision points (ship+adopt in one item — the T23→T24
+zero-calls lesson). **Deferred with written reasons (the working rules'
+skip clause):** phase 2 (fine-tune export pipeline) — needs a corpus
+worth training on; exporting an empty stream teaches nothing, and the
+pipeline's design should be informed by the classes that actually
+accumulate; phase 3 (confidence-gated first-pass routing) — needs the
+trained judge AND a layad decision-class endpoint that does not exist
+yet; classification-ONLY per SPEC-3 doctrine stands. FEATURES.md's F13
+row is annotated SPLIT with the phase map; F13 is NOT checked off.
 
-Cycle-31 scan (kept for the record, superseded by the roadmap pull
-above):
-
-Audited against the META-META-SPEC candidate classes on the post-T66
-surface: **parallel tool calls — PRESENT. `delegate` — PRESENT and
-doctrine-complete** (launch/status/`wait_secs`/`resume` — T58 shipped,
-T63 adopted; the one rough edge is I3, a wake-semantics robustness row,
-not a gap). **`web_fetch` — PRESENT**, 0 organic calls across 13 streams
-(demand-honest). **MCP — PRESENT** (stdio + streamable HTTP);
-resources/prompts zero demand (rejected, 4th cycle). **Plan-then-execute —
-the LEDGER surface** (no failure attributed to its absence). **Session/
-handoff — `--resume` + rotation + `delegate resume` — complete. Steering
-— PRESENT** (TUI line, chat dock, T13/T38 injections). **Fleet-driving —
-T44 caps at 2**; the queue drains in 1–2 cycles; no wider fan-out demand
-(rejected, 3rd cycle). **Context management — PRESENT** (no context-limit
-failure in any stream; the 510–516k cumulative-input figures are sums
-over ~115 full-context calls, not window pressure).
-
-**No feature row filed this cycle** — the honest scan finds every class
-PRESENT or previously rejected with zero new demand evidence. Weighed and
-rejected again (recorded so next cycle doesn't re-litigate): token-
-budgeted impl children via T39's knob (deaths are iteration-ceiling, and
-T63's resume is the cheaper recovery — armed, 0 exercises); impl
-max_iters 50→60 (HOLD — the only 50/50 death since T63 was
-complete-and-committed, which resume correctly didn't cover);
-`src/delegate.rs` extraction (watch — 4,050 < 4,500 trip, no new
-wayfinding miss); a `scripts/gates.sh` shorthand for the bounded-gates
-incantation (shell alias territory, below the feature bar); MCP
-resources/prompts, web_fetch POST/HEAD, delegate fleet view — zero
-demand, third/fourth cycle rejected.
+**Beyond the roadmap:** the post-T69 scan finds every META-META-SPEC
+candidate class PRESENT or previously rejected with zero new demand
+evidence: delegate (launch/status/wait_secs/resume/collect — complete;
+collect is dogfooded by THIS cycle's reviews for the first time);
+web_fetch (0 organic calls, 5th cycle — demand-honest); MCP
+resources/prompts (0 demand, 5th cycle rejected); parallel tool calls
+(retired cycle-11 — driver batches); session/handoff (`--resume` +
+rotation + delegate resume — complete, proven twice this arc); steering
+(present); fleet fan-out beyond T44's 2 (rejected 4th cycle — the
+serial 3-row queue drains fine); token-budgeted impl children (deaths
+are iteration-ceiling; T63 resume is the cheaper recovery — now PROVEN
+twice); impl max_iters 50→60 (HOLD — T63's resume recovered both 50/50
+deaths this arc); a `scripts/gates.sh` shorthand (below the feature
+bar). **No new capability finds this cycle.**
 
 ## 5. Top 3 priorities
 
-**Cycle-32 delta:** 1. **HUMAN: restart the supervisor (I1, RESTATED a
-seventh time — evidence: this eval's own launch line is `--max-iters
-120`, T36's 160 dormant; loopd.sh unchanged since `5c842a6`/T53, so the
-pileup is exactly the six stale revisions cycle 31 named).** 2. **T69
-(the ROADMAP PULL, only queued row).** 3. nothing else queued — the
-queue is T69 alone; F13 enters at the next fresh eval by mandate.
-
-Cycle-31 priorities (executed: T67 + T68 both landed green, queue
-drained):
-
-1. **HUMAN: restart the supervisor (I1)** — six stale revisions; every
-   cycle launches at 120 not 160 (T36 dormant) and both cycles wrapped at
-   the margin (115/120, 114/120, budget_low@8); the digest is stale at
-   every eval start (4 manual regenerations). 30 seconds, zero risk — the
-   new ps-check skips an in-flight cycle cleanly.
-2. **T67 (pri 2, doctrine/robustness)** — the nine-sighting check-line
-   defect; a two-line convention + a guard leg kills the class forever
-   and repairs t64's spec. Cheap, high certainty.
-3. **T68 (pri 3, src/tools.rs robustness)** — significant-change wake for
-   the long-poll; returns ~10–25 orchestrator iterations per child wait
-   to cycles that wrap at 114–115/120.
+1. **HUMAN: restart the supervisor (I1, EIGHTH restatement).** Cycle 32
+   died AT 120/120 mid-arc; the digest was stale at this eval's start
+   (6th manual regen); this eval's own launch line reads
+   `--max-iters 120` — T36's 160 dormant. 30 seconds, zero risk, the
+   ps-check skips an in-flight cycle cleanly.
+2. **T70 (pri 2, the mandated ROADMAP PULL — F13 phase 1).** Feature
+   work is first-class; the corpus cannot accumulate until the tool
+   exists, and every cycle without it is eval-triage/routing/verdict
+   data lost.
+3. **T71 (pri 3) then T72 (pri 3)** — serial; see Handoff for the
+   ordering logic (T70 and T72 both touch LOOP-SPEC.md → doctrine
+   isolation forces full serial anyway).
 
 ## 6. README audit (usability, not just accuracy)
 
-Cold read top-to-bottom (post-T65). **(a) Reading order:** what-it-is →
-quickstart → interactive → autonomous → TUI → tools → risk gate → MCP →
-Langfuse → self-hosting specs → continuous mode → development — the
-newcomer arc holds; no append-only accretion. **(b) Redundancy:** none
-found — the delegate paragraph is the single source for launch/status/
-wait semantics; the target-cache mechanics appear once, in the
-Continuous-mode section, with the spec-pointer sentence doing the
-delegation. **(c) Staleness:** none found — the delegate paragraph matches
-the shipped surface (launch args + 40/35 defaults, max-tokens passthrough,
-resume, status latest-segment, `wait_secs` with the `waited:` line); the
-Development layout brace list matches the tree (T60 verified, 20 modules +
-main.rs); the loopd section names the re-exec behavior (T56) and the
-digest refresh (T46). **(d) Balance:** the T65 rewrite reads at README
-altitude — user semantics in two short paragraphs, mechanism deferred to
-specs t47/t52/t57; the MCP remote-specifics paragraph stays acceptable
-(it IS the configuration contract). One NB: the README's `wait_secs`
-clause ("returns early when the child's state changes") will need the
-same rewording T68 gives the tool description — T68's spec already
-carries that leg, so no separate docs row. **(e) Quickstart truth:**
-commands verified unchanged against main (`cargo build`, `cargo install
---path .`, flags current; `check:` behavior accurately described; auth
-chain matches the code). **No docs row filed** — the first zero-finding
-audit since the §6 audits began; the de-accretion rows (T51/T56/T60/T65)
-are compounding.
+Cold read top-to-bottom (post-T69, 319 lines). **(a) Reading order:**
+what-it-is → quickstart → interactive → autonomous → TUI → tools →
+risk gate → MCP → Langfuse → self-hosting specs → continuous →
+development — the newcomer arc holds; no append-only accretion.
+**(b) Redundancy:** none found — delegate semantics live only in the
+Tools paragraph; the target-cache mechanics only in Continuous mode.
+**(c) Staleness:** none found — the delegate paragraph matches the
+post-T69 surface exactly (launch args + 40/35 defaults, max-tokens,
+resume, status latest-segment, `collect` with its
+verdict/summary/check-cmd/refs contract and the
+long-poll-with-status-first guidance, `wait_secs` with the T68 wake set
+described accurately: "child's iteration advances, a verdict or
+budget-low flag appears, or its liveness flips… last_event churn renders
+at the deadline but never wakes"); the Development layout brace list
+diffs IDENTICAL against the tree (21 modules — verified mechanically
+this eval); the loopd section names re-exec + digest refresh.
+**(d) Balance:** the delegate paragraph is now ~30 lines for one tool —
+still the user contract (the MCP remote-specifics paragraph set the
+precedent), but the accretion line is in sight; a FUTURE docs row
+(`t<N>-readme-delegate-paragraph`) should split the four action
+semantics into a compact sub-list if one more clause lands. Watch-level,
+not filed. **(e) Quickstart truth:** `cargo build` →
+`cargo install --path .` → `chug run` verified against main; auth-chain
+comment matches the code; `check:` behavior accurately described.
+**No docs row filed** — second consecutive zero-finding audit; the
+de-accretion rows (T51/T56/T60/T65) keep compounding.
 
 ## Handoff — recommended execution order
 
-**CYCLE-32 HANDOFF (current):** Human-decision item FIRST (unchanged,
-restated): restart the supervisor — `launchctl kickstart -k
-gui/$(id -u)/com.tampajohn.chug-loopd` — activates T36 (160-iter cycles;
-cycle 31 wrapped 115/120, THIS cycle launched at 120 too), T46 (digest
-refresh — 5 manual regenerations now), T47, T50, T53. KeepAlive=false
-means chug must never kill it (I1).
+**Human-decision item FIRST (unchanged, EIGHTH restatement): restart the
+supervisor** — `launchctl kickstart -k gui/$(id -u)/com.tampajohn.chug-loopd`
+— activates T36 (160-iter cycles; cycle 32 died AT 120/120 mid-arc),
+T46 (digest refresh — 6 manual regenerations), T47, T50, T53.
+KeepAlive=false means chug must never kill it (I1).
 
-Queue order: **T69 (pri 2, the ROADMAP PULL) is the only row.** It
-touches src/tools.rs AND LOOP-SPEC.md → REQUIRED kimi validation
-(§2 step 4's core list + doctrine), and as a doctrine-touching item it
-runs ALONE (no T44 overlap). Files: src/tools.rs (collect action +
-schema + unknown-action message/pin), LOOP-SPEC.md (one §2-step-3
-sentence), README.md (delegate paragraph clause). Spec written and
-ready; todo_consistency 5/5 green at filing.
+Queue order (features first-class per the amended doctrine; full serial —
+no T44 overlap this cycle):
 
-Next fresh eval (after T69's cycle): pull **F13** (decision logs →
-Laya distillation, `dc18a7a` operator-directed) — mandated, no
-re-triage. The cycle-31 handoff below is kept for the record (both its
-rows landed).
+1. **T70 (pri 2, F13 phase 1)** — touches src/tools.rs (registration)
+   AND LOOP-SPEC.md (adoption) → REQUIRED kimi validation (§2 step 4
+   core list + doctrine), and as a doctrine-touching item it runs ALONE.
+   Files: src/decisions.rs (new), src/tools.rs (2 registration lines),
+   src/main.rs (1 line), LOOP-SPEC.md (4 sentences), README.md (list +
+   1 sentence).
+2. **T71 (pri 3)** — src/tools.rs touch → REQUIRED kimi validation;
+   shares src/tools.rs with T70 (NOT disjoint) → no overlap even if a
+   validator were in flight; runs strictly after T70 merges.
+3. **T72 (pri 3, doctrine)** — LOOP-SPEC.md edit → runs ALONE, REQUIRED
+   kimi validation; shares LOOP-SPEC.md with T70 → strictly serial.
 
----
-
-Cycle-31 handoff (kept for the record):
-
-**Human-decision item FIRST (blocks nothing chug-side but caps every
-cycle): restart the supervisor.** `launchctl kickstart -k
-gui/$(id -u)/com.tampajohn.chug-loopd` (or `./loopd.sh stop` + the
-operator's usual start). Activates T36 (160-iter cycles — both cycles
-wrapped at the 120 margin with budget_low@8), T46 (digest refresh — stale
-at 4 of the last 5 eval starts), T47 (warm shared cache), T50
-(self-re-exec — after this restart the pileup can never recur), T53
-(ps-based skip). KeepAlive=false means chug must never kill it (I1).
-
-Queue order (bugs > robustness > features > DX):
-
-1. **T67 — pri 2, DOCTRINE item: runs ALONE** (META-META-SPEC.md edit —
-   T44 forbids overlap for doctrine), REQUIRED kimi validation (loop/spec
-   doctrine). Files: META-META-SPEC.md + tests/todo_consistency.rs +
-   specs/t64-validator-survivor-pins.md (one-word check-line repair).
-2. **T68 — pri 3, src/tools.rs: REQUIRED kimi validation** (core tool
-   surface). Files: src/tools.rs (wake condition + doc comment + schema
-   description) + README.md (one clause). Runs strictly after T67 merges
-   (doctrine never overlaps; serial queue of 2).
-
-Both specs are written and ready; a cold next cycle needs zero human
-words. If the queue outlives this cycle's budget, unworked rows stay
-`todo` with specs — that is a fine outcome.
+All three specs are written and ready; todo_consistency 5/5 green at
+filing; a cold next cycle needs zero human words. If the queue outlives
+this cycle's budget, unworked rows stay `todo` with specs — a fine
+outcome. **Next fresh eval after this queue drains: pull F2 (plan
+mode)** — F13's phases 2–3 wait on corpus accumulation (§4), so the top
+unworked roadmap item at that point is F2; record any disagreement in
+that eval, not by re-triage mid-queue.
 
 ## Outcomes (filled at cycle wrap — LOOP-SPEC Phase 3)
 
