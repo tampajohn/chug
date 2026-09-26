@@ -82,6 +82,13 @@ returns to idle, repeat. Natural stops end the turn; budgets are per turn.
   miss (a cheap watch-and-wait loop burns neither while racking up tokens).
   Crossing the ceiling aborts at the loop top naming the exhausted budget
   (`budget: N tokens`)
+- **Driver lock** — a `chug run` refuses to start in a cwd a live run
+  already drives: it names the holding pid on stderr and exits non-zero; if
+  you know that run is gone, remove `.chug/driver.lock` and start again. A
+  stale lock (dead holder, or its pid recycled by a non-chug process) is
+  reclaimed transparently — `--resume` never blocks on its own predecessor —
+  and the lock is released on every normal exit. `chug chat` never takes the
+  lock: chat never blocks a run
 - **Abort output** — every abort prints the freshest LEDGER.md and the model
   in use, plus a resume line naming the current model:
   `resume: chug run --spec <spec> --goal "<goal>" --cwd <cwd> --resume [--model <other>]  (current model: <model>)`.

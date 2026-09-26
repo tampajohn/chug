@@ -6,6 +6,7 @@ mod build_info;
 mod chat;
 mod complete;
 mod driver;
+mod driver_lock;
 mod eventlog;
 mod events;
 mod riskgate;
