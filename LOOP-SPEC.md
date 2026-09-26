@@ -116,8 +116,12 @@ impl, never 2 impls):
    `delegate` itself errors persistently (the tool, not the child),
    META-SPEC §4's hand-rolled nohup launch template remains the fallback
    launch path — note the fallback in your ledger.
-3. **Review.** Diff the branch, read the child's ledger if ambiguous, and run
-   bounded gates yourself (`CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared
+3. **Review.** After the child exits, the review's first look is one
+   `delegate{action:"collect", cwd, pid}` call — it returns the latest run
+   segment's verdict, the accepted goal's summary, the check cmd, and the
+   commit refs in one bounded non-blocking read (every git failure degrades
+   to a note) — then diff the branch, read the child's ledger if ambiguous,
+   and run bounded gates yourself (`CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared
    perl -e 'alarm 600; exec @ARGV' cargo test --
    --test-threads=4` — the T47 env prefix keeps the gate on the shared warm
    cache; bash tool calls don't share env, so the step-1 export doesn't
