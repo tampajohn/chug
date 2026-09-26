@@ -111,6 +111,13 @@ impl, never 2 impls):
    the TODO row to `done` **with the merge commit ref in the same commit**
    (or an immediately following `todo:` commit; bundled rows may share one
    such `todo:` commit naming every row + its ref — Trivial-row bundling).
+   When editing TODO.md (row flips, notes annotations), the notes cell
+   must contain no `|` — the T8 guard splits every row on it, so a stray
+   pipe splits one cell into two and fails the guard (cycle-16's
+   goal-gate death: a recipe pipe in the T37 notes cell rejected
+   `goal_complete` at ~118/120 and the run aborted 120/120) — and the
+   orchestrator runs `cargo test --test todo_consistency` (seconds)
+   after every TODO.md edit, before committing.
    Update README.md in the
    merge commit when the item is user-visible. **Outcomes are per-item
    too**: in the same commit as the row flip (or an immediately following
