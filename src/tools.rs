@@ -1395,7 +1395,7 @@ pub fn truncate_middle(s: &str, head: usize, tail: usize) -> String {
 mod tests {
     use super::*;
     use std::io::Write as _;
-    use std::sync::Mutex;
+    use std::sync::{Mutex, MutexGuard};
 
     #[test]
     fn path_safety_rejects_parent_traversal() {
@@ -1717,6 +1717,30 @@ mod tests {
         assert_eq!(truncate_middle("short", 100, 50), "short");
     }
 
+    // ---- T31: wall-clock-sensitive run_shell tests serialize on one lock ----
+
+    /// Serializes the wall-clock-sensitive `run_shell` tests (T31). Each of
+    /// the three tests below asserts an upper bound on real elapsed time
+    /// around a `timeout + READER_GRACE` window; under `--test-threads=4` the
+    /// scheduler can starve a test thread while sibling tests run, stretching
+    /// `elapsed` past the bound even though run_shell behaved correctly (two
+    /// one-off sightings, both under parallel load, both green isolated).
+    /// Holding this lock for the clocked window removes that co-occurrence by
+    /// construction: no two timing tests are ever in flight together, so the
+    /// only stretch source left is whole-machine starvation, not the suite
+    /// itself. std-only — no new dependencies. The elapsed bounds themselves
+    /// are deliberately untouched: they must keep dying when run_shell stops
+    /// returning promptly.
+    static RUN_SHELL_TIMING_LOCK: Mutex<()> = Mutex::new(());
+
+    /// Poison-tolerant acquisition: a panic inside one timing test must not
+    /// cascade `PoisonError` failures into its siblings.
+    fn timing_guard() -> MutexGuard<'static, ()> {
+        RUN_SHELL_TIMING_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+    }
+
     /// Regression: a backgrounded grandchild in the shell's own process group
     /// must be killed with the GROUP at timeout — before the fix only the
     /// direct `sh` child died, the orphan held the stdout pipe, and the reader
@@ -1724,6 +1748,10 @@ mod tests {
     /// timeout + reader grace, with a timeout error.
     #[test]
     fn run_shell_timeout_kills_process_group_and_returns() {
+        // T31: wall-clock ceiling below — hold the timing lock so a sibling
+        // timing test cannot stretch `elapsed` (see RUN_SHELL_TIMING_LOCK).
+        // Same mechanism as the two named flake sites, so it serializes too.
+        let _timing = timing_guard();
         let tmp = tempfile::tempdir().unwrap();
         let timeout = Duration::from_secs(1);
         let start = Instant::now();
@@ -1754,6 +1782,11 @@ mod tests {
     /// outside the killed group holding the inherited pipe — is identical.)
     #[test]
     fn run_shell_returns_when_setsid_grandchild_holds_pipe() {
+        // T31 (named flake): the ceiling below is exactly the shape parallel
+        // scheduler stretch violates — hold the timing lock so no sibling
+        // timing test's clocked window can overlap ours and starve this
+        // thread (see RUN_SHELL_TIMING_LOCK). Bound itself unchanged.
+        let _timing = timing_guard();
         let tmp = tempfile::tempdir().unwrap();
         let timeout = Duration::from_secs(1);
         let escapee = "python3 -c \"import os, time; os.setsid(); print('held'); time.sleep(60)\"";
@@ -1795,6 +1828,14 @@ mod tests {
     /// code and full output (readers drain via the channel without EOF issues).
     #[test]
     fn run_shell_normal_path_unchanged() {
+        // T31 (named flake): no explicit elapsed assert here, but the load
+        // sensitivity is the same family one level down — the driver's 10s
+        // timeout can fire spuriously when this thread is starved between
+        // spawn and its next poll, and the suite's own heavyweight timing
+        // tests (multi-second kill+grace windows) are the co-occurrence that
+        // produced the one-off sighting. Serialize against them (see
+        // RUN_SHELL_TIMING_LOCK); every assertion below is byte-identical.
+        let _timing = timing_guard();
         let tmp = tempfile::tempdir().unwrap();
         let outcome = run_shell(tmp.path(), "echo hi; exit 3", Duration::from_secs(10)).unwrap();
         assert!(!outcome.timed_out);

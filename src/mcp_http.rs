@@ -1073,7 +1073,7 @@ mod tests {
     use super::*;
     use crate::mcp::McpRegistry;
     use std::io::{Read, Write};
-    use std::net::{TcpListener, TcpStream};
+    use std::net::{SocketAddr, TcpListener, TcpStream};
     use tempfile::TempDir;
 
     // ---------- hand-rolled HTTP/1.1 stub (no crates, 127.0.0.1 only) ----------
@@ -1211,6 +1211,71 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
         (listener, url)
+    }
+
+    // ---------- T31: dead-port acquisition (TOCTOU-free) ----------
+
+    /// Probe cap for [`dead_port`] acquisition. A refused loopback connect is
+    /// immediate in practice; the bound only fences a pathological
+    /// accept-and-hold peer so acquisition can never stall the suite. (This
+    /// is a NEW bound — no existing timeout/grace constant is touched.)
+    const DEAD_PORT_PROBE_TIMEOUT: Duration = Duration::from_secs(1);
+    /// Bounded re-bind attempts when a probe proves the port was stolen.
+    const DEAD_PORT_ATTEMPTS: usize = 32;
+
+    /// True when `port` currently REFUSES connections (nothing listening).
+    fn port_refuses_connections(port: u16) -> bool {
+        let addr = SocketAddr::from(([127, 0, 0, 1], port));
+        matches!(
+            TcpStream::connect_timeout(&addr, DEAD_PORT_PROBE_TIMEOUT),
+            Err(e) if e.kind() == std::io::ErrorKind::ConnectionRefused
+        )
+    }
+
+    /// An ephemeral port verified, at acquisition time, to refuse connections
+    /// — a "dead server" address for the fail-soft tests.
+    ///
+    /// Mechanism (T31): a plain bind+drop is a TOCTOU. The OS recycles
+    /// freshly-freed ephemeral ports immediately, so under
+    /// `--test-threads=4` another test's `bind_stub()` can claim the port
+    /// between our drop and the client's connect — the "dead server" then
+    /// belongs to a live sibling stub and the test flakes (one such sighting
+    /// rejected a T28 goal_complete verdict; the test passes isolated). The
+    /// probe closes the acquisition race by construction: a port is only
+    /// returned after a connect to it was observed REFUSED. If a probe
+    /// connect unexpectedly SUCCEEDS, the port was claimed in flight and is
+    /// poisoned for dead-server duty — re-bind a fresh port and retry,
+    /// bounded by `DEAD_PORT_ATTEMPTS` so a pathological environment fails
+    /// loudly instead of looping forever.
+    fn dead_port() -> u16 {
+        for _ in 0..DEAD_PORT_ATTEMPTS {
+            let port = TcpListener::bind("127.0.0.1:0")
+                .unwrap()
+                .local_addr()
+                .unwrap()
+                .port();
+            // The listener above is dropped at the end of this statement;
+            // the probe decides whether the port is actually dead.
+            if port_refuses_connections(port) {
+                return port;
+            }
+        }
+        panic!("dead_port: no connection-refused port in {DEAD_PORT_ATTEMPTS} attempts");
+    }
+
+    /// Re-verify a [`dead_port`] handout immediately before a phase connects
+    /// to it. The acquisition probe cannot cover the whole test body: this
+    /// shrinks the residual steal window from acquisition-to-use down to
+    /// verify-to-connect (microseconds), and if the port WAS stolen it fails
+    /// HERE, naming the theft, instead of desyncing a sibling stub (whose
+    /// handshake asserts would fail in its own thread) or erroring
+    /// confusingly downstream.
+    fn assert_dead_port(port: u16) {
+        assert!(
+            port_refuses_connections(port),
+            "dead-port {port} no longer refuses connections: claimed by another listener \
+             between acquisition and use (T31 probe)"
+        );
     }
 
     /// Stub-side I/O ceiling (T6): every blocking operation a stub thread
@@ -1480,8 +1545,10 @@ mod tests {
 
     #[test]
     fn dead_server_retries_then_tool_error_without_sleeping() {
-        // Bind + drop to get a port nothing listens on (connection refused).
-        let port = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+        // T31: probe-verified dead port. A plain bind+drop is a TOCTOU under
+        // parallel load — another test's bind_stub can claim the port between
+        // our drop and the client's connect (mechanism: see dead_port).
+        let port = dead_port();
         let (sleeper, slept) = no_sleep();
         let mut srv = HttpMcpServer::with_sleeper(
             "remote".to_string(),
@@ -1491,6 +1558,9 @@ mod tests {
         )
         .unwrap();
 
+        // Re-verified dead immediately before the first connect: shrinks the
+        // residual steal window to verify-to-connect (microseconds).
+        assert_dead_port(port);
         let res = srv.call("echo", json!({})).unwrap();
         assert!(res.is_error);
         assert!(
@@ -1520,7 +1590,40 @@ mod tests {
             sleeper2,
         )
         .unwrap();
+        // Same re-verify before this phase's connect: a mid-test theft must
+        // fail HERE (named) rather than as a confusing handshake outcome.
+        assert_dead_port(port);
         assert!(srv2.initialize().is_err());
+    }
+
+    /// T31: the acquisition probe must distinguish live from dead — the
+    /// dead-server test's TOCTOU fix stands on this mechanism, so it gets its
+    /// own pin. Kills the mutant where the probe is removed or inverted
+    /// (dead_port would then hand out a live port and the bind+drop race
+    /// returns); the always-false direction is killed by the main test, where
+    /// dead_port would exhaust its attempts and panic.
+    #[test]
+    fn dead_port_probe_distinguishes_live_from_dead() {
+        let (listener, _) = bind_stub();
+        let port = listener.local_addr().unwrap().port();
+        // Live: something is listening → must NOT read as dead. (The probe's
+        // connection queues in our own listener's backlog, never accepted.)
+        assert!(
+            !port_refuses_connections(port),
+            "live port {port} probed as dead"
+        );
+        // Dead: with the listener dropped, a connect must be refused.
+        drop(listener);
+        assert!(
+            port_refuses_connections(port),
+            "dropped port {port} did not refuse connections"
+        );
+        // And the acquisition helper hands out a port that refuses right now.
+        let fresh = dead_port();
+        assert!(
+            port_refuses_connections(fresh),
+            "dead_port handed out port {fresh} that no longer refuses connections"
+        );
     }
 
     /// HTTP statuses are immediate errors — no retry schedule, no sleep.
