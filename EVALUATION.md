@@ -311,6 +311,44 @@ words. If the queue outlives this cycle's budget, unworked rows stay
 
 ## Outcomes (filled at cycle wrap — LOOP-SPEC Phase 3)
 
+### Cycle 32 (2026-09-26, ~08:51–09:16 EDT) — delta eval + ROADMAP PULL (T69 = F1 delegate collect); T69 MID-ARC at budget wrap (validated-in-flight)
+
+- **Delta eval + mandatory pull (committed 50f1caf).** Queue was EMPTY 3 min
+  before launch (cycle-31 wrap 08:49) → fresh eval mandatory; a full re-read
+  of a 3-minute-old eval would burn ~45 iters for zero new corpus, so the
+  eval is a DELTA over the cycle-31 streams: no new incident rows (wrap
+  clean — T63 armed 0 exercises, T44/T45 unused, t68 49/50 inside the T18
+  margin). ROADMAP PULL executed per operator directive 259b5ed + dc18a7a:
+  F1 → T69 (pri 2, spec + row); F13 (decision logs → Laya) named the NEXT
+  fresh eval's mandated pull — one item per pull per FEATURES.md rules, no
+  re-triage needed. I1 loopd-restart carry RESTATED 7th time (this cycle's
+  own launch line: --max-iters 120, T36's 160 dormant).
+- **T69 (F1 delegate collect) — impl landed, validation in flight at wrap.**
+  glm impl child 50/50 BUDGET ABORT with uncommitted work on all three
+  surfaces → **T63's FIRST live exercise: resume relaunch, goal ACCEPTED
+  25/50 on the resumed segment** (impl ccd9923, +863/−16: collect action —
+  latest-segment verdict + accepted-goal summary + latest verifying cmd +
+  bounded git-log commit refs with T20-precedent degrades; separate
+  CollectSummary keeps the T68 six-field wake set byte-untouched; schema,
+  README clause, LOOP-SPEC §2-step-3 adoption sentence; +18 pins).
+  **Orchestrator review gates caught a real defect the child's gates
+  missed**: the real-checkout integration pin whitelisted only two verdict
+  states (mid-run/clean) and red-fired on the child's own goal-accepted
+  stream — a test whose truth depends on the live run state of the checkout
+  it runs in; orchestrator review-fix 138d042 pins the verdict line's SHAPE
+  (five known verdicts), never the state. Gates post-fix: 550/550 + clippy
+  + spec check 70/70 under target-shared. Kimi validator (pid 75343,
+  50/30) reached 46/50 mid-mutation at my budget wrap — M2/M3/M5 mutants
+  caught, M1 (abort_reason render line) UNCAUGHT survivor noted, gates
+  independently re-run green mid-run. Verdict unread at wrap.
+- **Recovery recipe lives on the T69 row** (validator verdict → mutant-free
+  tree check → merge/flip/FEATURES-check-off/push, or fix-up arc on FAIL).
+  Worktree /tmp/chug-loop-t69 PRESERVED with both commits; impl events +
+  validator partial stream + impl ledger harvested to .chug/ pre-wrap.
+- **Verdict: roadmap pull executed, feature impl complete + review-hardened,
+  merge deferred one cycle on the validation arc — the per-item Outcomes
+  doctrine (T34) means this entry exists even though the row is not done.**
+
 ### Cycle 31 (2026-09-26, ~08:06– EDT) — MANDATORY fresh eval (queue EMPTY); T67 + T68 landed — QUEUE DRAINED
 
 **T68 — `delegate status` `wait_secs` wakes on significant change only
