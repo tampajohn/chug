@@ -127,8 +127,9 @@ panic-safe terminal restore.
 `read_file` (`offset`/`limit` page past the 2000-line cap), `write_file`,
 `edit_file` (+`replace_all`), `bash`, `grep`,
 `glob`, `list_dir`, `update_ledger`, `goal_complete`, `delegate`, `web_fetch`.
-All paths sandboxed to `--cwd` (`delegate` is the one documented exception —
-its absolute `cwd`/`spec` target child worktrees by design). `bash` runs in its own process group —
+All paths sandboxed to `--cwd` (`delegate` and `web_fetch` are the two
+documented exceptions — `delegate`'s absolute `cwd`/`spec` target child
+worktrees by design; `web_fetch` is network, not filesystem). `bash` runs in its own process group —
 timeouts SIGKILL the whole group, so orphaned grandchildren can't wedge the
 driver (120s default; `--bash-timeout` / `CHUG_BASH_TIMEOUT` overrides).
 

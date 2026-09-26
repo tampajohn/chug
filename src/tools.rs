@@ -58,11 +58,11 @@ pub fn tool_schemas() -> Vec<Value> {
     vec![
         json!({
             "name": "read_file",
-            "description": "Read a text file. Paths are relative to the working directory. Output is capped at 2000 lines and truncation is noted. Use `offset`/`limit` to page beyond the cap.",
+            "description": "Read a text file. Paths are relative to the working directory. Output is capped at 2000 lines and truncation is noted. Use `offset`/`limit` to page beyond the cap. Paths outside the cwd are refused (`path escapes cwd`); cross-tree reads/writes (such as a child worktree in /tmp) go through `bash`.",
             "input_schema": {
                 "type": "object",
                 "properties": {
-                    "path": {"type": "string", "description": "File path relative to cwd (must stay inside cwd)"},
+                    "path": {"type": "string", "description": "File path relative to cwd (must stay inside cwd; outside paths are refused: `path escapes cwd` — cross-tree reads go through `bash`)"},
                     "offset": {"type": "integer", "description": "1-based first line to show (default 1)"},
                     "limit": {"type": "integer", "description": "Max lines to show (default 2000; may exceed the cap)"}
                 },
@@ -71,11 +71,11 @@ pub fn tool_schemas() -> Vec<Value> {
         }),
         json!({
             "name": "write_file",
-            "description": "Create or overwrite a file. Parent directories are created automatically.",
+            "description": "Create or overwrite a file. Parent directories are created automatically. Paths outside the cwd are refused (`path escapes cwd`); cross-tree reads/writes (such as a child worktree in /tmp) go through `bash`.",
             "input_schema": {
                 "type": "object",
                 "properties": {
-                    "path": {"type": "string", "description": "File path relative to cwd"},
+                    "path": {"type": "string", "description": "File path relative to cwd (must stay inside cwd; outside paths are refused: `path escapes cwd` — cross-tree writes go through `bash`)"},
                     "content": {"type": "string", "description": "Full file contents"}
                 },
                 "required": ["path", "content"]
@@ -83,11 +83,11 @@ pub fn tool_schemas() -> Vec<Value> {
         }),
         json!({
             "name": "edit_file",
-            "description": "Exact string replacement in a file. `old` must occur exactly once unless `replace_all` is true, which replaces every occurrence.",
+            "description": "Exact string replacement in a file. `old` must occur exactly once unless `replace_all` is true, which replaces every occurrence. Paths outside the cwd are refused (`path escapes cwd`); cross-tree reads/writes (such as a child worktree in /tmp) go through `bash`.",
             "input_schema": {
                 "type": "object",
                 "properties": {
-                    "path": {"type": "string", "description": "File path relative to cwd"},
+                    "path": {"type": "string", "description": "File path relative to cwd (must stay inside cwd; outside paths are refused: `path escapes cwd` — cross-tree edits go through `bash`)"},
                     "old": {"type": "string", "description": "Exact text to replace"},
                     "new": {"type": "string", "description": "Replacement text"},
                     "replace_all": {"type": "boolean", "description": "Replace every occurrence (default false)"}
@@ -120,23 +120,23 @@ pub fn tool_schemas() -> Vec<Value> {
         }),
         json!({
             "name": "glob",
-            "description": "Match file paths under the working directory with a glob pattern (e.g. src/**/*.rs). Returns sorted relative paths, capped at 200 with a truncation note.",
+            "description": "Match file paths under the working directory with a glob pattern (e.g. src/**/*.rs). Returns sorted relative paths, capped at 200 with a truncation note. Paths outside the cwd are refused (`path escapes cwd`); cross-tree reads/writes (such as a child worktree in /tmp) go through `bash`.",
             "input_schema": {
                 "type": "object",
                 "properties": {
                     "pattern": {"type": "string", "description": "Glob pattern, relative to `path` (or cwd)"},
-                    "path": {"type": "string", "description": "Optional base directory relative to cwd (must stay inside cwd)"}
+                    "path": {"type": "string", "description": "Optional base directory relative to cwd (must stay inside cwd; outside paths are refused: `path escapes cwd` — cross-tree listings go through `bash`)"}
                 },
                 "required": ["pattern"]
             }
         }),
         json!({
             "name": "list_dir",
-            "description": "List the immediate entries of a directory (default cwd), one per line, directories suffixed with `/`, directories first, sorted. Capped at 500 with a truncation note.",
+            "description": "List the immediate entries of a directory (default cwd), one per line, directories suffixed with `/`, directories first, sorted. Capped at 500 with a truncation note. Paths outside the cwd are refused (`path escapes cwd`); cross-tree reads/writes (such as a child worktree in /tmp) go through `bash`.",
             "input_schema": {
                 "type": "object",
                 "properties": {
-                    "path": {"type": "string", "description": "Directory relative to cwd (default: cwd)"}
+                    "path": {"type": "string", "description": "Directory relative to cwd (default: cwd; outside paths are refused: `path escapes cwd` — cross-tree listings go through `bash`)"}
                 }
             }
         }),
@@ -3427,6 +3427,178 @@ log_tail: (none)";
         assert!(
             desc.contains("Use `offset`/`limit` to page beyond the cap."),
             "description lost the paging clause: {desc}"
+        );
+    }
+
+    // ---- T41: candid cwd-confinement wording in the filesystem tool schemas ----
+
+    /// The five filesystem tools whose schemas must name the refusal.
+    const CWD_REFUSAL_TOOLS: [&str; 5] = ["read_file", "write_file", "edit_file", "glob", "list_dir"];
+
+    /// T41: the filesystem tools' descriptions must be candid about the cwd
+    /// sandbox — paths outside the cwd are REFUSED, naming the live error
+    /// string (`path escapes cwd`), with `bash` named as the escape hatch for
+    /// cross-tree reads/writes. The bites that motivated this (cycle-16, two in
+    /// one run): `read_file /tmp/chug-loop-t37/src/webfetch.rs` while reviewing
+    /// a child worktree, and `write_file /tmp/eval-head.md` for scratch space —
+    /// each cost an iteration plus a bash-heredoc workaround. The tool
+    /// description is the only surface every session of every role sees
+    /// (T22 precedent: impl children never read META-SPEC). Pinned against the
+    /// LIVE `tool_schemas()` output, not a copied literal, so reverting any one
+    /// description to its pre-T41 text fails here.
+    #[test]
+    fn filesystem_tool_descriptions_name_the_cwd_refusal_and_bash_escape_hatch() {
+        let schemas = tool_schemas();
+        for name in CWD_REFUSAL_TOOLS {
+            let entries: Vec<&Value> = schemas
+                .iter()
+                .filter(|s| s.get("name").and_then(Value::as_str) == Some(name))
+                .collect();
+            assert_eq!(entries.len(), 1, "{name}: exactly one schema");
+            let desc = entries[0]
+                .get("description")
+                .and_then(Value::as_str)
+                .unwrap_or_else(|| panic!("{name}: schema has a description"));
+            assert!(
+                desc.contains("refused"),
+                "{name}: description does not say outside paths are refused: {desc}"
+            );
+            assert!(
+                desc.contains("path escapes cwd"),
+                "{name}: description does not name the live error string: {desc}"
+            );
+            assert!(
+                desc.contains("go through `bash`"),
+                "{name}: description does not name the bash escape hatch: {desc}"
+            );
+            // Appended as exactly ONE sentence, at the end.
+            assert!(
+                desc.ends_with("go through `bash`."),
+                "{name}: confinement clause is not the final sentence: {desc}"
+            );
+        }
+    }
+
+    /// T41 (T22 pattern): each touched description gains exactly ONE sentence
+    /// — so the pre-T41 part counts (via `split(". ")`; glob's pre-existing
+    /// "(e.g. …)" contributes its own split, folded into the expectation) each
+    /// rise by one — and the load-bearing tokens survive the append: caps,
+    /// defaults, and `offset`/`limit` notes are unchanged.
+    #[test]
+    fn filesystem_tool_descriptions_gain_one_sentence_and_keep_load_bearing_tokens() {
+        let expected: &[(&str, usize, &[&str])] = &[
+            (
+                "read_file",
+                5,
+                &[
+                    "Output is capped at 2000 lines",
+                    "Use `offset`/`limit` to page beyond the cap.",
+                ],
+            ),
+            (
+                "write_file",
+                3,
+                &["Parent directories are created automatically."],
+            ),
+            ("edit_file", 3, &["must occur exactly once"]),
+            ("glob", 4, &["capped at 200 with a truncation note"]),
+            ("list_dir", 3, &["Capped at 500 with a truncation note"]),
+        ];
+        let schemas = tool_schemas();
+        for (name, parts, tokens) in expected.iter() {
+            let desc = schemas
+                .iter()
+                .find(|s| s.get("name").and_then(Value::as_str) == Some(*name))
+                .expect("schema present (pinned elsewhere)")
+                .get("description")
+                .and_then(Value::as_str)
+                .unwrap_or_else(|| panic!("{name}: schema has a description"));
+            assert_eq!(
+                desc.split(". ").count(),
+                *parts,
+                "{name}: description did not gain exactly one sentence: {desc}"
+            );
+            for token in tokens.iter() {
+                assert!(
+                    desc.contains(*token),
+                    "{name}: load-bearing token lost: {token:?} — {desc}"
+                );
+            }
+        }
+    }
+
+    /// T41: the per-param `path` descriptions stop underselling the sandbox —
+    /// each names the refusal and the `bash` escape hatch, and the pre-T41
+    /// wording stays ("relative to cwd"; glob's "Optional base directory";
+    /// list_dir's "default: cwd").
+    #[test]
+    fn filesystem_tool_path_param_descriptions_name_the_refusal() {
+        let schemas = tool_schemas();
+        for name in CWD_REFUSAL_TOOLS {
+            let schema = schemas
+                .iter()
+                .find(|s| s.get("name").and_then(Value::as_str) == Some(name))
+                .expect("schema present (pinned elsewhere)");
+            let path_desc = schema["input_schema"]["properties"]["path"]
+                .get("description")
+                .and_then(Value::as_str)
+                .unwrap_or_else(|| panic!("{name}: path property has a description"));
+            assert!(
+                path_desc.contains("refused") && path_desc.contains("path escapes cwd"),
+                "{name}: path description does not name the refusal: {path_desc}"
+            );
+            assert!(
+                path_desc.contains("`bash`"),
+                "{name}: path description does not name the bash escape hatch: {path_desc}"
+            );
+            assert!(
+                path_desc.contains("relative to cwd"),
+                "{name}: path description lost the relative-to-cwd token: {path_desc}"
+            );
+        }
+    }
+
+    /// T41: the error string the new wording names is the LIVE one —
+    /// `resolve_safe` fails with exactly `path escapes cwd: <path>` (pre-T41
+    /// wording, unchanged; behavior is also pinned by
+    /// `glob_rejects_path_escape` and the `path_safety_*` tests).
+    #[test]
+    fn resolve_safe_error_names_path_escapes_cwd() {
+        let tmp = tempfile::tempdir().unwrap();
+        let err = resolve_safe(tmp.path(), "/etc/passwd").unwrap_err();
+        assert!(err.starts_with("path escapes cwd: "), "{err}");
+        let err = resolve_safe(tmp.path(), "../out.txt").unwrap_err();
+        assert!(err.starts_with("path escapes cwd: "), "{err}");
+    }
+
+    /// T41: the README Tools intro must name BOTH sandbox exceptions —
+    /// `delegate` (absolute child-worktree paths) and `web_fetch` (network,
+    /// not filesystem). It said `delegate` was "the one documented exception",
+    /// stale the moment T37 landed `web_fetch` — a cold reader saw the intro
+    /// contradict the `web_fetch` paragraph one screen below. Whitespace is
+    /// normalized so the pin is independent of markdown line wrapping.
+    #[test]
+    fn readme_tools_intro_names_both_sandbox_exceptions() {
+        let readme =
+            fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/README.md"))
+                .expect("README.md readable from the crate root");
+        let flat: String = readme.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(
+            flat.contains(
+                "All paths sandboxed to `--cwd` (`delegate` and `web_fetch` are the two documented exceptions"
+            ),
+            "README Tools intro does not name both exceptions: {flat}"
+        );
+        assert!(
+            flat.contains(
+                "`web_fetch` is network, not filesystem). `bash` runs in its own process group"
+            ),
+            "README Tools intro lost the web_fetch wording or the byte-identical `bash` continuation: {flat}"
+        );
+        // The stale singular is gone.
+        assert!(
+            !flat.contains("is the one documented exception"),
+            "README still calls delegate the one documented exception: {flat}"
         );
     }
 }
