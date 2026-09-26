@@ -37,9 +37,11 @@ Features are first-class: the mandate is closing capability gaps (a missing
 When the queue holds both a credible feature row and a DX-friction row of
 the same pri, work the feature first.
 
-For each `todo` row, ONE impl child at a time (backgrounded + polled, per
-step 2); adjacent rows may overlap ONLY under the **Pipeline overlap** rule
-at the end of this phase — at most 2 children in flight (1 validator + 1
+ONE impl child at a time (backgrounded + polled, per step 2) — one child
+per row by default, though up to 3 trivial same-area rows MAY share one
+child under the **Trivial-row bundling** rule at the end of this phase;
+adjacent children may overlap ONLY under the **Pipeline overlap** rule at
+the end of this phase — at most 2 children in flight (1 validator + 1
 impl, never 2 impls):
 
 1. **Worktree.** `git -C /Users/jadams/workspace/chug worktree add
@@ -107,7 +109,9 @@ impl, never 2 impls):
    verdict or non-trivial findings; transcript harvest is the operator's
    choice (size). Only then merge to main, re-run gates in main, then flip
    the TODO row to `done` **with the merge commit ref in the same commit**
-   (or an immediately following `todo:` commit). Update README.md in the
+   (or an immediately following `todo:` commit; bundled rows may share one
+   such `todo:` commit naming every row + its ref — Trivial-row bundling).
+   Update README.md in the
    merge commit when the item is user-visible. **Outcomes are per-item
    too**: in the same commit as the row flip (or an immediately following
    `eval:` commit), append the item's Outcomes entry to EVALUATION.md —
@@ -123,6 +127,35 @@ impl, never 2 impls):
    watches origin; don't hold a batch hostage to the wrap.
 6. **Budget check.** Fewer than 15 iterations left → stop dispatching, go to
    wrap. Unworked rows stay `todo` — that is a fine outcome.
+
+**Trivial-row bundling (T45) — when one child may take up to 3 rows.** The
+per-row arc above carries a fixed cost — a worktree, a fresh build, a
+dispatch and a validation cycle ≈ 15–30 min even when the change is a
+one-line const pin or a doc sentence (the T38–T43 class). The orchestrator
+MAY therefore dispatch ONE impl child for up to 3 rows in a single round
+(one worktree, one launch, one review pass) when ALL of the following
+hold — the eligibility predicate is CONJUNCTIVE, every condition must
+hold, no weighing; when any one is in doubt, run the rows separately:
+- (a) each row's spec estimates ≤ ~30 changed lines (doc sentences, const
+  pins, description text);
+- (b) all rows touch the same 1–2 files or are docs/doctrine-only;
+- (c) none touches src/driver.rs or src/api.rs core loop logic;
+- (d) every row's pri ≤ 3.
+Never bundled: features, rows across different file areas, bundles >3
+rows. The child's goal is the step-2 template with the row list made
+explicit — "Implement TODO items t<a>, t<b>, t<c> ONLY", followed by each
+row's spec path — and it requires ONE commit PER ROW, in queue order
+(never one squashed commit), so each row's flip references its own
+commit. Validation: ONE kimi round covers the whole bundle,
+mutation-testing per row where feasible; if ANY bundled row is
+core-adjacent (step 4's REQUIRED list — src/tools.rs, src/events.rs, or
+the loop/spec doctrine), that REQUIRED validation covers the set, while a
+bundle of docs/pins-only rows may skip the kimi round and rely on the
+orchestrator gates of step 4. At merge time the bundled rows may flip in
+ONE `todo:` commit naming every row + its ref (step 5). For the Pipeline
+overlap rule below, a bundle counts as its ONE impl child — the cap stays
+1 validator + 1 impl — and a bundle containing a doctrine row still never
+overlaps (it runs alone).
 
 **Pipeline overlap (T44) — when a second child may fly.** Steps 1–6 remain
 the per-row arc; adjacent rows may overlap in exactly one pattern. After
@@ -169,7 +202,8 @@ hosted (impl and validator alike) has been harvested.
 ## Hard rules
 
 - ONE WRITER per file set, serial merges, bounded gates (T44): at most 2
-  children in flight — 1 validator + 1 impl, never 2 impls — and an impl
+  children in flight — 1 validator + 1 impl, never 2 impls (a Trivial-row
+  bundle counts as that ONE impl child) — and an impl
   may overlap a validator only when the two items' spec-named target files
   are disjoint; doctrine items (LOOP/META/META-META/SELF-SPEC or TODO.md
   row format) never overlap, and merges stay strictly serial in queue
