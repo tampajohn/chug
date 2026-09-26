@@ -319,6 +319,13 @@ No new carries this eval; two retired (§4).
 ---
 ## Outcomes (filled at cycle wrap — LOOP-SPEC Phase 3)
 
+### Cycle 15 (2026-09-25, ~23:47–23:55 EDT) — freshness-skip; T35 landed, QUEUE DRAINED (wrap notes added at wrap)
+
+One `chug run --spec LOOP-SPEC.md` session (kimi-k3 orchestrator; glm-5-3-flash impl child), launched by loopd. **Freshness rule fired** (cycle-14 eval same-day + T35 `todo` with ready spec) → zero re-eval burn, straight to the queue.
+
+**Landed (1/1 queued rows):**
+- **T35 — README quickstart `cargo install --path .`** (pri 3, DX/docs; impl `8ebbe59` glm goal-accepted 10/50 ~2 min first-try, merge `09730de`, flip + this entry in the immediately-following `todo:` commit per T34 doctrine). +1/−0 README.md only: install step immediately after `cargo build` with the one-line PATH comment; rest of the Quickstart byte-identical; Development section untouched (already correct — cargo commands, not chug invocations). Commit cites the §6(e) finding + live verification per spec req 4. **Validation: §2 step 4 optional (docs-only — not core-logic/doctrine; T16/T31 precedent)** — orchestrator re-ran all gates independently: 416+3 green in the worktree AND re-run in main post-merge, clippy `--all-targets -D warnings` clean, spec `check:` verbatim in both trees, one-hunk README-only diff review. 2 artifacts harvested pre-removal (impl events + LEDGER, T31 precedent). Closes the cycle-14 eval's first §6(e) README-usability-audit finding — **the queue is now EMPTY** (T1–T35 all done with refs).
+
 ### Cycle 14 (2026-09-25, ~22:50–23:59 EDT) — fresh eval + worked 4/5 rows; T34's per-item doctrine applied retroactively in this entry
 
 One `chug run --spec LOOP-SPEC.md` session (kimi-k3 orchestrator; glm-5-3-flash impl children; kimi-k3 validators), launched by loopd (pid 90114, T27's 120-cap active). Queue empty at start → Phase 1 evaluated fresh (corpus: cycle-12/13 streams + t28–t30 harvested children), filed T31–T35 with specs, committed `dd857c2`, pushed, then worked the queue in doctrine order.
