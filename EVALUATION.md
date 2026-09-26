@@ -298,6 +298,21 @@ that eval, not by re-triage mid-queue.
   impl first goal-gate; T71 impl 518/1 parallel run) — both re-ran green
   3–4×; a candidate row for the next eval.
 
+- **T72 landed: merge db74a99** (per-item entry written at landing, T34).
+  glm first-try goal accepted 26/50 (8a8e18a): ONE in-place hunk extends
+  the §2 step-4 FAIL-arc sentence (fix-up goals now name the CLASS and
+  require every instance swept with its own RED-proven killing test,
+  citing cycle-33/T69), no renumbering; tests/loop_spec_sweep_family.rs
+  (T63/T64 precedent) pins the needles exactly-once inside the step-4
+  window; deletion hand-check RED-proven. **kimi VERDICT PASS, 0 blocking
+  findings** (20/50): 7 doc-side mutants all behaved as required —
+  delete/reword/relocate RED, weakened at-least-once pin escape-then-RED
+  (load-bearing proven, not vacuous), heading reword survives (loose
+  match). Orchestrator gates 563/563 + clippy pre-merge. QUEUE DRAINED
+  at landing — next cycle opens with a mandatory fresh eval. Watch item
+  for that eval: api.rs body_watchdog cold-parallel flake, 2 sightings
+  today (T70 impl goal-gate, T71 impl 518/1); both re-ran green.
+
 ### Cycle 33 (2026-09-26, ~09:20– EDT) — T69 (F1 delegate collect) recovered + landed (merge c6ce238); QUEUE DRAINED
 
 - **T69 recovery arc executed from the cycle-32 row recipe (per-item entry
