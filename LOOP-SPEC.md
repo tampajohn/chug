@@ -105,7 +105,15 @@ For each `todo` row, ONE at a time (backgrounded child + polling, per step 2):
    choice (size). Only then merge to main, re-run gates in main, then flip
    the TODO row to `done` **with the merge commit ref in the same commit**
    (or an immediately following `todo:` commit). Update README.md in the
-   merge commit when the item is user-visible. This ordering is the fix
+   merge commit when the item is user-visible. **Outcomes are per-item
+   too**: in the same commit as the row flip (or an immediately following
+   `eval:` commit), append the item's Outcomes entry to EVALUATION.md —
+   what landed, what the validators caught — so a mid-cycle death loses
+   no narrative. The cycle-12 bite: it deferred the narrative to wrap,
+   died mid-arc at budget, and cycle-13's wrap had to reconstruct the
+   entry from the git record ("RECONSTRUCTED at cycle-13 wrap"; eval
+   commit `697a6b6` records the lesson: "deferred-wrap loss lesson:
+   write Outcomes per-item"). This ordering is the fix
    for the T10/T12 failure mode: children die between the code commit and
    the row flip, so children never own the row. **Push after each item
    lands green** (`git push` once the todo: commit is in) — the operator
@@ -119,8 +127,10 @@ For each `todo` row, ONE at a time (backgrounded child + polling, per step 2):
 - Child harvests landed in the main repo's `.chug/`: each worked item's
   `events-t<N>-<role>-*.jsonl` (plus `LEDGER-t<N>-<role>-*.md` where
   non-trivial) — nothing died with a removed worktree.
-- EVALUATION.md gains an **Outcomes** section: what landed, what was
-  skipped/deferred, what the validators caught.
+- EVALUATION.md's **Outcomes** section is complete and truthful — per-item
+  entries were written at each landing (§2 step 5); wrap adds the
+  skipped/deferred rows, the cycle-level notes (what the validators
+  caught, final state), and fills any gap a mid-arc death left.
 - Final gates green in main (build + clippy + test) → push anything
   remaining (eval commits, Outcomes) → `goal_complete` with the cycle
   summary. Never force-push; a rejected push means the remote moved — stop
