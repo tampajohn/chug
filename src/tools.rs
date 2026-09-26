@@ -3407,15 +3407,27 @@ log_tail: (none)";
             &json!({"action": "collect", "cwd": root}),
         );
         assert!(!result.is_error, "{}", result.content);
-        // This worktree's own loop writes `.chug/events.jsonl` when it runs —
-        // mid-run → `running`; a clean checkout without one → `starting`.
-        // Either way the git leg resolves the REAL checkout's commits.
+        // This checkout's live `.chug/events.jsonl` can be in ANY run state
+        // when the suite runs — mid-run `running`, a clean checkout with no
+        // events `starting`, or a FINISHED run's `goal-accepted` /
+        // `goal-rejected` / `aborted` (the t69 child's own goal-accepted
+        // stream red-fired a running|starting-only pin at the orchestrator's
+        // review gates) — so pin the verdict LINE's shape (one of the five
+        // known verdicts), never the state. Either way the git leg resolves
+        // the REAL checkout's commits.
         let verdict = result
             .content
             .lines()
             .find_map(|l| l.strip_prefix("verdict: "))
             .expect("verdict line present");
-        assert!(verdict == "running" || verdict == "starting", "{}", result.content);
+        assert!(
+            matches!(
+                verdict,
+                "goal-accepted" | "goal-rejected" | "aborted" | "running" | "starting"
+            ),
+            "{}",
+            result.content
+        );
         assert!(
             result.content.contains("commits (range HEAD, up to 20):"),
             "{}",
