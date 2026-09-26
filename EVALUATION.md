@@ -275,6 +275,29 @@ that eval, not by re-triage mid-queue.
   body_watchdog timing suspected, 4x green re-runs (worth a row if it
   recurs).
 
+- **T71 landed: merge e1e940c** (per-item entry written at landing, T34).
+  glm impl hit 50/50 with the move complete-but-uncommitted → **T63's
+  FOURTH live resume exercise**, goal accepted 19/50 (commit 3b732c9).
+  tools.rs 5237→1783, delegate.rs +3485: 26 prod fns/structs + 9 consts
+  byte-identical (sole delta the required pub(crate) on delegate()),
+  test partition exact 133 = 54 retained + 79 moved, delegate filter
+  count 71/448 exact match to main @ b6b22c7, hand-check RED-proven.
+  Orchestrator review independently verified schema byte-identity,
+  dispatch-arm call path, no pub use shim, and the fn-name inventory
+  before gating 559/559 + clippy green. **kimi VERDICT PASS, 0 blocking
+  findings** (accepted 50/50 under budget_low): byte-identity
+  re-verified, BEFORE count re-run in a separate worktree, 4 structural
+  mutants ALL caught (dispatch-arm swap, deleted moved test, wait-cap
+  loosen → boundary pin RED, stale duplicate → clippy dead_code);
+  visibility-widen class closed by exhaustive diff inspection. 3
+  non-blocking observations (README `decisions` layout-list omission
+  noted pre-existing at b6b22c7 — a T70-era gap worth a one-word fix
+  next docs pass). Post-merge gates 559/559 + clippy in main under
+  target-shared-main. 4 artifacts harvested. **Watch item escalated:
+  api.rs body_watchdog cold-parallel flake sighted TWICE today** (T70
+  impl first goal-gate; T71 impl 518/1 parallel run) — both re-ran green
+  3–4×; a candidate row for the next eval.
+
 ### Cycle 33 (2026-09-26, ~09:20– EDT) — T69 (F1 delegate collect) recovered + landed (merge c6ce238); QUEUE DRAINED
 
 - **T69 recovery arc executed from the cycle-32 row recipe (per-item entry
