@@ -2715,8 +2715,7 @@ mod tests {
 
     /// T38: no advisory message, no event, no log line — the control for
     /// every non-truncated stop reason (`tool_use`, `end_turn`, absent).
-    fn assert_untouched(llm: &ScriptedLlm, events: &[Event], lines: &[Value]) {
-        for (_, seen) in &llm.calls {
+    fn assert_untouched(llm: &ScriptedLlm, events: &[Event], lines: &[Value]) {        for (_, seen) in &llm.calls {
             assert_eq!(
                 advisory_count(seen),
                 0,
@@ -2730,6 +2729,61 @@ mod tests {
         assert!(
             !lines.iter().any(|l| l["type"] == "output_truncated"),
             "no output_truncated log line expected: {lines:?}"
+        );
+    }
+
+    /// T76 integration: a scripted driver run where the model calls `tgrep`
+    /// on a 300-hit corpus. The tool result the NEXT LLM call sees must stay
+    /// under the requested budget and carry the omission marker.
+    #[test]
+    fn tgrep_scripted_run_stays_under_budget_and_marks_omissions() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut body = String::new();
+        // 300 hits, one every 10 lines, windows never touching: 300 clusters.
+        for i in 1..=3000 {
+            let line = if i % 10 == 0 {
+                format!("needle line {i}\n")
+            } else {
+                format!("filler line {i} padding padding padding\n")
+            };
+            body.push_str(&line);
+        }
+        fs::write(tmp.path().join("hay.rs"), body).unwrap();
+        let budget = 600u64;
+        let (_llm, _events, _lines) = run_t38(
+            &tmp,
+            vec![
+                tool_use_response("tgrep", json!({"query": "needle", "budget": budget})),
+                tool_use_response("goal_complete", json!({"summary": "done"})),
+            ],
+        );
+        // The second LLM call is the first to see the tgrep tool result.
+        assert_eq!(_llm.calls.len(), 2);
+        let (content, is_error) = tool_result_text(&_llm.calls[1].1).unwrap();
+        assert!(!is_error, "{content}");
+        // Marker fires; shown + omitted = 300 with at least one cluster shown.
+        let marker_at = content
+            .find("[more: ")
+            .unwrap_or_else(|| panic!("no omission marker: {content}"));
+        let marker_end = content[marker_at..].find(']').unwrap() + marker_at;
+        let omitted: usize = content[marker_at..marker_end]
+            .trim_start_matches("[more: ")
+            .trim_end_matches(" clusters omitted")
+            .parse()
+            .unwrap();
+        let shown = content.matches(" (exact-phrase)").count();
+        assert_eq!(shown + omitted, 300, "{content}");
+        assert!(shown > 0, "{content}");
+        assert!(
+            content.contains("300 clusters in 1 file"),
+            "header names the corpus: {content}"
+        );
+        assert!(
+            content.chars().count() <= (budget * 4) as usize,
+            "tgrep output {} chars exceeds the {}-token budget: {}",
+            content.chars().count(),
+            budget,
+            content
         );
     }
 
@@ -4431,6 +4485,7 @@ for line in sys.stdin:
             "edit_file",
             "bash",
             "grep",
+            "tgrep",
             "glob",
             "list_dir",
             "update_ledger",
