@@ -87,8 +87,9 @@ For each `todo` row, ONE at a time (backgrounded child + polling, per step 2):
    verbatim — VERDICT: PASS/FAIL + numbered findings, mutation-testing where
    feasible. The validation child launches exactly like step 2 — a
    `delegate` launch with model `anthropic-system.ai.kimi-k3`,
-   `max_iters: 40`, `max_minutes: 30` (§6's budgets, passed explicitly —
-   minutes is 30, not delegate's 35 default), and §6's goal text
+   `max_iters: 50`, `max_minutes: 30` (§6's budgets with T21-class
+   widened iterations, passed explicitly — minutes is 30, not
+   delegate's 35 default), and §6's goal text
    verbatim; this paragraph is a LOOP-SPEC override of §6's launch
    mechanics only, and META-SPEC.md is not edited. FAIL → fix-up child
    with the findings pasted into its goal, then re-validate.
