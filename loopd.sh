@@ -46,7 +46,14 @@ case "${1:-run}" in
   *) echo "usage: loopd.sh [run|stop|status]" >&2; exit 2 ;;
 esac
 
-if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
+# T50: same-pid pass. `exec` preserves the pid, so a re-exec'd self finds its
+# own LIVE pid already in the pidfile — refusing on that would kill the
+# re-exec at startup. Refuse only when the recorded pid is alive AND not ours
+# (a foreign live supervisor keeps today's refusal); a stale (dead) pid keeps
+# the fall-through it always had. On pass we re-write the pidfile and re-arm
+# the EXIT trap below, as on the normal path.
+if [ -f "$PIDFILE" ] && [ "$(cat "$PIDFILE")" != "$$" ] \
+   && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
   echo "loopd already running (pid $(cat "$PIDFILE"))" >&2
   exit 1
 fi
@@ -61,8 +68,32 @@ trap 'rm -f "$PIDFILE"' EXIT
 mkdir -p target-shared
 
 echo "$(ts) loopd start (pid $$)" >> "$LOG"
+# T50: content fingerprint of the running script, recorded BEFORE the cycle
+# loop. POSIX cksum is content-based — `touch` or a git checkout that
+# preserves content must not trigger a spurious re-exec; only a real content
+# change does.
+SELF_CKSUM="$(cksum "$ROOT/loopd.sh")"
 fails=0
 while [ ! -f "$STOP" ]; do
+  # T50: re-exec self when this script changed on disk. FIRST statement in
+  # the body, so a re-exec only ever happens BETWEEN cycles, never
+  # mid-cycle; `exec` replaces the process image, so the fresh process reads
+  # the new script from disk with zero incremental-read exposure (the hazard
+  # that made signalling a running supervisor unsafe — T27). The re-exec is
+  # logged so .chug/loopd/loopd.log always explains a budget/behavior change.
+  # The operator's `loopd.sh stop` during a cycle still lands at the next
+  # while-condition check, re-exec or not: a pending STOP is seen by the
+  # while condition BEFORE this body runs, so STOP is never cleared by this
+  # path. Known tradeoffs, both intentional: (a) the consecutive-failure
+  # counter resets across a re-exec — failures against old code don't count
+  # against new code; (b) the re-exec'd process re-runs the
+  # `rm -f "$STOP" "$STATE/HALTED"` above, clearing a HALTED marker from a
+  # prior crash streak — acceptable, because a re-exec only happens after a
+  # merge changed the code (new code, fresh start).
+  if [ "$(cksum "$ROOT/loopd.sh")" != "$SELF_CKSUM" ]; then
+    echo "$(ts) loopd: script changed on disk — re-exec (pid $$)" >> "$LOG"
+    exec "$ROOT/loopd.sh" run
+  fi
   # Single-driver: never overlap another LOOP-SPEC run (e.g. a manual one).
   if pgrep -f "chug run --spec LOOP-SPEC.md" > /dev/null 2>&1; then
     echo "$(ts) another LOOP-SPEC driver active; skipping" >> "$LOG"
