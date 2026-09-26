@@ -3579,9 +3579,13 @@ log_tail: (none)";
     /// normalized so the pin is independent of markdown line wrapping.
     #[test]
     fn readme_tools_intro_names_both_sandbox_exceptions() {
-        let readme =
-            fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/README.md"))
-                .expect("README.md readable from the crate root");
+        // T48: cargo runs test binaries with cwd = the package root; the compile-time env! path is wrong under the T47 shared cache (cycle-21) — resolve at runtime.
+        let readme = fs::read_to_string(
+            std::env::current_dir()
+                .expect("cargo sets the test cwd to the package root")
+                .join("README.md"),
+        )
+        .expect("README.md readable from the crate root");
         let flat: String = readme.split_whitespace().collect::<Vec<_>>().join(" ");
         assert!(
             flat.contains(

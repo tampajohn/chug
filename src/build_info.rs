@@ -187,11 +187,12 @@ mod tests {
 
     #[test]
     fn resolve_head_in_the_real_repo_yields_branch_and_hex_short_hash() {
-        // Integration: the chug checkout itself (whatever worktree the test
-        // binary was built in) resolves to a non-empty branch and a 7+ char
-        // lowercase-hex short hash.
-        let (branch, commit) =
-            resolve_head(Path::new(env!("CARGO_MANIFEST_DIR"))).expect("checkout resolves");
+        // Integration: the chug checkout the test RUNS in (cargo sets the
+        // binary's cwd to the package root) resolves to a non-empty branch
+        // and a 7+ char lowercase-hex short hash.
+        // T48: cargo runs test binaries with cwd = the package root; the compile-time env! path is wrong under the T47 shared cache (cycle-21) — resolve at runtime.
+        let root = std::env::current_dir().expect("cargo sets the test cwd to the package root");
+        let (branch, commit) = resolve_head(&root).expect("checkout resolves");
         assert!(!branch.is_empty(), "branch: {branch:?}");
         assert!(
             commit.len() >= 7 && commit.chars().all(|c| c.is_ascii_hexdigit()),

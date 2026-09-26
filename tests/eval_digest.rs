@@ -16,7 +16,10 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 fn script_path() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("scripts/eval-digest.sh")
+    // T48: cargo runs test binaries with cwd = the package root; the compile-time env! path is wrong under the T47 shared cache (cycle-21) — resolve at runtime.
+    std::env::current_dir()
+        .expect("cargo sets the test cwd to the package root")
+        .join("scripts/eval-digest.sh")
 }
 
 /// Run the digest against `root` and return the `.chug/eval-digest.md` text.
