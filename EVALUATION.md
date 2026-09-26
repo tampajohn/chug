@@ -247,6 +247,34 @@ that eval, not by re-triage mid-queue.
 
 ## Outcomes (filled at cycle wrap — LOOP-SPEC Phase 3)
 
+### Cycle 35 (2026-09-26, ~10:42– EDT) — T70 recovered mid-arc + landed (merge 572ec5a); T71/T72 next
+
+- **T70 recovery arc executed from the cycle-34 row recipe (per-item
+  entry written at landing, T34).** Kimi round-2 validator (pid 54532,
+  in flight at cycle-34 wrap) exited goal-accepted 42/50; worktree tree
+  verified BYTE-CLEAN pre-merge (diff exactly b98ca1c + f50fac6, no
+  leftover mutants, no unexpected untracked files). **VERDICT: PASS, 0
+  blocking findings** — round-1 fix verified tests-only (impl portion
+  byte-identical b98ca1c↔f50fac6) and lethal: fix-verification mutants
+  ALL RED (M1a rename — the round-1 survivor — plus rename-other-class,
+  drop-class, reorder siblings); own mutation suite 13 implementation
+  mutants ALL RED (validation legs, confidence bounds both directions,
+  append drop, counter, id echo, best-effort context, key order, id
+  prefix, required list, description tokens, create_dir_all). 3 surviving
+  mutants all non-blocking observation-class outside the spec's
+  enumerated test contract (ts presence-only matches the riskgate.rs
+  precedent standard; schema min/max + property types advisory with
+  code-side enforcement fully pinned).
+- **Landed: merge 572ec5a.** Post-merge gates re-run in main under
+  target-shared-main (T57 ALWAYS rule): build + clippy --all-targets
+  -D warnings + 559/559 green. Validator events + ledger harvested to
+  .chug (final round-2 stream alongside the cycle-34 inflight snapshot).
+  FEATURES.md F13 annotated phase 1 landed (phases 2–3 remain deferred:
+  corpus + layad endpoint absent). New watch item carried from the impl
+  arc: the first goal-gate rejection was a cold-build flake — api.rs
+  body_watchdog timing suspected, 4x green re-runs (worth a row if it
+  recurs).
+
 ### Cycle 33 (2026-09-26, ~09:20– EDT) — T69 (F1 delegate collect) recovered + landed (merge c6ce238); QUEUE DRAINED
 
 - **T69 recovery arc executed from the cycle-32 row recipe (per-item entry
