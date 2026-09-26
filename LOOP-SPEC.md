@@ -103,7 +103,18 @@ impl, never 2 impls):
    perl -e 'alarm 600; exec @ARGV' cargo test --
    --test-threads=4` — the T47 env prefix keeps the gate on the shared warm
    cache; bash tool calls don't share env, so the step-1 export doesn't
-   persist between calls). Never trust a claim of green without seeing it.
+   persist between calls). Role-key the dir (T52): the `target-shared` shown
+   above when NO child is in flight, but
+   `CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-gates`
+   whenever an impl child may be concurrently building — the T44 overlap
+   window, including N+1's impl during N's post-merge gates. Why a separate
+   dir: cargo's target metadata hash excludes the checkout path, so the same
+   package+profile+features produce the SAME artifact filename in every
+   worktree — one shared dir is last-builder-wins, and a gate run can then
+   execute a binary compiled from a different checkout's source (observed
+   cycle 22: the t49 gates executed a validator's leftover mutant and ran it
+   as their own). The gates dir persists across cycles like the others (warm
+   after a first cold build). Never trust a claim of green without seeing it.
 4. **Adversarial validation (kimi, REQUIRED** for any item touching
    src/driver.rs, src/api.rs, src/tools.rs, src/events.rs, or the loop/spec
    doctrine itself; optional for docs/tests-only items): META-SPEC §6
@@ -113,8 +124,15 @@ impl, never 2 impls):
    `max_iters: 50`, `max_minutes: 30` (§6's budgets with T21-class
    widened iterations, passed explicitly — minutes is 30, not
    delegate's 35 default), and §6's goal text
-   verbatim — which carries the T47 `CARGO_TARGET_DIR` export, so the
-   validator's mutate→test→revert→re-test cycle builds warm too; this
+   verbatim except its export line, which becomes
+   `export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-validate`
+   before every cargo command — ALWAYS, never conditionally (T52 role-keyed
+   target dirs: the validator's mutate→test→revert→re-test cycle builds into
+   its own persistent `target-shared-validate` cache, so its mutant binaries
+   can never occupy an artifact slot another checkout's gates or impl builds
+   read — same artifact-name mechanism as step 3). The dir persists across
+   cycles — warm after first use; the first use is a cold build, the
+   accepted one-time cost per role; this
    paragraph is a LOOP-SPEC override of §6's launch
    mechanics only, and META-SPEC.md is not edited. FAIL → fix-up child
    with the findings pasted into its goal, then re-validate.
@@ -127,7 +145,8 @@ impl, never 2 impls):
    `events-t17-validate3-20260925.jsonl`), plus the
    child's `LEDGER.md` as `LEDGER-t<N>-<role>-<ts>.md` when it carried a
    verdict or non-trivial findings; transcript harvest is the operator's
-   choice (size). Only then merge to main, re-run gates in main, then flip
+   choice (size). Only then merge to main, re-run gates in main (step 3's
+   role-keyed dir rule applies here too), then flip
    the TODO row to `done` **with the merge commit ref in the same commit**
    (or an immediately following `todo:` commit; bundled rows may share one
    such `todo:` commit naming every row + its ref — Trivial-row bundling).
