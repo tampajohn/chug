@@ -71,6 +71,12 @@ returns to idle, repeat. Natural stops end the turn; budgets are per turn.
   the model reprioritizes toward committing, gates, and bookkeeping before
   the abort at the loop top. The token count appears only when a token
   budget is set
+- **Truncated-output advisory** — when a response comes back truncated at
+  the API output-token ceiling (`stop_reason=max_tokens`), the loop injects
+  a `chug: output truncated …` user message naming the chunking remedy
+  (write_file the first chunk, then append with `edit_file` or a bash
+  heredoc). Fires on every truncation — no one-shot latch — and each
+  injection records one `output_truncated` line in the events log
 - **Token budget** — `--max-tokens N` (run and chat) caps the run's
   cumulative input+output tokens — the axis iteration/wall-clock budgets can
   miss (a cheap watch-and-wait loop burns neither while racking up tokens).
@@ -100,7 +106,10 @@ returns to idle, repeat. Natural stops end the turn; budgets are per turn.
   previews — error results keep a tail-anchored ≤2000-char window, so the
   failing test's name or error block at the end of the output is on record),
   verification commands, goal verdicts, budget-low warning
-  injections (with the remaining counts at fire time), and aborts (with the
+  injections (with the remaining counts at fire time), output-truncated
+  advisories (one `output_truncated` line per injected advisory — a response
+  hit the API output-token ceiling and the loop named the chunking remedy),
+  and aborts (with the
   dying model and, on budget deaths, the exhausted budget). Best-effort
   telemetry: a write failure warns once on stderr and never affects the run.
   Fresh runs rotate a previous log to `.chug/events-<timestamp>.jsonl`

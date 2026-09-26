@@ -316,6 +316,9 @@ impl App {
             // T17: telemetry only — the notice already reached the user as a
             // transcript message; the activity stream stays as-is.
             Event::BudgetLow { .. } => {}
+            // T38: telemetry only — the advisory already reached the model as
+            // a transcript message; the activity stream stays as-is.
+            Event::OutputTruncated => {}
             Event::SteeringQueued(note) => {
                 // Chat mode: the UI sent the expanded `llm_message`; the
                 // echo shows the typed text only, plus a dim `attached:`

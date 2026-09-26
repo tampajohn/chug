@@ -58,6 +58,13 @@ pub enum Event {
         remaining_secs: u64,
         remaining_tokens: Option<u64>,
     },
+    /// T38 telemetry: a response came back truncated at the API output-token
+    /// ceiling (`stop_reason=max_tokens`) and the driver injected the chunking
+    /// advisory into the transcript. The advisory itself already reached the
+    /// model as a message; this event exists only so `.chug/events.jsonl`
+    /// records that it fired — one line per injected advisory, no latch, so a
+    /// later `jq` pass can count truncations per run.
+    OutputTruncated,
     SteeringQueued(String),
     /// One risk-gate judgment on a bash command (only when --risk-gate is on).
     RiskVerdict {
@@ -240,6 +247,9 @@ impl EventSink for ConsoleSink {
             // T17: telemetry only — the notice already reached the user as a
             // transcript message; no console output.
             Event::BudgetLow { .. } => {}
+            // T38: telemetry only — the advisory already reached the model as
+            // a transcript message; no console output.
+            Event::OutputTruncated => {}
             Event::SteeringQueued(_) => {}
             Event::RiskVerdict {
                 blocked,
@@ -504,6 +514,8 @@ mod tests {
             output: 20,
         });
         sink.emit(Event::SteeringQueued("note".into()));
+        // T38: the truncation advisory is telemetry-only here too.
+        sink.emit(Event::OutputTruncated);
         assert_eq!(out_bytes(&err), "");
         assert_eq!(out_bytes(&out), "");
     }
