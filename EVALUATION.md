@@ -307,6 +307,29 @@ but uncommitted — the fifth occurrence of the pattern this feature
 addresses (t15/t17/t20/t55/t58); orchestrator finish per the T55
 precedent produced `b189517`.
 
+**T62 — eval-digest golden-section pin (pri 4, robustness, tests-only)
+→ done `f4e3bc3` (impl `92f0243`, merge commit).** Cycle-27's second
+in-flight recovery per the row's recipe: the glm impl finished cleanly
+(self-committed + goal-accepted at 10:37:08Z, 2 min before cycle-27's
+budget wrap — no orchestrator finish needed). Diff review: exactly
+`tests/eval_digest.rs` +217 (the row's constraint). What landed:
+`golden_section_pins_the_digest_output_skeleton` runs the real
+eval-digest.sh via the existing `run_digest` harness (pinned clock)
+against an all-fields fixture and pins (a) the header line exactly +
+the summary-line field labels, (b) the three section headings each
+once in order (Events files → Corpus inputs → Staleness), (c) the 10
+per-file field lines in emission order with per-line shape templates
+(a tiny `matches_shape` matcher: `#` = digit-run, `*` = any —
+volatile values wild-carded so a legitimate data change cannot go
+red, spec req 2), (d) the staleness labels in order. Closes the T46
+validator's 7/7 output-field survivor class. kimi round skipped per
+the row's optional-validation + the T16/T31/T59 tests-only precedent;
+orchestrator gates independently re-run 508/508 + clippy clean
+in-worktree, and the impl's LEDGER records the hand-mutation check
+(field-order swap → RED → revert → green). 3 artifacts harvested
+(impl events + LEDGER + delegate.log; the cycle-27 `-inflight-`
+snapshot superseded + removed).
+
 ### Cycle 27 (2026-09-26, ~06:15–06:40 EDT) — freshness-skip; T59 landed; T58 + T62 IN-FLIGHT at budget wrap (recovery recipes on their rows)
 
 **T59 — mcp_http dead_port tests: bounded retry on port-theft (pri 3,
