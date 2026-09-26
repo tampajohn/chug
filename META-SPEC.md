@@ -21,7 +21,13 @@ check: cd /Users/jadams/workspace/chug && cargo test
   `LEDGER.md` under cwd, and a child in your cwd would corrupt your own
   transcript. Therefore every child round runs in its own **git worktree**.
 - The child binary: `target/debug/chug` inside each round worktree (build it
-  there first: `cargo build` in the worktree).
+  there first: `cargo build` in the worktree, exporting
+  `CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared` — T47: all
+  worktree builds share one warm cache, so the binary lands in
+  `target-shared/debug/chug`; a poisoned shared cache affects all children,
+  recovery is `rm -rf target-shared`, cheap, rebuild once — and no
+  `git clean`/`cargo clean` is ever automatic, reclaiming is the operator's
+  call, `du -sh target-shared`).
 - Orchestrator (you): kimi-k3. Implementation children:
   `anthropic-system.ai.glm-5-3-flash`. Validation children:
   `anthropic-system.ai.kimi-k3` (see Models below).
@@ -60,30 +66,36 @@ check: cd /Users/jadams/workspace/chug && cargo test
 4. **Launch child (backgrounded + polled, one at a time — see the 120s bash
    cap note above):**
    ```
-   cd /tmp/chug-round-N && nohup /Users/jadams/workspace/chug/target/debug/chug run \
+   cd /tmp/chug-round-N && CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared nohup /Users/jadams/workspace/chug/target/debug/chug run \
      --spec <your feature spec file> \
      --goal "ROUND GOAL: <G>. Implement ONLY this slice. Keep cargo build and
              cargo test green. Do not touch unrelated files." \
      --model anthropic-system.ai.glm-5-3-flash --max-iters 40 --max-minutes 35 \
      > /tmp/chug-round-N.log 2>&1 & echo "child pid: $!"
    ```
+   The T47 env prefix is inherited by the spawned child, so every cargo
+   command it runs builds into the shared warm cache instead of a cold
+   per-worktree one.
 5. **Review.** `git -C /tmp/chug-round-N diff main...round-N --stat` (children
    may not commit — then inspect `git -C /tmp/chug-round-N status` + the
    files directly). Read the child's `LEDGER.md` and the tail of its
    `.chug/transcript.jsonl` if the outcome is ambiguous. Run
-   `cd /tmp/chug-round-N && cargo test -- --test-threads=4` yourself
+   `cd /tmp/chug-round-N && CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared cargo test -- --test-threads=4` yourself
    (bounded — see the gates rule below) — never trust a claim of
    green without seeing it.
 6. **Validate (kimi-k3, REQUIRED).** Before merging any round, launch a
    validation child on kimi-k3 (no env prefix, backgrounded + polled like
    the implementation child):
    ```
-   cd /tmp/chug-round-N && nohup /Users/jadams/workspace/chug/target/debug/chug run \
+   cd /tmp/chug-round-N && CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared nohup /Users/jadams/workspace/chug/target/debug/chug run \
      --spec <the round's feature spec, e.g. SPEC-N-*.md> \
      --goal "VALIDATION ONLY — do not implement. Review the uncommitted/committed
              diff in this worktree against the spec: correctness bugs, missing
              spec requirements, weak tests. Run cargo build + clippy + test
-             yourself. Where feasible, MUTATION-TEST: deliberately break the
+             yourself. export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared
+             before every cargo command (T47 shared build cache — mutations and
+             reverts then rebuild incrementally, not from scratch). Where
+             feasible, MUTATION-TEST: deliberately break the
              new code (flip a condition, drop a check, corrupt a value) and
              confirm the round's tests catch it — green tests that survive
              mutations are vacuous (round 1 shipped dead code with 245/245

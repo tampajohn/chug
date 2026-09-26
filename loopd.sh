@@ -53,6 +53,12 @@ fi
 echo $$ > "$PIDFILE"
 rm -f "$STOP" "$STATE/HALTED"
 trap 'rm -f "$PIDFILE"' EXIT
+# T47: shared CARGO_TARGET_DIR for every worktree build (children + orchestrator
+# gates) — a NEW dir, NOT the repo's own target/, so a poisoned cache can't
+# touch the operator's daily builds. Clean policy: none automatic — reclaiming
+# is the operator's call (`du -sh target-shared`; recovery from a poisoned
+# cache is `rm -rf target-shared`, cheap, rebuilt once and warm for all).
+mkdir -p target-shared
 
 echo "$(ts) loopd start (pid $$)" >> "$LOG"
 fails=0
@@ -70,7 +76,16 @@ while [ ! -f "$STOP" ]; do
   cycle_log="$STATE/cycle-$(date -u +%Y%m%d-%H%M%S).log"
   echo "$(ts) cycle start -> $cycle_log" >> "$LOG"
   # cycle budget: fresh Phase 1 ≈45–55 iters + ~28–35/item + ~10 wrap (cycle-16 eval Q1); 160 fits eval + 3 items + wrap; minutes never binding (56–117 of 240)
-  ./target/debug/chug run --spec LOOP-SPEC.md \
+  # T47: the shared cache reaches the cycle as a per-invocation env prefix on
+  # the chug call — NEVER as a bare `export`. An export inside this while loop
+  # would persist in the supervisor's environment across iterations, so from
+  # cycle 2 on the `cargo build` above would run with the var set, land in
+  # target-shared, and never refresh ./target/debug/chug (stale supervisor
+  # binary). The prefix is visible only to this cycle's orchestrator process
+  # and the delegate children that inherit its launch env; the supervisor's
+  # own build above always stays in ./target, so ./target/debug/chug keeps
+  # resolving to a freshly built binary.
+  CARGO_TARGET_DIR="$ROOT/target-shared" ./target/debug/chug run --spec LOOP-SPEC.md \
     --goal "Run the full self-improvement cycle per LOOP-SPEC: evaluate or skip per the freshness rule, work the queue (features are first-class per the amended doctrine — close capability gaps, not only harden), adversarial validation for core-logic items, you own all bookkeeping, push after each item lands green + remainder at wrap. Your wrap IS the next cycle's input — leave TODO.md, EVALUATION.md and specs/ such that a cold next cycle needs zero human words." \
     --model anthropic-system.ai.kimi-k3 --max-iters 160 --max-minutes 240 \
     > "$cycle_log" 2>&1
