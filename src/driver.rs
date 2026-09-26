@@ -2750,7 +2750,30 @@ mod tests {
             body.push_str(&line);
         }
         fs::write(tmp.path().join("hay.rs"), body).unwrap();
-        let budget = 600u64;
+        // Round-3 sweep (blocking class 1, driver leg): the <=budget claim
+        // must EXERCISE the omitted-marker band the reserve guards, so the
+        // budget is calibrated at runtime from measured cluster sizes (the
+        // fixed 600-token budget left ~200 chars of headroom — a
+        // reserve-deletion mutant ran green). band::calibrate picks the
+        // budget where the shipped reserve stays under budget but a
+        // delete/shrink mutant (reserve → 0/8/16/32) re-packs one more
+        // cluster and overflows.
+        let measure_ctx = ToolCtx {
+            cwd: tmp.path().to_path_buf(),
+            bash_timeout: Duration::from_secs(crate::tools::BASH_TIMEOUT_SECS),
+        };
+        let measured = crate::tools::dispatch(
+            &measure_ctx,
+            "tgrep",
+            &json!({"query": "needle", "budget": 8000u64}),
+        );
+        assert!(!measured.is_error, "{}", measured.content);
+        // The 300-cluster measure pass at the 8000-token ceiling itself
+        // truncates (300 x ~300 chars > 32000); calibrate only needs the
+        // header's total plus the first ~100 rendered sizes — packing is
+        // prefix-based, and the picked budgets show < 20 clusters.
+        let (budget, shown96, body96, over0, header_len) =
+            crate::tgrep::band::calibrate(&measured.content, 3);
         let (_llm, _events, _lines) = run_t38(
             &tmp,
             vec![
@@ -2775,12 +2798,27 @@ mod tests {
         let shown = content.matches(" (exact-phrase)").count();
         assert_eq!(shown + omitted, 300, "{content}");
         assert!(shown > 0, "{content}");
+        assert_eq!(
+            shown, shown96,
+            "reserve pushed out exactly one cluster: {content}"
+        );
         assert!(
             content.contains("300 clusters in 1 file"),
             "header names the corpus: {content}"
         );
+        // The output is EXACTLY header + reserve-limited body + marker, and
+        // the band pins hold: without the reserve the packing takes one more
+        // cluster and overflows by `over0` chars — the fixture straddles the
+        // marker band, so the invariant below is genuinely exercised.
+        assert_eq!(
+            content.chars().count(),
+            header_len + 2 + body96 + 59 + omitted.to_string().len(), // line1\n + marker\n
+            "packing drifted: {content}"
+        );
+        assert!(over0 > 0, "fixture drifted out of the reserve band (over0 = {over0})");
+        assert!(over0 <= 24, "band too loose: over0 = {over0}");
         assert!(
-            content.chars().count() <= (budget * 4) as usize,
+            content.chars().count() <= budget * 4,
             "tgrep output {} chars exceeds the {}-token budget: {}",
             content.chars().count(),
             budget,

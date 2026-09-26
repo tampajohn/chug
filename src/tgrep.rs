@@ -55,7 +55,7 @@ pub const TGREP_MAX_TOTAL_BYTES: u64 = 64 * 1024 * 1024;
 /// Longest rendered signature line in symbols mode, before the ellipsis.
 const SYMBOL_SIG_MAX_CHARS: usize = 200;
 /// Extra continuation lines joined into one signature (multi-line fn sigs).
-const SYMBOL_SIG_LOOKAHEAD: usize = 8;
+const SYMBOL_SIG_LOOKAHEAD: usize = 96;
 /// Chars reserved for the omission marker when packing, so header + clusters
 /// + marker together never exceed the budget.
 ///
@@ -935,6 +935,117 @@ fn mod_name(trimmed: &str) -> Option<String> {
 /// `mod attest {` (at-TEST), and `mod tests_utils {` (validator probe P1).
 fn is_test_mod_name(name: Option<&str>) -> bool {
     matches!(name, Some("tests") | Some("test"))
+}
+
+/// Band calibration shared by the tgrep unit tests and the driver T76
+/// integration test (round-3 BLOCKING class 1 sweep): a `<=budget` claim is
+/// only exercised when the packed body lands inside the omitted-marker band
+/// the reserve guards. The helpers measure REAL rendered cluster sizes and
+/// pick the budget where the packing straddles that band.
+#[cfg(test)]
+pub(crate) mod band {
+    use super::MARKER_RESERVE_CHARS;
+
+    /// The greedy packing `search`/`symbols_skeleton` perform, over MEASURED
+    /// cluster sizes in output order (`\n\n` between clusters): returns
+    /// (clusters shown, body chars). Read side-by-side with the real loops.
+    pub(crate) fn pack(sizes: &[usize], limit: usize) -> (usize, usize) {
+        let mut body = 0usize;
+        let mut shown = 0usize;
+        for (i, s) in sizes.iter().enumerate() {
+            let add = if i == 0 { *s } else { s + 2 };
+            if body + add > limit {
+                break;
+            }
+            body += add;
+            shown += 1;
+        }
+        (shown, body)
+    }
+
+    /// Measure a search result: (header chars, total clusters, per-cluster
+    /// rendered sizes in output order). `content` must come from a measure
+    /// pass at `budget: 8000` — the header carries `budget 8000 tokens`,
+    /// which the budget rebasing in [`Self::calibrate`] subtracts digit-wise.
+    /// The measure pass MAY itself be truncated (marker present): packing is
+    /// prefix-based, so the leading measured sizes are exact, and calibrate
+    /// refuses picks whose packing would run past the measured prefix.
+    pub(crate) fn measure(content: &str) -> (usize, usize, Vec<usize>) {
+        let (header, body) = content.split_once('\n').expect("header line");
+        let total: usize = header
+            .split(" clusters in ")
+            .next()
+            .expect("total count")
+            .rsplit(' ')
+            .next()
+            .expect("count digits")
+            .parse()
+            .expect("total is an integer");
+        let sizes: Vec<usize> = {
+            // A truncated measure pass appends the omission marker to the
+            // header; strip that line so it is not counted as a cluster.
+            let body = if let Some(rest) = body.strip_prefix("[more: ") {
+                rest.split_once('\n').map(|(_, b)| b).unwrap_or("")
+            } else {
+                body
+            };
+            body.split("\n\n").map(|c| c.chars().count()).collect()
+        };
+        (header.chars().count(), total, sizes)
+    }
+
+    /// Marker width for `n` omitted clusters:
+    /// `[more: n clusters omitted] — raise \`budget\` or narrow \`path\``
+    /// = 59 + digits(n) (pinned against the live marker in tests).
+    pub(crate) fn marker_len(n: usize) -> usize {
+        59 + n.to_string().len()
+    }
+
+    /// Pick the budget where the packing straddles the reserve band: with the
+    /// shipped [`MARKER_RESERVE_CHARS`] the run shows `shown96` clusters and
+    /// stays under budget, while at EACH probed reserve value (delete → 0,
+    /// shrink → 8/16/32) one more cluster fits and the rendered output
+    /// OVERFLOWS `4*budget` chars by a tight margin — so a mutant that
+    /// deletes or shrinks the reserve turns the caller's invariant assert
+    /// RED, and the current code is green. Returns
+    /// (budget, shown96, body96, over0, header_len).
+    pub(crate) fn calibrate(measured: &str, min_shown: usize) -> (usize, usize, usize, usize, usize) {
+        let (h4, total, sizes) = measure(measured);
+        let hdr = |b: usize| h4 - 4 + b.to_string().len();
+        const PROBED_RESERVES: [usize; 4] = [0, 8, 16, 32];
+        for b in 40..=8000 {
+            let h = hdr(b);
+            if 4 * b <= MARKER_RESERVE_CHARS + h {
+                continue;
+            }
+            let (k96, body96) = pack(&sizes, 4 * b - MARKER_RESERVE_CHARS - h);
+            if k96 < min_shown {
+                continue;
+            }
+            // The r=0 (delete) overshoot must be a TIGHT band member.
+            let (k0, body0) = pack(&sizes, 4 * b);
+            let total0 = h + body0 + marker_len(total - k0);
+            if total0 <= 4 * b || total0 - 4 * b > 24 || k0 >= sizes.len() {
+                continue;
+            }
+            let over0 = total0 - 4 * b;
+            let ok = PROBED_RESERVES.iter().all(|&r| {
+                let (k_r, body_r) = pack(&sizes, 4 * b - r - h);
+                let omitted = total - k_r;
+                // Marker width must stay reachable (2 digits) so the band is
+                // the honest ~61-char one, the mutant must overflow, and the
+                // simulated stop must be real (not "ran out of measured
+                // sizes") so k_r is the true packing, not the prefix end.
+                k_r < sizes.len()
+                    && (10..=999).contains(&omitted)
+                    && h + body_r + marker_len(omitted) > 4 * b
+            });
+            if ok {
+                return (b, k96, body96, over0, h);
+            }
+        }
+        panic!("no band-straddling budget found ({total} clusters, {h4}-char header)");
+    }
 }
 
 #[cfg(test)]
@@ -2020,6 +2131,213 @@ struct Unit;
             "symbols marker {symbols:?} ({} chars) overflows the reserve",
             symbols.chars().count()
         );
+    }
+
+    /// Round-3 BLOCKING class 1: the `<=budget` invariant, exercised IN the
+    /// marker band. Prior fixtures left so much headroom that deleting
+    /// MARKER_RESERVE_CHARS changed nothing — the reserve was pinned only
+    /// analytically. Here the budget is calibrated at runtime (band::calibrate)
+    /// from MEASURED cluster sizes so the packing genuinely straddles the
+    /// ~61-char omitted-marker band: the shipped reserve stays under budget,
+    /// while delete (→0) and shrink (→8/16/32) mutants re-pack one more
+    /// cluster and overflow. RED vs those mutants; also RED if the fixture
+    /// drifts out of the band.
+    #[test]
+    fn search_packing_exercises_the_marker_reserve_band() {
+        // 24 disjoint clusters, uniform scores: hits every 8 lines from 10,
+        // all windows fully inside the file, all line numbers rendered.
+        let tmp = tempfile::tempdir().unwrap();
+        let mut body = String::new();
+        for i in 1..=300 {
+            let line = if (10..=194).contains(&i) && (i - 10) % 8 == 0 {
+                format!("needle {i}\n")
+            } else {
+                format!("filler {i}\n")
+            };
+            body.push_str(&line);
+        }
+        fs::write(tmp.path().join("band.rs"), body).unwrap();
+        let ctx = ctx_for(&tmp);
+
+        // Measure pass at the ceiling: every cluster rendered, no marker.
+        let measured = dispatch(
+            &ctx,
+            "tgrep",
+            &json!({"query": "needle", "budget": TGREP_BUDGET_CEILING}),
+        );
+        assert!(!measured.is_error, "{}", measured.content);
+        assert!(
+            !measured.content.contains("[more: "),
+            "measure pass truncated: {}",
+            measured.content
+        );
+        let (budget, shown96, body96, over0, header_len) =
+            band::calibrate(&measured.content, 3);
+
+        let result = dispatch(
+            &ctx,
+            "tgrep",
+            &json!({"query": "needle", "budget": budget}),
+        );
+        assert!(!result.is_error, "{}", result.content);
+        let c = &result.content;
+
+        // The marker names exactly the cluster the reserve pushed out.
+        let marker_at = c
+            .find("[more: ")
+            .unwrap_or_else(|| panic!("no omission marker: {c}"));
+        let marker_end = c[marker_at..].find(']').unwrap() + marker_at;
+        let omitted: usize = c[marker_at..marker_end]
+            .trim_start_matches("[more: ")
+            .trim_end_matches(" clusters omitted")
+            .parse()
+            .unwrap();
+        assert_eq!(omitted, 24 - shown96, "reserve pushed out exactly one cluster: {c}");
+
+        // The live marker's width matches the packing arithmetic.
+        let line_end = c[marker_at..].find('\n').map(|e| marker_at + e).unwrap_or(c.len());
+        assert_eq!(
+            c[marker_at..line_end].chars().count(),
+            band::marker_len(omitted),
+            "marker format drifted: {:?}",
+            &c[marker_at..line_end]
+        );
+
+        // The output is EXACTLY header + reserve-limited body + marker.
+        assert_eq!(
+            c.chars().count(),
+            header_len + 2 + body96 + band::marker_len(omitted), // line1\n + marker\n
+            "packing drifted: {c}"
+        );
+
+        // The invariant itself — RED vs delete/shrink reserve mutants, which
+        // re-pack one more cluster and land `over0` chars past the ceiling.
+        assert!(
+            c.chars().count() <= budget * 4,
+            "output {} chars exceeds budget {budget} tokens ({} chars): {c}",
+            c.chars().count(),
+            budget * 4
+        );
+
+        // Band-sensitivity pins (drift guards, independently RED): the
+        // no-reserve packing overflows the budget, tightly.
+        assert!(over0 > 0, "fixture drifted out of the reserve band (over0 = {over0})");
+        assert!(over0 <= 24, "band too loose: over0 = {over0}");
+    }
+
+    /// Round-3 BLOCKING class 2a: suppression inside a block-style test mod
+    /// must NOT end at a NESTED close brace (a fn body's indented `}`) — only
+    /// the mod's own column-0 `}` releases it, and real declarations after
+    /// the mod MUST appear. RED vs the any-indent close-brace mutant
+    /// (`hidden_late`, which follows a nested multi-line fn body, leaks).
+    #[test]
+    fn symbols_test_mod_suppression_survives_nested_close_brace() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(
+            tmp.path().join("nested.rs"),
+            r#"pub fn before() -> u32 { 1 }
+
+mod tests {
+    use std::fmt;
+
+    #[test]
+    fn hidden_early() {
+        assert_eq!(1, 1);
+    }
+
+    fn hidden_late() -> u32 {
+        42
+    }
+}
+
+pub struct Real {
+    field: u32,
+}
+
+pub fn visible_after() -> u32 {
+    7
+}
+"#,
+        )
+        .unwrap();
+        let ctx = ctx_for(&tmp);
+        let result = dispatch(
+            &ctx,
+            "tgrep",
+            &json!({"query": "ignored", "symbols": true, "path": "nested.rs"}),
+        );
+        assert!(!result.is_error, "{}", result.content);
+        let c = &result.content;
+        // The mod's own column-0 close brace RELEASES suppression.
+        assert!(c.starts_with("symbols nested.rs: 3 declarations in "), "{c}");
+        assert!(
+            c.contains("pub struct Real { ... }"),
+            "declaration after the test mod missing: {c}"
+        );
+        assert!(c.contains("pub fn visible_after() -> u32 { ... }"), "{c}");
+        // Everything INSIDE the mod stays suppressed — including the item
+        // after a nested fn body's indented close brace.
+        assert!(!c.contains("hidden_early"), "{c}");
+        assert!(
+            !c.contains("hidden_late"),
+            "nested close brace released suppression early: {c}"
+        );
+    }
+
+    /// Round-3 BLOCKING class 2b: the `in_test_mod` reset is load-bearing —
+    /// deleting it lets the first block-style `mod tests {` (with multi-line
+    /// items) eat the REST OF THE FILE. Every declaration after the mod must
+    /// survive. RED vs the reset-deletion mutant.
+    #[test]
+    fn symbols_declarations_after_block_test_mod_survive_rest_of_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(
+            tmp.path().join("rest.rs"),
+            r#"pub fn before() -> u32 { 1 }
+
+mod tests {
+    fn hidden_one() {
+        helper();
+    }
+
+    fn hidden_two() -> u32 {
+        5
+    }
+}
+
+pub struct After {
+    field: u32,
+}
+
+impl After {
+    pub fn method(&self) -> u32 {
+        self.field
+    }
+}
+
+pub fn last_survivor() {}
+"#,
+        )
+        .unwrap();
+        let ctx = ctx_for(&tmp);
+        let result = dispatch(
+            &ctx,
+            "tgrep",
+            &json!({"query": "ignored", "symbols": true, "path": "rest.rs"}),
+        );
+        assert!(!result.is_error, "{}", result.content);
+        let c = &result.content;
+        assert!(c.starts_with("symbols rest.rs: 5 declarations in "), "{c}");
+        assert!(c.contains("pub fn before() -> u32 { ... }"), "{c}");
+        assert!(
+            c.contains("pub struct After { ... }"),
+            "rest of the file eaten after the test mod: {c}"
+        );
+        assert!(c.contains("impl After { ... }"), "{c}");
+        assert!(c.contains("pub fn method(&self) -> u32 { ... }"), "{c}");
+        assert!(c.contains("pub fn last_survivor() { ... }"), "{c}");
+        assert!(!c.contains("hidden_one"), "{c}");
+        assert!(!c.contains("hidden_two"), "{c}");
     }
 
     /// Determinism: identical calls give byte-identical output (spec req 2),
