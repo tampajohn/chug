@@ -262,6 +262,11 @@ call (T47: nothing cleans it automatically).
 
 ## Outcomes (filled at cycle wrap — LOOP-SPEC Phase 3)
 
+### Cycle 23 (2026-09-26, in progress) — freshness-skip; T49 validated + merged
+
+**Landed:**
+- **T49 — api.rs LLM client gains a 10s connect timeout const + value pins** (pri 2; cycle-22 impl `56ecf72` glm 34/50 + orchestrator review; this cycle: kimi validation, merge `9a73b12`, flip + this entry per T34). `CONNECT_TIMEOUT_SECS = 10` const with the class doc + `.connect_timeout` builder leg + 3-value pin test; `classify_reqwest` unmodified (is_timeout/is_connect → retryable, verified incl. reqwest 0.12.28 from Cargo.lock). kimi VERDICT: **PASS** 17/50 — all 5 reqs verified, gates independently re-run (468 passed / 0 failed), 4/4 value mutants KILLED with the panic naming the correct const; the `.connect_timeout`-leg deletion mutant SURVIVES as the spec-sanctioned evidence level (T16/T42 precedent: unobservable without a SYN-dropping endpoint; pins pin values, not wiring); tree restored byte-clean. Post-merge main gates 453+6+1+6+3 + clippy green. 2 validator artifacts harvested pre-removal.
+
 ### Cycle 22 (2026-09-26, ~03:29–04:15 EDT) — MANDATORY fresh eval (queue EMPTY); T48 landed green; T49 impl done, validation deferred at budget; T44-overlap × target-shared race observed live → T52 filed
 
 Single `chug run` (kimi-k3 orchestrator; glm-5-3-flash impls; kimi-k3 validators), loopd-launched — the RUNNING loopd still predates T36/T46/T47 (this cycle: 120 iters, digest regenerated manually at eval start, no T47 env prefix; restart-loopd carry stands, T50 is its coded fix). Queue was EMPTY at start → freshness rule could not fire → mandatory Phase 1: digest-dogfooded eval (T46's artifact carried the whole corpus read; Phase 1 ≈30 orchestrator iterations vs the 45–55 estimate), 5 rows filed with ready specs (T48 pri 1, T49 pri 2, T50 pri 2 feature, T51 pri 4 at eval `0553a5b`; T52 at wrap).
