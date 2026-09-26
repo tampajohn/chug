@@ -1256,6 +1256,12 @@ fn open_append(path: &Path) -> anyhow::Result<fs::File> {
 /// Resolve `path` lexically against `cwd`, rejecting anything that escapes it
 /// (`..` traversal, absolute paths outside cwd). No filesystem access, no
 /// symlink resolution: purely lexical, per spec.
+///
+/// Both refusal messages carry a suffix naming the `bash` escape hatch (T61):
+/// the tool descriptions are read once at turn 0, but this error string is
+/// what the model sees at the moment of need — it must name the fallback.
+const PATH_ESCAPES_CWD_SUFFIX: &str = " — cross-tree paths go through bash";
+
 pub fn resolve_safe(cwd: &Path, path: &str) -> Result<PathBuf, String> {
     let given = Path::new(path);
     let combined = if given.is_absolute() {
@@ -1269,7 +1275,7 @@ pub fn resolve_safe(cwd: &Path, path: &str) -> Result<PathBuf, String> {
             Component::CurDir => {}
             Component::ParentDir => {
                 if !normalized.pop() {
-                    return Err(format!("path escapes cwd: {path}"));
+                    return Err(format!("path escapes cwd: {path}{PATH_ESCAPES_CWD_SUFFIX}"));
                 }
             }
             Component::RootDir => {
@@ -1282,7 +1288,7 @@ pub fn resolve_safe(cwd: &Path, path: &str) -> Result<PathBuf, String> {
         }
     }
     if !normalized.starts_with(cwd) {
-        return Err(format!("path escapes cwd: {path}"));
+        return Err(format!("path escapes cwd: {path}{PATH_ESCAPES_CWD_SUFFIX}"));
     }
     Ok(normalized)
 }
@@ -3894,16 +3900,27 @@ log_tail: (none)";
     }
 
     /// T41: the error string the new wording names is the LIVE one —
-    /// `resolve_safe` fails with exactly `path escapes cwd: <path>` (pre-T41
-    /// wording, unchanged; behavior is also pinned by
-    /// `glob_rejects_path_escape` and the `path_safety_*` tests).
+    /// `resolve_safe` fails with the `path escapes cwd: <path>` prefix
+    /// (pre-T41 wording, byte-identical; behavior is also pinned by
+    /// `glob_rejects_path_escape` and the `path_safety_*` tests). T61: the
+    /// message names `bash` as the escape hatch and stays single-line, at
+    /// BOTH refusal sites (the `..`-past-root pop and the outside-cwd
+    /// prefix check).
     #[test]
     fn resolve_safe_error_names_path_escapes_cwd() {
         let tmp = tempfile::tempdir().unwrap();
-        let err = resolve_safe(tmp.path(), "/etc/passwd").unwrap_err();
-        assert!(err.starts_with("path escapes cwd: "), "{err}");
-        let err = resolve_safe(tmp.path(), "../out.txt").unwrap_err();
-        assert!(err.starts_with("path escapes cwd: "), "{err}");
+        for err in [
+            resolve_safe(tmp.path(), "/etc/passwd").unwrap_err(),
+            resolve_safe(tmp.path(), "../out.txt").unwrap_err(),
+            // Relative cwd + leading `..` reaches the other refusal site:
+            // `pop` on an empty prefix, unreachable with an absolute cwd.
+            resolve_safe(Path::new("."), "../out.txt").unwrap_err(),
+            resolve_safe(Path::new("a/b"), "../../out.txt").unwrap_err(),
+        ] {
+            assert!(err.starts_with("path escapes cwd: "), "{err}");
+            assert!(err.contains("bash"), "{err}");
+            assert!(!err.contains('\n'), "refusal must stay single-line: {err}");
+        }
     }
 
     /// T41: the README Tools intro must name BOTH sandbox exceptions —
