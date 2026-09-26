@@ -66,8 +66,10 @@ concern, repo-context section, requirements, tests, acceptance, and its own
 `check:` line, which MUST be worktree-relative — it runs in the impl child's
 worktree cwd, never `cd` to the main repo (content checks grep worktree;
 `cargo test` runs as-is); bites: T21 (self-merge anomaly), T26 (`1d6780d`
-pre-dispatch fix). Priority doctrine: bugs > robustness > DX friction >
-performance > features. **Verify T1/T2/T4/T5 actually worked before filing
+pre-dispatch fix). Priority doctrine: bugs > robustness > features > DX
+friction > performance — features are first-class (LOOP-SPEC §2): at
+equal pri, a credible feature row is worked before a DX-friction row.
+**Verify T1/T2/T4/T5 actually worked before filing
 anything adjacent** (read the code, run the relevant tests if cheap).
 
 ## Handoff section in EVALUATION.md
