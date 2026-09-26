@@ -1,6 +1,6 @@
 # T43 — EVALUATION.md Outcomes pruning rule + first compaction
 
-check: grep -Fq 'Outcomes keeps the last' LOOP-SPEC.md && test "$(awk '/^## Outcomes/,0' EVALUATION.md | wc -l)" -lt 200 && grep -Fq '### Cycle 5 ' EVALUATION.md && grep -Fq '### Cycle 13 ' EVALUATION.md && grep -Fq '### Cycle 14 ' EVALUATION.md
+check: grep -Fq 'Outcomes keeps the last' LOOP-SPEC.md && test "$(awk '/^## Outcomes/,0' EVALUATION.md | wc -l)" -lt 400 && grep -Fq '### Cycle 5 ' EVALUATION.md && grep -Fq '### Cycle 13 ' EVALUATION.md && grep -Fq '### Cycle 14 ' EVALUATION.md
 
 ## Concern
 
@@ -40,8 +40,15 @@ context tax on the loop's own handoff document.
    form `### Cycle N (date) — <one line naming items landed + key refs>`.
    Cycle 14 and newer stay in full. The `## Outcomes` heading, the file's
    §1–§6 + Handoff body, and all non-Outcomes content remain byte-identical.
-3. Post-compaction the `## Outcomes` section is under 200 lines (the
-   check's bound; cycle 14–17 in full plus 9 one-liners lands ≈150).
+3. Post-compaction the `## Outcomes` section is under 400 lines (the
+   check's bound). The spec's original 200-line bound was estimated at
+   cycle-18 authorship ("cycle 14–17 in full plus 9 one-liners lands
+   ≈150") — cycles 18–20 then landed ≈256 more full-entry lines before
+   this row was worked, so the cycle-21 orchestrator raised the bound
+   pre-dispatch: cycles 14–20 in full ≈315 lines + 9 one-liners ≈335,
+   and the 400 bound leaves room for this cycle's own wrap entry. The
+   doctrine rule (req 1) is what bounds growth long-term: each wrap
+   compacts the 7th-newest cycle to a one-liner.
 4. Truthfulness: each compacted line must name the cycle's landed items and
    at least one commit ref — verifiable against `git log`.
 
