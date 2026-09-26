@@ -94,7 +94,25 @@ impl, never 2 impls):
    status call (it wakes early on a state change or an alive→dead flip).
    If status
    reports liveness unknown (pid omitted or lost), fall back to
-   `ps -p <pid>`. Exit of the pid = child done; then review. If
+   `ps -p <pid>`. Exit of the pid = child done; then review.
+   **Budget-death recovery (T63):** when the child exited on a BUDGET
+   abort (iteration / token / minutes ceiling — the events summary's
+   abort flag names the budget, e.g. `abort_reason: iteration budget
+   exceeded`) with the goal not accepted and the worktree holding
+   incomplete work, the FIRST recovery is ONE `delegate` relaunch in the
+   SAME worktree with `resume: true` — same spec, same goal (the goal
+   re-carries the T47 `CARGO_TARGET_DIR` export), same model, same
+   budgets (50/35 impl, 50/30 validate) — which continues the child's
+   prior transcript in that worktree instead of starting cold. Resume
+   works because the worktree is never removed pre-harvest (T19), so the
+   child's untracked `.chug/` transcript persists, and `delegate status`
+   reads the LATEST run segment (T58), so the pre-resume abort no longer
+   latches the summary. Cap ONE resume attempt per child — a resumed
+   child that dies at budget again without goal acceptance falls back to
+   the standing recipes (orchestrator-finish for complete-but-uncommitted
+   work, T55 precedent; next-cycle recovery with a recipe written on the
+   row, T28 precedent). Fix-up children (step 4's FAIL arc) are
+   unaffected — they start fresh by design. If
    `delegate` itself errors persistently (the tool, not the child),
    META-SPEC §4's hand-rolled nohup launch template remains the fallback
    launch path — note the fallback in your ledger.
