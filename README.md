@@ -114,10 +114,8 @@ returns to idle, repeat. Natural stops end the turn; budgets are per turn.
   failing test's name or error block at the end of the output is on record),
   verification commands, goal verdicts, budget-low warning
   injections (with the remaining counts at fire time), output-truncated
-  advisories (one `output_truncated` line per injected advisory — a response
-  hit the API output-token ceiling and the loop named the chunking remedy),
-  and aborts (with the
-  dying model and, on budget deaths, the exhausted budget). Best-effort
+  advisories (one `output_truncated` line per injected advisory), and aborts
+  (with the dying model and, on budget deaths, the exhausted budget). Best-effort
   telemetry: a write failure warns once on stderr and never affects the run.
   Fresh runs rotate a previous log to `.chug/events-<timestamp>.jsonl`
   alongside the transcript
@@ -288,7 +286,9 @@ cheap, rebuilt once and warm for every worktree again).
 State in `.chug/loopd/` (cycle logs, pidfile). Three consecutive cycles
 without `goal_complete` → HALTED marker + exit. A second supervisor refuses
 to start (pidfile); a manual `LOOP-SPEC` run makes it skip a cycle rather
-than collide.
+than collide. Between cycles the supervisor fingerprints its own script and
+re-execs itself when the file has changed, so loopd edits merged to main
+activate without an operator restart — a pending `stop` still wins.
 
 ## Development
 
