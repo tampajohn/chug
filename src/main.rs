@@ -5,6 +5,7 @@ mod auth;
 mod build_info;
 mod chat;
 mod complete;
+mod delegate;
 mod decisions;
 mod driver;
 mod driver_lock;

@@ -117,7 +117,7 @@ pub fn argv_names_chug(pid: u32) -> bool {
 
 /// Liveness probe: `kill(pid, 0)` delivers no signal and reports existence.
 /// `EPERM` (exists, owned by another user) counts as alive — same semantics
-/// as `tools.rs`'s `process_alive`. Pids that cannot name a process (0 =
+/// as `delegate.rs`'s `process_alive`. Pids that cannot name a process (0 =
 /// "my process group", or anything past `i32::MAX`) report not-alive so
 /// they degrade to reclaim. Non-unix has no probe: not-alive (reclaim).
 pub fn pid_alive(pid: u32) -> bool {
