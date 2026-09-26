@@ -500,6 +500,68 @@ fn loop_spec_post_merge_gates_name_the_main_dedicated_dir() {
     );
 }
 
+/// T64 pin (a) — the t57-validate M5 survivor. The T57 step-5 window pin
+/// above asserts `contains(MAIN)` + `contains("ALWAYS")`, which the
+/// mechanism sentence's `ALWAYS main checkouts` satisfies even when the
+/// ALWAYS-form rule sentence itself is reworded or dropped — the M5 mutant
+/// survived on exactly that. This pin scopes the WHOLE step 5 (heading to
+/// heading) and pins the ALWAYS language in its exact form, exact-count per
+/// the T47-carrier doctrine: the ALWAYS-form carrier for the main-gates dir
+/// occurs exactly once, so dropping, rewording, or duplicating it goes RED
+/// while `ALWAYS main checkouts` can never stand in for it.
+#[test]
+fn loop_spec_step5_window_carries_the_always_form_exactly_once() {
+    let spec = read("LOOP-SPEC.md");
+    let start = spec
+        .find("5. **Harvest")
+        .expect("LOOP-SPEC step-5 heading (`5. **Harvest`) (T64)");
+    let end = start
+        + spec[start..]
+            .find("6. **Budget check")
+            .expect("LOOP-SPEC step-6 heading (`6. **Budget check`) (T64)");
+    let window = &spec[start..end];
+    // (1) The main-gates dir occurs EXACTLY once in step 5 — its other
+    //     spec-wide carrier (Phase 3's final gates) sits outside the window
+    //     and is counted by the T57 spec-wide pin above.
+    count_eq(
+        window,
+        MAIN,
+        1,
+        "LOOP-SPEC step-5 window target-shared-main carrier (T64)",
+    );
+    // (2) The ALWAYS-form rule language occurs EXACTLY once in the window,
+    //     in its exact wording — the mechanism sentence's `ALWAYS main
+    //     checkouts` does not contain this phrase and cannot satisfy the
+    //     count (the M5 survivor's escape hatch, now closed).
+    count_eq(
+        window,
+        "ALWAYS, never conditionally",
+        1,
+        "LOOP-SPEC step-5 window ALWAYS-form rule language (T64, t57-validate \
+         M5 survivor)",
+    );
+    // (3) The two are ONE carrier: the ALWAYS-form sentence is the one
+    //     carrying the main-gates dir (byte-exact adjacency, T47 pattern —
+    //     the env prefix ends `target-shared-main`,` and the next line
+    //     opens with the ALWAYS form).
+    count_eq(
+        window,
+        &format!("{MAIN}`,\n   ALWAYS, never conditionally"),
+        1,
+        "LOOP-SPEC step-5 combined carrier: main-gates dir + ALWAYS-form in \
+         one rule sentence (T64)",
+    );
+    // (4) The step-5 rule names what it is NOT: step 3's conditional
+    //     role-keyed split — the disambiguation that makes the ALWAYS-form
+    //     meaningful (an M5 reword that keeps the phrase but drops the
+    //     contrast still dies here).
+    assert!(
+        window.contains("NOT step 3's"),
+        "the step-5 ALWAYS-form must disambiguate itself from step 3's \
+         role-keyed rule (`this is NOT step 3's ...`) (T64); got:\n{window}"
+    );
+}
+
 #[test]
 fn readme_target_cache_clause_names_the_main_dedicated_dir() {
     let readme = read("README.md");
