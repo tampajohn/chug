@@ -319,12 +319,20 @@ No new carries this eval; two retired (§4).
 ---
 ## Outcomes (filled at cycle wrap — LOOP-SPEC Phase 3)
 
-### Cycle 15 (2026-09-25, ~23:47–23:55 EDT) — freshness-skip; T35 landed, QUEUE DRAINED (wrap notes added at wrap)
+### Cycle 15 (2026-09-25, ~23:47–23:56 EDT) — freshness-skip; T35 landed, QUEUE DRAINED
 
 One `chug run --spec LOOP-SPEC.md` session (kimi-k3 orchestrator; glm-5-3-flash impl child), launched by loopd. **Freshness rule fired** (cycle-14 eval same-day + T35 `todo` with ready spec) → zero re-eval burn, straight to the queue.
 
 **Landed (1/1 queued rows):**
 - **T35 — README quickstart `cargo install --path .`** (pri 3, DX/docs; impl `8ebbe59` glm goal-accepted 10/50 ~2 min first-try, merge `09730de`, flip + this entry in the immediately-following `todo:` commit per T34 doctrine). +1/−0 README.md only: install step immediately after `cargo build` with the one-line PATH comment; rest of the Quickstart byte-identical; Development section untouched (already correct — cargo commands, not chug invocations). Commit cites the §6(e) finding + live verification per spec req 4. **Validation: §2 step 4 optional (docs-only — not core-logic/doctrine; T16/T31 precedent)** — orchestrator re-ran all gates independently: 416+3 green in the worktree AND re-run in main post-merge, clippy `--all-targets -D warnings` clean, spec `check:` verbatim in both trees, one-hunk README-only diff review. 2 artifacts harvested pre-removal (impl events + LEDGER, T31 precedent). Closes the cycle-14 eval's first §6(e) README-usability-audit finding — **the queue is now EMPTY** (T1–T35 all done with refs).
+
+**Skipped/deferred:** none — the single queued row landed.
+
+**What the validators caught:** no validator dispatched (docs-only item, §2 step 4 optional). Orchestrator-side verification instead: independent gate re-runs in both trees + full-diff review + spec-req checklist (reqs 1–4 all met; commit message cites §6(e) + live verification as required).
+
+**Cycle-level notes:** (a) **T34's per-item Outcomes doctrine practiced for the first time forward** — T35's entry was written in the row-flip commit (`eb885a8`), not deferred to this wrap; the wrap only assembled cycle-level notes. A mid-cycle death after the flip loses no narrative. (b) **wait_secs adoption, cleanest profile yet**: 7 delegate polls / **0 bash sleeps** for the whole cycle (vs cycle-14's ~9 sleeps/15 polls for 4 items); every early wake was a real state change, terminal flip (running→done) woke the poll in 2s — the T29 long-poll is now the only polling surface used. (c) Docs-only items are cheap end-to-end: ~9 min launch-to-push, ~25 orchestrator iterations. (d) T35's spec was fully consumable cold by the glm child (pinned mechanism, byte-identical boundaries, explicit non-goals) — cycle-14 eval's spec-authoring bar held.
+
+**Final state:** main `eb885a8` (merge `09730de` + todo: flip); gates 416+3 green in main, clippy clean; TODO.md truthful (T1–T35 ALL done with refs — no `todo` rows); 2 child artifacts in `.chug/` (`events-t35-impl-20260925-234923.jsonl` + `LEDGER-t35-impl-20260925-234923.md`); README gate satisfied — the cycle's landing IS a README quickstart improvement, integrated into the Quickstart block itself; everything pushed. **Handoff to the next cycle: the queue is EMPTY → the freshness rule CANNOT fire → the next cycle MUST run a fresh Phase-1 eval** (META-META-SPEC §6 README-audit duty included; the quickstart-truth fix lands between audits, so the next audit re-verifies the block end-to-end). Carries for that eval: wait_secs benefit-realization watch (this cycle's 0-sleep profile is the datapoint); the cycle-14 eval's open questions stand otherwise unchanged; human-decision carries unchanged (loopd already restarted on T27's 120-cap).
 
 ### Cycle 14 (2026-09-25, ~22:50–23:59 EDT) — fresh eval + worked 4/5 rows; T34's per-item doctrine applied retroactively in this entry
 
