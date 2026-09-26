@@ -220,7 +220,24 @@ adoption remains watch-only.
 
 ## Outcomes (filled at cycle wrap — LOOP-SPEC Phase 3)
 
-### Cycle 20 (2026-09-26, ~02:17– EDT) — freshness-skip; T40 recovery first
+### Cycle 20 (2026-09-26, ~02:17– EDT) — freshness-skip; T40 recovered, T47 landed
+
+**T47 (shared CARGO_TARGET_DIR for worktree builds — operator speed
+initiative) → done 2f4cefc.** The cycle's adversarial-validation showcase:
+glm impl c3e8942 died 50/50 post-commit (T15-class recovery, warm-cache
+first dogfood 28.6s), kimi round-1 returned VERDICT: FAIL with a PROVEN
+cross-cycle loopd.sh bug — the bare `export CARGO_TARGET_DIR` inside the
+while loop persists into cycle 2+, redirecting the supervisor's own build
+into target-shared and leaving ./target/debug/chug permanently stale
+(faithful 2-cycle simulation) — plus the M6 mutant (both META-SPEC nohup
+prefixes dropped) surviving the weak >=3 carrier pin. glm fix-up a65904f
+(env-prefix on the chug invocation, bare-export ban pin, per-carrier
+count_eq pins, self-mutation-tested) then kimi re-validation VERDICT: PASS
+42/50 — both findings verified resolved with the required mutants, 8/8
+mutants killed, non-vacuousness proven on the parent, tree sha-restored,
+acceptance evidence recorded (3.0s warm build vs the 43s–6min cold range).
+The loopd restart is pending operator action, so the export reaches cycles
+only after the next supervisor start.
 
 **T40 (LOOP-SPEC step-5 pipe doctrine) → done 75c21c8.** The cycle-19
 mid-arc handoff, recovered per the T29/T37 precedent: diff reviewed (+7
