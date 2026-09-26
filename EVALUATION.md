@@ -220,6 +220,34 @@ adoption remains watch-only.
 
 ## Outcomes (filled at cycle wrap — LOOP-SPEC Phase 3)
 
+### Cycle 18 (2026-09-26, ~00:41–01:10 EDT) — fresh eval (queue EMPTY at start) + T38 landed; TWO 50/50 child deaths, both recovered
+
+**T38 (truncated-response advisory) → done a686522.** Fresh evaluation filed
+6 rows (T38–T43); T38 worked first (pri 2). glm impl died 50/50 mid-wrap
+(T18's budget_low@42 fired and was acknowledged — 5th of the 50/50 class;
+227k/28.6k tokens) with the work complete-but-uncommitted (396 insertions,
+exactly the right 6 files, README done). Orchestrator harvest-completed one
+fix the dying child never got to run: its run_t38 scripted harness used
+max_iters=10, so the T13 budget-low notice fired on turn 3 and landed AFTER
+the second advisory, breaking the no-latch test's last-message assertion
+(1/436 red as harvested; 10→20, 436+3 green, clippy clean → 364b95c). kimi
+adversarial validation then died 50/50 ITSELF — post-mutations, pre-verdict:
+10/10 mutants killed on record (condition delete/flip, token corrupt,
+event/transcript/chat-injection drop, type-string corrupt, latch, ordering,
+sink-silence), tree restored clean. Orchestrator re-verified (clean tree,
+436+3) and RESUMED the validator via `chug run --resume` over bash nohup —
+**delegate cannot express `--resume` (capability gap, watch item for the
+next eval)** — which emitted VERDICT: PASS, goal accepted (all 7 reqs
+verified, gates green twice consecutive post-restore; 3 non-blocking
+observations: chat goal-accepted edge gets no advisory by design, TODO row
+flip pending = orchestrator's job, one transient unnamed flake during
+mutation runs). 4 artifacts harvested pre-removal (impl+validate events,
+impl+validate LEDGERs). Also noted live: delegate status misreports a
+RESUMED child — its events stream holds the prior run's abort, so status
+said `state: aborted` while the resumed validator ran healthy (watch item;
+ps fallback used). T41 sighting #3: orchestrator's own edit_file to the /tmp
+worktree refused (bash python3 workaround).
+
 ### Cycle 17 (2026-09-26, ~00:31–00:45 EDT) — freshness-skip; T37 recovered + landed, QUEUE DRAINED
 
 One `chug run --spec LOOP-SPEC.md` session (kimi-k3 orchestrator, loopd-launched; kimi-k3 validator child via delegate). **Freshness rule fired as designed** (cycle-16 eval same-day + T37 `todo` with ready spec + preserved worktree) → zero re-eval burn, straight to the queue's single row. T37's per-item entry is written here at landing per T34 doctrine (this commit IS the row-flip commit's companion).
