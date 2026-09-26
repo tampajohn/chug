@@ -531,6 +531,24 @@ impl Client {
         })
     }
 
+    /// Test-only constructor wiring a caller-built transport with zero retry
+    /// delays, so driver tests can run the FULL `run_loop` (T55 lock
+    /// acquire/release legs) to goal-acceptance without network.
+    #[cfg(test)]
+    pub(crate) fn with_transport_for_tests(
+        transport: Arc<dyn Transport>,
+        model: &str,
+    ) -> Self {
+        Self {
+            transport,
+            retry_delays: Vec::new(),
+            base_url: "http://fake.local".to_string(),
+            api_key: None,
+            auth_token: None,
+            model: model.to_string(),
+        }
+    }
+
     /// Swap the model id used by subsequent `complete` calls (chat `/model`).
     pub fn set_model(&mut self, model: &str) {
         self.model = model.to_string();
