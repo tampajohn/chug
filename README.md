@@ -120,6 +120,44 @@ returns to idle, repeat. Natural stops end the turn; budgets are per turn.
   Fresh runs rotate a previous log to `.chug/events-<timestamp>.jsonl`
   alongside the transcript
 
+## Plan mode (`chug plan`)
+
+A read-only planning session: the model explores the repo and drafts an
+implementation plan, with zero mutation surface. Benchmark: Claude Code's plan
+mode; chug's twist is that it also serves the autonomous loop — dispatch a
+plan child into a worktree (e.g. via `delegate`) to draft an approach before
+burning an implementation child.
+
+- **Read-only contract** — the tool list advertised to the API is EXACTLY five
+  tools: `read_file`, `grep`, `glob`, `list_dir`, and `submit_plan`. No
+  `write_file`, `edit_file`, `bash`, `delegate`, `web_fetch`, `update_ledger`,
+  `goal_complete`, `decision_log`, and no MCP tools
+- **Defense in depth** — the schemas are filtered AND dispatch rejects every
+  other registered tool name with a tool error naming the allowed set; the
+  call never executes and the loop continues
+- **`submit_plan`** — the single deliberate write/exit path. Input is the full
+  plan as markdown; with `--out <path>` it is written verbatim to that path
+  (parent dirs created; the same cwd-sandbox rule as `write_file` — a path
+  escaping the working directory is a tool error), without `--out` it prints
+  to stdout. Either way the session ends with exit 0 and the events log
+  records the outcome like a run's goal acceptance (the plan rides the
+  `goal`/`accepted` line as its summary)
+- **No bookkeeping** — a plan run never archives or seeds LEDGER.md and never
+  writes TODO.md; the ledger appears in the prompt as read-only context only.
+  Budgets are `--max-iters 30` / `--max-minutes 20` (defaults) /
+  `--max-tokens` (optional); budget exhaustion uses the run-mode abort path
+  unchanged (nonzero exit, Aborted event naming model + budget). Events
+  parity: `.chug/events.jsonl` opens with a `run_start` whose mode is "plan"
+
+```
+chug plan --goal "add a --version flag" --spec SPEC.md --out plan.md --model claude-sonnet-4-6
+```
+
+`--spec` is optional (same resolution as `run`); `--out` is optional and
+cwd-sandboxed. Not yet in plan mode: a `/plan` chat slash command, an
+`--approve plan.md` gate for `chug run`, and `web_fetch` (planned phase-2
+work).
+
 ## TUI (`--tui`)
 
 Activity stream (model text + tool calls), live LEDGER.md panel, status bar
@@ -138,6 +176,8 @@ the two documented exceptions — `delegate`'s absolute `cwd`/`spec` target chil
 worktrees by design; `web_fetch` is network, not filesystem). `bash` runs in its own process group —
 timeouts SIGKILL the whole group, so orphaned grandchildren can't wedge the
 driver (120s default; `--bash-timeout` / `CHUG_BASH_TIMEOUT` overrides).
+`chug plan` runs the same `read_file`/`grep`/`glob`/`list_dir` tools plus `submit_plan` (its only write and exit path) — plan mode advertises no other tool, so the registry surfaces below are run/chat surfaces.
+
 `decision_log` is the loop's bookkeeping surface next to `update_ledger`:
 structured decision records to `.chug/decisions.jsonl` (append-only,
 best-effort) feeding the F13 distillation corpus; like the file tools it is

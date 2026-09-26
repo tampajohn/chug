@@ -120,12 +120,14 @@ impl Default for Controls {
     }
 }
 
-/// The two loop personalities: `run` (process exits on completion) and `chat`
-/// (a turn ends, control returns to the user).
+/// The three loop personalities: `run` (process exits on completion), `chat`
+/// (a turn ends, control returns to the user), and `plan` (T73: read-only
+/// planning — process exits 0 on `submit_plan`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Mode {
     Autonomous,
     Chat,
+    Plan,
 }
 
 /// Live-tunable session knobs a chat turn re-reads at every iteration
@@ -175,6 +177,7 @@ pub fn apply_slash_update(knobs: &mut TurnKnobs, client: &mut dyn Llm, update: S
 }
 
 /// What a finished drive_loop invocation produced.
+#[derive(Debug)]
 enum DriveOutcome {
     /// Autonomous run finished; value is the process exit code.
     RunFinished(i32),
@@ -194,6 +197,9 @@ struct LoopCtx<'a> {
     trace: Option<&'a str>,
     /// The process observability sink (Noop when off → every call is a no-op).
     obs: &'a observ::Sink,
+    /// T73 plan mode only: where `submit_plan` writes the plan (`None` → the
+    /// plan surfaces on stdout). Always `None` in run/chat modes.
+    plan_out: Option<&'a Path>,
 }
 
 enum VerifyOutcome {
@@ -329,6 +335,7 @@ fn run_loop(
         bash_timeout: cfg.bash_timeout,
         trace: trace.as_deref(),
         obs,
+        plan_out: None,
     };
     // T10: first line of the run's events log (model/spec/cwd/mode), plus
     // the configured budget ceilings (T17) and the cwd's checkout HEAD
@@ -356,6 +363,148 @@ fn run_loop(
     )? {
         DriveOutcome::RunFinished(code) => Ok(code),
         DriveOutcome::TurnEnded(_) => bail!("chat turn outcome in autonomous mode"),
+    }
+}
+
+/// T73: plan-mode config — a read-only planning session in `cwd` that ends
+/// when the model calls `submit_plan` (exit 0), or on a budget abort.
+pub struct PlanConfig {
+    pub cwd: PathBuf,
+    /// Optional spec file, same resolution as `run` (absent = no spec section).
+    pub spec_path: Option<PathBuf>,
+    pub goal: String,
+    pub model: String,
+    pub max_iters: u32,
+    pub max_minutes: u64,
+    /// Cumulative token budget across the session (`0` = unlimited), same
+    /// shape as run/chat (T15 parity).
+    pub max_tokens: u64,
+    /// Where `submit_plan` writes the plan; `None` → the plan surfaces on
+    /// stdout. Resolved through the cwd sandbox at write time.
+    pub out_path: Option<PathBuf>,
+}
+
+/// Plan mode entry point: the same shape as `run`, with the plan-mode
+/// startup differences — no ledger archiving or seeding (a plan run never
+/// writes LEDGER.md), no MCP, no risk gate (there is no bash), and a
+/// `run_start` event naming mode "plan".
+pub fn run_plan(cfg: PlanConfig, sink: &mut dyn EventSink) -> anyhow::Result<i32> {
+    let client = Client::new(&cfg.model)?;
+    run_plan_loop(cfg, client, sink, observ::global())
+}
+
+fn run_plan_loop(
+    cfg: PlanConfig,
+    mut client: Client,
+    sink: &mut dyn EventSink,
+    obs: &observ::Sink,
+) -> anyhow::Result<i32> {
+    // Same same-cwd mutual exclusion as a run: the session appends to the
+    // shared transcript/events files, so a concurrent chug in this cwd must
+    // not interleave with it (released on every exit path).
+    let _driver_lock: driver_lock::Guard = match driver_lock::acquire(&cfg.cwd) {
+        Ok(guard) => guard,
+        Err(msg) => bail!("{msg}"),
+    };
+    // Fresh-session rotation, same lifecycle as a fresh run (transcript +
+    // events log). Deliberately NO ledger::archive_stale / ensure_seeded:
+    // plan mode never touches LEDGER.md (requirement: no bookkeeping writes).
+    match transcript::rotate_fresh(&cfg.cwd) {
+        archive::Outcome::Archived(path) => {
+            eprintln!("chug: archived previous transcript to {}", path.display());
+        }
+        archive::Outcome::Failed(why) => {
+            eprintln!(
+                "chug: warning: could not archive previous transcript ({why}); appending to it"
+            );
+        }
+        archive::Outcome::Skipped => {}
+    }
+    match eventlog::rotate_fresh(&cfg.cwd) {
+        archive::Outcome::Archived(path) => {
+            eprintln!("chug: archived previous events log to {}", path.display());
+        }
+        archive::Outcome::Failed(why) => {
+            eprintln!(
+                "chug: warning: could not archive previous events log ({why}); appending to it"
+            );
+        }
+        archive::Outcome::Skipped => {}
+    }
+    // The spec must be readable at startup when given (same resolution as
+    // run); a plan session may run without one.
+    let initial_spec = match &cfg.spec_path {
+        Some(path) => Some(
+            fs::read_to_string(path)
+                .with_context(|| format!("reading spec {}", path.display()))?,
+        ),
+        None => None,
+    };
+    let first = Message::user(vec![ContentBlock::text_block(format!(
+        "Goal: {}\n\nThe goal (and spec, when given) are in your system prompt. \
+         Explore read-only, then call submit_plan with the complete plan.",
+        cfg.goal
+    ))]);
+    transcript::append(&cfg.cwd, &first)?;
+    let mut messages = vec![first];
+
+    let head = crate::build_info::resolve_head(&cfg.cwd);
+    eventlog::run_start(
+        &cfg.cwd,
+        "plan",
+        cfg.spec_path.as_deref(),
+        &cfg.model,
+        cfg.max_iters,
+        cfg.max_minutes,
+        cfg.max_tokens,
+        crate::build_info::as_pair(&head),
+    );
+    let trace = obs.trace_started(
+        &cfg.goal,
+        &cfg.model,
+        &cfg.cwd.display().to_string(),
+        "plan",
+        cfg.spec_path
+            .as_deref()
+            .map(|p| p.to_string_lossy().into_owned())
+            .as_deref(),
+    );
+    let mut knobs = TurnKnobs {
+        spec_path: cfg.spec_path.clone(),
+        goal: Some(cfg.goal.clone()),
+        check_cmd: None, // a plan is not check-verifiable; submit_plan is the exit
+        max_iters: cfg.max_iters,
+        max_minutes: cfg.max_minutes,
+        max_tokens: cfg.max_tokens,
+    };
+    let (_update_tx, update_rx) = mpsc::channel::<SlashUpdate>();
+    let controls = Controls::detached();
+    // No MCP in plan mode (the five-tool surface is exactly the plan list);
+    // the registry stays empty and drive_loop's plan branch never extends it.
+    let mut mcp = McpRegistry::new(&cfg.cwd, true, None)?;
+    let mut gate: Option<RiskGate> = None;
+    let ctx = LoopCtx {
+        cwd: &cfg.cwd,
+        mode: Mode::Plan,
+        controls: &controls,
+        updates: &update_rx,
+        bash_timeout: Duration::from_secs(tools::BASH_TIMEOUT_SECS),
+        trace: trace.as_deref(),
+        obs,
+        plan_out: cfg.out_path.as_deref(),
+    };
+    match drive_loop(
+        &ctx,
+        &mut knobs,
+        &mut client,
+        &mut gate,
+        &mut messages,
+        initial_spec,
+        sink,
+        &mut mcp,
+    )? {
+        DriveOutcome::RunFinished(code) => Ok(code),
+        DriveOutcome::TurnEnded(_) => bail!("chat turn outcome in plan mode"),
     }
 }
 
@@ -396,6 +545,7 @@ pub fn run_turn(
         bash_timeout,
         trace,
         obs,
+        plan_out: None,
     };
     match drive_loop(&ctx, knobs, client, gate, messages, None, sink, mcp)? {
         DriveOutcome::TurnEnded(reason) => Ok(reason),
@@ -424,10 +574,19 @@ fn drive_loop(
     // aborts) before it reaches the console/TUI sink.
     let mut event_log = eventlog::EventLogSink::new(ctx.cwd, sink);
     let sink = &mut event_log as &mut dyn EventSink;
-    // An empty registry (no MCP config) extends with nothing: byte-identical
-    // tools array to before.
-    let mut tool_schemas = tools::tool_schemas();
-    tool_schemas.extend(mcp.tool_schemas());
+    // T73 plan mode: EXACTLY the five-tool read-only surface, and never an
+    // MCP extension (an empty registry would be a no-op anyway, but the plan
+    // branch makes the "no other schema advertised" guarantee structural).
+    let tool_schemas = match ctx.mode {
+        Mode::Plan => crate::plan::tool_schemas(),
+        _ => {
+            // An empty registry (no MCP config) extends with nothing:
+            // byte-identical tools array to before.
+            let mut schemas = tools::tool_schemas();
+            schemas.extend(mcp.tool_schemas());
+            schemas
+        }
+    };
     let tool_ctx = ToolCtx {
         cwd: ctx.cwd.to_path_buf(),
         bash_timeout: ctx.bash_timeout,
@@ -490,7 +649,7 @@ fn drive_loop(
         }
         if ctx.controls.abort.load(Ordering::SeqCst) {
             let reason = match ctx.mode {
-                Mode::Autonomous => "operator abort",
+                Mode::Autonomous | Mode::Plan => "operator abort",
                 Mode::Chat => "operator interrupt",
             };
             return abort_exit(
@@ -591,6 +750,11 @@ fn drive_loop(
                 knobs.goal.as_deref(),
                 &ledger_text,
             ),
+            Mode::Plan => build_plan_system_prompt(
+                spec_text.as_deref(),
+                knobs.goal.as_deref().unwrap_or_default(),
+                &ledger_text,
+            ),
         };
 
         sink.emit(Event::LedgerChanged(ledger_text.clone()));
@@ -641,6 +805,9 @@ fn drive_loop(
         let mut user_blocks: Vec<ContentBlock> = Vec::new();
         let mut tool_count = 0usize;
         let mut goal_summary: Option<String> = None;
+        // T73: the plan text of an accepted submit_plan call (set only when
+        // the dispatch succeeded, so an empty/invalid plan keeps the loop up).
+        let mut plan_submitted: Option<String> = None;
 
         for (id, name, input) in assistant.content.iter().filter_map(ContentBlock::tool_use) {
             sink.emit(Event::ToolStart {
@@ -648,7 +815,14 @@ fn drive_loop(
             });
             let tool_start = std::time::SystemTime::now();
             let tool_t0 = Instant::now();
-            let result = if name.starts_with("mcp__") {
+            // T73 plan mode: every call goes through the plan gate — the
+            // read-only four execute; submit_plan is the write/exit path;
+            // ANY other name (all the run/chat tools, and any mcp__ import)
+            // is rejected with a tool error naming the allowed set, never
+            // executed, and the loop continues.
+            let result = if ctx.mode == Mode::Plan {
+                crate::plan::dispatch(&tool_ctx, name, input, ctx.plan_out)
+            } else if name.starts_with("mcp__") {
                 // MCP tools bypass the laya risk gate (it judges bash only).
                 mcp.dispatch(name, input.clone())
             } else if name == "bash" {
@@ -706,10 +880,22 @@ fn drive_loop(
                 duration_ms: tool_t0.elapsed().as_millis() as u64,
                 preview: tool_result_preview(&result.content, result.is_error),
             });
-            if name == "goal_complete" {
+            // Plan mode has no goal_complete exit: the call is rejected by
+            // the plan gate above and the loop continues (the plan exit is
+            // submit_plan below).
+            if name == "goal_complete" && ctx.mode != Mode::Plan {
                 goal_summary = Some(
                     input
                         .get("summary")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_string(),
+                );
+            }
+            if name == "submit_plan" && ctx.mode == Mode::Plan && !result.is_error {
+                plan_submitted = Some(
+                    input
+                        .get("plan")
                         .and_then(Value::as_str)
                         .unwrap_or_default()
                         .to_string(),
@@ -740,12 +926,37 @@ fn drive_loop(
                 }
                 return Ok(DriveOutcome::TurnEnded(TurnEndReason::Completed));
             }
-            // Model stopped talking without finishing — the anti-stall kick.
-            user_blocks.push(ContentBlock::text_block(KICK));
+            // Model stopped talking without finishing — the anti-stall kick
+            // (plan mode names its own exit: submit_plan, not goal_complete).
+            user_blocks.push(ContentBlock::text_block(match ctx.mode {
+                Mode::Plan => crate::plan::PLAN_KICK,
+                _ => KICK,
+            }));
+        } else if let Some(plan) = plan_submitted {
+            // T73 plan exit: submit_plan succeeded — end the session with
+            // exit 0. The plan rides the existing goal/verdict machinery:
+            // GoalAccepted (the events log records it exactly like a run's
+            // goal acceptance, with the plan as the summary), and the
+            // ConsoleSink prints it to stdout (the no---out surface).
+            let user_msg = Message::user(user_blocks);
+            transcript::append(ctx.cwd, &user_msg)?;
+            sink.emit(Event::GoalAccepted { summary: plan.clone() });
+            if let Some(trace) = ctx.trace {
+                ctx.obs.event(trace, "goal_accepted", json!({ "summary": plan }));
+                finish_run(
+                    ctx.obs,
+                    trace,
+                    observ::outcome::COMPLETED,
+                    u64::from(iteration) + 1,
+                );
+            }
+            return Ok(DriveOutcome::RunFinished(0));
         } else if let Some(summary) = goal_summary {
             // Autonomous: the spec's `check:` line. Chat: the `/check` command.
             let check_cmd = match ctx.mode {
                 Mode::Autonomous => spec_text.as_deref().and_then(parse_check_command),
+                // Plan mode has no check gate: submit_plan is the exit.
+                Mode::Plan => None,
                 Mode::Chat => knobs.check_cmd.clone(),
             };
             match verify(ctx.cwd, check_cmd.as_deref(), sink)? {
@@ -1066,6 +1277,22 @@ pub fn build_system_prompt(spec: &str, goal: &str, ledger_text: &str) -> String 
     format!("{PREAMBLE}\n\n## Spec\n\n{spec}\n\n## Goal\n\n{goal}\n\n## Ledger\n\n{ledger_text}")
 }
 
+/// T73 plan-mode system prompt: the read-only contract preamble, optional
+/// spec section, the goal, and the ledger as READ-ONLY context (plan mode
+/// never writes it — the ledger is read with the usual seed fallback, so a
+/// worktree without one still gets a prompt).
+pub fn build_plan_system_prompt(spec: Option<&str>, goal: &str, ledger_text: &str) -> String {
+    let mut prompt = crate::plan::PLAN_PREAMBLE.to_string();
+    if let Some(spec) = spec {
+        prompt.push_str(&format!("\n\n## Spec\n\n{spec}"));
+    }
+    prompt.push_str(&format!("\n\n## Goal\n\n{goal}"));
+    prompt.push_str(&format!(
+        "\n\n## Ledger (read-only context; plan mode never writes it)\n\n{ledger_text}"
+    ));
+    prompt
+}
+
 /// Chat-mode system prompt: interactive preamble, optional spec and goal
 /// sections (only when configured), ledger as today. The current objective is
 /// the final user message, never part of the system prompt.
@@ -1134,15 +1361,15 @@ fn abort_exit(
     });
     if let Some(trace) = ctx.trace {
         ctx.obs.event(trace, "abort", json!({ "reason": reason }));
-        if ctx.mode == Mode::Autonomous {
-            // SPEC-8: finish the run trace with the classified outcome. Chat
-            // turns keep the session trace open — the session continues.
+        // SPEC-8: finish the run/plan trace with the classified outcome. Chat
+        // turns keep the session trace open — the session continues.
+        if ctx.mode != Mode::Chat {
             finish_run(ctx.obs, trace, abort_outcome(reason), u64::from(iteration));
         }
     }
     Ok(match ctx.mode {
-        Mode::Autonomous => DriveOutcome::RunFinished(code),
         Mode::Chat => DriveOutcome::TurnEnded(turn_reason),
+        Mode::Autonomous | Mode::Plan => DriveOutcome::RunFinished(code),
     })
 }
 
@@ -2982,6 +3209,7 @@ for line in sys.stdin:
             bash_timeout: Duration::from_secs(1),
             trace,
             obs,
+            plan_out: None,
         }
     }
 
@@ -3603,5 +3831,418 @@ for line in sys.stdin:
         );
         // And no run started here, so no lock was created either.
         assert_eq!(fs::read_to_string(driver_lock::lock_path(tmp.path())).unwrap(), text);
+    }
+
+    // ===================== T73: plan mode =====================
+
+    /// Like `ctx_for` but with Mode::Plan and plan_out — the `--out` path
+    /// submit_plan writes.
+    fn ctx_for_plan<'a>(
+        tmp: &'a tempfile::TempDir,
+        plan_out: Option<&'a Path>,
+        controls: &'a Controls,
+        urx: &'a Receiver<SlashUpdate>,
+    ) -> LoopCtx<'a> {
+        LoopCtx {
+            cwd: tmp.path(),
+            mode: Mode::Plan,
+            controls,
+            updates: urx,
+            bash_timeout: Duration::from_secs(1),
+            trace: None,
+            obs: &observ::Sink::Noop,
+            plan_out,
+        }
+    }
+
+    /// Schema-filter pin: the tool list a plan-mode run sends to the API is
+    /// EXACTLY the five names (set compare with exact cardinality — a sixth
+    /// added or one dropped turns this RED).
+    #[test]
+    fn plan_mode_advertises_exactly_the_five_tool_schemas() {
+        let tmp = tempfile::tempdir().unwrap();
+        let out = tmp.path().join("plan.md");
+        let (_utx, urx) = mpsc::channel::<SlashUpdate>();
+        let controls = Controls::detached();
+        let ctx = ctx_for_plan(&tmp, Some(&out), &controls, &urx);
+        let mut knobs = knobs_with(5);
+        let mut llm = ToolRecordingLlm::new(vec![tool_use_response(
+            "submit_plan",
+            json!({"plan": "# Plan\n\n- step one\n- step two\n"}),
+        )]);
+        let mut gate = None;
+        let mut messages = Vec::new();
+        let mut sink = RecordingSink::default();
+        let outcome = drive_loop(
+            &ctx,
+            &mut knobs,
+            &mut llm,
+            &mut gate,
+            &mut messages,
+            None,
+            &mut sink,
+            &mut McpRegistry::new(ctx.cwd, true, None).unwrap(),
+        )
+        .unwrap();
+        assert!(matches!(outcome, DriveOutcome::RunFinished(0)), "{outcome:?}");
+        let mut names: Vec<String> = llm.recorded_tools[0]
+            .iter()
+            .filter_map(|t| t.get("name").and_then(Value::as_str))
+            .map(String::from)
+            .collect();
+        names.sort();
+        assert_eq!(names.len(), 5, "exact cardinality five: {names:?}");
+        assert_eq!(
+            names,
+            vec!["glob", "grep", "list_dir", "read_file", "submit_plan"],
+            "the plan surface is exactly the five read-only tools + submit_plan"
+        );
+    }
+
+    /// Rejection sweep through the LOOP (T72 sweep-the-family doctrine): one
+    /// leg per excluded registered tool. Scripted tool_use of the excluded
+    /// name in plan mode → tool error naming the allowed set; the loop
+    /// CONTINUES (the scripted follow-up submit_plan runs); the tool never
+    /// executed (per-leg side-effect pin).
+    #[test]
+    fn plan_mode_rejects_every_excluded_tool_and_the_loop_continues() {
+        let excluded = [
+            "write_file",
+            "edit_file",
+            "bash",
+            "delegate",
+            "web_fetch",
+            "update_ledger",
+            "goal_complete",
+            "decision_log",
+        ];
+        let plan_text = "# Plan\n\nthe plan body\n";
+        for name in excluded {
+            let tmp = tempfile::tempdir().unwrap();
+            // edit_file leg: a target the scripted edit would change.
+            fs::write(tmp.path().join("target.txt"), "original").unwrap();
+            // delegate leg: a would-be child dir whose delegate.log proves
+            // whether a child was spawned.
+            let child_dir = tempfile::tempdir().unwrap();
+            let input = match name {
+                "write_file" => json!({"path": "escape.md", "content": "mutated"}),
+                "edit_file" => json!({"path": "target.txt", "old": "original", "new": "mutated"}),
+                "bash" => json!({"command": "touch pwned-by-bash.txt"}),
+                "delegate" => json!({
+                    "action": "launch",
+                    "cwd": child_dir.path().display().to_string(),
+                    "spec": child_dir.path().join("s.md").display().to_string(),
+                    "goal": "g",
+                    "model": "m"
+                }),
+                "web_fetch" => json!({"url": "http://127.0.0.1:1/x"}),
+                "update_ledger" => json!({"content": "MUTATED LEDGER"}),
+                "goal_complete" => json!({"summary": "claim done"}),
+                "decision_log" => json!({
+                    "class": "outcome", "subject": "T73", "inputs": "i",
+                    "options": "o", "choice": "landed-clean", "confidence": 0.5
+                }),
+                other => unreachable!("{other}"),
+            };
+            let out = tmp.path().join("plan.md");
+        let (_utx, urx) = mpsc::channel::<SlashUpdate>();
+        let controls = Controls::detached();
+        let ctx = ctx_for_plan(&tmp, Some(&out), &controls, &urx);
+            let mut knobs = knobs_with(5);
+            let mut llm = ScriptedLlm::new(vec![
+                tool_use_response(name, input),
+                tool_use_response("submit_plan", json!({"plan": plan_text})),
+            ]);
+            let mut gate = None;
+            let mut messages = Vec::new();
+            let mut sink = RecordingSink::default();
+            let outcome = drive_loop(
+                &ctx,
+                &mut knobs,
+                &mut llm,
+                &mut gate,
+                &mut messages,
+                None,
+                &mut sink,
+                &mut McpRegistry::new(ctx.cwd, true, None).unwrap(),
+            )
+            .unwrap();
+            assert!(
+                matches!(outcome, DriveOutcome::RunFinished(0)),
+                "{name}: the loop must continue past the rejection and exit on submit_plan, got {outcome:?}"
+            );
+            // The loop continued: BOTH scripted calls were consumed.
+            assert_eq!(llm.calls.len(), 2, "{name}: two model calls expected");
+            // The rejection error reached the transcript, naming the allowed set.
+            let transcript = fs::read_to_string(tmp.path().join(".chug/transcript.jsonl")).unwrap();
+            assert!(
+                transcript.contains("plan mode") && transcript.contains("submit_plan"),
+                "{name}: transcript must carry the plan-gate rejection naming the allowed set: {transcript}"
+            );
+            // The plan still landed (the follow-up submit_plan executed).
+            assert_eq!(
+                fs::read_to_string(tmp.path().join("plan.md")).unwrap(),
+                plan_text,
+                "{name}: leg must not disturb the plan exit"
+            );
+            // Per-leg side-effect pins: the excluded tool never executed.
+            match name {
+                "write_file" => assert!(!tmp.path().join("escape.md").exists()),
+                "edit_file" => assert_eq!(
+                    fs::read_to_string(tmp.path().join("target.txt")).unwrap(),
+                    "original"
+                ),
+                "bash" => assert!(!tmp.path().join("pwned-by-bash.txt").exists()),
+                "delegate" => assert!(!child_dir.path().join(".chug/delegate.log").exists()),
+                "web_fetch" => {} // the plan-gate message assert above is the leg
+                "update_ledger" => assert!(!tmp.path().join("LEDGER.md").exists()),
+                // goal_complete: rejected as a TOOL, not honored as the exit —
+                // the second scripted call proves the loop moved past it.
+                "goal_complete" => {}
+                "decision_log" => {
+                    assert!(!tmp.path().join(".chug/decisions.jsonl").exists())
+                }
+                other => unreachable!("{other}"),
+            }
+        }
+    }
+
+    /// submit_plan end-to-end with `--out`: the file's bytes are exactly the
+    /// plan string; exit 0; the events stream carries the plan-completed
+    /// outcome (a goal line, outcome accepted, with the plan as summary) —
+    /// the same machinery a run's goal acceptance uses.
+    #[test]
+    fn submit_plan_end_to_end_writes_out_file_and_records_the_outcome() {
+        let tmp = tempfile::tempdir().unwrap();
+        let out = tmp.path().join("scratch/plan.md");
+        let (_utx, urx) = mpsc::channel::<SlashUpdate>();
+        let controls = Controls::detached();
+        let ctx = ctx_for_plan(&tmp, Some(&out), &controls, &urx);
+        let mut knobs = knobs_with(5);
+        let plan_text = "# Plan\n\n1. add the flag\n2. pin the parse\n";
+        let mut llm = ScriptedLlm::new(vec![tool_use_response(
+            "submit_plan",
+            json!({"plan": plan_text}),
+        )]);
+        let mut gate = None;
+        let mut messages = Vec::new();
+        let mut sink = RecordingSink::default();
+        // run_plan's startup writes the run_start line before the loop
+        // (mirrored here so the events-stream assertions see a real segment).
+        eventlog::run_start(ctx.cwd, "plan", None, "scripted-model", 5, 20, 0, None);
+        let outcome = drive_loop(
+            &ctx,
+            &mut knobs,
+            &mut llm,
+            &mut gate,
+            &mut messages,
+            None,
+            &mut sink,
+            &mut McpRegistry::new(ctx.cwd, true, None).unwrap(),
+        )
+        .unwrap();
+        assert!(matches!(outcome, DriveOutcome::RunFinished(0)), "{outcome:?}");
+        // Verbatim bytes, parent dirs created.
+        assert_eq!(fs::read(&out).unwrap(), plan_text.as_bytes());
+        // The events stream carries the completion outcome.
+        let events = fs::read_to_string(tmp.path().join(".chug/events.jsonl")).unwrap();
+        let lines: Vec<Value> = events
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        assert_eq!(lines[0]["type"], "run_start");
+        assert_eq!(lines[0]["mode"], "plan", "run_start names the plan mode");
+        let goal = lines
+            .iter()
+            .find(|l| l["type"] == "goal" && l["outcome"] == "accepted")
+            .expect("events stream must record the plan-completed outcome");
+        assert_eq!(goal["summary"], plan_text, "the plan rides the goal event");
+        // And the submit_plan tool call itself is on the stream as ok.
+        assert!(
+            lines
+                .iter()
+                .any(|l| l["type"] == "tool_result" && l["name"] == "submit_plan" && l["ok"] == true),
+            "submit_plan tool_result missing: {events}"
+        );
+    }
+
+    /// stdout leg: without `--out`, the plan surfaces on stdout (via the
+    /// GoalAccepted summary the ConsoleSink prints) and NO file is created.
+    #[test]
+    fn submit_plan_without_out_prints_the_plan_and_creates_no_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (_utx, urx) = mpsc::channel::<SlashUpdate>();
+        let controls = Controls::detached();
+        let ctx = ctx_for_plan(&tmp, None, &controls, &urx);
+        let mut knobs = knobs_with(5);
+        let plan_text = "# Plan\n\nprinted, not written\n";
+        let mut llm = ScriptedLlm::new(vec![tool_use_response(
+            "submit_plan",
+            json!({"plan": plan_text}),
+        )]);
+        let mut gate = None;
+        let mut messages = Vec::new();
+        let out_buf: std::sync::Arc<std::sync::Mutex<Vec<u8>>> = Default::default();
+        let err_buf: std::sync::Arc<std::sync::Mutex<Vec<u8>>> = Default::default();
+        struct SharedWriter(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+        impl std::io::Write for SharedWriter {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(buf);
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let mut sink = crate::events::ConsoleSink::with_writers(
+            Box::new(SharedWriter(out_buf.clone())),
+            Box::new(SharedWriter(err_buf.clone())),
+            ctx.cwd.to_path_buf(),
+        );
+        let outcome = drive_loop(
+            &ctx,
+            &mut knobs,
+            &mut llm,
+            &mut gate,
+            &mut messages,
+            None,
+            &mut sink,
+            &mut McpRegistry::new(ctx.cwd, true, None).unwrap(),
+        )
+        .unwrap();
+        assert!(matches!(outcome, DriveOutcome::RunFinished(0)), "{outcome:?}");
+        let stdout = String::from_utf8(out_buf.lock().unwrap().clone()).unwrap();
+        assert!(
+            stdout.contains("printed, not written"),
+            "the plan must surface on stdout: {stdout:?}"
+        );
+        // No-file pin: nothing but .chug/ exists in the cwd.
+        let created: Vec<String> = fs::read_dir(tmp.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(created, vec![".chug"], "no plan file may be created: {created:?}");
+    }
+
+    /// Budget exhaustion without submit_plan uses the existing abort path
+    /// unchanged: nonzero exit, Aborted event naming model + budget.
+    #[test]
+    fn plan_mode_budget_death_uses_the_existing_abort_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (_utx, urx) = mpsc::channel::<SlashUpdate>();
+        let controls = Controls::detached();
+        let ctx = ctx_for_plan(&tmp, None, &controls, &urx);
+        let mut knobs = knobs_with(1);
+        let mut llm = ScriptedLlm::new(vec![text_only_response("still thinking…")]);
+        let mut gate = None;
+        let mut messages = Vec::new();
+        let mut sink = RecordingSink::default();
+        let outcome = drive_loop(
+            &ctx,
+            &mut knobs,
+            &mut llm,
+            &mut gate,
+            &mut messages,
+            None,
+            &mut sink,
+            &mut McpRegistry::new(ctx.cwd, true, None).unwrap(),
+        )
+        .unwrap();
+        assert!(matches!(outcome, DriveOutcome::RunFinished(1)), "{outcome:?}");
+        let events = fs::read_to_string(tmp.path().join(".chug/events.jsonl")).unwrap();
+        assert!(events.contains("\"type\":\"abort\""), "{events}");
+        assert!(events.contains("iteration budget exceeded"), "{events}");
+        assert!(events.contains("scripted-model"), "{events}");
+        assert!(events.contains("\"budget_kind\":\"iterations\""), "{events}");
+    }
+
+    /// Regression pin: the run-mode advertised tool list equals the exact
+    /// pre-change set — twelve tools today (T73 added plan mode's surface
+    /// without touching this list). If a rebase changes the set, update this
+    /// pin in the same diff and say so.
+    #[test]
+    fn run_mode_advertised_tool_list_is_exactly_the_pre_change_set() {
+        let schemas = crate::tools::tool_schemas();
+        let mut names: Vec<&str> = schemas
+            .iter()
+            .filter_map(|t| t.get("name").and_then(Value::as_str))
+            .collect();
+        names.sort_unstable();
+        let mut expected = [
+            "read_file",
+            "write_file",
+            "edit_file",
+            "bash",
+            "grep",
+            "glob",
+            "list_dir",
+            "update_ledger",
+            "goal_complete",
+            "delegate",
+            "web_fetch",
+            "decision_log",
+        ];
+        expected.sort_unstable();
+        assert_eq!(names, expected, "run-mode tool list changed — update this pin in the same diff and say so");
+    }
+
+    /// submit_plan absence pin: the run-mode and chat-mode advertised tool
+    /// lists do NOT contain submit_plan; the plan-mode list does.
+    /// (One test, three assertions.)
+    #[test]
+    fn submit_plan_is_absent_from_run_and_chat_lists_present_in_plan() {
+        // Run surface: the builtin registry (drive_loop extends it with MCP
+        // only, never submit_plan).
+        let run_names: Vec<String> = crate::tools::tool_schemas()
+            .iter()
+            .filter_map(|t| t.get("name").and_then(Value::as_str))
+            .map(String::from)
+            .collect();
+        assert!(
+            !run_names.contains(&"submit_plan".to_string()),
+            "run-mode list must not advertise submit_plan: {run_names:?}"
+        );
+        // Chat surface: drive a real run_turn (the chat path) with a
+        // tool-recording LLM and inspect the advertised array.
+        let tmp = tempfile::tempdir().unwrap();
+        let mut client = ToolRecordingLlm::new(vec![text_only_response("hi")]);
+        let mut messages = vec![Message::user(vec![ContentBlock::text_block(
+            "hello".to_string(),
+        )])];
+        let mut gate = None;
+        run_turn(
+            tmp.path(),
+            &mut client,
+            &mut gate,
+            &mut messages,
+            &Controls::detached(),
+            &mpsc::channel().1,
+            &mut knobs_with(5),
+            Duration::from_secs(tools::BASH_TIMEOUT_SECS),
+            &mut McpRegistry::new(tmp.path(), true, None).unwrap(),
+            None,
+            &observ::Sink::Noop,
+            &mut RecordingSink::default(),
+        )
+        .unwrap();
+        let chat_names: Vec<String> = client.recorded_tools[0]
+            .iter()
+            .filter_map(|t| t.get("name").and_then(Value::as_str))
+            .map(String::from)
+            .collect();
+        assert!(
+            !chat_names.contains(&"submit_plan".to_string()),
+            "chat-mode list must not advertise submit_plan: {chat_names:?}"
+        );
+        // Plan surface: the five, submit_plan included.
+        let plan_names: Vec<String> = crate::plan::tool_schemas()
+            .iter()
+            .filter_map(|t| t.get("name").and_then(Value::as_str))
+            .map(String::from)
+            .collect();
+        assert!(
+            plan_names.contains(&"submit_plan".to_string()),
+            "plan-mode list must advertise submit_plan: {plan_names:?}"
+        );
     }
 }
