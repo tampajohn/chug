@@ -389,15 +389,27 @@ pub struct PlanConfig {
 /// writes LEDGER.md), no MCP, no risk gate (there is no bash), and a
 /// `run_start` event naming mode "plan".
 pub fn run_plan(cfg: PlanConfig, sink: &mut dyn EventSink) -> anyhow::Result<i32> {
-    let client = Client::new(&cfg.model)?;
-    run_plan_loop(cfg, client, sink, observ::global())
+    let mut client = Client::new(&cfg.model)?;
+    // Plan mode never initializes MCP servers: the registry is the empty one
+    // (mcp_off), and drive_loop's plan branch never extends the advertised
+    // five-tool list with it. The registry rides the signature (like `&mut
+    // dyn Llm`) so tests can drive the REAL loop with a non-empty registry
+    // and pin the no-extension guarantee at the loop level.
+    let mcp = McpRegistry::new(&cfg.cwd, true, None)?;
+    run_plan_loop(cfg, &mut client, sink, observ::global(), mcp)
 }
 
+/// The plan loop proper. Drivable in tests with a [`ScriptedLlm`] (the
+/// `run_turn` seam pattern): everything a real plan session does — driver
+/// lock, fresh rotation, the `run_start` event naming mode "plan", budget
+/// enforcement, the submit_plan exit — except the concrete `Client` and the
+/// (prod: empty) MCP registry, which arrive as parameters.
 fn run_plan_loop(
     cfg: PlanConfig,
-    mut client: Client,
+    client: &mut dyn Llm,
     sink: &mut dyn EventSink,
     obs: &observ::Sink,
+    mut mcp: McpRegistry,
 ) -> anyhow::Result<i32> {
     // Same same-cwd mutual exclusion as a run: the session appends to the
     // shared transcript/events files, so a concurrent chug in this cwd must
@@ -479,9 +491,6 @@ fn run_plan_loop(
     };
     let (_update_tx, update_rx) = mpsc::channel::<SlashUpdate>();
     let controls = Controls::detached();
-    // No MCP in plan mode (the five-tool surface is exactly the plan list);
-    // the registry stays empty and drive_loop's plan branch never extends it.
-    let mut mcp = McpRegistry::new(&cfg.cwd, true, None)?;
     let mut gate: Option<RiskGate> = None;
     let ctx = LoopCtx {
         cwd: &cfg.cwd,
@@ -496,7 +505,7 @@ fn run_plan_loop(
     match drive_loop(
         &ctx,
         &mut knobs,
-        &mut client,
+        client,
         &mut gate,
         &mut messages,
         initial_spec,
@@ -4007,51 +4016,299 @@ for line in sys.stdin:
         }
     }
 
-    /// submit_plan end-to-end with `--out`: the file's bytes are exactly the
-    /// plan string; exit 0; the events stream carries the plan-completed
-    /// outcome (a goal line, outcome accepted, with the plan as summary) —
-    /// the same machinery a run's goal acceptance uses.
+    /// Helpers for the LOOP-level plan tests: these drive the REAL
+    /// `run_plan_loop` (driver lock, fresh rotation, the loop's own
+    /// `run_start` event, budget enforcement, the submit_plan exit) with a
+    /// scripted `&mut dyn Llm` — the run_turn seam pattern — so the plan
+    /// startup/exit guarantees are pinned on the lines the loop actually
+    /// executes, not on hand-written mirrors.
+    fn plan_cfg(tmp: &tempfile::TempDir, out: Option<PathBuf>, max_iters: u32) -> PlanConfig {
+        PlanConfig {
+            cwd: tmp.path().to_path_buf(),
+            spec_path: None,
+            goal: "draft a plan".to_string(),
+            model: "scripted-model".to_string(),
+            max_iters,
+            max_minutes: 20,
+            max_tokens: 0,
+            out_path: out,
+        }
+    }
+
+    fn empty_plan_registry(tmp: &tempfile::TempDir) -> McpRegistry {
+        // The prod shape: plan mode never initializes MCP servers.
+        McpRegistry::new(tmp.path(), true, None).unwrap()
+    }
+
+    fn events_lines(cwd: &Path) -> Vec<Value> {
+        fs::read_to_string(cwd.join(".chug/events.jsonl"))
+            .unwrap()
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect()
+    }
+
+    /// (a) The run_start event the REAL loop emits carries mode "plan" —
+    /// read from the events.jsonl the loop itself wrote. The pre-fix tests
+    /// hand-wrote this line, so a mode drift inside run_plan_loop was
+    /// invisible; here the loop's own line is the pin.
+    #[test]
+    fn plan_loop_run_start_event_names_the_plan_mode() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut llm = ScriptedLlm::new(vec![tool_use_response(
+            "submit_plan",
+            json!({"plan": "# Plan\n\nloop-level run_start\n"}),
+        )]);
+        let mut sink = RecordingSink::default();
+        let code = run_plan_loop(
+            plan_cfg(&tmp, None, 5),
+            &mut llm,
+            &mut sink,
+            &observ::Sink::Noop,
+            empty_plan_registry(&tmp),
+        )
+        .unwrap();
+        assert_eq!(code, 0);
+        let lines = events_lines(tmp.path());
+        assert_eq!(lines[0]["type"], "run_start", "{lines:?}");
+        assert_eq!(
+            lines[0]["mode"], "plan",
+            "the loop's own run_start must name mode \"plan\""
+        );
+    }
+
+    /// (b, ensure_seeded mutant) A plan loop run in a cwd with NO ledger
+    /// leaves it absent: plan mode never seeds LEDGER.md (the run path's
+    /// `ledger::ensure_seeded` is deliberately not in the plan startup).
+    #[test]
+    fn plan_loop_run_leaves_an_absent_ledger_absent() {
+        let tmp = tempfile::tempdir().unwrap();
+        assert!(!tmp.path().join("LEDGER.md").exists());
+        let mut llm = ScriptedLlm::new(vec![tool_use_response(
+            "submit_plan",
+            json!({"plan": "# Plan\n\nno ledger writes\n"}),
+        )]);
+        let mut sink = RecordingSink::default();
+        let code = run_plan_loop(
+            plan_cfg(&tmp, None, 5),
+            &mut llm,
+            &mut sink,
+            &observ::Sink::Noop,
+            empty_plan_registry(&tmp),
+        )
+        .unwrap();
+        assert_eq!(code, 0);
+        assert!(
+            !tmp.path().join("LEDGER.md").exists(),
+            "a plan run must never seed LEDGER.md"
+        );
+    }
+
+    /// (b, archive_stale mutant) A plan loop run leaves a PRE-EXISTING
+    /// ledger and TODO.md byte-untouched: no archive rotation into .chug,
+    /// no seeding, no rewrite. The run path archives any non-seed ledger at
+    /// startup; plan mode must not.
+    #[test]
+    fn plan_loop_run_leaves_preexisting_ledger_and_todo_bytes_untouched() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ledger = "# Ledger\n\n## Done\n- custom content\n";
+        let todo = "# TODO\n\n| T1 | something | pending |\n";
+        fs::write(tmp.path().join("LEDGER.md"), ledger).unwrap();
+        fs::write(tmp.path().join("TODO.md"), todo).unwrap();
+        let mut llm = ScriptedLlm::new(vec![tool_use_response(
+            "submit_plan",
+            json!({"plan": "# Plan\n\nread-only bookkeeping\n"}),
+        )]);
+        let mut sink = RecordingSink::default();
+        let code = run_plan_loop(
+            plan_cfg(&tmp, None, 5),
+            &mut llm,
+            &mut sink,
+            &observ::Sink::Noop,
+            empty_plan_registry(&tmp),
+        )
+        .unwrap();
+        assert_eq!(code, 0);
+        assert_eq!(
+            fs::read_to_string(tmp.path().join("LEDGER.md")).unwrap(),
+            ledger,
+            "a plan run must never touch LEDGER.md"
+        );
+        assert_eq!(
+            fs::read_to_string(tmp.path().join("TODO.md")).unwrap(),
+            todo,
+            "a plan run must never touch TODO.md"
+        );
+        let archived: Vec<String> = fs::read_dir(tmp.path().join(".chug"))
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|n| n.starts_with("LEDGER"))
+            .collect();
+        assert!(
+            archived.is_empty(),
+            "a plan run must never archive the ledger: {archived:?}"
+        );
+    }
+
+    /// (c) The tool list the REAL loop sends to the API is exactly the five
+    /// plan tools EVEN WITH a live non-empty MCP registry present — the
+    /// plan branch must never extend the advertised list with mcp schemas
+    /// (an empty prod registry would make that extension invisible).
+    #[test]
+    fn plan_loop_advertises_exactly_five_tools_with_a_live_mcp_registry() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_echo_server(tmp.path());
+        let mcp = McpRegistry::new(tmp.path(), false, None).expect("live fake registry");
+        assert!(
+            !mcp.tool_schemas().is_empty(),
+            "leg premise: the registry must be non-empty (fake server must be up)"
+        );
+        let mut llm = ToolRecordingLlm::new(vec![tool_use_response(
+            "submit_plan",
+            json!({"plan": "# Plan\n\nfive tools only\n"}),
+        )]);
+        let mut sink = RecordingSink::default();
+        let code = run_plan_loop(
+            plan_cfg(&tmp, None, 5),
+            &mut llm,
+            &mut sink,
+            &observ::Sink::Noop,
+            mcp,
+        )
+        .unwrap();
+        assert_eq!(code, 0);
+        let mut names: Vec<String> = llm.recorded_tools[0]
+            .iter()
+            .filter_map(|t| t.get("name").and_then(Value::as_str))
+            .map(String::from)
+            .collect();
+        names.sort();
+        assert_eq!(
+            names,
+            vec!["glob", "grep", "list_dir", "read_file", "submit_plan"],
+            "the live MCP schemas must never reach a plan-mode API call: {names:?}"
+        );
+    }
+
+    /// (d) A REJECTED submit_plan keeps the loop UP — no goal/accepted
+    /// event, no exit 0, the conversation continues to the next model call.
+    /// Two legs: an empty plan, and a sandbox-escaping --out. Killing the
+    /// is_error-guard mutant: without the guard a rejected submit_plan
+    /// latches, exits 0, and records a goal/accepted with a bogus summary.
+    #[test]
+    fn plan_loop_rejected_submit_plan_keeps_the_loop_up() {
+        let plan_text = "# Plan\n\nthe real plan\n";
+        let legs: Vec<(&str, Value, Option<PathBuf>, String)> = vec![
+            (
+                "empty plan",
+                json!({"plan": ""}),
+                None,
+                "must not be empty".to_string(),
+            ),
+            (
+                "sandbox escape",
+                json!({"plan": plan_text}),
+                Some(PathBuf::from("../plan-escape.md")),
+                "escapes the cwd sandbox".to_string(),
+            ),
+        ];
+        for (leg, input, out, err_needle) in legs {
+            let tmp = tempfile::tempdir().unwrap();
+            let mut llm = ScriptedLlm::new(vec![
+                tool_use_response("submit_plan", input),
+                // The conversation continues: the model gets the tool error
+                // and answers again.
+                text_only_response("let me fix that"),
+            ]);
+            let mut sink = RecordingSink::default();
+            let code = run_plan_loop(
+                plan_cfg(&tmp, out.clone(), 2),
+                &mut llm,
+                &mut sink,
+                &observ::Sink::Noop,
+                empty_plan_registry(&tmp),
+            )
+            .unwrap();
+            // NOT exit 0: with the rejection, the run dies on the iteration
+            // budget via the existing abort path.
+            assert_ne!(
+                code, 0,
+                "{leg}: a rejected submit_plan must not exit 0 (got {code})"
+            );
+            // The conversation continued past the rejection: the model was
+            // called again after the tool error.
+            assert_eq!(llm.calls.len(), 2, "{leg}: the loop must continue");
+            // The rejection reached the transcript with its specific wording.
+            let transcript =
+                fs::read_to_string(tmp.path().join(".chug/transcript.jsonl")).unwrap();
+            assert!(
+                transcript.contains(&err_needle),
+                "{leg}: rejection must reach the transcript: {err_needle}"
+            );
+            // The events stream has NO goal/accepted — the rejection is not
+            // a completion — and does record the abort.
+            let lines = events_lines(tmp.path());
+            assert!(
+                !lines
+                    .iter()
+                    .any(|l| l["type"] == "goal" && l["outcome"] == "accepted"),
+                "{leg}: a rejected submit_plan must not record goal/accepted: {lines:?}"
+            );
+            assert!(
+                lines
+                    .iter()
+                    .any(|l| l["type"] == "abort" && l["reason"] == "iteration budget exceeded"),
+                "{leg}: the run must end through the existing abort path: {lines:?}"
+            );
+            // And nothing was written: not inside cwd…
+            assert!(
+                !tmp.path().join("plan.md").exists()
+                    && !tmp.path().join("plan-escape.md").exists(),
+                "{leg}: no plan file may be written on a rejected submit"
+            );
+            // … nor outside it (the ../ traversal stays lexical-only).
+            if out.is_some() {
+                assert!(
+                    !tmp.path().parent().unwrap().join("plan-escape.md").exists(),
+                    "{leg}: the plan must never land outside the sandbox"
+                );
+            }
+        }
+    }
+
+    /// submit_plan end-to-end through the REAL loop with `--out`: the file's
+    /// bytes are exactly the plan string; exit 0; the loop's own events
+    /// stream carries the plan-completed outcome (run_start mode "plan", a
+    /// goal line accepted with the plan as summary) — the same machinery a
+    /// run's goal acceptance uses.
     #[test]
     fn submit_plan_end_to_end_writes_out_file_and_records_the_outcome() {
         let tmp = tempfile::tempdir().unwrap();
         let out = tmp.path().join("scratch/plan.md");
-        let (_utx, urx) = mpsc::channel::<SlashUpdate>();
-        let controls = Controls::detached();
-        let ctx = ctx_for_plan(&tmp, Some(&out), &controls, &urx);
-        let mut knobs = knobs_with(5);
         let plan_text = "# Plan\n\n1. add the flag\n2. pin the parse\n";
         let mut llm = ScriptedLlm::new(vec![tool_use_response(
             "submit_plan",
             json!({"plan": plan_text}),
         )]);
-        let mut gate = None;
-        let mut messages = Vec::new();
         let mut sink = RecordingSink::default();
-        // run_plan's startup writes the run_start line before the loop
-        // (mirrored here so the events-stream assertions see a real segment).
-        eventlog::run_start(ctx.cwd, "plan", None, "scripted-model", 5, 20, 0, None);
-        let outcome = drive_loop(
-            &ctx,
-            &mut knobs,
+        let code = run_plan_loop(
+            plan_cfg(&tmp, Some(out.clone()), 5),
             &mut llm,
-            &mut gate,
-            &mut messages,
-            None,
             &mut sink,
-            &mut McpRegistry::new(ctx.cwd, true, None).unwrap(),
+            &observ::Sink::Noop,
+            empty_plan_registry(&tmp),
         )
         .unwrap();
-        assert!(matches!(outcome, DriveOutcome::RunFinished(0)), "{outcome:?}");
+        assert_eq!(code, 0, "an accepted submit_plan exits 0");
         // Verbatim bytes, parent dirs created.
         assert_eq!(fs::read(&out).unwrap(), plan_text.as_bytes());
         // The events stream carries the completion outcome.
-        let events = fs::read_to_string(tmp.path().join(".chug/events.jsonl")).unwrap();
-        let lines: Vec<Value> = events
-            .lines()
-            .map(|l| serde_json::from_str(l).unwrap())
-            .collect();
+        let lines = events_lines(tmp.path());
         assert_eq!(lines[0]["type"], "run_start");
-        assert_eq!(lines[0]["mode"], "plan", "run_start names the plan mode");
+        assert_eq!(
+            lines[0]["mode"], "plan",
+            "the loop's own run_start names the plan mode"
+        );
         let goal = lines
             .iter()
             .find(|l| l["type"] == "goal" && l["outcome"] == "accepted")
@@ -4062,7 +4319,7 @@ for line in sys.stdin:
             lines
                 .iter()
                 .any(|l| l["type"] == "tool_result" && l["name"] == "submit_plan" && l["ok"] == true),
-            "submit_plan tool_result missing: {events}"
+            "submit_plan tool_result missing: {lines:?}"
         );
     }
 
