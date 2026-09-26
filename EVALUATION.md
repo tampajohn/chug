@@ -223,7 +223,7 @@ phases 2–3 deferral stands.
 
 ## Outcomes (filled at cycle wrap — LOOP-SPEC Phase 3)
 
-### Cycle 37 (2026-09-26, ~13:22– EDT) — freshness-skip; T73 recovered mid-arc + landed (merge 87fe53f); I1 RESOLVED
+### Cycle 37 (2026-09-26, ~13:22–18:5x EDT) — freshness-skip; T73 recovered mid-arc + landed (merge 87fe53f); T76 MID-ARC (fix-up-2 in flight); I1 RESOLVED
 
 - **T73 landed** (`chug plan` read-only planning mode, FEATURES.md F2
   phase 1; merge `87fe53f`, row flip this cycle). Recovery arc per the
@@ -265,8 +265,46 @@ phases 2–3 deferral stands.
   live evidence the doctrine shortens the vacuous-class arc. Cycle-36
   wrap artifact (EVALUATION.md Outcomes) committed by cycle 37 at open
   (7de118a) — the T34 per-item rule kept the mid-arc death lossless.
-- **T76 (pri 1, tgrep) next; T77 (pri 2); T75 (pri 3 doctrine, runs
-  alone, REQUIRED kimi).**
+- **T76 MID-ARC at budget wrap** (tgrep ranked context retrieval, pri 1
+  operator-directed; branch loop-t76 in /tmp/chug-loop-t76 at `bee5b2e`
+  — work safe, NOT merged). Impl `9271fc2` (glm 50/50 abort → T63
+  EIGHTH resume accepted 26/50 — 8/8) + orchestrator review-fix
+  `fc38af8` + fix-up round 1 `bee5b2e` (glm accepted 41/50: merge
+  radius 2W+1, gap matrix d1..d8 + transitive, basename-fixture rename
+  M1 RED, mod_name pub-strip, size-cap consistency; 12 mutants
+  RED-proven). Two kimi FAILs, each one-class and each closed at the
+  seam: round 1 (merge-radius window contradiction + vacuous
+  basename-boost survivor, 6 mutants 5 RED — d1790446259-13 /
+  d1790446807-14); round 2 (symbols-mode declaration-dropping: file-style
+  `mod tests;` eats subsequent decls, `contains("test")` overmatches
+  `mod latest {`, multi-qualifier fns dropped; 12 legs 10 RED, 2
+  non-blocking survivors; round-1 classes CLOSED, search machinery
+  APPROVED — d1790448395-15). **GLM fix-up round 2 IN FLIGHT pid 62942**
+  (symbols heuristics sweep) — the full recovery recipe is on the T76
+  row (collect → gates → kimi round 3 → harvest → merge → backfills).
+  Orchestrator gates at bee5b2e: 614/614 + clippy; real-repo perf probe
+  50–76ms vs the 100ms bar. Second consecutive item where mutation
+  testing caught a coverage class invisible to 600+ green tests — and
+  the SECOND class (symbols heuristics) only surfaced after the first
+  was pinned: layered vacuousness is real, budget validation rounds
+  accordingly (the T72 sweep closes one class per round, not the whole
+  item).
+- **Cycle-level notes:** T63 resume 8/8 (T76 impl). T44 overlap #5 NOT
+  exercised (T76↔T78 README intersection + T78 doctrine-alone rule both
+  blocked it; queue ran strictly serial). Two decision_log text-field
+  paste slips by the orchestrator (one duplicated goal paragraph —
+  harmless redundancy in a resume; one garbled inputs splice in
+  d1790445760-12) — slow down on long fields; the corpus is training
+  data. Operator mid-cycle additions absorbed cleanly (T78/T80 filed
+  with ready specs; operator's own commit captured the T73 row flip —
+  content verified correct, attribution quirk only). driver.rs now
+  ~4500 lines — the pre-declared extraction trip line is HERE; next
+  eval should weigh it against an empty feature queue.
+- **T78 (pri 1 doctrine, release builds — spec ready, runs alone,
+  REQUIRED kimi) next; then T76 recovery is interleaved per its recipe
+  (in-flight fix-up may already be done); T80 (pri 2 doctrine),
+  T77 (pri 2), T75 (pri 3 doctrine) after. All specs ready; a cold
+  cycle 38 needs zero human words.**
 
 ### Cycle 36 (2026-09-26, ~11:52– EDT) — MANDATORY fresh eval (F2 SPLIT → T73/T74/T75 filed); T74 landed; T73/T75 next
 
