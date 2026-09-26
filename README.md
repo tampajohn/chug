@@ -135,7 +135,9 @@ driver (120s default; `--bash-timeout` / `CHUG_BASH_TIMEOUT` overrides).
 `delegate` — launch or observe a bounded child `chug run` (e.g. in a git
 worktree). Two actions: **`launch`** spawns a detached child (`--spec`,
 `--goal`, `--model` required; `--max-iters`/`--max-minutes` optional,
-defaults 40/35) against an absolute `cwd` you prepared, appends its
+defaults 40/35; `--max-tokens` optional — the child's cumulative
+input+output token ceiling, omitted = no token ceiling) against an
+absolute `cwd` you prepared, appends its
 stdout+stderr to `<cwd>/.chug/delegate.log`, and returns immediately with
 the child `pid` and the log/events paths — it never waits on the child
 (own process group, SIGHUP ignored, `nohup … &` parity). **`status`**

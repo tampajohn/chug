@@ -153,7 +153,7 @@ pub fn tool_schemas() -> Vec<Value> {
         }),
         json!({
             "name": "delegate",
-            "description": "Launch or observe a bounded child `chug run` (e.g. in a worktree you created). action=launch: spawns a detached child with its working directory at `cwd` (absolute), spec/goal/model required, max_iters/max_minutes optional (defaults 40/35); returns immediately with the child pid and the log/events paths — it never waits on the child. action=status: reports the child's liveness (when you pass the `pid` from launch), a summary of its .chug/events.jsonl (state, last_iteration, budget-low/goal/abort flags), and the tail of its console log. Never blocks: launch returns at spawn, status reads tails only. Optionally pass `wait_secs` on status (0/absent = instant, max 600) to block up to that many seconds, returning early when the child's events state changes or its liveness flips to dead.",
+            "description": "Launch or observe a bounded child `chug run` (e.g. in a worktree you created). action=launch: spawns a detached child with its working directory at `cwd` (absolute), spec/goal/model required, max_iters/max_minutes optional (defaults 40/35), max_tokens optional (child token ceiling; omitted = unlimited); returns immediately with the child pid and the log/events paths — it never waits on the child. action=status: reports the child's liveness (when you pass the `pid` from launch), a summary of its .chug/events.jsonl (state, last_iteration, budget-low/goal/abort flags), and the tail of its console log. Never blocks: launch returns at spawn, status reads tails only. Optionally pass `wait_secs` on status (0/absent = instant, max 600) to block up to that many seconds, returning early when the child's events state changes or its liveness flips to dead.",
             "input_schema": {
                 "type": "object",
                 "properties": {
@@ -164,6 +164,7 @@ pub fn tool_schemas() -> Vec<Value> {
                     "model": {"type": "string", "description": "Model id the child runs with (launch only, required — routing stays your explicit choice)"},
                     "max_iters": {"type": "integer", "description": "Child iteration budget (launch only; default 40)"},
                     "max_minutes": {"type": "integer", "description": "Child wall-clock budget in minutes (launch only; default 35)"},
+                    "max_tokens": {"type": "integer", "minimum": 1, "description": "Child token budget: cumulative input+output tokens across the child run (launch only; omitted = no token ceiling)"},
                     "pid": {"type": "integer", "description": "The pid launch returned (status only, optional; omit → liveness is reported unknown)"},
                     "wait_secs": {"type": "integer", "minimum": 0, "maximum": 600, "description": "Seconds to block on status waiting for a child state change, a liveness flip to dead, or this deadline (0/absent = instant; status only — launch rejects it)"}
                 },
@@ -604,6 +605,7 @@ fn update_ledger(ctx: &ToolCtx, input: &Value) -> anyhow::Result<ToolResult> {
 ///
 /// Two actions. `launch` spawns a detached child
 /// (`<binary> run --spec … --goal … --model … --max-iters … --max-minutes …`,
+/// plus `--max-tokens …` only when the caller passes one — T39/T15 parity,
 /// child cwd = the caller's `cwd`) and returns as soon as `spawn()` succeeds.
 /// The caller supplied the worktree, so worktree creation, building,
 /// harvest/merge, and killing the child stay with the caller's bash — this
@@ -666,6 +668,61 @@ fn delegate_spec(input: &Value) -> anyhow::Result<PathBuf> {
     Ok(spec)
 }
 
+/// The child's argv, in order, shared by `launch` and the tests that pin it.
+/// Pure, so the exact flag list is assertable without spawning a process.
+///
+/// T39: `max_tokens` is the one optional tail — `Some(n)` appends
+/// `--max-tokens n` (T15 parity for children), `None` produces the
+/// pre-T39 argv byte-for-byte (no flag), so children keep their current
+/// no-token-ceiling behavior unless the orchestrator opts in.
+fn delegate_child_argv(
+    spec: &Path,
+    goal: &str,
+    model: &str,
+    max_iters: u64,
+    max_minutes: u64,
+    max_tokens: Option<u64>,
+) -> Vec<OsString> {
+    let mut argv = vec![
+        OsString::from("run"),
+        OsString::from("--spec"),
+        spec.as_os_str().to_os_string(),
+        OsString::from("--goal"),
+        OsString::from(goal),
+        OsString::from("--model"),
+        OsString::from(model),
+        OsString::from("--max-iters"),
+        OsString::from(max_iters.to_string()),
+        OsString::from("--max-minutes"),
+        OsString::from(max_minutes.to_string()),
+    ];
+    if let Some(tokens) = max_tokens {
+        argv.push(OsString::from("--max-tokens"));
+        argv.push(OsString::from(tokens.to_string()));
+    }
+    argv
+}
+
+/// T39: parse the optional launch-only `max_tokens` (the child's cumulative
+/// input+output token budget, `chug run --max-tokens` / T15 semantics).
+/// Absent → `None` (child runs with no token ceiling, exactly as before).
+/// Non-integer → tool error; `< 1` → tool error naming the constraint, so
+/// zero/negative never reaches the child (0 would mean "unlimited" on the
+/// child's CLI — silently launching an unbounded child when the caller asked
+/// for a ceiling of 0 is the failure this guards).
+fn delegate_max_tokens(input: &Value) -> anyhow::Result<Option<u64>> {
+    let Some(value) = input.get("max_tokens") else {
+        return Ok(None);
+    };
+    let n = value.as_i64().ok_or_else(|| {
+        anyhow!("delegate: `max_tokens` must be an integer token count (at least 1)")
+    })?;
+    if n < 1 {
+        bail!("delegate: `max_tokens` must be at least 1, got {n}");
+    }
+    Ok(Some(n as u64))
+}
+
 /// Spawn a detached `chug run` child and return immediately. Never waits on
 /// the child — no sleeps, no retries, no waiting anywhere in this function.
 fn delegate_launch(input: &Value) -> anyhow::Result<ToolResult> {
@@ -681,6 +738,7 @@ fn delegate_launch(input: &Value) -> anyhow::Result<ToolResult> {
         .get("max_minutes")
         .and_then(Value::as_u64)
         .unwrap_or(DELEGATE_DEFAULT_MAX_MINUTES);
+    let max_tokens = delegate_max_tokens(input)?;
 
     // Binary resolution: the test seam wins, else the running chug itself —
     // children run the same binary, exactly like today's template line does.
@@ -695,19 +753,16 @@ fn delegate_launch(input: &Value) -> anyhow::Result<ToolResult> {
     let log_path = chug_dir.join("delegate.log");
 
     let mut cmd = Command::new(&binary);
-    cmd.arg("run")
-        .arg("--spec")
-        .arg(&spec)
-        .arg("--goal")
-        .arg(goal)
-        .arg("--model")
-        .arg(model)
-        .arg("--max-iters")
-        .arg(max_iters.to_string())
-        .arg("--max-minutes")
-        .arg(max_minutes.to_string())
-        .current_dir(&cwd)
-        .stdin(Stdio::null())
+    cmd.args(delegate_child_argv(
+        &spec,
+        goal,
+        model,
+        max_iters,
+        max_minutes,
+        max_tokens,
+    ))
+    .current_dir(&cwd)
+    .stdin(Stdio::null())
         // stdout AND stderr append to one log file.
         .stdout(Stdio::from(open_append(&log_path)?))
         .stderr(Stdio::from(open_append(&log_path)?));
@@ -736,9 +791,15 @@ fn delegate_launch(input: &Value) -> anyhow::Result<ToolResult> {
     // never waited on or reaped here.
     drop(child);
 
+    // T39: the configured token budget is echoed back only when configured —
+    // absent, the return text is byte-identical to pre-T39.
+    let tokens_note = match max_tokens {
+        Some(tokens) => format!(" max_tokens: {tokens}"),
+        None => String::new(),
+    };
     Ok(ToolResult {
         content: format!(
-            "launched: pid {pid}\nlog: {}\nevents: {}\nmodel: {model} max_iters: {max_iters} max_minutes: {max_minutes}",
+            "launched: pid {pid}\nlog: {}\nevents: {}\nmodel: {model} max_iters: {max_iters} max_minutes: {max_minutes}{tokens_note}",
             log_path.display(),
             chug_dir.join("events.jsonl").display(),
         ),
@@ -2824,6 +2885,336 @@ log_tail: (none)";
             "error must name the binary path: {}",
             result.content
         );
+    }
+
+    // ---- T39: delegate launch optional max_tokens passthrough ----
+
+    /// T39: the pure argv builder — with a token budget the flag pair is
+    /// appended at the tail (after `--max-minutes`); without one the argv is
+    /// byte-identical to pre-T39, pinned as the whole list.
+    #[test]
+    fn delegate_child_argv_appends_max_tokens_only_when_present() {
+        let spec = PathBuf::from("/tmp/spec.md");
+        let base = vec![
+            OsString::from("run"),
+            OsString::from("--spec"),
+            OsString::from("/tmp/spec.md"),
+            OsString::from("--goal"),
+            OsString::from("g"),
+            OsString::from("--model"),
+            OsString::from("m"),
+            OsString::from("--max-iters"),
+            OsString::from("40"),
+            OsString::from("--max-minutes"),
+            OsString::from("35"),
+        ];
+        // Absent: byte-identical to pre-T39 — no `--max-tokens` anywhere.
+        assert_eq!(
+            delegate_child_argv(&spec, "g", "m", 40, 35, None),
+            base,
+            "absent max_tokens must not change the child argv"
+        );
+        // T15 parity: the flag pair lands at the tail, verbatim.
+        let mut with = base.clone();
+        with.push(OsString::from("--max-tokens"));
+        with.push(OsString::from("250000"));
+        assert_eq!(
+            delegate_child_argv(&spec, "g", "m", 40, 35, Some(250_000)),
+            with
+        );
+        // Boundary: 1 is accepted and passes through verbatim.
+        let mut one = base;
+        one.push(OsString::from("--max-tokens"));
+        one.push(OsString::from("1"));
+        assert_eq!(delegate_child_argv(&spec, "g", "m", 40, 35, Some(1)), one);
+    }
+
+    /// T39: the parse — absent → `None`; valid → `Some`; `< 1` (0, negative)
+    /// → error naming the constraint; non-integer (string, fractional) →
+    /// error naming the integer requirement. Zero never parses into `Some(0)`
+    /// (which the child CLI would read as "unlimited").
+    #[test]
+    fn delegate_max_tokens_parse_absent_valid_and_rejects() {
+        assert_eq!(delegate_max_tokens(&json!({})).unwrap(), None);
+        assert_eq!(
+            delegate_max_tokens(&json!({"max_tokens": 250_000})).unwrap(),
+            Some(250_000)
+        );
+        assert_eq!(delegate_max_tokens(&json!({"max_tokens": 1})).unwrap(), Some(1));
+        for bad in [json!(0), json!(-5)] {
+            let err = delegate_max_tokens(&json!({"max_tokens": bad}))
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("at least 1"), "{bad} → {err}");
+        }
+        for bad in [json!("250000"), json!(250000.5)] {
+            let err = delegate_max_tokens(&json!({"max_tokens": bad}))
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("integer"), "{bad} → {err}");
+        }
+    }
+
+    /// A stub child that records the argv it was invoked with, one argument
+    /// per line, into `argv.txt` in its cwd (the child dir), then sleeps so
+    /// the pid-group kill cleans it up.
+    #[cfg(unix)]
+    fn write_argv_stub(dir: &Path) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let stub = dir.join("chug-argv-stub.sh");
+        fs::write(
+            &stub,
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" > argv.txt\nsleep 60\n",
+        )
+        .unwrap();
+        fs::set_permissions(&stub, fs::Permissions::from_mode(0o755)).unwrap();
+        stub
+    }
+
+    /// The stub's argv dump, polled for (launch returns at spawn; the stub
+    /// writes the dump within milliseconds of exec).
+    #[cfg(unix)]
+    fn wait_for_argv_dump(child_dir: &Path) -> Vec<String> {
+        let path = child_dir.join("argv.txt");
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            if let Ok(text) = fs::read_to_string(&path) {
+                return text.lines().map(str::to_string).collect();
+            }
+            assert!(
+                Instant::now() < deadline,
+                "stub never wrote argv.txt in {}",
+                child_dir.display()
+            );
+            thread::sleep(Duration::from_millis(25));
+        }
+    }
+
+    #[cfg(unix)]
+    fn spawn_pid_of(launch: &ToolResult) -> u32 {
+        launch
+            .content
+            .lines()
+            .find_map(|l| l.strip_prefix("launched: pid "))
+            .expect("pid in launch output")
+            .trim()
+            .parse()
+            .expect("pid parses")
+    }
+
+    /// T39 spec test: launch with `max_tokens: 250000` → the child's argv
+    /// contains `--max-tokens 250000`, asserted against the argv seam the
+    /// other delegate tests use (`CHUG_DELEGATE_BIN`; the stub dumps its
+    /// argv). NON-VACUOUSNESS: dropping the argv append leaves the dump
+    /// without the flag and fails here.
+    #[test]
+    fn delegate_launch_with_max_tokens_appends_flag_to_child_argv() {
+        let _guard = DELEGATE_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let child_dir = tempfile::tempdir().unwrap();
+        let ctx_cwd = tempfile::tempdir().unwrap();
+        // SAFETY: serialized by DELEGATE_ENV_LOCK; no other test reads this var.
+        unsafe { std::env::set_var("CHUG_DELEGATE_BIN", write_argv_stub(ctx_cwd.path())) };
+        let launch = dispatch(
+            &delegate_ctx(ctx_cwd.path()),
+            "delegate",
+            &json!({
+                "action": "launch",
+                "cwd": child_dir.path(),
+                "spec": "/tmp/chug-stub-spec.md",
+                "goal": "g",
+                "model": "m",
+                "max_tokens": 250_000,
+            }),
+        );
+        assert!(!launch.is_error, "{}", launch.content);
+        let argv = wait_for_argv_dump(child_dir.path());
+        let pos = argv
+            .iter()
+            .position(|a| a == "--max-tokens")
+            .expect("--max-tokens in the child argv");
+        assert_eq!(argv[pos + 1], "250000", "{}", argv.join(" | "));
+        // The return text names the configured token budget alongside the
+        // existing budgets (the iters/minutes echo pattern).
+        assert!(
+            launch
+                .content
+                .contains("max_iters: 40 max_minutes: 35 max_tokens: 250000"),
+            "{}",
+            launch.content
+        );
+        let pid = spawn_pid_of(&launch);
+        kill_pid_group(pid);
+        // SAFETY: serialized by DELEGATE_ENV_LOCK; no other test reads this var.
+        unsafe { std::env::remove_var("CHUG_DELEGATE_BIN") };
+    }
+
+    /// T39 byte-identical-argv control: WITHOUT `max_tokens`, the child argv
+    /// carries no `--max-tokens` and is exactly the pre-T39 list — children
+    /// keep their current no-token-ceiling behavior unless the orchestrator
+    /// opts in.
+    #[test]
+    fn delegate_launch_without_max_tokens_keeps_argv_byte_identical() {
+        let _guard = DELEGATE_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let child_dir = tempfile::tempdir().unwrap();
+        let ctx_cwd = tempfile::tempdir().unwrap();
+        // SAFETY: serialized by DELEGATE_ENV_LOCK; no other test reads this var.
+        unsafe { std::env::set_var("CHUG_DELEGATE_BIN", write_argv_stub(ctx_cwd.path())) };
+        let launch = dispatch(
+            &delegate_ctx(ctx_cwd.path()),
+            "delegate",
+            &json!({
+                "action": "launch",
+                "cwd": child_dir.path(),
+                "spec": "/tmp/chug-stub-spec.md",
+                "goal": "g",
+                "model": "m",
+            }),
+        );
+        assert!(!launch.is_error, "{}", launch.content);
+        let argv = wait_for_argv_dump(child_dir.path());
+        assert_eq!(
+            argv,
+            vec![
+                "run".to_string(),
+                "--spec".to_string(),
+                "/tmp/chug-stub-spec.md".to_string(),
+                "--goal".to_string(),
+                "g".to_string(),
+                "--model".to_string(),
+                "m".to_string(),
+                "--max-iters".to_string(),
+                "40".to_string(),
+                "--max-minutes".to_string(),
+                "35".to_string(),
+            ],
+            "argv must be byte-identical to pre-T39 (no --max-tokens)"
+        );
+        // The return text is unchanged too: no token-budget echo when absent.
+        assert!(
+            !launch.content.contains("max_tokens"),
+            "absent max_tokens must not appear in the launch text: {}",
+            launch.content
+        );
+        let pid = spawn_pid_of(&launch);
+        kill_pid_group(pid);
+        // SAFETY: serialized by DELEGATE_ENV_LOCK; no other test reads this var.
+        unsafe { std::env::remove_var("CHUG_DELEGATE_BIN") };
+    }
+
+    /// T39 boundary: `max_tokens: 1` is accepted and reaches the child
+    /// verbatim (`--max-tokens 1`) — the floor is inclusive.
+    #[cfg(unix)]
+    #[test]
+    fn delegate_launch_boundary_max_tokens_one_reaches_child() {
+        let _guard = DELEGATE_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let child_dir = tempfile::tempdir().unwrap();
+        let ctx_cwd = tempfile::tempdir().unwrap();
+        // SAFETY: serialized by DELEGATE_ENV_LOCK; no other test reads this var.
+        unsafe { std::env::set_var("CHUG_DELEGATE_BIN", write_argv_stub(ctx_cwd.path())) };
+        let launch = dispatch(
+            &delegate_ctx(ctx_cwd.path()),
+            "delegate",
+            &json!({
+                "action": "launch",
+                "cwd": child_dir.path(),
+                "spec": "/tmp/chug-stub-spec.md",
+                "goal": "g",
+                "model": "m",
+                "max_tokens": 1,
+            }),
+        );
+        assert!(!launch.is_error, "{}", launch.content);
+        let argv = wait_for_argv_dump(child_dir.path());
+        let pos = argv
+            .iter()
+            .position(|a| a == "--max-tokens")
+            .expect("--max-tokens in the child argv");
+        assert_eq!(argv[pos + 1], "1", "{}", argv.join(" | "));
+        let pid = spawn_pid_of(&launch);
+        kill_pid_group(pid);
+        // SAFETY: serialized by DELEGATE_ENV_LOCK; no other test reads this var.
+        unsafe { std::env::remove_var("CHUG_DELEGATE_BIN") };
+    }
+
+    /// T39: `max_tokens: 0` and `max_tokens: -5` are tool errors naming the
+    /// constraint — and no child is spawned (the stub's argv dump never
+    /// appears in the child dir). NON-VACUOUSNESS: accepting 0 (e.g. by
+    /// parsing with `as_u64` like `max_iters` does) fails the error asserts.
+    #[test]
+    fn delegate_launch_rejects_zero_and_negative_max_tokens_without_spawning() {
+        let _guard = DELEGATE_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let child_dir = tempfile::tempdir().unwrap();
+        let ctx_cwd = tempfile::tempdir().unwrap();
+        // SAFETY: serialized by DELEGATE_ENV_LOCK; no other test reads this var.
+        unsafe { std::env::set_var("CHUG_DELEGATE_BIN", write_argv_stub(ctx_cwd.path())) };
+        for bad in [json!(0), json!(-5)] {
+            let result = dispatch(
+                &delegate_ctx(ctx_cwd.path()),
+                "delegate",
+                &json!({
+                    "action": "launch",
+                    "cwd": child_dir.path(),
+                    "spec": "/tmp/chug-stub-spec.md",
+                    "goal": "g",
+                    "model": "m",
+                    "max_tokens": bad,
+                }),
+            );
+            assert!(result.is_error, "{bad}: {}", result.content);
+            assert!(
+                result.content.contains("at least 1"),
+                "{bad} must name the constraint: {}",
+                result.content
+            );
+        }
+        // No spawn: the stub never ran, so its argv dump does not exist.
+        assert!(
+            !child_dir.path().join("argv.txt").exists(),
+            "a rejected max_tokens must never spawn the child"
+        );
+        // SAFETY: serialized by DELEGATE_ENV_LOCK; no other test reads this var.
+        unsafe { std::env::remove_var("CHUG_DELEGATE_BIN") };
+    }
+
+    /// T39: the delegate schema advertises `max_tokens` as an OPTIONAL integer
+    /// (minimum 1) in launch's properties, and the required list is unchanged.
+    #[test]
+    fn delegate_schema_pins_optional_max_tokens() {
+        let schemas = tool_schemas();
+        let schema = schemas
+            .iter()
+            .find(|s| s.get("name").and_then(Value::as_str) == Some("delegate"))
+            .expect("exactly one delegate schema (pinned elsewhere)");
+        let prop = schema["input_schema"]["properties"]["max_tokens"]
+            .as_object()
+            .expect("max_tokens property");
+        assert_eq!(prop.get("type").and_then(Value::as_str), Some("integer"));
+        assert_eq!(prop.get("minimum").and_then(Value::as_u64), Some(1));
+        let required: Vec<&str> = schema["input_schema"]["required"]
+            .as_array()
+            .expect("required list")
+            .iter()
+            .filter_map(Value::as_str)
+            .collect();
+        assert_eq!(required, vec!["action", "cwd"], "required list must be unchanged");
+    }
+
+    /// T39: `max_tokens` on the `status` action is IGNORED, not rejected —
+    /// exactly how `max_iters`/`max_minutes` behave there today (launch-only
+    /// inputs that status never reads). The status payload shape is
+    /// unchanged.
+    #[test]
+    fn delegate_status_ignores_max_tokens() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_events_fixture(tmp.path(), &[T29_RUN_START, T29_ITERATION]);
+        let result = dispatch(
+            &delegate_ctx(tmp.path()),
+            "delegate",
+            &json!({"action": "status", "cwd": tmp.path(), "max_tokens": 250_000}),
+        );
+        assert!(!result.is_error, "{}", result.content);
+        assert!(result.content.contains("state: running"), "{}", result.content);
+        assert!(result.content.contains("last_iteration: 7"), "{}", result.content);
     }
 
     // ---- T26: read_file `offset`/`limit` pagination ----
