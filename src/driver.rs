@@ -2758,6 +2758,12 @@ mod tests {
         // budget where the shipped reserve stays under budget but a
         // delete/shrink mutant (reserve → 0/8/16/32) re-packs one more
         // cluster and overflows.
+        // Round-4 timing sweep (T72 family): this leg has NO wall-clock
+        // asserts — every pin here is SIZE-based (chars / budgets / cluster
+        // counts) and band::calibrate measures rendered cluster sizes,
+        // never time — so the leg is load-immune by construction. The only
+        // timing assert on the tgrep surface is deterministic_and_fast's
+        // SPEED leg (src/tgrep.rs, median-of-5 vs a load-robust bound).
         let measure_ctx = ToolCtx {
             cwd: tmp.path().to_path_buf(),
             bash_timeout: Duration::from_secs(crate::tools::BASH_TIMEOUT_SECS),
