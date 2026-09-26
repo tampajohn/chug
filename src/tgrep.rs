@@ -200,27 +200,52 @@ fn collect_corpus(ctx: &ToolCtx, input: &Value) -> anyhow::Result<Corpus> {
             let mut files = Vec::new();
             let mut stats = WalkStats::default();
             walk_dir(&ctx.cwd, &mut files, &mut stats);
-            let capped_note = stats
-                .capped
-                .then(|| format!("[search truncated at the {} file / byte cap]", files.len()));
+            let capped_note = walk_note(&files, &stats);
             Ok(Corpus { files, capped_note })
         }
         Some(raw) => {
             let resolved = resolve_safe(&ctx.cwd, raw).map_err(|e| anyhow!("{e}"))?;
             if raw.contains('*') || raw.contains('?') || raw.contains('[') {
                 let pattern = resolved.to_string_lossy().into_owned();
-                let mut files: Vec<PathBuf> = glob::glob(&pattern)
+                let mut files: Vec<PathBuf> = Vec::new();
+                let mut oversized = 0usize;
+                for p in glob::glob(&pattern)
                     .map_err(|e| anyhow!("invalid glob pattern: {e}"))?
                     .filter_map(|p| p.ok())
-                    .filter(|p| p.is_file())
-                    .collect();
-                let capped_note = (files.len() > TGREP_MAX_FILES).then(|| {
-                    files.truncate(TGREP_MAX_FILES);
-                    format!("[search truncated at the {TGREP_MAX_FILES} file cap]")
-                });
+                {
+                    if !p.is_file() {
+                        continue;
+                    }
+                    // Same size cap the walk arm applies — the glob arm used
+                    // to read multi-MB data dumps the walk arm would have
+                    // skipped (NB-b: caps must be consistent per path kind).
+                    let len = fs::metadata(&p).map(|m| m.len()).unwrap_or(0);
+                    if len > TGREP_MAX_FILE_BYTES {
+                        oversized += 1;
+                        continue;
+                    }
+                    files.push(p);
+                }
+                let capped_note = sized_note(
+                    (files.len() > TGREP_MAX_FILES).then(|| {
+                        files.truncate(TGREP_MAX_FILES);
+                        format!("[search truncated at the {TGREP_MAX_FILES} file cap]")
+                    }),
+                    oversized,
+                );
                 return Ok(Corpus { files, capped_note });
             }
             if resolved.is_file() {
+                // Single-file path honors the same size cap as walk/glob.
+                let len = fs::metadata(&resolved).map(|m| m.len()).unwrap_or(0);
+                if len > TGREP_MAX_FILE_BYTES {
+                    return Ok(Corpus {
+                        files: Vec::new(),
+                        capped_note: Some(format!(
+                            "[skipped {raw}: {len} bytes is over the {TGREP_MAX_FILE_BYTES}-byte file cap]"
+                        )),
+                    });
+                }
                 return Ok(Corpus {
                     files: vec![resolved],
                     capped_note: None,
@@ -230,9 +255,7 @@ fn collect_corpus(ctx: &ToolCtx, input: &Value) -> anyhow::Result<Corpus> {
                 let mut files = Vec::new();
                 let mut stats = WalkStats::default();
                 walk_dir(&resolved, &mut files, &mut stats);
-                let capped_note = stats
-                    .capped
-                    .then(|| format!("[search truncated at the {} file / byte cap]", files.len()));
+                let capped_note = walk_note(&files, &stats);
                 return Ok(Corpus { files, capped_note });
             }
             bail!("tgrep path not found: {raw}")
@@ -244,6 +267,30 @@ fn collect_corpus(ctx: &ToolCtx, input: &Value) -> anyhow::Result<Corpus> {
 struct WalkStats {
     bytes: u64,
     capped: bool,
+    oversized: usize,
+}
+
+/// The honesty note for a walked corpus: truncation cap and/or oversized
+/// files skipped — the same size-cap accounting the glob and single-file
+/// arms now apply (NB-b consistency).
+fn walk_note(files: &[PathBuf], stats: &WalkStats) -> Option<String> {
+    let trunc = stats
+        .capped
+        .then(|| format!("[search truncated at the {} file / byte cap]", files.len()));
+    sized_note(trunc, stats.oversized)
+}
+
+/// Compose truncation + oversized-skip notes into one honesty line.
+fn sized_note(trunc: Option<String>, oversized: usize) -> Option<String> {
+    let size_note = (oversized > 0).then(|| {
+        format!("[skipped {oversized} file(s) over the {TGREP_MAX_FILE_BYTES}-byte size cap]")
+    });
+    match (trunc, size_note) {
+        (Some(a), Some(b)) => Some(format!("{a} {b}")),
+        (Some(a), None) => Some(a),
+        (None, Some(b)) => Some(b),
+        (None, None) => None,
+    }
 }
 
 /// Depth-first walk, sorted per directory for determinism, skipping
@@ -273,6 +320,7 @@ fn walk_dir(dir: &Path, out: &mut Vec<PathBuf>, stats: &mut WalkStats) {
         } else if ft.is_file() {
             let len = entry.metadata().map(|m| m.len()).unwrap_or(0);
             if len > TGREP_MAX_FILE_BYTES {
+                stats.oversized += 1;
                 continue;
             }
             stats.bytes += len;
@@ -403,11 +451,20 @@ fn clusters_for_file(ft: &FileText, query: &Query) -> Vec<Cluster> {
     let mut clusters = Vec::new();
     let mut idx = 0;
     while idx < seeds.len() {
-        // Extend the window while the next seed's window overlaps it.
+        // Extend while the next seed's emitted window would overlap or touch
+        // this cluster's: cluster window ends at `last + W`, the next seed's
+        // window starts at `seed - W` — overlap iff `seed <= last + 2W`,
+        // adjacency iff `seed == last + 2W + 1`. Merging on match-line
+        // distance alone (the pre-fix `<= last + W`) left hits 4-6 lines
+        // apart in two clusters whose windows duplicated lines (validator
+        // probe P1); the radius is the WINDOW-OVERLAP radius, not the hit
+        // radius. Transitive extension keeps the merge once-only.
         let first = seeds[idx];
         let mut last = first;
         let mut members = vec![first];
-        while idx + 1 < seeds.len() && seeds[idx + 1] <= last + TGREP_WINDOW {
+        while idx + 1 < seeds.len()
+            && seeds[idx + 1] <= last + 2 * TGREP_WINDOW + 1
+        {
             idx += 1;
             last = seeds[idx];
             members.push(last);
@@ -792,9 +849,29 @@ fn decl_kind(trimmed: &str) -> Option<&'static str> {
     None
 }
 
-/// The module name of a `mod <name>` line.
+/// The module name of a `mod <name>` line, given the RAW trimmed line:
+/// `pub`-visibility prefixes are stripped first (decl_kind sees through
+/// `pub mod` to return kind `mod`, but suppression needs the NAME from the
+/// same line — pre-fix `pub mod tests {` resolved to no name and its test
+/// fns leaked into the skeleton).
 fn mod_name(trimmed: &str) -> Option<String> {
-    let rest = trimmed.strip_prefix("mod ")?;
+    let mut t = trimmed;
+    for prefix in ["pub(crate)", "pub(super)", "pub(in", "pub"] {
+        if let Some(rest) = t.strip_prefix(prefix) {
+            let rest = rest.trim_start();
+            let rest = if prefix == "pub(in" {
+                match rest.find(')') {
+                    Some(pos) => rest[pos + 1..].trim_start(),
+                    None => rest,
+                }
+            } else {
+                rest
+            };
+            t = rest;
+            break;
+        }
+    }
+    let rest = t.strip_prefix("mod ")?;
     let name: String = rest
         .chars()
         .take_while(|c| c.is_alphanumeric() || *c == '_')
@@ -1230,18 +1307,456 @@ mod tests {
         assert!(parse_query("!!! ...").is_none());
     }
 
-    /// Path-basename boost: a same-tier cluster in a file whose basename
-    /// carries a query term outranks one that does not (spec req 2).
+    /// Path-basename boost (spec req 2): a same-tier cluster in a file whose
+    /// BASENAME carries the query term outranks an identical one whose
+    /// basename does not. The fixture names are the whole point (validator
+    /// M1: the old fixtures had the term in NEITHER basename, so the leg
+    /// never fired and the alphabetical path tiebreak masked the mutant):
+    /// the boosted file sorts alphabetically SECOND, so only the boost can
+    /// put it first. RED vs M1 (boost -> 0): the scores tie at 70.5 and
+    /// aplain.rs wins the path tiebreak instead.
     #[test]
     fn basename_boost_breaks_density_ties() {
         let tmp = tempfile::tempdir().unwrap();
-        fs::write(tmp.path().join("delegate.rs"), "pad\nlaunch handling here;\npad\n").unwrap();
-        fs::write(tmp.path().join("elsewhere.rs"), "pad\nlaunch handling here;\npad\n").unwrap();
+        fs::write(tmp.path().join("aplain.rs"), "pad\nlaunch handling here;\npad\n").unwrap();
+        fs::write(tmp.path().join("zlaunch.rs"), "pad\nlaunch handling here;\npad\n").unwrap();
         let ctx = ctx_for(&tmp);
         let result = dispatch(&ctx, "tgrep", &json!({"query": "launch"}));
         assert!(!result.is_error, "{}", result.content);
-        let d = result.content.find("delegate.rs:").unwrap();
-        let e = result.content.find("elsewhere.rs:").unwrap();
-        assert!(d < e, "basename boost lost: {}", result.content);
+        let boosted = result.content.find("zlaunch.rs:").unwrap();
+        let plain = result.content.find("aplain.rs:").unwrap();
+        assert!(boosted < plain, "basename boost lost: {}", result.content);
+    }
+
+    /// A file of `len` lines with `needle` on exactly the given lines
+    /// (distinct filler elsewhere) so hit-line distances are exact.
+    fn body_with_hits(len: usize, hits: &[usize]) -> String {
+        (1..=len)
+            .map(|i| {
+                if hits.contains(&i) {
+                    format!("needle {i}\n")
+                } else {
+                    format!("filler {i}\n")
+                }
+            })
+            .collect()
+    }
+
+    /// The 1-based line numbers rendered in cluster bodies, in output order —
+    /// proves no line is ever emitted twice (the probe-P1 defect class).
+    fn emitted_line_numbers(content: &str) -> Vec<usize> {
+        content
+            .lines()
+            .filter_map(|l| {
+                let body = l.strip_prefix('>').or_else(|| l.strip_prefix(' '))?;
+                let body = body.strip_prefix(' ')?;
+                let digits: String = body.chars().take_while(|c| c.is_ascii_digit()).collect();
+                if digits.is_empty() {
+                    return None;
+                }
+                body[digits.len()..]
+                    .starts_with(" | ")
+                    .then(|| digits.parse().ok())
+                    .flatten()
+            })
+            .collect()
+    }
+
+    fn assert_no_duplicate_lines(content: &str, ctx_label: &str) {
+        let nums = emitted_line_numbers(content);
+        let mut sorted = nums.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(
+            sorted.len(),
+            nums.len(),
+            "{ctx_label}: duplicated emitted lines {nums:?}"
+        );
+    }
+
+    /// Gap class 0 — hits on CONSECUTIVE lines ("overlapping matches"): one
+    /// cluster spanning [10-3, 11+3], every line emitted once. (Pre-fix
+    /// radius already merged this class; it pins the floor and is RED
+    /// against a merge-disabled / radius-0 mutant.)
+    #[test]
+    fn merge_gap0_hits_on_consecutive_lines_one_cluster() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("g0.rs"), body_with_hits(20, &[10, 11])).unwrap();
+        let ctx = ctx_for(&tmp);
+        let result = dispatch(&ctx, "tgrep", &json!({"query": "needle"}));
+        assert!(!result.is_error, "{}", result.content);
+        assert!(
+            result.content.contains("1 cluster in 1 file"),
+            "{}",
+            result.content
+        );
+        assert_no_duplicate_lines(&result.content, "gap0");
+        assert_eq!(
+            emitted_line_numbers(&result.content),
+            (7..=14).collect::<Vec<_>>(),
+            "{}",
+            result.content
+        );
+    }
+
+    /// Gap class 1-3 — hits 3 lines apart (the pre-fix boundary): still ONE
+    /// cluster, span [first-3, last+3] exactly. Pins the floor against
+    /// radius-1/-0 mutants.
+    #[test]
+    fn merge_gap1_to_3_hits_one_cluster_exact_span() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("g3.rs"), body_with_hits(20, &[10, 13])).unwrap();
+        let ctx = ctx_for(&tmp);
+        let result = dispatch(&ctx, "tgrep", &json!({"query": "needle"}));
+        assert!(!result.is_error, "{}", result.content);
+        assert!(
+            result.content.contains("1 cluster in 1 file"),
+            "{}",
+            result.content
+        );
+        assert_eq!(
+            emitted_line_numbers(&result.content),
+            (7..=16).collect::<Vec<_>>(),
+            "{}",
+            result.content
+        );
+    }
+
+    /// Gap class 4-6 — THE validator hole (probe P1): the ±3-line windows of
+    /// hits 4-6 lines apart OVERLAP, so merging on hit-line distance (the
+    /// pre-fix radius of 3) emitted TWO clusters with duplicated lines. Each
+    /// distance must give ONE cluster spanning [first-3, last+3] with every
+    /// line emitted once. RED vs the pre-fix radius (M2 merge-shrink).
+    #[test]
+    fn merge_gap4_to_6_overlapping_windows_one_cluster_no_duplicates() {
+        for d in 4..=6 {
+            let tmp = tempfile::tempdir().unwrap();
+            let hits = [10, 10 + d];
+            fs::write(tmp.path().join("hole.rs"), body_with_hits(30, &hits)).unwrap();
+            let ctx = ctx_for(&tmp);
+            let result = dispatch(&ctx, "tgrep", &json!({"query": "needle"}));
+            assert!(!result.is_error, "d={d}: {}", result.content);
+            assert!(
+                result.content.contains("1 cluster in 1 file"),
+                "d={d}: {}",
+                result.content
+            );
+            assert_no_duplicate_lines(&result.content, &format!("d={d}"));
+            assert_eq!(
+                emitted_line_numbers(&result.content),
+                (7..=(13 + d)).collect::<Vec<_>>(),
+                "d={d}: {}",
+                result.content
+            );
+        }
+    }
+
+    /// Window ADJACENCY — hits exactly 2*WINDOW+1 = 7 lines apart: the
+    /// windows [7,13] and [14,20] touch with no gap (14 = 13+1), so they
+    /// merge into one cluster per the "overlap or adjacent" rule. RED vs the
+    /// pre-fix radius AND vs an overlap-only radius of 2*WINDOW that forgot
+    /// adjacency.
+    #[test]
+    fn merge_adjacent_windows_touch_at_d7_one_cluster() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("adj.rs"), body_with_hits(30, &[10, 17])).unwrap();
+        let ctx = ctx_for(&tmp);
+        let result = dispatch(&ctx, "tgrep", &json!({"query": "needle"}));
+        assert!(!result.is_error, "{}", result.content);
+        assert!(
+            result.content.contains("1 cluster in 1 file"),
+            "{}",
+            result.content
+        );
+        assert_eq!(
+            emitted_line_numbers(&result.content),
+            (7..=20).collect::<Vec<_>>(),
+            "{}",
+            result.content
+        );
+    }
+
+    /// Negative control — hits 2*WINDOW+2 = 8 lines apart: windows [7,13]
+    /// and [15,21] neither overlap nor touch, so they stay TWO clusters with
+    /// disjoint lines (kills radius-overshoot mutants: merging everything
+    /// into one cluster is as wrong as splitting overlapping windows).
+    #[test]
+    fn distinct_clusters_when_windows_neither_overlap_nor_touch() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("far.rs"), body_with_hits(30, &[10, 18])).unwrap();
+        let ctx = ctx_for(&tmp);
+        let result = dispatch(&ctx, "tgrep", &json!({"query": "needle"}));
+        assert!(!result.is_error, "{}", result.content);
+        assert!(
+            result.content.contains("2 clusters in 1 file"),
+            "{}",
+            result.content
+        );
+        assert_no_duplicate_lines(&result.content, "d=8");
+        let mut expected: Vec<usize> = (7..=13).collect();
+        expected.extend(15..=21);
+        assert_eq!(
+            emitted_line_numbers(&result.content),
+            expected,
+            "{}",
+            result.content
+        );
+    }
+
+    /// Transitive merge-once — three hits chained 4 lines apart (10, 14, 18):
+    /// windows [7,13], [11,17], [15,21] overlap pairwise in a chain and must
+    /// collapse into exactly ONE cluster [7,21] with every line emitted once
+    /// (spec: "overlapping windows merge once"). RED vs the pre-fix radius
+    /// (three separate clusters).
+    #[test]
+    fn transitive_three_hits_merge_once() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("chain.rs"), body_with_hits(30, &[10, 14, 18])).unwrap();
+        let ctx = ctx_for(&tmp);
+        let result = dispatch(&ctx, "tgrep", &json!({"query": "needle"}));
+        assert!(!result.is_error, "{}", result.content);
+        assert!(
+            result.content.contains("1 cluster in 1 file"),
+            "{}",
+            result.content
+        );
+        assert_no_duplicate_lines(&result.content, "transitive");
+        assert_eq!(
+            emitted_line_numbers(&result.content),
+            (7..=21).collect::<Vec<_>>(),
+            "{}",
+            result.content
+        );
+    }
+
+    /// All-terms tier (spec req 2): a window holding ALL query terms
+    /// outranks a partial window even when the partial one is far denser —
+    /// only the tier base keeps them apart. RED vs M7 (TIER_ALL_TERMS -> 0):
+    /// 11.5 < 11.67, the dense partial flips to the top.
+    #[test]
+    fn all_terms_tier_beats_high_density_partial() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(
+            tmp.path().join("allterms.rs"),
+            "pad\ngamma fires alpha fires beta\npad\n",
+        )
+        .unwrap();
+        // 5 alphas + 5 betas, no gamma, never the contiguous phrase: partial
+        // tier, density 2/3, occurrences capped at 10.
+        fs::write(
+            tmp.path().join("dense_partial.rs"),
+            "pad\nalpha zz beta zz alpha zz beta zz alpha zz beta zz alpha zz beta\npad\n",
+        )
+        .unwrap();
+        let ctx = ctx_for(&tmp);
+        let result = dispatch(&ctx, "tgrep", &json!({"query": "alpha beta gamma"}));
+        assert!(!result.is_error, "{}", result.content);
+        let all_at = result.content.find("allterms.rs:").unwrap();
+        let dense_at = result.content.find("dense_partial.rs:").unwrap();
+        assert!(
+            all_at < dense_at,
+            "all-terms tier lost to a dense partial: {}",
+            result.content
+        );
+        assert!(result.content.contains("(all-terms)"), "{}", result.content);
+        assert!(result.content.contains("(partial)"), "{}", result.content);
+    }
+
+    /// Term-density leg (spec req 2): within the partial tier, a window
+    /// holding MORE of the query's terms outranks a sparser one at EQUAL
+    /// occurrence counts — only density separates them. RED vs M6 (density
+    /// contribution -> 0): both clusters tie at 1.0 and the
+    /// alphabetically-first file wins the path tiebreak instead.
+    #[test]
+    fn density_orders_clusters_within_the_partial_tier() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("a_one_term.rs"), "pad\nalpha alpha\npad\n").unwrap();
+        fs::write(tmp.path().join("z_two_terms.rs"), "pad\nalpha fires beta\npad\n").unwrap();
+        let ctx = ctx_for(&tmp);
+        let result = dispatch(&ctx, "tgrep", &json!({"query": "alpha beta gamma"}));
+        assert!(!result.is_error, "{}", result.content);
+        let two_at = result.content.find("z_two_terms.rs:").unwrap();
+        let one_at = result.content.find("a_one_term.rs:").unwrap();
+        assert!(two_at < one_at, "density leg lost: {}", result.content);
+    }
+
+    /// Each ranking leg's exact contribution, pinned at the fn where a
+    /// mutation would regress it (validator class: a leg whose tests never
+    /// fire it is vacuous). RED-proven against: TIER_PHRASE -> 0, M5 tier
+    /// flip (60<->30), TIER_ALL_TERMS -> 0, density -> 0, M1 basename -> 0.
+    #[test]
+    fn score_window_pins_each_ranking_leg() {
+        // exact-phrase tier: quoted phrase hit, no terms → bare 60.0.
+        let q = parse_query("\"alpha beta\"").unwrap();
+        let (label, score) = score_window(&q, "let x = alpha beta combined", "plain.rs");
+        assert_eq!(label, "exact-phrase");
+        assert_eq!(score, 60.0, "TIER_PHRASE contribution moved");
+        assert_eq!(score_window(&q, "no hit here", "plain.rs").0, "partial");
+
+        // all-terms tier: every term present (no contiguous phrase) →
+        // 30 + density 10 + occurrences 2*0.5 = 41.0.
+        let q = parse_query("alpha beta").unwrap();
+        let (label, score) = score_window(&q, "beta then alpha", "plain.rs");
+        assert_eq!(label, "all-terms");
+        assert_eq!(score, 41.0, "TIER_ALL_TERMS contribution moved");
+
+        // density leg: one of two terms → partial base 0 + density 5.0 +
+        // occurrences 2*0.5 = 6.0.
+        let q = parse_query("alpha beta").unwrap();
+        let (label, score) = score_window(&q, "alpha zz alpha", "plain.rs");
+        assert_eq!(label, "partial");
+        assert_eq!(score, 6.0, "density contribution moved");
+
+        // basename boost: identical window, basename carrying the term adds
+        // exactly 2.0 over a basename without it (70.5 vs 72.5).
+        let q = parse_query("launch").unwrap();
+        let (_, plain) = score_window(&q, "launch handling here", "aplain.rs");
+        let (_, boosted) = score_window(&q, "launch handling here", "zlaunch.rs");
+        assert_eq!(plain, 70.5);
+        assert_eq!(boosted, 72.5, "basename-boost contribution moved");
+
+        // occurrence cap: 12 hits still add only 10*0.5 = 5.0 over the base.
+        let q = parse_query("alpha").unwrap();
+        let (_, score) = score_window(&q, "alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha", "plain.rs");
+        assert_eq!(score, 75.0, "occurrence cap moved");
+    }
+
+    /// Symbols mode: `pub mod tests` (and `pub(crate) mod …`) suppresses its
+    /// fns like bare `mod tests` does — pre-fix the suppression matched only
+    /// `mod <name>` because mod_name saw the raw `pub mod tests {` line and
+    /// resolved no name, so test fns leaked into the skeleton (NB-a; the
+    /// same fix covers NB-c).
+    #[test]
+    fn symbols_mode_pub_mod_tests_suppressed() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(
+            tmp.path().join("pubmod.rs"),
+            r#"pub fn visible() -> u32 { 1 }
+
+pub mod tests {
+    fn hidden_a() {}
+}
+
+pub(crate) mod tests {
+    fn hidden_b() {}
+}
+
+mod tests {
+    fn hidden_c() {}
+}
+"#,
+        )
+        .unwrap();
+        let ctx = ctx_for(&tmp);
+        let result = dispatch(
+            &ctx,
+            "tgrep",
+            &json!({"query": "ignored", "symbols": true, "path": "pubmod.rs"}),
+        );
+        assert!(!result.is_error, "{}", result.content);
+        let c = &result.content;
+        // 1 declaration: the visible fn; all three test mods are suppressed.
+        assert!(c.starts_with("symbols pubmod.rs: 1 declarations in "), "{c}");
+        assert!(c.contains("pub fn visible() -> u32 { ... }"), "{c}");
+        assert!(!c.contains("hidden_a"), "pub mod tests leaked: {c}");
+        assert!(!c.contains("hidden_b"), "pub(crate) mod tests leaked: {c}");
+        assert!(!c.contains("hidden_c"), "bare mod tests leaked: {c}");
+    }
+
+    /// mod_name resolves the module name through `pub`-visibility prefixes
+    /// (NB-c): pub/pub(crate)/pub(super)/pub(in …) all strip.
+    #[test]
+    fn mod_name_strips_pub_prefixes() {
+        assert_eq!(mod_name("mod plain;"), Some("plain".to_string()));
+        assert_eq!(mod_name("pub mod tests {"), Some("tests".to_string()));
+        assert_eq!(
+            mod_name("pub(crate) mod fixtures;"),
+            Some("fixtures".to_string())
+        );
+        assert_eq!(
+            mod_name("pub(super) mod inner;"),
+            Some("inner".to_string())
+        );
+        assert_eq!(
+            mod_name("pub(in crate::x) mod scoped;"),
+            Some("scoped".to_string())
+        );
+        assert_eq!(mod_name("fn not_a_mod()"), None);
+    }
+
+    /// Glob paths honor the same per-file size cap as walked directories
+    /// (NB-b: the glob arm used to happily read a multi-MB file the walk arm
+    /// skipped) and say so in an honesty note. RED pre-fix: the big file's
+    /// clusters appeared and no note was printed.
+    #[test]
+    fn glob_path_skips_oversized_files_with_note() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::create_dir_all(tmp.path().join("data")).unwrap();
+        fs::write(tmp.path().join("data/small.rs"), "needle here\n").unwrap();
+        let big = format!("// {}\n{}", "x".repeat(80), "needle big\n".repeat(100_000));
+        assert!(big.len() as u64 > TGREP_MAX_FILE_BYTES);
+        fs::write(tmp.path().join("data/big.rs"), &big).unwrap();
+        let ctx = ctx_for(&tmp);
+        let result = dispatch(&ctx, "tgrep", &json!({"query": "needle", "path": "data/*.rs"}));
+        assert!(!result.is_error, "{}", result.content);
+        assert!(result.content.contains("small.rs:1"), "{}", result.content);
+        assert!(
+            !result.content.contains("needle big"),
+            "oversized file was read: {}",
+            result.content
+        );
+        assert!(
+            result.content.contains("[skipped 1 file(s) over the"),
+            "{}",
+            result.content
+        );
+    }
+
+    /// Single-file paths honor the size cap too (consistency): an oversized
+    /// file is skipped with the same honest note, not read.
+    #[test]
+    fn single_file_path_skips_oversized_file_with_note() {
+        let tmp = tempfile::tempdir().unwrap();
+        let big = "needle big\n".repeat(120_000);
+        assert!(big.len() as u64 > TGREP_MAX_FILE_BYTES);
+        fs::write(tmp.path().join("huge.rs"), &big).unwrap();
+        let ctx = ctx_for(&tmp);
+        let result = dispatch(&ctx, "tgrep", &json!({"query": "needle", "path": "huge.rs"}));
+        assert!(!result.is_error, "{}", result.content);
+        assert!(result.content.contains("0 clusters"), "{}", result.content);
+        assert!(
+            !result.content.contains("needle big"),
+            "oversized file was read: {}",
+            result.content
+        );
+        assert!(
+            result.content.contains("is over the"),
+            "{}",
+            result.content
+        );
+    }
+
+    /// Directory walks carry the same honesty note when they skip oversized
+    /// files (walk/glob/single-file size-cap arms consistent end to end).
+    #[test]
+    fn dir_walk_skips_oversized_files_with_note() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("small.rs"), "needle here\n").unwrap();
+        let big = "needle big\n".repeat(120_000);
+        fs::write(tmp.path().join("big.rs"), &big).unwrap();
+        let ctx = ctx_for(&tmp);
+        let result = dispatch(&ctx, "tgrep", &json!({"query": "needle", "path": "."}));
+        assert!(!result.is_error, "{}", result.content);
+        assert!(result.content.contains("small.rs:1"), "{}", result.content);
+        assert!(
+            !result.content.contains("needle big"),
+            "oversized file was read: {}",
+            result.content
+        );
+        assert!(
+            result.content.contains("[skipped 1 file(s) over the"),
+            "{}",
+            result.content
+        );
     }
 }
