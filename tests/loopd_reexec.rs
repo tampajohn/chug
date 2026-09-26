@@ -34,6 +34,12 @@ const REEXEC_EXEC: &str = "exec \"$ROOT/loopd.sh\" run";
 /// The re-exec log line — loopd.log must always explain a budget/behavior
 /// change; a silent re-exec would be undiagnosable.
 const REEXEC_LOG: &str = "loopd: script changed on disk — re-exec (pid $$)";
+/// The single-driver check (T53): ps-based, because pgrep persistently fails
+/// to enumerate the launchd-spawned loopd tree on this host (pgrep -f/-l/-P
+/// all miss a live in-tree driver; ps sees it every time — cycle-24 eval I1),
+/// so a pgrep-based guard fails OPEN. The `[c]hug` bracket excludes the grep
+/// pipeline's own argv from the match.
+const DRIVER_CHECK: &str = "ps -ax -o command= | grep -q \"[c]hug run --spec LOOP-SPEC.md\"";
 
 #[test]
 fn loopd_fingerprints_itself_before_the_cycle_loop() {
@@ -77,8 +83,11 @@ fn loopd_reexecs_at_the_top_of_the_while_body() {
         .find("while [ ! -f \"$STOP\" ]")
         .expect("loopd.sh has a supervisor loop");
     let driver_check = loopd
-        .find("pgrep -f \"chug run --spec LOOP-SPEC.md\"")
-        .expect("loopd.sh has the single-driver check");
+        .find(DRIVER_CHECK)
+        .expect("loopd.sh has the ps-based single-driver check (T53): \
+                  `ps -ax -o command= | grep -q \"[c]hug run --spec \
+                  LOOP-SPEC.md\"` — pgrep is blind to the launchd-spawned \
+                  loopd tree on this host, so a pgrep guard fails OPEN");
     let build = loopd
         .find("  cargo build >> \"$LOG\" 2>&1")
         .expect("loopd.sh builds its own binary");
@@ -140,5 +149,98 @@ fn loopd_pidfile_guard_passes_for_the_same_pid() {
         "the pidfile guard must keep requiring liveness (kill -0) — a stale \
          pid falls through, a foreign live supervisor is refused (T50). \
          Guard:\n{guard}"
+    );
+}
+
+#[test]
+fn loopd_single_driver_check_does_not_use_pgrep() {
+    let loopd = read("loopd.sh");
+    assert!(
+        !loopd.contains("pgrep -f \"chug run --spec LOOP-SPEC.md\""),
+        "loopd.sh must NOT guard the single-driver check with \
+         `pgrep -f \"chug run --spec LOOP-SPEC.md\"`: on this host pgrep \
+         persistently fails to enumerate the launchd-spawned loopd tree \
+         (pgrep -f/-l/-P all miss a live in-tree driver while ps sees it \
+         every time), so a pgrep-based guard fails OPEN and duplicate \
+         drivers become possible (T53, cycle-24 eval I1)"
+    );
+    assert!(
+        loopd.contains(DRIVER_CHECK),
+        "loopd.sh must detect an active driver with the ps pipeline \
+         ({DRIVER_CHECK}) — the only enumeration that sees the \
+         launchd-spawned loopd tree on this host (T53, cycle-24 eval I1)"
+    );
+}
+
+#[test]
+fn loopd_single_driver_check_grep_excludes_itself_via_bracket_idiom() {
+    let loopd = read("loopd.sh");
+    // The `[c]hug` bracket idiom is load-bearing: a plain `grep -q "chug
+    // ..."` pattern matches the grep process's OWN argv (its command line
+    // contains the needle), so the check would fire on itself forever.
+    assert!(
+        loopd.contains("grep -q \"[c]hug run --spec LOOP-SPEC.md\""),
+        "the single-driver grep pattern must use the `[c]hug` bracket idiom — \
+         a plain `chug` needle matches the grep process's own argv, so the \
+         guard would report another driver active every cycle (T53)"
+    );
+    // Exactly one check: a duplicated guard line would log + sleep 120 twice
+    // per skipped cycle for no additional safety.
+    let hits = loopd.matches("[c]hug run --spec LOOP-SPEC.md").count();
+    assert_eq!(
+        hits, 1,
+        "the `[c]hug run --spec LOOP-SPEC.md` needle must occur exactly once \
+         in loopd.sh — inside the single-driver check (T53)"
+    );
+}
+
+/// T54 — exact-count pins for the T50 self-re-exec machinery. The four
+/// positional pins above assert existence + order but never COUNTS, so an
+/// additive duplicate of the fingerprint machinery inside the while body
+/// silently defeats the re-exec with every pin still green: a second
+/// `SELF_CKSUM=` assignment refreshes the fingerprint every cycle, so the
+/// while-top comparison never fires and script changes stop activating.
+/// The T47 carrier doctrine (tests/shared_target_dir.rs) applies: exact
+/// counts are strictly stronger than `>=` bounds.
+#[test]
+fn loopd_has_exactly_one_self_cksum_assignment() {
+    let loopd = read("loopd.sh");
+    let count = loopd.lines().filter(|l| l.contains("SELF_CKSUM=")).count();
+    assert_eq!(
+        count, 1,
+        "loopd.sh must contain EXACTLY ONE `SELF_CKSUM=` assignment (the \
+         fingerprint recorded before the cycle loop, T50) — a second one \
+         (e.g. an additive duplicate at the while-body end) refreshes the \
+         fingerprint every cycle, so the while-top comparison never fires \
+         and the re-exec is silently defeated with all positional pins \
+         green (T54, T50 validator finding)"
+    );
+}
+
+#[test]
+fn loopd_has_exactly_one_self_cksum_comparison() {
+    let loopd = read("loopd.sh");
+    let count = loopd.matches("!= \"$SELF_CKSUM\"").count();
+    assert_eq!(
+        count, 1,
+        "loopd.sh must contain EXACTLY ONE `!= \"$SELF_CKSUM\"` comparison \
+         (the while-top re-exec gate, T50) — a second comparison is the \
+         other half of a duplicated fingerprint block and re-introduces the \
+         additive-mutant defeat surface (T54, T50 validator finding)"
+    );
+}
+
+#[test]
+fn loopd_self_cksum_string_occurs_exactly_twice() {
+    let loopd = read("loopd.sh");
+    let count = loopd.matches("SELF_CKSUM").count();
+    assert_eq!(
+        count, 2,
+        "the literal SELF_CKSUM must occur EXACTLY TWICE in loopd.sh — once \
+         in the pre-loop assignment and once in the while-top comparison; \
+         any other additive reference (an exported copy, a second \
+         conditional shape the assignment/comparison pins miss) would make \
+         the re-exec machinery diverge from the T50 design (T54, T50 \
+         validator finding)"
     );
 }
