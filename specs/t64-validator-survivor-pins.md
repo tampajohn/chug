@@ -67,4 +67,4 @@ The two new pins ARE the tests. Full suite + clippy green.
 - Adversarial validation OPTIONAL (tests-only — T16/T31/T59/T62 precedent);
   orchestrator gates + the non-vacuousness evidence suffice.
 
-check: cargo test --test shared_target_dir && cargo test --lib
+check: cargo test --test shared_target_dir && cargo test --bin chug

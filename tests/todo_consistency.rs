@@ -181,3 +181,107 @@ fn malformed_rows_are_rejected_naming_the_row() {
         assert!(joined.contains(expected), "missing problem:\n{expected}\nin:\n{joined}");
     }
 }
+
+// ---------------------------------------------------------------------------
+// T67 — spec `check:` lines never invoke `cargo test --lib`.
+//
+// This crate is binary-only (`src/main.rs`, no `lib.rs`), so
+// `cargo test --lib` exits 101 ("no library targets found in package
+// `chug`") — and `goal_complete` re-runs a spec's `check:` line as the impl
+// child's goal gate. Nine child streams (t22/t25/t26/t29/t39/t42/t58/t59/
+// t64) died on that unsatisfiable gate, the latest (t64) after its work was
+// already committed and 14/14 green on leg 1. The lint below keeps the
+// specs corpus clean; the doctrine pin keeps META-META-SPEC.md's
+// convention sentence from being silently reverted.
+//
+// t67's own spec spells the flag `--l[i]b` (a BRE class matching the
+// literal `i`) so its prose does not carry the literal token its own gate
+// greps `specs/t*.md` for — the lint still matches the literal here.
+
+const CARGO_TEST_LIB: &str = "cargo test --lib";
+
+/// Every `specs/t*.md` file on disk (sorted), mirroring the shell glob the
+/// spec's acceptance grep uses. Asserts an implausible-shrink floor so the
+/// lint cannot pass vacuously because specs/ went missing.
+fn t_spec_files(root: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let specs = root.join("specs");
+    let mut files: Vec<std::path::PathBuf> = std::fs::read_dir(&specs)
+        .unwrap_or_else(|e| panic!("specs/ readable from {root:?}: {e}"))
+        .filter_map(|entry| {
+            let entry = entry.expect("specs/ entry readable");
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            (name.starts_with('t') && name.ends_with(".md")).then(|| entry.path())
+        })
+        .collect();
+    files.sort();
+    assert!(
+        files.len() >= 60,
+        "expected the full t-spec corpus (68 files at T67 time), got {} — the lint must scan the real corpus",
+        files.len()
+    );
+    files
+}
+
+/// Every check-shaped line of a spec as `(1-based line, rest-of-line)`.
+/// Two shapes exist in the corpus: col-0 `check:` (every t-spec but t52)
+/// and heading `## check:` (t52), so leading `#`s and whitespace are
+/// stripped before matching the prefix. Whole-file scope stays with the
+/// gate's grep; this catches the gate line wherever it is spelled.
+fn check_lines(text: &str) -> Vec<(usize, &str)> {
+    text.lines()
+        .enumerate()
+        .filter_map(|(idx, raw)| {
+            let line = raw.trim_start().trim_start_matches('#').trim_start();
+            line.strip_prefix("check:").map(|check| (idx + 1, check))
+        })
+        .collect()
+}
+
+#[test]
+fn spec_check_lines_never_invoke_cargo_test_lib() {
+    let root = std::env::current_dir().expect("cargo sets the test cwd to the package root");
+    let mut offenders = Vec::new();
+    let mut saw_t64 = false;
+    for path in t_spec_files(&root) {
+        let name = path
+            .file_name()
+            .expect("t-spec path has a file name")
+            .to_string_lossy()
+            .into_owned();
+        if name == "t64-validator-survivor-pins.md" {
+            saw_t64 = true;
+        }
+        let text =
+            std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{} readable: {e}", path.display()));
+        for (line_no, check) in check_lines(&text) {
+            if check.contains(CARGO_TEST_LIB) {
+                offenders.push(format!(
+                    "{name}:{line_no}: check line invokes `{CARGO_TEST_LIB}` — binary-only crate — use cargo test or cargo test --bin chug"
+                ));
+            }
+        }
+    }
+    assert!(
+        saw_t64,
+        "lint must cover the historical defect site t64-validator-survivor-pins.md"
+    );
+    assert!(
+        offenders.is_empty(),
+        "spec check lines must not invoke cargo test --lib (binary-only crate — use cargo test or cargo test --bin chug):\n{}",
+        offenders.join("\n")
+    );
+}
+
+#[test]
+fn metameta_doctrine_pins_no_library_targets_rule() {
+    let root = std::env::current_dir().expect("cargo sets the test cwd to the package root");
+    let text = std::fs::read_to_string(root.join("META-META-SPEC.md"))
+        .expect("META-META-SPEC.md readable");
+    assert!(
+        text.contains("no library targets"),
+        "META-META-SPEC.md lost the T67 convention sentence: a spec's `check:` line must never \
+         invoke `cargo test --lib` — binary-only crate, `--lib` exits 101 `no library targets \
+         found` at the goal gate (use plain `cargo test` or `cargo test --bin chug`)"
+    );
+}
