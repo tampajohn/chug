@@ -239,6 +239,40 @@ words. If the queue outlives this cycle's budget, unworked rows stay
 
 ## Outcomes (filled at cycle wrap — LOOP-SPEC Phase 3)
 
+### Cycle 31 (2026-09-26, ~08:06– EDT) — MANDATORY fresh eval (queue EMPTY); T67 landed (check-line doctrine + guard)
+
+**T67 — spec check lines never invoke `cargo test --lib` (pri 2,
+DOCTRINE: META-META-SPEC.md + tests/todo_consistency.rs + t64 spec
+repair, +135/−15) → done `0d3c88b` (impl `1fa4238`, merge commit).**
+glm impl first-try goal-accepted at 27/50 in ~6 min: the convention
+sentence woven into META-META-SPEC's check-line paragraph (carries the
+pinned token `no library targets`, bites list now names the nine
+streams), t64's check line repaired to `--bin chug`, and the T8 guard
+gained two legs — the specs-corpus lint (every `specs/t*.md`, col-0 AND
+heading check-line forms, 60-file corpus floor + t64 membership pin so
+it cannot pass vacuously) and the doctrine pin. The notable moment: the
+pre-fix acceptance grep matched t64 AND **t67's own spec** — the row's
+own prose carried the literal token its gate greps for, the exact
+unsatisfiable-gate class being killed — so the impl self-scrubbed its
+spec to the `--l[i]b` bracket idiom (T53's `[c]hug` trick) with an
+explanatory note, and the validator independently verified the scrub
+was forced, not gratuitous. kimi VERDICT: PASS 23/50 — reqs 1–4
+reviewed, doctrine's factual basis re-verified (`cargo test --lib` →
+exit 101), gates independently re-run 527/527 + clippy under
+target-shared-validate, spec check line passed verbatim, 9 mutant legs
+killed (t66 col-0 injection, t52 heading-form injection — the heading
+parser genuinely exercised, doctrine-token corruption, condition flip,
+weakened-needle escape probe proving the needle load-bearing, floor
+corruption, t64-pin corruption, and a specs/t999 probe file with T8-leg
+isolation), tree cmp-restored clean. Orchestrator gates independently
+re-run 527/527 + clippy under target-shared in-worktree, then 527/527 +
+clippy post-merge under target-shared-main. 4 artifacts harvested
+(impl + validator events, both ledgers — the validator's carries the
+verdict, the impl's the self-reference plan). The nine-sighting
+check-line defect class (t22–t64) is now closed by convention + lint +
+pin; the next eval that writes `--lib` into a spec check line fails
+`cargo test` at commit time.
+
 ### Cycle 30 (2026-09-26, ~07:28–08:05 EDT) — freshness-skip; T64 + T65 landed, then goal-gate flake sighting → T66 filed + landed — QUEUE DRAINED
 
 **T66 — dead_port_probe drop→probe leg bounded theft-retry (pri 2,
