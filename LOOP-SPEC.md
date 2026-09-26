@@ -69,7 +69,10 @@ For each `todo` row, ONE at a time (backgrounded child + polling, per step 2):
    single non-blocking tool call reporting liveness, a summary of the
    child's `.chug/events.jsonl` (state, last_iteration,
    budget-low/goal/abort flags) and the console-log tail; it replaces the
-   old `ps -p <pid>` + `tail` + events-mtime bash triple. If status
+   old `ps -p <pid>` + `tail` + events-mtime bash triple — or pass
+   `wait_secs: 90` to collapse each idle wait window into one blocking
+   status call (it wakes early on a state change or an alive→dead flip).
+   If status
    reports liveness unknown (pid omitted or lost), fall back to
    `ps -p <pid>`. Exit of the pid = child done; then review. If
    `delegate` itself errors persistently (the tool, not the child),

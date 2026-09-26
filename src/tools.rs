@@ -32,6 +32,13 @@ const DELEGATE_EVENTS_TAIL_BYTES: u64 = 64 * 1024;
 const DELEGATE_LOG_TAIL_BYTES: u64 = 8 * 1024;
 const DELEGATE_LOG_TAIL_LINES: usize = 3;
 const DELEGATE_LOG_LINE_MAX: usize = 200;
+/// T29: hard cap of the `status` long-poll — the wait is strictly bounded so
+/// one call can never outlive the caller's patience (schema maximum too).
+const DELEGATE_WAIT_MAX_SECS: u64 = 600;
+/// T29: internal poll cadence of the wait loop (spec: 2–5 s). Each poll is
+/// the same cheap bounded tail read the instant leg does, so polling often
+/// is harmless and returns promptly on a state change.
+const DELEGATE_WAIT_POLL: Duration = Duration::from_millis(2500);
 
 #[derive(Debug, Clone)]
 pub struct ToolCtx {
@@ -146,7 +153,7 @@ pub fn tool_schemas() -> Vec<Value> {
         }),
         json!({
             "name": "delegate",
-            "description": "Launch or observe a bounded child `chug run` (e.g. in a worktree you created). action=launch: spawns a detached child with its working directory at `cwd` (absolute), spec/goal/model required, max_iters/max_minutes optional (defaults 40/35); returns immediately with the child pid and the log/events paths — it never waits on the child. action=status: reports the child's liveness (when you pass the `pid` from launch), a summary of its .chug/events.jsonl (state, last_iteration, budget-low/goal/abort flags), and the tail of its console log. Never blocks: launch returns at spawn, status reads tails only.",
+            "description": "Launch or observe a bounded child `chug run` (e.g. in a worktree you created). action=launch: spawns a detached child with its working directory at `cwd` (absolute), spec/goal/model required, max_iters/max_minutes optional (defaults 40/35); returns immediately with the child pid and the log/events paths — it never waits on the child. action=status: reports the child's liveness (when you pass the `pid` from launch), a summary of its .chug/events.jsonl (state, last_iteration, budget-low/goal/abort flags), and the tail of its console log. Never blocks: launch returns at spawn, status reads tails only. Optionally pass `wait_secs` on status (0/absent = instant, max 600) to block up to that many seconds, returning early when the child's events state changes or its liveness flips to dead.",
             "input_schema": {
                 "type": "object",
                 "properties": {
@@ -157,7 +164,8 @@ pub fn tool_schemas() -> Vec<Value> {
                     "model": {"type": "string", "description": "Model id the child runs with (launch only, required — routing stays your explicit choice)"},
                     "max_iters": {"type": "integer", "description": "Child iteration budget (launch only; default 40)"},
                     "max_minutes": {"type": "integer", "description": "Child wall-clock budget in minutes (launch only; default 35)"},
-                    "pid": {"type": "integer", "description": "The pid launch returned (status only, optional; omit → liveness is reported unknown)"}
+                    "pid": {"type": "integer", "description": "The pid launch returned (status only, optional; omit → liveness is reported unknown)"},
+                    "wait_secs": {"type": "integer", "minimum": 0, "maximum": 600, "description": "Seconds to block on status waiting for a child state change, a liveness flip to dead, or this deadline (0/absent = instant; status only — launch rejects it)"}
                 },
                 "required": ["action", "cwd"]
             }
@@ -613,7 +621,16 @@ fn delegate(_ctx: &ToolCtx, input: &Value) -> anyhow::Result<ToolResult> {
     // `_ctx` is deliberately unused: delegate is the one tool whose paths are
     // not confined to ctx.cwd (see the path-policy note above).
     match get_str(input, "action")? {
-        "launch" => delegate_launch(input),
+        "launch" => {
+            // T29: launch returns at spawn by contract — the wait knob is
+            // status-only, and naming that beats silently ignoring it.
+            if input.get("wait_secs").is_some() {
+                bail!(
+                    "delegate: `wait_secs` applies to the status action only — launch returns at spawn and never waits on the child"
+                );
+            }
+            delegate_launch(input)
+        }
         "status" => delegate_status(input),
         other => bail!("delegate: unknown action {other:?} (expected \"launch\" or \"status\")"),
     }
@@ -725,31 +742,165 @@ fn delegate_launch(input: &Value) -> anyhow::Result<ToolResult> {
     })
 }
 
-/// Observe a previously launched child: bounded tail reads only, no waiting.
+/// Observe a previously launched child. Without `wait_secs` (or with `0`)
+/// this is the pre-T29 instant render, byte-identical for identical state
+/// (pinned by test); with `wait_secs > 0` it is a bounded long-poll that
+/// blocks until the first state change, liveness flip, or deadline.
 fn delegate_status(input: &Value) -> anyhow::Result<ToolResult> {
+    // Parse the knob before any I/O so a bad value errors instantly even
+    // when `cwd` is also bad.
+    let wait_secs = parse_wait_secs(input)?;
     let cwd = delegate_cwd(input)?;
     let pid = input.get("pid").and_then(Value::as_u64);
-    let alive = pid.and_then(reap_and_alive);
+    match wait_secs {
+        Some(secs) if secs > 0 => delegate_status_wait(&cwd, pid, secs),
+        // Absent and 0 are the same instant behavior — one code path, so the
+        // byte-identical guarantee is structural, not hoped for.
+        _ => delegate_status_now(&cwd, pid),
+    }
+}
 
-    let events_path = cwd.join(".chug").join("events.jsonl");
-    let (summary, events_note) = match read_tail_lines(&events_path, DELEGATE_EVENTS_TAIL_BYTES) {
-        Ok(lines) => {
-            let refs: Vec<&str> = lines.iter().map(String::as_str).collect();
-            (summarize_events(&refs), None)
-        }
-        // Missing (or unreadable) events log is the normal state before a
-        // child's first write — reported as `state: starting`, never an error.
-        Err(e) => (
-            DelegateSummary::default(),
-            Some(format!("events: nothing read ({e:#})")),
-        ),
+/// T29: parse the optional `wait_secs` (status only). Absent → `None`; `0` →
+/// `Some(0)`; `1..=600` → `Some(n)`. Negative, non-integer, or >600 → tool
+/// error. Pinned choice (spec req 4): REJECT, never clamp — same style as
+/// `read_file`'s handling of out-of-range params, and a clamped wait would
+/// silently wait a different duration than the caller asked for.
+fn parse_wait_secs(input: &Value) -> anyhow::Result<Option<u64>> {
+    let Some(value) = input.get("wait_secs") else {
+        return Ok(None);
     };
-    let log_tail = read_log_tail(&cwd.join(".chug").join("delegate.log"));
+    let n = value.as_i64().ok_or_else(|| {
+        anyhow!("delegate: `wait_secs` must be an integer number of seconds (0..={DELEGATE_WAIT_MAX_SECS})")
+    })?;
+    if n < 0 {
+        bail!("delegate: `wait_secs` must be >= 0, got {n}");
+    }
+    // n >= 0 here, so the cast is lossless.
+    let n = n as u64;
+    if n > DELEGATE_WAIT_MAX_SECS {
+        bail!("delegate: `wait_secs` must be at most {DELEGATE_WAIT_MAX_SECS}, got {n}");
+    }
+    Ok(Some(n))
+}
 
+/// The instant leg: bounded tail reads only, no waiting anywhere.
+fn delegate_status_now(cwd: &Path, pid: Option<u64>) -> anyhow::Result<ToolResult> {
+    let alive = pid.and_then(reap_and_alive);
+    let (summary, events_note) = read_events(&cwd.join(".chug").join("events.jsonl"));
+    let log_tail = read_log_tail(&cwd.join(".chug").join("delegate.log"));
     Ok(ToolResult {
         content: render_status(&summary, alive, &log_tail, events_note.as_deref()),
         is_error: false,
     })
+}
+
+/// One non-blocking read of the child's events tail, shared by both status
+/// legs. A missing/unreadable events log is the normal state before a child's
+/// first write — reported as an empty summary plus the `events: nothing read`
+/// note, never an error (T23 behavior, unchanged).
+fn read_events(events_path: &Path) -> (DelegateSummary, Option<String>) {
+    match read_tail_lines(events_path, DELEGATE_EVENTS_TAIL_BYTES) {
+        Ok(lines) => {
+            let refs: Vec<&str> = lines.iter().map(String::as_str).collect();
+            (summarize_events(&refs), None)
+        }
+        Err(e) => (
+            DelegateSummary::default(),
+            Some(format!("events: nothing read ({e:#})")),
+        ),
+    }
+}
+
+/// T29: the bounded long-poll. Block until the FIRST of:
+/// (a) the child's events-derived state changes vs. the snapshot at entry —
+///     any [`DelegateSummary`] field differing (new last_event,
+///     goal_seen/abort_seen flip, last_iteration advance, max_iters or
+///     budget_low_seen appearing) or the events file's creation when it was
+///     missing at entry (the launch→build window is exactly this state);
+/// (b) the observed liveness flips alive → dead;
+/// (c) the deadline elapses (`wait_secs`, already hard-capped at 600).
+///
+/// Never aborts the run (spec req 5): every internal error leg degrades to
+/// the instant-style answer instead of hanging or erroring — a mid-wait read
+/// failure returns immediately, and the deadline is honored even when nothing
+/// ever changes. The poll cadence is [`DELEGATE_WAIT_POLL`]; each poll is the
+/// same bounded tail read the instant leg does.
+fn delegate_status_wait(
+    cwd: &Path,
+    pid: Option<u64>,
+    wait_secs: u64,
+) -> anyhow::Result<ToolResult> {
+    let started = Instant::now();
+    let deadline = started + Duration::from_secs(wait_secs);
+    let events_path = cwd.join(".chug").join("events.jsonl");
+    let log_path = cwd.join(".chug").join("delegate.log");
+
+    let (entry_summary, entry_note) = read_events(&events_path);
+    // A successful read is the existence signal: an empty-but-present file
+    // still reads Ok with an empty summary, and its first content is then a
+    // summary change; a failed read means the file was missing/unreadable at
+    // entry, so its first successful read is the creation trigger.
+    let entry_existed = entry_note.is_none();
+    let entry_alive = pid.and_then(reap_and_alive);
+
+    // The SAME render as the instant leg (same reads), plus the one
+    // `waited:` line naming the actual elapsed seconds — the instant leg
+    // prints no such line.
+    let render = |summary: &DelegateSummary, alive: Option<bool>, note: Option<&str>| {
+        let log_tail = read_log_tail(&log_path);
+        let mut content = render_status(summary, alive, &log_tail, note);
+        content.push_str(&format!("\nwaited: {}s", started.elapsed().as_secs()));
+        content
+    };
+
+    loop {
+        // Deadline first: never sleep past it, never poll past it. One FINAL
+        // read before rendering: a change can land inside the last sleep
+        // window (the cadence sleep is capped at the remaining time, so
+        // nothing polls between the last check and the deadline — always the
+        // case when wait_secs ≤ the cadence), and the rendered payload must
+        // reflect the true final state, not the entry snapshot. This read IS
+        // the instant leg's read, so the payload is "the same payload as the
+        // instant leg" at the moment the wait returns.
+        if Instant::now() >= deadline {
+            let (final_summary, final_note) = read_events(&events_path);
+            let final_alive = pid.and_then(reap_and_alive);
+            return Ok(ToolResult {
+                content: render(&final_summary, final_alive, final_note.as_deref()),
+                is_error: false,
+            });
+        }
+
+        let (now_summary, now_note) = read_events(&events_path);
+        let now_alive = pid.and_then(reap_and_alive);
+        let now_existed = now_note.is_none();
+
+        // Req 5: an events read failing mid-wait (file deleted, worktree
+        // cleaned) degrades to the instant-style answer immediately — never
+        // a hang, never an error surfaced to the caller.
+        if now_note.is_some() && entry_note.is_none() {
+            return Ok(ToolResult {
+                content: render(&now_summary, now_alive, now_note.as_deref()),
+                is_error: false,
+            });
+        }
+        // Req 2(a): any summary-field diff, or the events file appearing
+        // when it was missing at entry.
+        let state_changed =
+            now_summary != entry_summary || (now_existed && !entry_existed);
+        // Req 2(b): the observed liveness flipped alive → dead.
+        let liveness_flipped = entry_alive == Some(true) && now_alive == Some(false);
+        if state_changed || liveness_flipped {
+            return Ok(ToolResult {
+                content: render(&now_summary, now_alive, now_note.as_deref()),
+                is_error: false,
+            });
+        }
+
+        // Sleep at the poll cadence, but never past the deadline.
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        thread::sleep(remaining.min(DELEGATE_WAIT_POLL));
+    }
 }
 
 /// The parsing/flag logic of `status`, with no I/O: every edge case (empty
@@ -1243,6 +1394,7 @@ pub fn truncate_middle(s: &str, head: usize, tail: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write as _;
     use std::sync::Mutex;
 
     #[test]
@@ -1955,6 +2107,387 @@ mod tests {
             "{}",
             result.content
         );
+    }
+
+    // ---- T29: status wait_secs long-poll ----
+
+    /// Synthetic events lines shared by the T29 fixtures (no trailing
+    /// newline; the fixture writer adds one per line).
+    const T29_RUN_START: &str = "{\"type\":\"run_start\",\"ts\":\"t0\",\"mode\":\"run\",\"model\":\"m\",\"max_iters\":50,\"max_minutes\":35,\"max_tokens\":null}";
+    const T29_ITERATION: &str =
+        "{\"type\":\"iteration\",\"ts\":\"t1\",\"n\":7,\"input_tokens\":1,\"output_tokens\":1}";
+
+    /// A fixed fake `.chug/` with the given events lines.
+    fn write_events_fixture(cwd: &Path, lines: &[&str]) {
+        fs::create_dir_all(cwd.join(".chug")).unwrap();
+        let body: String = lines.iter().map(|l| format!("{l}\n")).collect();
+        fs::write(cwd.join(".chug/events.jsonl"), body).unwrap();
+    }
+
+    /// Append one raw line to the fixture's events file (the mid-wait writer
+    /// threads use this).
+    fn append_events_line(path: &Path, line: &str) {
+        let mut f = fs::OpenOptions::new().append(true).open(path).unwrap();
+        f.write_all(line.as_bytes()).unwrap();
+        f.write_all(b"\n").unwrap();
+    }
+
+    /// The `waited: <n>s` line's seconds — the wait leg's one extra line.
+    fn waited_secs_of(content: &str) -> Option<u64> {
+        content
+            .lines()
+            .find_map(|l| l.strip_prefix("waited: ")?.strip_suffix('s')?.parse().ok())
+    }
+
+    /// T29 test 1 (instant leg byte-identical) + test 6's `0` boundary: on a
+    /// fixed fake `.chug/`, `wait_secs` absent and `wait_secs: 0` both render
+    /// EXACTLY the pre-T29 payload — pinned as one whole string, so any
+    /// render drift, any new field, or any `waited:` line leaking into the
+    /// instant leg fails here.
+    #[test]
+    fn delegate_status_wait_secs_absent_and_zero_are_byte_identical_to_pre_t29() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_events_fixture(tmp.path(), &[T29_RUN_START, T29_ITERATION]);
+        let ctx = delegate_ctx(tmp.path());
+        let absent = dispatch(&ctx, "delegate", &json!({"action": "status", "cwd": tmp.path()}));
+        let zero = dispatch(
+            &ctx,
+            "delegate",
+            &json!({"action": "status", "cwd": tmp.path(), "wait_secs": 0}),
+        );
+        let expected = "\
+state: running
+alive: unknown (no pid given)
+max_iters: 50
+last_iteration: 7
+last_event: iteration t1
+budget_low_seen: false
+goal_seen: false
+abort_seen: false
+log_tail: (none)";
+        assert_eq!(absent.content, expected, "{}", absent.content);
+        assert_eq!(zero.content, absent.content, "wait_secs: 0 must be byte-identical to absent");
+        assert!(!absent.content.contains("waited:"), "{}", absent.content);
+        assert!(!absent.is_error && !zero.is_error);
+    }
+
+    /// T29 test 2 (early return on state change) AND test 7 (non-vacuousness).
+    /// A writer thread appends an `iteration` line mid-wait; `wait_secs: 30`
+    /// must return well under 30 s carrying the NEW state.
+    ///
+    /// NON-VACUOUSNESS TECHNIQUE: the assertions are on the returned CONTENT,
+    /// not just timing. Gutting the wait loop to a fixed sleep (sleep to the
+    /// deadline, then render) passes every timing assertion but returns the
+    /// ENTRY state — `last_iteration: none` — so pinning `last_iteration: 7`
+    /// and `last_event: iteration t1` kills it. The return-immediately
+    /// mutant fails the same pins; a wait-the-full-30s mutant fails the
+    /// elapsed bound below.
+    #[test]
+    fn delegate_status_wait_returns_early_on_state_change_with_new_state() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_events_fixture(tmp.path(), &[T29_RUN_START]);
+        let events = tmp.path().join(".chug/events.jsonl");
+        let writer = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(300));
+            append_events_line(&events, T29_ITERATION);
+        });
+        let ctx = delegate_ctx(tmp.path());
+        let started = Instant::now();
+        let result = dispatch(
+            &ctx,
+            "delegate",
+            &json!({"action": "status", "cwd": tmp.path(), "wait_secs": 30}),
+        );
+        let elapsed = started.elapsed();
+        writer.join().unwrap();
+        assert!(!result.is_error, "{}", result.content);
+        // Early: well under the 30 s deadline (CI slack).
+        assert!(elapsed < Duration::from_secs(15), "wait did not return early: {elapsed:?}");
+        // The NEW state, not the entry snapshot — the non-vacuousness pins.
+        assert!(result.content.contains("last_iteration: 7"), "{}", result.content);
+        assert!(result.content.contains("last_event: iteration t1"), "{}", result.content);
+        assert!(result.content.contains("state: running"), "{}", result.content);
+        // The wait leg's one extra line, naming the actual elapsed seconds.
+        let waited = waited_secs_of(&result.content).expect("waited: line present");
+        assert!(waited < 30, "waited: {waited}s");
+    }
+
+    /// T29 test 3 (deadline): a static `.chug/` and `wait_secs: 2` return
+    /// after ~2 s with the entry state unchanged and the `waited:` line
+    /// present (1 ≤ waited ≤ 10 for CI slack).
+    #[test]
+    fn delegate_status_wait_returns_at_deadline_with_unchanged_state() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_events_fixture(tmp.path(), &[T29_RUN_START, T29_ITERATION]);
+        let ctx = delegate_ctx(tmp.path());
+        let started = Instant::now();
+        let result = dispatch(
+            &ctx,
+            "delegate",
+            &json!({"action": "status", "cwd": tmp.path(), "wait_secs": 2}),
+        );
+        let elapsed = started.elapsed();
+        assert!(!result.is_error, "{}", result.content);
+        assert!(elapsed >= Duration::from_secs(1), "returned before any wait could elapse: {elapsed:?}");
+        assert!(elapsed < Duration::from_secs(30), "overshot the 2s deadline: {elapsed:?}");
+        // Unchanged state fields — the same fields the instant leg renders.
+        assert!(result.content.contains("last_iteration: 7"), "{}", result.content);
+        assert!(result.content.contains("last_event: iteration t1"), "{}", result.content);
+        assert!(result.content.contains("state: running"), "{}", result.content);
+        let waited = waited_secs_of(&result.content).expect("waited: line present");
+        assert!((1..=10).contains(&waited), "waited: {waited}s");
+    }
+
+    /// T29 test 4 (missing events file). Req 2(a) makes the file's CREATION a
+    /// wake trigger, so a file missing at entry does not skip the wait — the
+    /// two legs pin both halves and reconcile the spec's "returns
+    /// immediately" wording with req 2(a):
+    /// (a) no writer: the wait is strictly bounded by the deadline, never a
+    ///     hang (req 5), and renders the starting/`events: nothing read`
+    ///     note leg with no panic;
+    /// (b) a creator thread: returns promptly — as soon as the file appears —
+    ///     with the new state (the file-creation trigger, non-vacuously).
+    #[test]
+    fn delegate_status_wait_on_missing_events_file_bounded_then_created() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ctx = delegate_ctx(tmp.path());
+        // (a) No writer: bounded by the deadline, starting/note leg, no panic.
+        let started = Instant::now();
+        let result = dispatch(
+            &ctx,
+            "delegate",
+            &json!({"action": "status", "cwd": tmp.path(), "wait_secs": 2}),
+        );
+        let elapsed = started.elapsed();
+        assert!(!result.is_error, "{}", result.content);
+        assert!(elapsed >= Duration::from_secs(1), "no-writer wait returned before its deadline: {elapsed:?}");
+        assert!(elapsed < Duration::from_secs(30), "missing-file wait hung: {elapsed:?}");
+        assert!(result.content.contains("state: starting"), "{}", result.content);
+        assert!(result.content.contains("events: nothing read"), "{}", result.content);
+        assert!(result.content.contains("last_event: none"), "{}", result.content);
+        assert!(waited_secs_of(&result.content).is_some(), "{}", result.content);
+
+        // (b) Creator thread: the file appearing mid-wait IS the state
+        // change, so the wait returns promptly with the new state.
+        let events = tmp.path().join(".chug/events.jsonl");
+        let writer = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(300));
+            fs::create_dir_all(events.parent().unwrap()).unwrap();
+            fs::write(&events, format!("{T29_RUN_START}\n")).unwrap();
+        });
+        let started = Instant::now();
+        let result = dispatch(
+            &ctx,
+            "delegate",
+            &json!({"action": "status", "cwd": tmp.path(), "wait_secs": 30}),
+        );
+        let elapsed = started.elapsed();
+        writer.join().unwrap();
+        assert!(!result.is_error, "{}", result.content);
+        assert!(
+            elapsed < Duration::from_secs(15),
+            "creation trigger did not wake the wait: {elapsed:?}"
+        );
+        assert!(result.content.contains("last_event: run_start t0"), "{}", result.content);
+        assert!(result.content.contains("state: running"), "{}", result.content);
+    }
+
+    /// T29 test 5 (schema pins): the live delegate schema gains optional
+    /// integer `wait_secs` (min 0, max 600), the required list is unchanged,
+    /// and the launch action rejects `wait_secs` with an error naming that
+    /// it is status-only.
+    #[test]
+    fn delegate_schema_pins_wait_secs_and_launch_rejects_it() {
+        let schemas = tool_schemas();
+        let schema = schemas
+            .iter()
+            .find(|s| s.get("name").and_then(Value::as_str) == Some("delegate"))
+            .expect("exactly one delegate schema (pinned elsewhere)");
+        let wait = schema["input_schema"]["properties"]["wait_secs"]
+            .as_object()
+            .expect("wait_secs property");
+        assert_eq!(wait.get("type").and_then(Value::as_str), Some("integer"));
+        assert_eq!(wait.get("minimum").and_then(Value::as_u64), Some(0));
+        assert_eq!(wait.get("maximum").and_then(Value::as_u64), Some(600));
+        let required: Vec<&str> = schema["input_schema"]["required"]
+            .as_array()
+            .expect("required list")
+            .iter()
+            .filter_map(Value::as_str)
+            .collect();
+        assert_eq!(required, vec!["action", "cwd"], "required list must be unchanged");
+
+        // Status-only: the launch rejection names the status action.
+        let tmp = tempfile::tempdir().unwrap();
+        let result = dispatch(
+            &delegate_ctx(tmp.path()),
+            "delegate",
+            &json!({
+                "action": "launch",
+                "cwd": tmp.path(),
+                "spec": "/tmp/chug-stub-spec.md",
+                "goal": "g",
+                "model": "m",
+                "wait_secs": 5,
+            }),
+        );
+        assert!(result.is_error, "{}", result.content);
+        assert!(
+            result.content.contains("status action only"),
+            "rejection must name that wait_secs is status-only: {}",
+            result.content
+        );
+    }
+
+    /// T29 test 6 (boundary pins): `600` accepted, `601` and negative
+    /// rejected — the pinned req-4 choice is REJECT, never clamp. (`0` =
+    /// instant is pinned byte-identically in the test-1 leg.)
+    #[test]
+    fn delegate_status_wait_secs_boundaries_reject_out_of_range() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_events_fixture(tmp.path(), &[T29_RUN_START]);
+        let ctx = delegate_ctx(tmp.path());
+
+        // 600 is accepted. A writer thread cuts the wait short so the test
+        // stays fast; acceptance means the parse did not reject the cap.
+        let events = tmp.path().join(".chug/events.jsonl");
+        let writer = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(300));
+            append_events_line(&events, "{\"type\":\"iteration\",\"ts\":\"t9\",\"n\":8}");
+        });
+        let result = dispatch(
+            &ctx,
+            "delegate",
+            &json!({"action": "status", "cwd": tmp.path(), "wait_secs": 600}),
+        );
+        writer.join().unwrap();
+        assert!(!result.is_error, "600 must be accepted: {}", result.content);
+        assert!(result.content.contains("last_iteration: 8"), "{}", result.content);
+
+        // 601: rejected, naming the 600 cap — not clamped down to it.
+        let result = dispatch(
+            &ctx,
+            "delegate",
+            &json!({"action": "status", "cwd": tmp.path(), "wait_secs": 601}),
+        );
+        assert!(result.is_error, "{}", result.content);
+        assert!(result.content.contains("600"), "{}", result.content);
+        // Negative: rejected, naming the >= 0 floor.
+        let result = dispatch(
+            &ctx,
+            "delegate",
+            &json!({"action": "status", "cwd": tmp.path(), "wait_secs": -1}),
+        );
+        assert!(result.is_error, "{}", result.content);
+        assert!(result.content.contains("-1"), "{}", result.content);
+        // Non-integer: rejected (string and fractional alike).
+        for bad in [json!("90"), json!(90.5)] {
+            let result = dispatch(
+                &ctx,
+                "delegate",
+                &json!({"action": "status", "cwd": tmp.path(), "wait_secs": bad}),
+            );
+            assert!(result.is_error, "{}", result.content);
+            assert!(result.content.contains("integer"), "{}", result.content);
+        }
+    }
+
+    /// T29 fix-up, FINDING 1 (spec req 2(b) shipped untested): the
+    /// liveness-flip wake leg. A REAL own child (the T28 fixtures' pattern) is
+    /// spawned with a static events fixture — so the ONLY thing that changes
+    /// during the wait is liveness — and its handle is dropped per the launch
+    /// contract, making the waitpid reap inside [`reap_and_alive`] the only
+    /// observer of the exit. It is SIGKILLed mid-wait; the wait must wake well
+    /// before the deadline with liveness flipped to dead.
+    ///
+    /// NON-VACUOUSNESS (validator mutant M7: the `liveness_flipped` check
+    /// gutted): the events stream never changes, so the gutted wait sleeps to
+    /// the full 30 s deadline — the elapsed bound below kills it. A mutant
+    /// that skips the waitpid reap keeps answering the zombie's `alive: true`
+    /// and fails the `alive: false` pin instead.
+    #[cfg(unix)]
+    #[test]
+    fn delegate_status_wait_wakes_early_when_child_dies_liveness_flip() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_events_fixture(tmp.path(), &[T29_RUN_START, T29_ITERATION]);
+        let child = Command::new("sleep").arg("30").spawn().unwrap();
+        let pid = child.id();
+        drop(child); // launch contract: detached, never waited by the handle
+        // The wait call blocks this thread, so the kill fires from a helper
+        // thread: the child dies mid-wait and stays a zombie for the seam.
+        let killer = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(300));
+            unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) };
+        });
+        let started = Instant::now();
+        let result = dispatch(
+            &delegate_ctx(tmp.path()),
+            "delegate",
+            &json!({"action": "status", "cwd": tmp.path(), "pid": pid, "wait_secs": 30}),
+        );
+        let elapsed = started.elapsed();
+        killer.join().unwrap();
+        assert!(!result.is_error, "{}", result.content);
+        // The flip woke the wait: well under the 30 s deadline (CI slack).
+        assert!(
+            elapsed < Duration::from_secs(15),
+            "liveness flip did not wake the wait early: {elapsed:?}"
+        );
+        // Liveness flipped to dead, with the wait leg's `waited:` line.
+        assert!(result.content.contains("alive: false"), "{}", result.content);
+        let waited = waited_secs_of(&result.content).expect("waited: line present");
+        assert!(waited < 30, "waited: {waited}s");
+        // The events state is unchanged (`last_iteration: 7`) — the wake came
+        // from the liveness flip, not from a state change.
+        assert!(result.content.contains("last_iteration: 7"), "{}", result.content);
+    }
+
+    /// T29 fix-up, FINDING 2 (spec req 2's "FIRST of" + "same payload as the
+    /// instant leg"): the deadline leg must render the FINAL state, not the
+    /// entry snapshot. With the 2.5 s cadence and `wait_secs: 2` there is
+    /// exactly ONE poll — at entry; the cadence sleep is capped at the
+    /// remaining 2 s, so nothing reads between the entry poll and the
+    /// deadline — and a writer landing inside that window is therefore
+    /// invisible to every intermediate poll: only a final read at the
+    /// deadline can see it.
+    ///
+    /// NON-VACUOUSNESS: removing the final read (the pre-fix deadline leg,
+    /// which rendered the entry snapshot) fails the `last_iteration: 8` pin —
+    /// that render carries the entry state, `last_iteration: none`. An
+    /// instant-return mutant fails the same pin (the writer has not run yet),
+    /// and both pass no timing bound to hide behind.
+    #[test]
+    fn delegate_status_wait_deadline_renders_final_state_not_entry_snapshot() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_events_fixture(tmp.path(), &[T29_RUN_START]);
+        let events = tmp.path().join(".chug/events.jsonl");
+        // Lands ~1 s in: after the entry poll (~0 ms) and before the 2 s
+        // deadline wake, with a full second of scheduling slack each side.
+        let writer = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(1000));
+            append_events_line(&events, "{\"type\":\"iteration\",\"ts\":\"t8\",\"n\":8}");
+        });
+        let ctx = delegate_ctx(tmp.path());
+        let started = Instant::now();
+        let result = dispatch(
+            &ctx,
+            "delegate",
+            &json!({"action": "status", "cwd": tmp.path(), "wait_secs": 2}),
+        );
+        let elapsed = started.elapsed();
+        writer.join().unwrap();
+        assert!(!result.is_error, "{}", result.content);
+        // The deadline leg ran: at least the entry poll's window elapsed.
+        assert!(
+            elapsed >= Duration::from_millis(1500),
+            "returned before the deadline could elapse: {elapsed:?}"
+        );
+        assert!(elapsed < Duration::from_secs(30), "overshot the 2s deadline: {elapsed:?}");
+        // The deadline render carries the FINAL state, not the entry snapshot.
+        assert!(result.content.contains("last_iteration: 8"), "{}", result.content);
+        assert!(result.content.contains("last_event: iteration t8"), "{}", result.content);
+        let waited = waited_secs_of(&result.content).expect("waited: line present");
+        assert!((1..=10).contains(&waited), "waited: {waited}s");
     }
 
     #[test]

@@ -132,7 +132,11 @@ the child `pid` and the log/events paths — it never waits on the child
 reports the child's liveness (when you pass the `pid`), a summary of its
 `.chug/events.jsonl` (state, `last_iteration` + `max_iters`, budget-low /
 goal / abort flags with the abort reason) and the tail of its console log —
-bounded tail reads only, so polling never blocks. Delegate paths are the
+bounded tail reads only, so instant polling never blocks. Optionally pass
+`wait_secs` (status-only; 0/absent = instant, max 600) to collapse each idle
+wait window into one blocking status call: it returns early when the child's
+state changes or its liveness flips to dead, else at the deadline, and names
+the actual elapsed seconds on a `waited:` line. Delegate paths are the
 one exception to cwd sandboxing: `cwd` and `spec` must be absolute and may
 lie outside your `--cwd`, because children live in scratch worktrees by
 design. Worktree creation, building, harvest/merge, and killing the child
