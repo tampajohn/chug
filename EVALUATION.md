@@ -827,3 +827,44 @@ that T58 makes resume expressible); the loopd-restart carry above.
 ### Cycle 12 (2026-09-25, ~18:55–20:57 EDT) — T28 landed (delegate status reaps zombies; impl a0a7c97, merge fcaa7c2, flip 07dd3af); T29 mid-arc at exit — validator #1 FAIL, wrap deferred (RECONSTRUCTED at cycle-13 wrap; deferred-wrap lesson)
 
 ### Cycle 13 (2026-09-25, ~20:58–22:55 EDT) — T29 recovered + landed (delegate wait_secs long-poll; impl 549d250 + fix-up e36b30c, merge 47dfcaf, flip cd7d43c) + T30 landed (worktree-relative check: rule; merge 00ce617, flip a1dde80) — queue drained; operator spec 9b7e904 absorbed mid-cycle; flake-family sightings handed to next eval
+
+### Cycle 34 (2026-09-26, ~09:55– EDT) — MANDATORY fresh eval (F13 SPLIT → T70/T71/T72 filed); T70 MID-ARC at budget wrap (validator-2 in flight)
+
+- **Eval committed `d5ddac5` + pushed.** ROADMAP PULL F13 executed as a
+  SPLIT (FEATURES.md working rules): phase 1 → T70 (pri 2), phases 2–3
+  deferred with written reasons (corpus + layad endpoint absent);
+  FEATURES.md F13 annotated SPLIT, not checked off. Incident rows T71
+  (tools.rs 5,233 — pre-declared ~4,500 trip line CROSSED; delegate
+  extraction, pri 3) + T72 (sweep-the-family fix-up doctrine — T69's
+  3-round vacuous-pin family; pri 3). I1 loopd-restart carry RESTATED
+  8th (cycle 32 died AT 120/120 mid-arc; digest stale at eval start,
+  6th manual regen). T63 resume watch CLOSED (2 live exercises
+  pre-cycle). README audit: 2nd consecutive zero-finding.
+- **T70 impl arc (per-item entry at the wrap, T34).** glm impl 50/50
+  BUDGET ABORT with work uncommitted (died running final gates — 6th
+  occurrence of the class) → **T63 THIRD live exercise: resume accepted
+  18/50** → first goal-gate REJECTION diagnosed by the child as a
+  cold-build flake (api.rs body_watchdog timing suspected; check re-run
+  4x green; NEW WATCH ITEM for the next eval) → goal accepted, committed
+  b98ca1c (+src/decisions.rs 562 lines, 2 registration lines tools.rs,
+  1 mod line, 4 LOOP-SPEC sentences, README list+sentence). **delegate
+  collect dogfooded live for the first time** at the review (verdict +
+  full summary + check cmd + scoped refs in one call; base param keeps
+  output small). Orchestrator gates independently re-run: clippy clean,
+  559/559 (7 suites), spec check verbatim — under target-shared.
+- **Kimi round 1 VERDICT: FAIL, 1 finding (29/50)** — implementation
+  verified correct and spec-complete, gates re-run green, 9/10 mutants
+  killed; the survivor: the schema pin's seed-class leg was VACUOUS
+  (looped over SEED_CLASSES, the const that generates the description;
+  M1a rename survived green). glm fix-up f50fac6 (tests-only +37/-1):
+  test-local PINNED_SEED_CLASSES literals + exact rendered-list leg
+  (per-token contains cannot kill a rename) + class sweep clean; M1a
+  proven RED post-fix. Kimi round-2 validator pid 54532 IN FLIGHT at
+  wrap. Recovery recipe on the T70 row; worktree PRESERVED; 7 artifacts
+  harvested (4 events incl. -inflight validator-2 snapshot, 2 ledgers,
+  check-rerun log).
+- **Deferred:** T71, T72 unworked — specs ready, strictly serial behind
+  T70 (file overlaps + doctrine isolation). T44/T45 unused (T70 doctrine
+  runs alone).
+- **Verdict: eval + T70 validated-in-flight; recovery is one collect
+  call at next cycle's start.**
