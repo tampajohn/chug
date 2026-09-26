@@ -242,6 +242,34 @@ words. If the queue outlives this cycle's budget, unworked rows stay
 
 ## Outcomes (filled at cycle wrap — LOOP-SPEC Phase 3)
 
+### Cycle 29 (2026-09-26, ~07:10–07:30 EDT) — MANDATORY fresh eval (queue EMPTY); T63 landed (doctrine: delegate resume recovery)
+
+**T63 — LOOP-SPEC adopts `delegate resume:true` as the standard child
+budget-death recovery (pri 2, DOCTRINE, LOOP-SPEC.md +
+tests/loop_spec_recovery.rs) → done `db539c9` (impl `12c3d40`, merge
+commit).** glm impl first-try goal-accepted at 29/50 in ~5 min: the
+recovery leg landed in step 2's polling paragraph exactly where specced
+(after "Exit of the pid = child done; then review.", before the nohup
+fallback — whose bytes survived byte-identical, pinned with escaped
+non-ASCII so editor normalization cannot silently unpin), naming the
+BUDGET-abort condition, the ONE-resume-attempt cap, the T19/T58
+mechanics, and the fix-up-children exclusion; 4 new pins (needle
+exactly-once, in-step-2 ordering, byte-exact fallback, mechanics window)
+with a deletion hand-check (3/4 red) plus two voluntary extra mutation
+checks. kimi adversarial validation VERDICT: PASS 16/50 — reqs 1–3
+verified point by point, the leg's `abort_reason: iteration budget
+exceeded` example fact-checked against src/tools.rs (accurate), gates
+independently re-run (521 green under target-shared-validate), and 5/5
+mutants killed (leg deletion, fallback rewrap, leg moved past step 3,
+duplicate cap needle, corrupt budgets); tree restored clean and
+re-verified. Orchestrator gates independently re-run in-worktree (521 +
+clippy under target-shared); post-merge gates 521 + clippy in main under
+target-shared-main. 4 artifacts harvested pre-removal (impl + validate
+event streams, validate verdict LEDGER, delegate.log). The loop's most
+common child failure (five 50/50-class deaths on record, latest = T58's
+own impl) now has an in-doctrine first recovery: one same-worktree
+`delegate resume:true` relaunch, then the standing T55/T28 recipes.
+
 ### Cycle 28 (2026-09-26, ~06:39–07:15 EDT) — freshness-skip; ALL 4 queued rows landed green (T58 + T62 resumed from cycle-27's wrap, T61 + T60 fresh) — QUEUE DRAINED
 
 **T58 — delegate launch gains `resume: true` + status summarizes the
