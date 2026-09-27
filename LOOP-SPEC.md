@@ -111,9 +111,17 @@ impl, never 2 impls):
    single non-blocking tool call reporting liveness, a summary of the
    child's `.chug/events.jsonl` (state, last_iteration,
    budget-low/goal/abort flags) and the console-log tail; it replaces the
-   old `ps -p <pid>` + `tail` + events-mtime bash triple — or pass
-   `wait_secs: 90` to collapse each idle wait window into one blocking
-   status call (it wakes early on a state change or an alive→dead flip).
+   old `ps -p <pid>` + `tail` + events-mtime bash triple. The DEFAULT wait
+   posture is the terminal long-poll — `delegate{action: "status", cwd,
+   pid, terminal: true, wait_secs: 600}` collapses the whole child run into
+   one blocking call that wakes only on the terminal facts (goal or abort
+   verdict, liveness alive→dead, events-file creation) or the deadline —
+   never on iteration advances or budget-low flags (the iteration
+   economics: one orchestrator iteration per child run, not per child
+   iteration — wake-on-advance cost ~40 orchestrator iterations per
+   40-iteration child even with `wait_secs: 600`). The significant wake
+   (`wait_secs` without `terminal`) and instant polls remain for active
+   monitoring — e.g. watching a known-flaky child's per-iteration progress.
    If status
    reports liveness unknown (pid omitted or lost), fall back to
    `ps -p <pid>`. Exit of the pid = child done; then review.

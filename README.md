@@ -214,7 +214,13 @@ blocking status call: it returns early when the child's iteration
 advances, a verdict or budget-low flag appears, or its liveness flips to
 dead (per-tool-call `last_event` churn renders at the deadline but never
 wakes it), else at the deadline, and names the actual
-elapsed seconds on a `waited:` line. `cwd` and `spec` must be absolute and
+elapsed seconds on a `waited:` line; adding `terminal: true` (status-only,
+default false, requires `wait_secs > 0`) narrows the wake set to the
+terminal facts — the goal or abort verdict, liveness alive→dead, or
+events-file creation — so a working child never wakes the wait on
+iteration advances (one orchestrator iteration per child run, not per
+child iteration), while telemetry still renders at the deadline. `cwd` and
+`spec` must be absolute and
 may target child worktrees outside your own `--cwd`; worktree creation,
 building, harvest/merge, and killing the child stay with your `bash`.
 

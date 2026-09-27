@@ -79,6 +79,14 @@ pub(crate) fn delegate(_ctx: &ToolCtx, input: &Value) -> anyhow::Result<ToolResu
                     "delegate: `wait_secs` applies to the status action only — launch returns at spawn and never waits on the child"
                 );
             }
+            // T89: the terminal wait flag is status-only for the same reason
+            // (same presence-based rejection style — even `false` names the
+            // constraint rather than being silently ignored).
+            if input.get("terminal").is_some() {
+                bail!(
+                    "delegate: `terminal` applies to the status action only — launch returns at spawn and never waits on the child"
+                );
+            }
             delegate_launch(input)
         }
         "status" => delegate_status(input),
@@ -90,6 +98,12 @@ pub(crate) fn delegate(_ctx: &ToolCtx, input: &Value) -> anyhow::Result<ToolResu
             if input.get("wait_secs").is_some() {
                 bail!(
                     "delegate: `wait_secs` applies to the status action only — collect never blocks or waits; long-poll with status first, then collect"
+                );
+            }
+            // T89: launch-leg parity for the terminal flag as well.
+            if input.get("terminal").is_some() {
+                bail!(
+                    "delegate: `terminal` applies to the status action only — collect never blocks or waits; long-poll with status first, then collect"
                 );
             }
             delegate_collect(input)
@@ -299,15 +313,30 @@ fn delegate_launch(input: &Value) -> anyhow::Result<ToolResult> {
 /// (pinned by test); with `wait_secs > 0` it is a bounded long-poll that
 /// blocks until the first significant change (T68 — iteration advance or
 /// verdict/budget-low flag; `last_event` churn never wakes), a liveness
-/// flip, or the deadline.
+/// flip, or the deadline. With `terminal: true` AND `wait_secs > 0` (T89)
+/// the same long-poll narrows its wake set to the terminal facts — the
+/// goal/abort verdict, a liveness flip to dead, events-file creation, or
+/// the deadline — never iteration advances or budget-low flags; the
+/// default (`terminal` absent/false) keeps the pre-T89 semantics exactly
+/// (pinned by test).
 fn delegate_status(input: &Value) -> anyhow::Result<ToolResult> {
-    // Parse the knob before any I/O so a bad value errors instantly even
+    // Parse the knobs before any I/O so a bad value errors instantly even
     // when `cwd` is also bad.
     let wait_secs = parse_wait_secs(input)?;
+    let terminal = parse_terminal(input)?;
+    // T89 req 2: a terminal wait with no wait window is a contradiction —
+    // the instant leg already exists, so a `terminal: true` poll without
+    // `wait_secs > 0` is a caller error, named as such (corrective error,
+    // never silent degradation into the instant leg).
+    if terminal && wait_secs.unwrap_or(0) == 0 {
+        bail!(
+            "delegate: `terminal: true` needs `wait_secs > 0` — a terminal instant poll is a contradiction; the terminal wait blocks until the goal/abort verdict, a liveness flip to dead, events-file creation, or this wait_secs deadline (max {DELEGATE_WAIT_MAX_SECS})"
+        );
+    }
     let cwd = delegate_cwd(input)?;
     let pid = input.get("pid").and_then(Value::as_u64);
     match wait_secs {
-        Some(secs) if secs > 0 => delegate_status_wait(&cwd, pid, secs),
+        Some(secs) if secs > 0 => delegate_status_wait(&cwd, pid, secs, terminal),
         // Absent and 0 are the same instant behavior — one code path, so the
         // byte-identical guarantee is structural, not hoped for.
         _ => delegate_status_now(&cwd, pid),
@@ -335,6 +364,17 @@ fn parse_wait_secs(input: &Value) -> anyhow::Result<Option<u64>> {
         bail!("delegate: `wait_secs` must be at most {DELEGATE_WAIT_MAX_SECS}, got {n}");
     }
     Ok(Some(n))
+}
+
+/// T89: parse the optional `terminal` flag (status only). Absent → `false`;
+/// boolean → its value; anything else → tool error, never a silent ignore
+/// (the `resume`/`max_tokens` parse precedent).
+fn parse_terminal(input: &Value) -> anyhow::Result<bool> {
+    match input.get("terminal") {
+        None => Ok(false),
+        Some(Value::Bool(b)) => Ok(*b),
+        Some(other) => bail!("delegate: `terminal` must be a boolean (status only), got {other}"),
+    }
 }
 
 /// The instant leg: bounded tail reads only, no waiting anywhere.
@@ -372,21 +412,34 @@ fn read_events(events_path: &Path) -> (DelegateSummary, Option<String>) {
     }
 }
 
-/// T29 + T68: the bounded long-poll. Block until the FIRST of:
+/// T29 + T68 + T89: the bounded long-poll. Block until the FIRST of:
 /// (a) the child's events-derived state changes SIGNIFICANTLY vs. the
-///     snapshot at entry — the wake set is `max_iters`, `last_iteration`,
-///     `budget_low_seen`, `goal_seen`, `abort_seen`, `abort_reason`
-///     ([`DelegateSummary::significant_ne`]) — or the events file's
-///     creation when it was missing at entry (the launch→build window is
-///     exactly this state). `last_event_type`/`last_event_ts` churn is
-///     deliberately NOT wake-worthy (T68): an active child appends a
-///     `tool_result` event every 2–10 s, so the pre-T68 any-field wake
-///     fired at the first poll tick almost every time and every
-///     `wait_secs: 90–110` long-poll collapsed back into per-tool-call
-///     polling. Churn is still RENDERED — the deadline leg's final read
-///     carries it — it just never wakes the wait;
+///     snapshot at entry — the default (pre-T89, significant) wake set is
+///     `max_iters`, `last_iteration`, `budget_low_seen`, `goal_seen`,
+///     `abort_seen`, `abort_reason` ([`DelegateSummary::significant_ne`]) —
+///     or the events file's creation when it was missing at entry (the
+///     launch→build window is exactly this state). `last_event_type`/
+///     `last_event_ts` churn is deliberately NOT wake-worthy (T68): an
+///     active child appends a `tool_result` event every 2–10 s, so the
+///     pre-T68 any-field wake fired at the first poll tick almost every
+///     time and every `wait_secs: 90–110` long-poll collapsed back into
+///     per-tool-call polling. Churn is still RENDERED — the deadline leg's
+///     final read carries it — it just never wakes the wait;
 /// (b) the observed liveness flips alive → dead;
 /// (c) the deadline elapses (`wait_secs`, already hard-capped at 600).
+///
+/// T89 `terminal` mode narrows the (a) wake set to the terminal facts —
+/// `goal_seen`/`abort_seen` present in the current read, plus events-file
+/// creation — so an actively-working child does NOT wake the wait on every
+/// iteration advance or budget-low flip (loop-level economics: one
+/// orchestrator iteration per child RUN, not per child iteration). The
+/// verdict flags are PRESENCE-based, not transition-based: a fact already
+/// observable at entry is returned immediately (the re-attach case — the
+/// wait has nothing left to wait for); in the normal launch→wait flow both
+/// flags are false at entry, so this coincides with the spec's "flips true"
+/// wording. The T58 segment reset keeps the flags describing the LATEST
+/// segment, so a resumed child re-arms them truthfully. Liveness and
+/// file-creation stay transition-based (entry snapshot).
 ///
 /// Never aborts the run (spec req 5): every internal error leg degrades to
 /// the instant-style answer instead of hanging or erroring — a mid-wait read
@@ -397,6 +450,7 @@ fn delegate_status_wait(
     cwd: &Path,
     pid: Option<u64>,
     wait_secs: u64,
+    terminal: bool,
 ) -> anyhow::Result<ToolResult> {
     let started = Instant::now();
     let deadline = started + Duration::from_secs(wait_secs);
@@ -458,8 +512,19 @@ fn delegate_status_wait(
         // file appearing when it was missing at entry. A diff confined to
         // `last_event_type`/`last_event_ts` (per-tool-call churn) must NOT
         // wake — it would fire at the first poll tick nearly every time.
-        let state_changed = now_summary.significant_ne(&entry_summary)
-            || (now_existed && !entry_existed);
+        // T89: terminal mode narrows this to the terminal facts — the
+        // goal/abort verdict flags (presence semantics, see the fn doc) and
+        // events-file creation; iteration advances, `budget_low_seen` flips,
+        // and `max_iters` appearance are progress telemetry that never wake
+        // a terminal wait. The wake cause is carried by the rendered flags
+        // themselves (`goal_seen: true` …) — no new render lines.
+        let state_changed = if terminal {
+            now_summary.goal_seen
+                || now_summary.abort_seen
+                || (now_existed && !entry_existed)
+        } else {
+            now_summary.significant_ne(&entry_summary) || (now_existed && !entry_existed)
+        };
         // Req 2(b): the observed liveness flipped alive → dead.
         let liveness_flipped = entry_alive == Some(true) && now_alive == Some(false);
         if state_changed || liveness_flipped {
@@ -2048,6 +2113,435 @@ log_tail: (none)";
         assert!(result.content.contains("last_event: goal t2"), "{}", result.content);
         let waited = waited_secs_of(&result.content).expect("waited: line present");
         assert!(waited < 30, "waited: {waited}s");
+    }
+
+    // ---- T89: the terminal wait mode ----
+
+    /// The iteration bump + budget-low lines the T89 fixtures append
+    /// mid-wait (progress telemetry: significant for the pre-T89 wake set,
+    /// deliberately NOT for a terminal wait).
+    const T89_ITERATION_BUMP: &str = "{\"type\":\"iteration\",\"ts\":\"t5\",\"n\":8}";
+    const T89_BUDGET_LOW: &str =
+        "{\"type\":\"budget_low\",\"ts\":\"t5\",\"threshold\":0.8}";
+
+    /// T89 req 1 + 3: with `terminal: true`, an ITERATION ADVANCE does not
+    /// wake the wait — the wait runs to its (short) deadline — while the
+    /// SAME fixture pattern DOES wake a significant-mode wait
+    /// (non-vacuousness of both legs at once).
+    ///
+    /// Timing: the writer lands at ~0.3 s; with `wait_secs: 3` and the 2.5 s
+    /// cadence there is exactly one mid-wait poll tick (~2.5 s), where the
+    /// bump IS visible — so a terminal wait that (wrongly) woke on iteration
+    /// advances returned there (~2.5 s, under the elapsed lower bound), while
+    /// the pinned behavior runs to the deadline leg. The bump is still
+    /// RENDERED: the deadline leg's final read carries `last_iteration: 8`.
+    #[test]
+    fn delegate_status_terminal_wait_ignores_iteration_advance_that_wakes_significant_mode() {
+        // Leg A: terminal mode — the iteration advance must NOT wake.
+        let tmp = tempfile::tempdir().unwrap();
+        write_events_fixture(tmp.path(), &[T29_RUN_START]);
+        let events = tmp.path().join(".chug/events.jsonl");
+        let writer = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(300));
+            append_events_line(&events, T89_ITERATION_BUMP);
+        });
+        let ctx = delegate_ctx(tmp.path());
+        let started = Instant::now();
+        let result = dispatch(
+            &ctx,
+            "delegate",
+            &json!({
+                "action": "status",
+                "cwd": tmp.path(),
+                "terminal": true,
+                "wait_secs": 3
+            }),
+        );
+        let elapsed = started.elapsed();
+        writer.join().unwrap();
+        assert!(!result.is_error, "{}", result.content);
+        // NOT early: only the deadline leg (>= 3 s) satisfies this — a
+        // terminal wait waking on the ~2.5 s iteration tick fails here.
+        assert!(
+            elapsed >= Duration::from_millis(2900),
+            "iteration advance woke a terminal wait early: {elapsed:?}"
+        );
+        assert!(elapsed < Duration::from_secs(30), "terminal wait hung: {elapsed:?}");
+        let waited = waited_secs_of(&result.content).expect("waited: line present");
+        assert!(waited >= 3, "waited: {waited}s — terminal wait woke early");
+        // The advance is RENDERED by the deadline leg's final read (telemetry
+        // the terminal wait declined to wake on, not an entry snapshot).
+        assert!(result.content.contains("last_iteration: 8"), "{}", result.content);
+        assert!(result.content.contains("state: running"), "{}", result.content);
+        assert!(result.content.contains("goal_seen: false"), "{}", result.content);
+
+        // Leg B: the SAME fixture pattern DOES wake significant mode — the
+        // pre-T89 contract is untouched (non-vacuousness of leg A).
+        let tmp2 = tempfile::tempdir().unwrap();
+        write_events_fixture(tmp2.path(), &[T29_RUN_START]);
+        let events2 = tmp2.path().join(".chug/events.jsonl");
+        let writer2 = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(300));
+            append_events_line(&events2, T89_ITERATION_BUMP);
+        });
+        let started2 = Instant::now();
+        let result2 = dispatch(
+            &delegate_ctx(tmp2.path()),
+            "delegate",
+            &json!({"action": "status", "cwd": tmp2.path(), "wait_secs": 30}),
+        );
+        let elapsed2 = started2.elapsed();
+        writer2.join().unwrap();
+        assert!(!result2.is_error, "{}", result2.content);
+        assert!(
+            elapsed2 < Duration::from_secs(15),
+            "significant-mode wait did not wake on the iteration advance: {elapsed2:?}"
+        );
+        assert!(result2.content.contains("last_iteration: 8"), "{}", result2.content);
+    }
+
+    /// T89 req 1: with `terminal: true`, a `budget_low_seen` flip does NOT
+    /// wake the wait (deadline leg) — budget-low is progress telemetry the
+    /// orchestrator does not act on mid-child; the flag is still RENDERED by
+    /// the deadline leg's final read. Timing as in the iteration pin above:
+    /// `wait_secs: 3` gives the flip one visible poll tick (~2.5 s), so a
+    /// mutant waking on it returns under the elapsed lower bound.
+    #[test]
+    fn delegate_status_terminal_wait_ignores_budget_low_flip() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_events_fixture(tmp.path(), &[T29_RUN_START]);
+        let events = tmp.path().join(".chug/events.jsonl");
+        let writer = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(300));
+            append_events_line(&events, T89_BUDGET_LOW);
+        });
+        let ctx = delegate_ctx(tmp.path());
+        let started = Instant::now();
+        let result = dispatch(
+            &ctx,
+            "delegate",
+            &json!({
+                "action": "status",
+                "cwd": tmp.path(),
+                "terminal": true,
+                "wait_secs": 3
+            }),
+        );
+        let elapsed = started.elapsed();
+        writer.join().unwrap();
+        assert!(!result.is_error, "{}", result.content);
+        assert!(
+            elapsed >= Duration::from_millis(2900),
+            "budget_low flip woke a terminal wait early: {elapsed:?}"
+        );
+        assert!(elapsed < Duration::from_secs(30), "terminal wait hung: {elapsed:?}");
+        let waited = waited_secs_of(&result.content).expect("waited: line present");
+        assert!(waited >= 3, "waited: {waited}s — terminal wait woke early");
+        // Rendered at the deadline, never wake-worthy: the T89 defect shape.
+        assert!(result.content.contains("budget_low_seen: true"), "{}", result.content);
+        assert!(result.content.contains("goal_seen: false"), "{}", result.content);
+    }
+
+    /// T89 req 1(a): a terminal wait wakes EARLY on a `goal_seen` flip —
+    /// the child claimed its goal, the first of the four terminal facts.
+    ///
+    /// NON-VACUOUSNESS: the render pins (`goal_seen: true`, `state: done`)
+    /// kill an entry-snapshot mutant, and the elapsed bound kills a
+    /// sleeps-to-deadline mutant (the goal is on disk at the ~2.5 s tick;
+    /// the 30 s deadline is far).
+    #[test]
+    fn delegate_status_terminal_wait_wakes_early_on_goal_flag() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_events_fixture(tmp.path(), &[T29_RUN_START]);
+        let events = tmp.path().join(".chug/events.jsonl");
+        let writer = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(300));
+            append_events_line(
+                &events,
+                "{\"type\":\"goal\",\"ts\":\"t2\",\"outcome\":\"accepted\",\"summary\":\"all done\"}",
+            );
+        });
+        let ctx = delegate_ctx(tmp.path());
+        let started = Instant::now();
+        let result = dispatch(
+            &ctx,
+            "delegate",
+            &json!({
+                "action": "status",
+                "cwd": tmp.path(),
+                "terminal": true,
+                "wait_secs": 30
+            }),
+        );
+        let elapsed = started.elapsed();
+        writer.join().unwrap();
+        assert!(!result.is_error, "{}", result.content);
+        assert!(
+            elapsed < Duration::from_secs(15),
+            "terminal wait did not wake on the goal flip: {elapsed:?}"
+        );
+        assert!(result.content.contains("goal_seen: true"), "{}", result.content);
+        assert!(result.content.contains("state: done"), "{}", result.content);
+        let waited = waited_secs_of(&result.content).expect("waited: line present");
+        assert!(waited < 30, "waited: {waited}s");
+    }
+
+    /// T89 req 1(b): a terminal wait wakes EARLY on an `abort_seen` flip
+    /// (the `abort_reason` rides the same `abort` line — covered by the same
+    /// wake), carrying the abort verdict.
+    #[test]
+    fn delegate_status_terminal_wait_wakes_early_on_abort_flag() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_events_fixture(tmp.path(), &[T29_RUN_START]);
+        let events = tmp.path().join(".chug/events.jsonl");
+        let writer = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(300));
+            append_events_line(
+                &events,
+                "{\"type\":\"abort\",\"ts\":\"t2\",\"reason\":\"iteration budget exceeded\"}",
+            );
+        });
+        let ctx = delegate_ctx(tmp.path());
+        let started = Instant::now();
+        let result = dispatch(
+            &ctx,
+            "delegate",
+            &json!({
+                "action": "status",
+                "cwd": tmp.path(),
+                "terminal": true,
+                "wait_secs": 30
+            }),
+        );
+        let elapsed = started.elapsed();
+        writer.join().unwrap();
+        assert!(!result.is_error, "{}", result.content);
+        assert!(
+            elapsed < Duration::from_secs(15),
+            "terminal wait did not wake on the abort flip: {elapsed:?}"
+        );
+        assert!(result.content.contains("abort_seen: true"), "{}", result.content);
+        assert!(
+            result.content.contains("abort_reason: iteration budget exceeded"),
+            "{}",
+            result.content
+        );
+        assert!(result.content.contains("state: aborted"), "{}", result.content);
+    }
+
+    /// T89 req 1(c): a terminal wait wakes EARLY on the observed liveness
+    /// flip alive → dead — the real-process leg per the existing liveness
+    /// tests (T29 fix-up FINDING 1's pattern): a REAL own child, handle
+    /// dropped per the launch contract, SIGKILLed mid-wait; the events
+    /// stream never changes, so liveness is the ONLY wake available.
+    #[cfg(unix)]
+    #[test]
+    fn delegate_status_terminal_wait_wakes_when_child_dies_liveness_flip() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_events_fixture(tmp.path(), &[T29_RUN_START, T29_ITERATION]);
+        let child = Command::new("sleep").arg("30").spawn().unwrap();
+        let pid = child.id();
+        drop(child); // launch contract: detached, never waited by the handle
+        let killer = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(300));
+            unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) };
+        });
+        let started = Instant::now();
+        let result = dispatch(
+            &delegate_ctx(tmp.path()),
+            "delegate",
+            &json!({
+                "action": "status",
+                "cwd": tmp.path(),
+                "pid": pid,
+                "terminal": true,
+                "wait_secs": 30
+            }),
+        );
+        let elapsed = started.elapsed();
+        killer.join().unwrap();
+        assert!(!result.is_error, "{}", result.content);
+        assert!(
+            elapsed < Duration::from_secs(15),
+            "terminal wait did not wake on the liveness flip: {elapsed:?}"
+        );
+        assert!(result.content.contains("alive: false"), "{}", result.content);
+        // The events state is unchanged — the wake came from the flip.
+        assert!(result.content.contains("last_iteration: 7"), "{}", result.content);
+    }
+
+    /// T89 req 1(d): a terminal wait wakes EARLY when the events file is
+    /// CREATED mid-wait (missing at entry — the launch→build window).
+    #[test]
+    fn delegate_status_terminal_wait_wakes_on_events_file_creation() {
+        let tmp = tempfile::tempdir().unwrap();
+        let events = tmp.path().join(".chug/events.jsonl");
+        let writer = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(300));
+            fs::create_dir_all(events.parent().unwrap()).unwrap();
+            fs::write(&events, format!("{T29_RUN_START}\n")).unwrap();
+        });
+        let ctx = delegate_ctx(tmp.path());
+        let started = Instant::now();
+        let result = dispatch(
+            &ctx,
+            "delegate",
+            &json!({
+                "action": "status",
+                "cwd": tmp.path(),
+                "terminal": true,
+                "wait_secs": 30
+            }),
+        );
+        let elapsed = started.elapsed();
+        writer.join().unwrap();
+        assert!(!result.is_error, "{}", result.content);
+        assert!(
+            elapsed < Duration::from_secs(15),
+            "terminal wait did not wake on events-file creation: {elapsed:?}"
+        );
+        assert!(result.content.contains("state: running"), "{}", result.content);
+        assert!(result.content.contains("last_event: run_start t0"), "{}", result.content);
+    }
+
+    /// T89 req 2: the rejection legs. `terminal: true` with `wait_secs`
+    /// absent — or explicitly `0` — is a tool error naming that terminal
+    /// waits need `wait_secs > 0` (a terminal instant poll is a
+    /// contradiction; corrective error, never silent degradation); a
+    /// non-boolean `terminal` is a tool error too; and `terminal` on
+    /// `launch` or `collect` is the same presence-based rejection the
+    /// `wait_secs` arm uses.
+    #[test]
+    fn delegate_terminal_rejection_legs() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_events_fixture(tmp.path(), &[T29_RUN_START]);
+        let ctx = delegate_ctx(tmp.path());
+
+        // status + terminal: true, wait_secs absent.
+        let result = dispatch(
+            &ctx,
+            "delegate",
+            &json!({"action": "status", "cwd": tmp.path(), "terminal": true}),
+        );
+        assert!(result.is_error, "{}", result.content);
+        assert!(
+            result.content.contains("wait_secs > 0"),
+            "rejection must name the wait_secs > 0 requirement: {}",
+            result.content
+        );
+        assert!(
+            result.content.contains("terminal"),
+            "rejection must name the terminal flag: {}",
+            result.content
+        );
+
+        // status + terminal: true, wait_secs: 0 — the instant leg is still a
+        // contradiction for a terminal wait.
+        let result = dispatch(
+            &ctx,
+            "delegate",
+            &json!({"action": "status", "cwd": tmp.path(), "terminal": true, "wait_secs": 0}),
+        );
+        assert!(result.is_error, "{}", result.content);
+        assert!(
+            result.content.contains("wait_secs > 0"),
+            "wait_secs: 0 must be rejected the same way: {}",
+            result.content
+        );
+
+        // Non-boolean terminal: tool error, never a silent ignore.
+        for bad in [json!("true"), json!(1)] {
+            let result = dispatch(
+                &ctx,
+                "delegate",
+                &json!({"action": "status", "cwd": tmp.path(), "terminal": bad, "wait_secs": 5}),
+            );
+            assert!(result.is_error, "{bad}: {}", result.content);
+            assert!(
+                result.content.contains("boolean"),
+                "{bad} must be rejected as non-boolean: {}",
+                result.content
+            );
+        }
+
+        // terminal on launch: rejected on PRESENCE (even `false`), same
+        // style as the wait_secs arm.
+        let result = dispatch(
+            &ctx,
+            "delegate",
+            &json!({
+                "action": "launch",
+                "cwd": tmp.path(),
+                "spec": "/tmp/chug-stub-spec.md",
+                "goal": "g",
+                "model": "m",
+                "terminal": true
+            }),
+        );
+        assert!(result.is_error, "{}", result.content);
+        assert!(
+            result.content.contains("status action only"),
+            "launch rejection must name that terminal is status-only: {}",
+            result.content
+        );
+
+        // terminal on collect: rejected the same way.
+        let result = dispatch(
+            &ctx,
+            "delegate",
+            &json!({"action": "collect", "cwd": tmp.path(), "terminal": true}),
+        );
+        assert!(result.is_error, "{}", result.content);
+        assert!(
+            result.content.contains("status action only"),
+            "collect rejection must name that terminal is status-only: {}",
+            result.content
+        );
+    }
+
+    /// T89 schema pin (T41 convention): the `terminal` property is described
+    /// as status-only, boolean, default false, and names its wake set
+    /// (terminal facts only — no iteration/budget-low wake).
+    #[test]
+    fn delegate_schema_pins_terminal_property() {
+        let schemas = tool_schemas();
+        let schema = schemas
+            .iter()
+            .find(|s| s.get("name").and_then(Value::as_str) == Some("delegate"))
+            .expect("exactly one delegate schema (pinned elsewhere)");
+        let terminal = schema["input_schema"]["properties"]["terminal"]
+            .as_object()
+            .expect("terminal property");
+        assert_eq!(terminal.get("type").and_then(Value::as_str), Some("boolean"));
+        let desc = terminal
+            .get("description")
+            .and_then(Value::as_str)
+            .expect("terminal property carries a description");
+        assert!(
+            desc.contains("status only"),
+            "terminal must be described as status-only: {desc}"
+        );
+        assert!(
+            desc.contains("default false"),
+            "terminal must name its default: {desc}"
+        );
+        assert!(
+            desc.contains("goal_seen") && desc.contains("abort_seen"),
+            "terminal must name the verdict-flag wake set: {desc}"
+        );
+        assert!(
+            desc.contains("wait_secs > 0"),
+            "terminal must name its wait_secs > 0 requirement: {desc}"
+        );
+        // The tool description names the terminal mode too (doc honesty).
+        let tool_desc = schema
+            .get("description")
+            .and_then(Value::as_str)
+            .expect("delegate tool description");
+        assert!(
+            tool_desc.contains("terminal"),
+            "tool description must name the terminal wait mode: {tool_desc}"
+        );
     }
 
     /// T68 schema pin (T22/T41 convention): the LIVE `tool_schemas()` delegate
