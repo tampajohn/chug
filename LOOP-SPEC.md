@@ -150,11 +150,31 @@ impl, never 2 impls):
    cycle 22: the t49 gates executed a validator's leftover mutant and ran it
    as their own). The gates dir persists across cycles like the others (warm
    after a first cold build). Never trust a claim of green without seeing it.
+   **Docs-only rounds skip the cargo gates (T80).** When the round diff
+   touches ONLY `*.md` — file-extension-exact, not "mostly docs" — gates
+   shrink to the guard floor `cargo test --test todo_consistency` (still
+   under the bounded-cap rule, same env prefix as the full gate), plus
+   `bash -n` on any `.sh` in the diff, and the full build/clippy/test is
+   skipped at review AND post-merge (step 5 applies the same
+   classification). The classification is mechanical and stated as a
+   template — `git diff --name-only main...<branch> | grep -qvE '\.md$'`:
+   exit 0 (some changed file does not end `.md`) → full gates; exit 1
+   (every changed file ends `.md`) → the reduced set.
+   `tests/todo_consistency.rs` covers the actual docs-only risk surface
+   (table format, doctrine tokens), so a README clause or a doctrine
+   sentence cannot go red in the full suite — for those diffs the full
+   runs are pure latency. Any ambiguity in the classification — a
+   predicate that cannot be evaluated, a diff shape it does not fit —
+   defaults to full gates.
 4. **Adversarial validation (kimi, REQUIRED** for any item touching
    src/driver.rs, src/api.rs, src/tools.rs, src/events.rs, or the loop/spec
    doctrine itself; optional for docs/tests-only items): META-SPEC §6
    verbatim — VERDICT: PASS/FAIL + numbered findings, mutation-testing where
-   feasible. The validation child launches exactly like step 2 — a
+   feasible. A validator on a docs-only round keeps its judgment: it may
+   shrink its own gate run to step 3's guard floor, and it retains the
+   right to run the full suite anyway when the doc diff quotes commands or
+   check lines (the T67 class — a spec `check:` line IS executable text).
+   The validation child launches exactly like step 2 — a
    `delegate` launch with model `anthropic-system.ai.kimi-k3`,
    `max_iters: 50`, `max_minutes: 30` (§6's budgets with T21-class
    widened iterations, passed explicitly — minutes is 30, not
@@ -198,6 +218,10 @@ impl, never 2 impls):
    gates). The gate command is the T78 release form:
    `cargo test --release -- --test-threads=4` under the bounded cap — same
    tradeoff as step 3, and the dir is warm after its first release build.
+   Docs-only rounds (step 3's classification — every changed file ends
+   `.md`) shrink the post-merge gate the same way: the guard floor
+   replaces the full suite here too, and the main-dedicated-dir rule
+   above still governs every cargo run that does happen.
    Why a main-dedicated dir (T57):
    cargo's artifact filename excludes the checkout path, so a shared dir's
    artifact slots are last-builder-wins — and only a dir whose builders are
