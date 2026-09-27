@@ -264,6 +264,13 @@ reasons carried); delegate.rs (3,498) / tgrep.rs (2,527) module sizes.
 
 ## Outcomes (filled at cycle wrap — LOOP-SPEC Phase 3)
 
+### Cycle 52 (2026-09-27) — routine glm freshness-skip; T90 LANDED (e9afed9, fast-forward merge) — F4 permissions phase 1: the deny-only fail-closed policy layer
+
+- **T90 LANDED** (e9afed9): `.chug/permissions.json` deny-list — new `src/permissions.rs` (363 prod lines, at the ~350 guard's edge) holds all policy logic: absent/empty config = zero rules + zero cost; malformed config fails OPEN (one stderr warn + one `permission_error` line, T83 parity); per-rule malformed legs (unknown key, two matchers, non-string value, missing tool, matcher-that-cannot-fit) are skipped in place with valid siblings still denying; deny rules are a tool glob + at most one `command`/`path`/`url` arg matcher, first-match-wins, missing/non-string arg under an arg rule fails toward execution; deny text `[permission denied] <rule summary>`. Driver gates dispatch FIRST (permissions → PreToolUse hooks → plan/MCP/risk gate) riding the T83 `blocked` flag in run+chat+plan, so a denied call fires no hooks and never executes. `hooks::glob_matches` made pub(crate), reused byte-identically. README Permissions section integrated after Hooks; FEATURES F4 row annotated at flip. 24 tests (17 unit + 7 driver integration incl. ZERO-hook-fires ordering pins + plan-mode leg + fail-open-exactly-once).
+- **Arc shape**: glm impl run1 aborted 50/50 uncommitted (ceiling-zone, +511/−2 staged) → T63 resume #19 (d1790550858-1) ACCEPTED 10/50 in ~2 min — the resume continues the transcript and finished clean. kimi REQUIRED validation (driver.rs + events.rs on the §2 step-4 list; routing d1790551117-2) pid 83896 VERDICT PASS 0 blocking 38/50 (verdict d1790551730-3): gates independently re-run under target-shared-validate (build + clippy + 745/745 fallback-release + spec check 19/19), 6/6 mutants RED in 2 parallel T79 waves with role-keyed mut dirs. Review + post-merge gates 745/745 fallback-release (nextest absent per T82) + clippy under target-shared / target-shared-main.
+- **Validator's 4 non-blocking findings (carried for next eval)**: (1) the load-time matcher-fit `mcp__` canary over-rejects server-specific globs like `mcp__fs__*` + path (fail-open, operator-visible — a skipped-rule warn, never a silent dead deny; phase-2 candidate: canary should accept any `mcp__*`-prefixed tool glob); (2) the spec-check filter `cargo test --bin chug permissions` misses the 5 strongest driver-integration legs (a mutant survived under the plural filter, killed under `permission` — spec-authoring lesson: check filters should be the broader stem); (3) the stderr warn-once latch is not test-observable (events line is, stderr isn't); (4) size at the guard's edge (363 vs ~350).
+- Cycle notes: freshness-skip per predicate (1 todo row + same-day EVALUATION.md; loopd routed routine glm, d1790550858-1 era). Opened by landing cycle-51's wrap remainder (21a76a6: T90 not-started note + cycle-level notes + cycle-44 compaction) — the previous cycle died at goal_complete with its wrap uncommitted; the eval commit was durable but the final EVALUATION.md push wasn't. Queue is now EMPTY (T1–T90 all done): next cycle's freshness predicate will NOT hold on the queue half → eval cycle on kimi unless rows are filed. `com.tampajohn.chug-loopd.plist` remains untracked at repo root (operator's launchd unit — left alone, operator's call).
+
 ### Cycle 51 (2026-09-27) — fresh eval (kimi, loopd-routed: queue empty) — T88 + T89 + T90 filed; T88 + T89 LANDED
 
 **T89 delegate terminal-wait + LOOP-SPEC adoption — LANDED, merge d2b402a.**
@@ -355,6 +362,7 @@ will need label cleaning; generalized get_str received-keys diagnosis is
 a next-eval row candidate, REQUIRED-listed tools.rs).
 
 ### Cycle 50 (2026-09-27) — routine glm freshness-skip; T85+T86+T87 bundle LANDED (merge 2440520) — cycle-49's mid-arc recovery executed end-to-end
+
 - **T85 (128a4b3)** — the bash escape hatch is now doctrine in both review and validation surfaces: LOOP-SPEC §2 step 3's Review paragraph gains the parenthetical after "read the child's ledger if ambiguous" (file tools are cwd-confined and refuse `/tmp/chug-loop-*` paths with `path escapes cwd`; read worktree files via bash) and META-SPEC §6's validator goal template gains the same sentence after "weak tests." kimi (pid 14318) VERDICT PASS 0 blocking at 18/50: token verified in both required positions, §6 confirmed single edit point, pin-safety verified (zero pinned needles in inserted lines, all pin files green), gates re-run under target-shared-validate (build + clippy + nextest 704/704 + spec check), M1 loop-spec-insertion-removed + M2 meta-spec-insertion-removed both RED via parallel T79 throwaway worktrees (removed; byte-clean restore). Origin: cycle-47 eval I3.
 - **T86 (da1c51a)** — README Development `src/{...}` list gains tgrep, plan, hooks; set-equality verified 27/27 against `ls src/*.rs` minus main.rs by both the child and the orchestrator independently. Origin: cycle-47 eval §6(c) — first staleness finding in four audits.
 - **T87 (ba5a9a0)** — the unreachable `bash -n` leg is gone from the docs-only guard floor (an all-`.md` diff cannot contain a `.sh`) and the "cannot go red" overclaim is replaced with the honest risk model: an md-only edit touching a PINNED doctrine carrier (`tests/loop_spec_*.rs`, `shared_target_dir.rs`, `nextest_gate_runner.rs`) CAN go red, so the editor ALSO runs the affected pin file's tests (seconds) before shrinking gates, with doubt keeping the existing ambiguity default. Same commit updates `tests/loop_spec_docs_only_gates.rs`: BASH_N const/entry/docs removed, new pin leg (i) asserts RISK_CARRIER + RISK_EDITOR exactly-once whole-file AND inside step 3's window (wrap-insensitive flat idiom); `nextest_gate_runner.rs` byte-untouched. Both RED legs proven by the impl child: re-inserting the leg fails the negated grep while the pin file stays green (nothing blesses it), deleting the risk-model sentence turns the new pin RED. Origin: cycle-44 T80 validator carry (cycle-47 eval §2).
@@ -397,98 +405,7 @@ a next-eval row candidate, REQUIRED-listed tools.rs).
 
 ### Cycle 39 (2026-09-26, ~20:1x-21:2x EDT) — freshness-skip; T76 + T77 both recovered and LANDED (merges 355f253, fedb9ef; pushed 26b547d, 09d9f03); T78 MID-ARC (impl in flight)
 
-- **T76 landed** (tgrep token-budgeted ranked context retrieval, 13th
-  tool; merge `355f253`, branch loop-t76 at `30dacb3`). Recovered from
-  cycle-38 wrap state: kimi R5 validator (pid 74446) was in flight,
-  delivered VERDICT PASS 0 blocking (47/50): 8 fresh mutants ALL caught
-  RED incl. MARKER_RESERVE 96→32 subtle shrink (band-calibrated reserve
-  tests genuinely straddle the marker band) and packing break→continue;
-  worktree verified byte-exact post-revert; spec 5/5 requirements
-  confirmed incl. the 300-hit scripted driver integration. 4 non-blocking
-  observations carried for a future eval (glob arm lacks the walk arm's
-  64 MiB aggregate cap; symbols_skeleton no 1 MiB per-file cap; degenerate
-  <40-token budgets floor at 1; decl_kind extern word-boundary nit).
-  FIVE validation rounds total: R1 merge-radius contradiction + vacuous
-  basename, R2 symbols declaration-dropping class, R3 MARKER_RESERVE band
-  + symbols resumption (3 survivors), R4 flaky perf pin straddling the
-  70-140ms load band (21/21 mutants RED), R5 PASS. Orchestrator
-  post-merge gates independently re-run 627/627 + clippy under
-  target-shared-main. 16 artifacts harvested pre-merge (10 event streams
-  incl. 2 abort+resume two-segment files = T63 resume pairs, 5 validator
-  LEDGERs, child decisions.jsonl). Acceptance-telemetry leg is a
-  later-cycle Outcomes item per the R5 report.
-- **T77 mid-arc**: fix-up-1 (pid 74447) goal accepted 38/50 → `a34d0c0`
-  tests-only (+204 lines, zero production changes vs `a5de407`): all 3
-  R1 surviving mutants killed with individually RED-proven tests
-  (pairing_unsafe chooser guard 2 fixtures, SEGMENT_TOKENS 16k pin
-  24-message granularity fixture, !seg.complete young-remainder leg) +
-  sweep-the-family. Orchestrator gates independently re-run 594/594 +
-  clippy under target-shared. Kimi R2 validator IN FLIGHT (pid 7916,
-  REQUIRED driver.rs, routing d1790468299-1, verdict record pending).
-- **T77 landed** (cache-stable transcript trimming — segment-frozen
-  prefix; merge `fedb9ef`, branch loop-t77 at `f83a9e7`). Recovered from
-  cycle-38 wrap state: fix-up-1 (pid 74447) accepted 38/50 → `a34d0c0`
-  tests-only (+204/−0), orchestrator gates independently 594/594. Kimi R2
-  FAIL ONE blocking (S1 stop-at-target break deletable — over-collapse
-  unpinned; R1's 3 mutants confirmed RED; S10 `seg.collapsed` disjunct
-  proven equivalent non-blocking) → fix-up-2 run1 50/50 abort with work
-  done uncommitted → T63 ELEVENTH resume accepted 7/50 → `f83a9e7`
-  tests-only (+237/−0, 6 mutants RED-proven: M1 stop-at-target, M2
-  pool-exhaustion, M3/M3b KEEP_LAST both directions, M4 segment-advance,
-  M5 engage-gate est∈(80k,120k] band — the child caught its own
-  first-surviving M5 fixture and rewrote it into the killing band).
-  Kimi R3 VERDICT PASS 0 blocking (49/50): S1 CLOSED RED by
-  `trim_stops_at_target_exact_collapse_extent` (6 markers vs pinned
-  exactly-4), production byte-identical f83a9e7 vs a5de407, 599/599 +
-  clippy on shasum-verified clean tree, 2 non-blocking benign
-  single-token boundary survivors (measure-zero vs the spec's own ~16k
-  estimate). Merge clean (no driver.rs conflicts vs T76). Post-merge
-  gates 641/641 + clippy under target-shared-main. 12 artifacts
-  harvested (6 event streams incl. 3 abort+resume two-segment T63 pairs,
-  5 LEDGERs, child decisions.jsonl). Spec repo-context line corrected
-  (trimming lives in driver.rs, not transcript.rs). Langfuse telemetry
-  acceptance leg is a later-cycle Outcomes item.
-- T44 overlap #6: T77 R2 validator (reads/mutates its own worktree) ran
-  concurrently with the T76 main-checkout merge + post-merge gates —
-  disjoint write surfaces, merges stayed serial (T76 first).
-- **T78 MID-ARC at budget wrap** (8 iters left): impl child pid 20743 IN
-  FLIGHT (glm 50/35, /tmp/chug-loop-t78, loop-t78 at 09d9f03 base,
-  worktree preserved). Full recovery recipe on the T78 row. Dispatch
-  record d1790471401-24 (mis-classed validation-routing in wrap haste;
-  it was the solo-dispatch routing — doctrine never overlaps).
-- Cycle-39 ledger: T76 + T77 both recovered from cycle-38 MID-ARC state
-  and LANDED with pushes (26b547d, 09d9f03). TWO double-recoveries
-  closed. T63 resume 2x this cycle (T77 fix-up-2 run1 abort → resume
-  accepted 7/50; career 11/11) — plus one NOT needed (T76 R5 validator
-  finished on its own). Validators caught: nothing new post-recovery —
-  R5 (T76) PASS first-try this cycle, T77 R2's S1 over-collapse survivor
-  was the cycle's one blocking catch (collapse-EXTENT pin class: assert
-  exact marker counts + verbatim survivors, not ≤bounds — closed by
-  f83a9e7 and proven RED in R3). T44 overlap #6 (T77 R2 validator ∥ T76
-  main-merge, disjoint surfaces, serial merges kept). Host external load
-  eased mid-cycle (mutant cycles back to seconds by ~01:00 UTC).
-- Cycle-39 records: d1790468299-1 (T77 R2 routing), d1790468338-2 (T76
-  R5 PASS), d1790468491-3..-10 (T76 backfills x8), d1790469659-11 (T77
-  R2 FAIL), d1790470425-12 (fixup-2 T63 recovery), d1790470664-13 (T77
-  R3 routing), d1790471194-14 (T77 R3 PASS), d1790471336-15..-23 (T77
-  backfills x9), d1790471401-24 (T78 dispatch).
-- Carried with ready specs: T78 (MID-ARC, recipe on row), T80/T81
-  (pri 2 doctrine), T75/T79/T82 (pri 3 doctrine) — all doctrine, all run
-  alone, no overlap possible. Final main gates this cycle: 641/641 +
-  clippy under target-shared-main at fedb9ef (only doc/bookkeeping
-  commits since).
-
 ### Cycle 38 (2026-09-26) — freshness-skip; T76 + T77 MID-ARC at budget wrap, nothing merged
-
-- Freshness rule fired (cycle-36 eval same-day, todo rows present). Worked T76 (pri 1 feature, cycle-37 mid-arc recovery) and T77 (pri 2) under T44 overlap #5 (disjoint files: tgrep.rs/tools.rs/main.rs/driver.rs vs driver.rs-transcript/api.rs; overlap record d1790450841-1; T78 skipped for the window — doctrine never overlaps).
-- T76 arc advanced FOUR validation rounds this cycle: fix-up-2 accepted 46/50 (f837e31) → kimi R3 FAIL (3 survivors, 2 vacuous-pin classes: MARKER_RESERVE band unexercised; symbols test-mod resumption unpinned) → fix-up-3 via T63 resume (146b89e, M1-M4 RED-proven) → kimi R4 FAIL (ONE finding: perf pin straddles load band = flaky goal gate; 21/21 mutants RED, zero survivors) → fix-up-4 (30dacb3: median-of-5 vs 1500ms, determinism byte-strong, RED both directions, 10/10 under 12-way CPU load). Orchestrator gates 627/627 + clippy at 30dacb3. Kimi R5 validator IN FLIGHT at wrap (pid 74446; full recovery recipe on the T76 row).
-- T77: impl via T63 resume accepted 12/50 (a5de407 — segment-frozen 16k trim; SPEC.md/README updated; 590/590 + clippy) → kimi R1 FAIL weak-tests-not-correctness (3/6 mutants survived: deletable pairing guard, unpinned SEGMENT_TOKENS, deletable completeness skip; tree restored pristine after validator budget-died mid-mutant and was itself T63-resumed) → fix-up IN FLIGHT at wrap (pid 74447; recipe on the T77 row).
-- T63 resume exercised 4x this cycle (T76 fixup-3, T77 impl, T77 validator mid-mutant, plus cycle-37's fixup-2 completed) — 10/10 career resumes accepted. First validator-resume with a live mutant: resume reverted and re-verified pristine.
-- Validators caught the vacuous-pin class twice more (T76 R3, T77 R1) plus a flaky-gate class (T76 R4): the T72 sweep-the-family + T54/T62 survivor-to-pin pipeline keeps paying; mutation leg counts 18 (R3) and 21 (R4) all-RED-but-named.
-- INCIDENTS: host under heavy EXTERNAL load mid-cycle (operator VM 564% CPU, load avg 57+) — orchestrator gates split per-suite to fit the 120s bash cap; multi-hour host sleep observed (minute budgets are awake-time, unaffected).
-- Cycle-38 decision records: 7 orchestrator records logged (overlap-routing, 2 validation-verdicts, validation-routing, 2 recovery-routings, T77 verdict) + child-side records (T76 validator d1790451351-1, T76 R4 validator d1790454196-1, fixup-4 child logs) — the T75 zero-call adoption gap is closed in practice this cycle (the T75 doctrine row itself carries, ready spec).
-- Carried with ready specs: T78 (pri 1), T75/T80/T79/T81/T77-in-flight, T82.
-
 
 ### Cycle 37 (2026-09-26, ~13:22–18:5x EDT) — freshness-skip; T73 recovered mid-arc + landed (merge 87fe53f); T76 MID-ARC (fix-up-2 in flight); I1 RESOLVED
 ### Cycle 36 (2026-09-26) — MANDATORY fresh eval (F2 SPLIT → T73/T74/T75 filed); T74 landed (merge ef0c3eb, impl 0f1475e, kimi PASS 24/50 3 mutants RED — body_watchdog flake margins re-classified mechanism-not-timeouts); T73 landed cycle 37 (87fe53f), T75 landed cycle 46 (b4c159f). Verdict: eval + 1/1 landed
