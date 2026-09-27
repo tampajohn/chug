@@ -223,6 +223,43 @@ phases 2–3 deferral stands.
 
 ## Outcomes (filled at cycle wrap — LOOP-SPEC Phase 3)
 
+### Cycle 39 (2026-09-26, ~20:1x-2x:xx EDT) — freshness-skip; T76 recovered + LANDED (merge 355f253); T77 mid-arc (fix-up-1 landed a34d0c0, kimi R2 in flight)
+
+- **T76 landed** (tgrep token-budgeted ranked context retrieval, 13th
+  tool; merge `355f253`, branch loop-t76 at `30dacb3`). Recovered from
+  cycle-38 wrap state: kimi R5 validator (pid 74446) was in flight,
+  delivered VERDICT PASS 0 blocking (47/50): 8 fresh mutants ALL caught
+  RED incl. MARKER_RESERVE 96→32 subtle shrink (band-calibrated reserve
+  tests genuinely straddle the marker band) and packing break→continue;
+  worktree verified byte-exact post-revert; spec 5/5 requirements
+  confirmed incl. the 300-hit scripted driver integration. 4 non-blocking
+  observations carried for a future eval (glob arm lacks the walk arm's
+  64 MiB aggregate cap; symbols_skeleton no 1 MiB per-file cap; degenerate
+  <40-token budgets floor at 1; decl_kind extern word-boundary nit).
+  FIVE validation rounds total: R1 merge-radius contradiction + vacuous
+  basename, R2 symbols declaration-dropping class, R3 MARKER_RESERVE band
+  + symbols resumption (3 survivors), R4 flaky perf pin straddling the
+  70-140ms load band (21/21 mutants RED), R5 PASS. Orchestrator
+  post-merge gates independently re-run 627/627 + clippy under
+  target-shared-main. 16 artifacts harvested pre-merge (10 event streams
+  incl. 2 abort+resume two-segment files = T63 resume pairs, 5 validator
+  LEDGERs, child decisions.jsonl). Acceptance-telemetry leg is a
+  later-cycle Outcomes item per the R5 report.
+- **T77 mid-arc**: fix-up-1 (pid 74447) goal accepted 38/50 → `a34d0c0`
+  tests-only (+204 lines, zero production changes vs `a5de407`): all 3
+  R1 surviving mutants killed with individually RED-proven tests
+  (pairing_unsafe chooser guard 2 fixtures, SEGMENT_TOKENS 16k pin
+  24-message granularity fixture, !seg.complete young-remainder leg) +
+  sweep-the-family. Orchestrator gates independently re-run 594/594 +
+  clippy under target-shared. Kimi R2 validator IN FLIGHT (pid 7916,
+  REQUIRED driver.rs, routing d1790468299-1, verdict record pending).
+- T44 overlap #6: T77 R2 validator (reads/mutates its own worktree) ran
+  concurrently with the T76 main-checkout merge + post-merge gates —
+  disjoint write surfaces, merges stayed serial (T76 first).
+- Cycle-39 records so far: validation-routing d1790468299-1 (T77 R2),
+  validation-verdict d1790468338-2 (T76 R5 PASS). Outcome backfills for
+  T76's cycle-37/38 ids appended at the row flip.
+
 ### Cycle 38 (2026-09-26) — freshness-skip; T76 + T77 MID-ARC at budget wrap, nothing merged
 
 - Freshness rule fired (cycle-36 eval same-day, todo rows present). Worked T76 (pri 1 feature, cycle-37 mid-arc recovery) and T77 (pri 2) under T44 overlap #5 (disjoint files: tgrep.rs/tools.rs/main.rs/driver.rs vs driver.rs-transcript/api.rs; overlap record d1790450841-1; T78 skipped for the window — doctrine never overlaps).
