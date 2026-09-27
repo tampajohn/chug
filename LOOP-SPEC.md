@@ -10,11 +10,18 @@ check: cd /Users/jadams/workspace/chug && cargo test
 
 Read first: `META-META-SPEC.md` (evaluation doctrine), `META-SPEC.md`
 (child-launch and validation doctrine). They apply in full except where this
-spec overrides. Model routing: **`anthropic-system.ai.glm-5-3-flash`
+spec overrides. Model routing (T81, per-phase): **`anthropic-system.ai.glm-5-3-flash`
 implements, `anthropic-system.ai.kimi-k3` validates** — both via tools-proxy,
 no env prefix (children read ~/.claude/settings.json per the SPEC-6 auth
-chain). You yourself are kimi. GLM and kimi are different model families, so
-the validation verdict is still an independent second opinion.
+chain). The ORCHESTRATOR's model is per-cycle, picked by `loopd.sh` BEFORE
+launch from the freshness rule — never by model judgment: a fresh-eval cycle
+(Phase 1 will run) always launches `LOOP_ORCH_MODEL` (kimi-k3), a routine
+freshness-skip cycle (queue non-empty, Phase 1 will skip) launches
+`LOOP_ROUTINE_MODEL` (glm-5-3-flash). Your duties are identical either way.
+**Validation is ALWAYS kimi whatever model orchestrates** — the implementer
+is glm, so the validator must stay the other family: a glm-orchestrated
+cycle never lets glm validate glm. GLM and kimi are different model
+families, so the validation verdict is still an independent second opinion.
 
 ## Phase 1 — Evaluate (you, directly, no children)
 
@@ -28,8 +35,14 @@ candidate gets an `eval-triage` record via `decision_log` (the reject half
 is what teaches a future classifier the negative class).
 
 Skip straight to Phase 2 if TODO.md already has `todo` rows AND
-EVALUATION.md is fresh (same day) — re-evaluating for its own sake burns
-budget. Commit the evaluation artifacts (`eval: ...`) before dispatching.
+EVALUATION.md is fresh (same UTC day) — re-evaluating for its own sake burns
+budget. This predicate is the loopd routing switch too (T81): when it holds
+at launch, `loopd.sh` routes the cycle to `LOOP_ROUTINE_MODEL` (glm); when
+it does not, the cycle launches kimi. **glm never runs this phase** — if
+you are glm and the predicate does not hold when you check, do not
+evaluate: wrap immediately with a note (the next cycle re-routes to kimi
+and evaluates). Commit the evaluation artifacts (`eval: ...`) before
+dispatching.
 
 ## Phase 2 — Work the queue
 
@@ -174,8 +187,11 @@ impl, never 2 impls):
    shrink its own gate run to step 3's guard floor, and it retains the
    right to run the full suite anyway when the doc diff quotes commands or
    check lines (the T67 class — a spec `check:` line IS executable text).
-   The validation child launches exactly like step 2 — a
-   `delegate` launch with model `anthropic-system.ai.kimi-k3`,
+   The validation child launches exactly like step 2 — a `delegate`
+   launch with model `anthropic-system.ai.kimi-k3` — ALWAYS kimi whatever
+   model orchestrates (T81 family independence: glm implements, so a
+   glm-orchestrated cycle never lets glm validate glm — a routine cycle
+   still launches this child on kimi) — with
    `max_iters: 50`, `max_minutes: 30` (§6's budgets with T21-class
    widened iterations, passed explicitly — minutes is 30, not
    delegate's 35 default), and §6's goal text
@@ -372,6 +388,17 @@ hosted (impl and validator alike) has been harvested.
   reset/remove worktrees with unmerged work, never force-push, wedge
   protocol); `delegate` (launch + status) is each child's
   launch/observation surface (step 2).
+- **Anti-sprint-burn guard (T81, model-agnostic — the M2/M3 muse
+  sprint-burn lesson made structural).** An orchestrator that has spent
+  MORE than 5 consecutive iterations without a child launch (`delegate`
+  launch — impl, validator, or resume — or a bash-spawned helper) MUST act
+  this iteration: launch the next dispatchable child, merge a reviewed
+  one, or wrap. Reading, planning, re-reading the queue, and instant
+  (non-blocking) status polls are not acting — collapse idle waits with
+  `wait_secs` (step 2) instead of spending iterations on them. The cap
+  binds kimi and glm alike; it never authorizes breaking the ONE-WRITER
+  caps above — when the caps forbid a launch and nothing is mergeable, the
+  honest act is wrap.
 - Single-driver invariant: another **`chug run`** (autonomous driver) with
   `/Users/jadams/workspace/chug` as its cwd blocks the cycle. When tripped:
   do NO mutating work, verify the untouched tree's gates once, then
