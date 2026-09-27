@@ -33,6 +33,16 @@
 //! logs a tool_result preview for every tool call, so no new Event variant is
 //! added here — do not "fix" that later; the decision record IS the durable
 //! surface, events.jsonl stays the activity log.
+//!
+//! T88 — corrective validation: the cycle-47 eval (kimi orchestrator) died on
+//! five consecutive identical `missing or non-string field: class` errors
+//! while batch-logging eval-triage records, because the one-field-at-a-time
+//! error never said what the call actually looked like. Validation now
+//! diagnoses EVERYTHING wrong with a call in ONE error: every invalid field
+//! with its expected shape, in schema order; the received top-level keys and
+//! the one-record-per-call contract when the shape itself is unknown (a
+//! batched wrapper, an aliased key); and the received JSON type for a
+//! non-object input. The success path is byte-identical (req 4).
 
 use std::fs;
 use std::io::Write;
@@ -42,7 +52,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, Context};
 use serde::Serialize;
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 
 use crate::tools::ToolResult;
 
@@ -117,13 +127,66 @@ pub fn schema() -> Value {
 /// failures and write I/O failures both come back as `Err` — the dispatch
 /// wrapper turns them into `is_error` results, so a failure can never abort
 /// the run.
+/// The six required fields, in schema order — this order drives the combined
+/// error's leg order (T88 req 1) and nothing else.
+const REQUIRED_FIELDS: [&str; 6] = [
+    "class", "subject", "inputs", "options", "choice", "confidence",
+];
+
+/// The contract reminder appended to unknown-shape and non-object errors
+/// (T88 reqs 2-3): the batched-wrapper shape is the one failure data shows
+/// models actually hit, so the reminder names the fix, not just the fields.
+const CONTRACT_REMINDER: &str =
+    "one record per call; required: class, subject, inputs, options, choice, confidence";
+
+/// Dispatch entry for the `decision_log` arm in `tools::inner`. Validation
+/// failures and write I/O failures both come back as `Err` — the dispatch
+/// wrapper turns them into `is_error` results, so a failure can never abort
+/// the run.
 pub fn decision_log(cwd: &Path, input: &Value) -> anyhow::Result<ToolResult> {
-    let class = str_field(input, "class")?;
-    let subject = str_field(input, "subject")?;
-    let inputs = str_field(input, "inputs")?;
-    let options = str_field(input, "options")?;
-    let choice = str_field(input, "choice")?;
-    let confidence = confidence_field(input)?;
+    // T88 req 3: a top-level non-object (array / string / number / bool /
+    // null) cannot be diagnosed field-by-field, so the error names the
+    // received JSON type plus the full required list.
+    let Some(obj) = input.as_object() else {
+        return Err(anyhow!(
+            "invalid decision_log call: expected a JSON object, got {}; {CONTRACT_REMINDER}",
+            json_type_name(input)
+        ));
+    };
+
+    // T88 req 1: validate ALL six fields up front so ONE message carries
+    // every leg, instead of one error per retry (the cycle-47
+    // five-in-a-row failure). Legs render in REQUIRED_FIELDS order.
+    let class = str_field(obj, "class");
+    let subject = str_field(obj, "subject");
+    let inputs = str_field(obj, "inputs");
+    let options = str_field(obj, "options");
+    let choice = str_field(obj, "choice");
+    let confidence = confidence_field(obj);
+    let legs: Vec<String> = [
+        err_of(&class),
+        err_of(&subject),
+        err_of(&inputs),
+        err_of(&options),
+        err_of(&choice),
+        err_of(&confidence),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    if !legs.is_empty() {
+        return Err(anyhow!("{}", validation_message(obj, &legs)));
+    }
+
+    // All six validated above; `unwrap_or_default` keeps this panic-free by
+    // construction (a panic here would abort the run, which the tool
+    // contract forbids) — the defaults are never taken.
+    let class = class.unwrap_or_default();
+    let subject = subject.unwrap_or_default();
+    let inputs = inputs.unwrap_or_default();
+    let options = options.unwrap_or_default();
+    let choice = choice.unwrap_or_default();
+    let confidence = confidence.unwrap_or_default();
 
     let ts = unix_ts();
     let n = ID_COUNTER.fetch_add(1, Ordering::Relaxed) + 1;
@@ -145,29 +208,90 @@ pub fn decision_log(cwd: &Path, input: &Value) -> anyhow::Result<ToolResult> {
     })
 }
 
-/// A required string field: absent, null, or non-string is a tool error
-/// naming the field (spec req 4).
-fn str_field<'a>(input: &'a Value, key: &str) -> anyhow::Result<&'a str> {
-    input
-        .get(key)
-        .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("missing or non-string field: {key}"))
+/// Human-readable name for a `serde_json` value's type, used by the
+/// corrective legs ("got number", "got array").
+/// The `Err` leg of a field validation result, cloned out so all six fields'
+/// errors (whose `Ok` payloads differ in type) can ride one homogeneous
+/// `Vec<String>`.
+fn err_of<T>(r: &Result<T, String>) -> Option<String> {
+    r.as_ref().err().cloned()
 }
 
-/// The required `confidence` field: a number in 0..=1 inclusive. Absent,
-/// non-number (e.g. `"high"`), or out-of-range (e.g. -0.1, 1.1) is a tool
-/// error naming the field (spec req 4 — this is the field F13's
-/// confidence-gated routing trains against, so garbage must not enter the
-/// corpus).
-fn confidence_field(input: &Value) -> anyhow::Result<f64> {
-    let n = input
-        .get("confidence")
-        .and_then(Value::as_f64)
-        .ok_or_else(|| anyhow!("missing or non-number field: confidence"))?;
-    if !(0.0..=1.0).contains(&n) {
-        anyhow::bail!("confidence must be a number in 0..=1, got {n}");
+fn json_type_name(v: &Value) -> &'static str {
+    match v {
+        Value::Null => "null",
+        Value::Bool(_) => "boolean",
+        Value::Number(_) => "number",
+        Value::String(_) => "string",
+        Value::Array(_) => "array",
+        Value::Object(_) => "object",
     }
-    Ok(n)
+}
+
+/// One required string field, as a corrective leg (T88 req 1): `Ok(value)`
+/// when valid, `Err("<field> must be a string, got <received>")` otherwise,
+/// where `<received>` is `missing` (absent or null) or the JSON type name.
+/// Returns the leg text instead of an `anyhow` error so the caller can
+/// collect every leg before formatting ONE combined message.
+fn str_field<'a>(obj: &'a Map<String, Value>, key: &str) -> Result<&'a str, String> {
+    match obj.get(key) {
+        Some(Value::String(s)) => Ok(s),
+        None | Some(Value::Null) => Err(format!("{key} must be a string, got missing")),
+        Some(other) => Err(format!(
+            "{key} must be a string, got {}",
+            json_type_name(other)
+        )),
+    }
+}
+
+/// The required `confidence` field: a number in 0..=1 inclusive. The leg
+/// keeps the T70 range text verbatim (`confidence must be a number in
+/// 0..=1, got <n>`) so an out-of-range confidence reads exactly as before
+/// (T88 req 5); absent/null and non-number values render `missing` / the
+/// JSON type name. Garbage must not enter the corpus: this is the field
+/// F13's confidence-gated routing trains against.
+fn confidence_field(obj: &Map<String, Value>) -> Result<f64, String> {
+    match obj.get("confidence") {
+        Some(Value::Number(n)) => {
+            let v = n.as_f64().unwrap_or(f64::NAN);
+            if (0.0..=1.0).contains(&v) {
+                Ok(v)
+            } else {
+                Err(format!("confidence must be a number in 0..=1, got {v}"))
+            }
+        }
+        None | Some(Value::Null) => {
+            Err("confidence must be a number in 0..=1, got missing".into())
+        }
+        Some(other) => Err(format!(
+            "confidence must be a number in 0..=1, got {}",
+            json_type_name(other)
+        )),
+    }
+}
+
+/// The combined validation error (T88 reqs 1-2): every leg in schema order,
+/// then — only when the call's SHAPE is unknown, i.e. none of the six
+/// required keys are present (the cycle-47 batched wrapper) or an
+/// unrecognized key rides along (the events.jsonl-style `type` alias) — the
+/// received top-level keys (first 8, sorted) and the one-record-per-call
+/// contract reminder. Fires on failure legs only: extra keys on an
+/// otherwise-valid record stay ignored, keeping the success path unchanged
+/// (T88 req 4).
+fn validation_message(obj: &Map<String, Value>, legs: &[String]) -> String {
+    let mut msg = format!("invalid decision_log call: {}", legs.join("; "));
+    let has_required = obj.keys().any(|k| REQUIRED_FIELDS.contains(&k.as_str()));
+    let has_unrecognized = obj.keys().any(|k| !REQUIRED_FIELDS.contains(&k.as_str()));
+    if !has_required || has_unrecognized {
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort_unstable();
+        keys.truncate(8);
+        msg.push_str(&format!(
+            "; received keys: [{}]; {CONTRACT_REMINDER}",
+            keys.join(", ")
+        ));
+    }
+    msg
 }
 
 /// Append the record as ONE JSON object line to `<cwd>/.chug/decisions.jsonl`,
@@ -594,5 +718,311 @@ mod tests {
             !tmp.path().join(".chug/decisions.jsonl").exists(),
             "no log file can exist under a file-shaped .chug"
         );
+    }
+
+    // ---------- T88 corrective validation legs ----------
+
+    /// Assert every needle occurs in `content`, each strictly after the
+    /// previous one — pins the schema-order listing of legs without pinning
+    /// the full prose.
+    fn assert_named_in_order(content: &str, needles: &[&str]) {
+        let mut cursor = 0;
+        for needle in needles {
+            let at = content[cursor..]
+                .find(needle)
+                .unwrap_or_else(|| panic!("{needle:?} missing or out of order in {content}"));
+            cursor += at + needle.len();
+        }
+    }
+
+    /// The contract reminder's required-list, verbatim (T88 reqs 2-3).
+    const REQUIRED_LIST: &str = "required: class, subject, inputs, options, choice, confidence";
+
+    /// Multi-missing: only `{class, subject}` present — the error names ALL
+    /// four invalid fields with their expected shapes, in schema order, and
+    /// does NOT diagnose the two fields that are fine.
+    #[test]
+    fn decision_log_multi_missing_names_every_invalid_field_in_schema_order() {
+        let tmp = TempDir::new().unwrap();
+        let ctx = tool_ctx(tmp.path());
+        let mut input = sample_input();
+        for field in ["inputs", "options", "choice", "confidence"] {
+            input.as_object_mut().unwrap().remove(field);
+        }
+        let r = dispatch(&ctx, "decision_log", &input);
+        assert!(r.is_error, "{}", r.content);
+        // Exact pin: every leg in REQUIRED_FIELDS order, one message.
+        assert_eq!(
+            r.content,
+            "tool error: invalid decision_log call: inputs must be a string, got missing; \
+             options must be a string, got missing; choice must be a string, got missing; \
+             confidence must be a number in 0..=1, got missing"
+        );
+        assert_named_in_order(&r.content, &["inputs", "options", "choice", "confidence"]);
+        assert!(!r.content.contains("class must be"), "{}", r.content);
+        assert!(!r.content.contains("subject must be"), "{}", r.content);
+        assert!(!log_path(tmp.path()).exists(), "validation failures must not write");
+    }
+
+    /// Wrapper leg (the cycle-47 FATAL shape): a batched `{"records": [...]}`
+    /// call gets the unknown-shape diagnosis — the received key, the
+    /// one-record-per-call reminder, and the full required list — plus every
+    /// field's expected shape, all in ONE error.
+    #[test]
+    fn decision_log_batched_wrapper_diagnoses_unknown_shape_with_contract_reminder() {
+        let tmp = TempDir::new().unwrap();
+        let ctx = tool_ctx(tmp.path());
+        let input = json!({ "records": [sample_input(), sample_input()] });
+        let r = dispatch(&ctx, "decision_log", &input);
+        assert!(r.is_error, "{}", r.content);
+        // Exact pin of the whole corrective message for the fatal shape.
+        assert_eq!(
+            r.content,
+            "tool error: invalid decision_log call: class must be a string, got missing; \
+             subject must be a string, got missing; inputs must be a string, got missing; \
+             options must be a string, got missing; choice must be a string, got missing; \
+             confidence must be a number in 0..=1, got missing; received keys: [records]; \
+             one record per call; required: class, subject, inputs, options, choice, confidence"
+        );
+        assert!(r.content.contains("received keys: [records]"), "{}", r.content);
+        assert!(r.content.contains("one record per call"), "{}", r.content);
+        assert!(r.content.contains(REQUIRED_LIST), "{}", r.content);
+        // Req 1 still holds under the shape diagnosis: every field named.
+        assert!(r.content.contains("class must be a string, got missing"), "{}", r.content);
+        assert!(
+            r.content.contains("confidence must be a number in 0..=1, got missing"),
+            "{}",
+            r.content
+        );
+        // Reminder appended after the legs and the received keys.
+        assert_named_in_order(&r.content, &["received keys: [records]", "one record per call"]);
+        assert!(!log_path(tmp.path()).exists(), "validation failures must not write");
+    }
+
+    /// Alias leg: the events.jsonl-style mistake — `type` where `class`
+    /// belongs, everything else valid — names `class` missing AND lists the
+    /// received keys (sorted), so the alias itself is visible.
+    #[test]
+    fn decision_log_aliased_class_key_names_class_missing_and_the_received_type_key() {
+        let tmp = TempDir::new().unwrap();
+        let ctx = tool_ctx(tmp.path());
+        let mut input = sample_input();
+        {
+            let obj = input.as_object_mut().unwrap();
+            obj.remove("class");
+            obj.insert("type".into(), json!("eval-triage"));
+        }
+        let r = dispatch(&ctx, "decision_log", &input);
+        assert!(r.is_error, "{}", r.content);
+        assert!(r.content.contains("class must be a string, got missing"), "{}", r.content);
+        // Received keys, sorted: the aliased `type` rides the list.
+        assert!(
+            r.content.contains("received keys: [choice, confidence, inputs, options, subject, type]"),
+            "{}",
+            r.content
+        );
+        assert!(r.content.contains(REQUIRED_LIST), "{}", r.content);
+        // The five valid fields are not diagnosed.
+        for other in ["subject", "inputs", "options", "choice"] {
+            assert!(
+                !r.content.contains(&format!("{other} must be")),
+                "{other} leaked: {}",
+                r.content
+            );
+        }
+        assert!(!log_path(tmp.path()).exists(), "validation failures must not write");
+    }
+
+    /// Non-object leg (req 3): a top-level array / string / number / bool /
+    /// null is a tool error naming the received JSON type plus the full
+    /// required list — no field-by-field pretense.
+    #[test]
+    fn decision_log_non_object_input_names_the_json_type_and_required_list() {
+        let tmp = TempDir::new().unwrap();
+        let ctx = tool_ctx(tmp.path());
+        // Exact pin for the spec's `[]` leg.
+        let r = dispatch(&ctx, "decision_log", &json!([]));
+        assert!(r.is_error, "{}", r.content);
+        assert_eq!(
+            r.content,
+            "tool error: invalid decision_log call: expected a JSON object, got array; \
+             one record per call; required: class, subject, inputs, options, choice, confidence"
+        );
+        for (input, type_name) in [
+            (json!(["one"]), "array"),
+            (json!("eval-triage"), "string"),
+            (json!(42), "number"),
+            (json!(true), "boolean"),
+            (json!(null), "null"),
+        ] {
+            let r = dispatch(&ctx, "decision_log", &input);
+            assert!(r.is_error, "{type_name}: {}", r.content);
+            assert!(
+                r.content.contains(&format!("got {type_name}")),
+                "{type_name}: {}",
+                r.content
+            );
+            assert!(
+                r.content.contains("one record per call") && r.content.contains(REQUIRED_LIST),
+                "{type_name}: {}",
+                r.content
+            );
+        }
+        assert!(!log_path(tmp.path()).exists(), "validation failures must not write");
+    }
+
+    /// Single-missing regression pins: each of the six fields omitted ALONE
+    /// is still named, and alone — no regression to silence, no
+    /// over-diagnosis of the five valid fields.
+    #[test]
+    fn decision_log_each_field_missing_alone_is_still_named() {
+        let tmp = TempDir::new().unwrap();
+        let ctx = tool_ctx(tmp.path());
+        let string_fields = ["class", "subject", "inputs", "options", "choice"];
+        for field in string_fields {
+            let mut input = sample_input();
+            input.as_object_mut().unwrap().remove(field);
+            let r = dispatch(&ctx, "decision_log", &input);
+            assert!(r.is_error, "{field}: {}", r.content);
+            assert!(
+                r.content.contains(&format!("{field} must be a string, got missing")),
+                "{field}: {}",
+                r.content
+            );
+            for other in string_fields {
+                if other != field {
+                    assert!(
+                        !r.content.contains(&format!("{other} must be")),
+                        "{field} alone leaked {other}: {}",
+                        r.content
+                    );
+                }
+            }
+            assert!(
+                !r.content.contains("confidence must be"),
+                "{field} alone leaked confidence: {}",
+                r.content
+            );
+        }
+        let mut input = sample_input();
+        input.as_object_mut().unwrap().remove("confidence");
+        let r = dispatch(&ctx, "decision_log", &input);
+        assert!(r.is_error, "{}", r.content);
+        assert!(
+            r.content.contains("confidence must be a number in 0..=1, got missing"),
+            "{}",
+            r.content
+        );
+        for other in string_fields {
+            assert!(
+                !r.content.contains(&format!("{other} must be")),
+                "confidence alone leaked {other}: {}",
+                r.content
+            );
+        }
+        assert!(!log_path(tmp.path()).exists(), "validation failures must not write");
+    }
+
+    /// Mixed-invalid leg: `confidence: "high"` AND `options` missing are
+    /// named together, in schema order (options before confidence).
+    #[test]
+    fn decision_log_mixed_invalid_names_all_bad_fields_in_schema_order() {
+        let tmp = TempDir::new().unwrap();
+        let ctx = tool_ctx(tmp.path());
+        let mut input = sample_input();
+        {
+            let obj = input.as_object_mut().unwrap();
+            obj.remove("options");
+            obj.insert("confidence".into(), json!("high"));
+        }
+        let r = dispatch(&ctx, "decision_log", &input);
+        assert!(r.is_error, "{}", r.content);
+        assert!(r.content.contains("options must be a string, got missing"), "{}", r.content);
+        assert!(
+            r.content.contains("confidence must be a number in 0..=1, got string"),
+            "{}",
+            r.content
+        );
+        assert_named_in_order(&r.content, &["options must be", "confidence must be"]);
+        assert!(!log_path(tmp.path()).exists(), "validation failures must not write");
+    }
+
+    /// Req 5: the confidence range message text is preserved verbatim —
+    /// alone (as the whole message) and alongside another invalid field.
+    #[test]
+    fn decision_log_confidence_range_message_preserved_alone_and_alongside() {
+        let tmp = TempDir::new().unwrap();
+        let ctx = tool_ctx(tmp.path());
+        let mut input = sample_input();
+        input["confidence"] = json!(1.1);
+        let r = dispatch(&ctx, "decision_log", &input);
+        assert!(r.is_error, "{}", r.content);
+        assert!(
+            r.content.contains("confidence must be a number in 0..=1, got 1.1"),
+            "{}",
+            r.content
+        );
+        // Out-of-range alone: the shape is known, so no received-keys hint.
+        assert!(!r.content.contains("received keys"), "{}", r.content);
+
+        let mut input = sample_input();
+        input["class"] = json!(7);
+        input["confidence"] = json!(-0.1);
+        let r = dispatch(&ctx, "decision_log", &input);
+        assert!(r.is_error, "{}", r.content);
+        assert!(r.content.contains("class must be a string, got number"), "{}", r.content);
+        assert!(
+            r.content.contains("confidence must be a number in 0..=1, got -0.1"),
+            "{}",
+            r.content
+        );
+        assert_named_in_order(&r.content, &["class must be", "confidence must be"]);
+        assert!(!log_path(tmp.path()).exists(), "validation failures must not write");
+    }
+
+    /// Req 2's "first 8, sorted" cap: nine unrecognized keys list the first
+    /// eight, sorted — enough to diagnose, bounded so a garbage call cannot
+    /// dump an unbounded key list into the transcript.
+    #[test]
+    fn decision_log_received_keys_capped_at_first_eight_sorted() {
+        let tmp = TempDir::new().unwrap();
+        let ctx = tool_ctx(tmp.path());
+        let input = json!({
+            "zeta": 1, "alpha": 1, "mu": 1, "beta": 1, "kappa": 1,
+            "gamma": 1, "nu": 1, "delta": 1, "omega": 1
+        });
+        let r = dispatch(&ctx, "decision_log", &input);
+        assert!(r.is_error, "{}", r.content);
+        assert!(
+            r.content
+                .contains("received keys: [alpha, beta, delta, gamma, kappa, mu, nu, omega]"),
+            "{}",
+            r.content
+        );
+        assert!(!r.content.contains("zeta"), "ninth key dropped: {}", r.content);
+        assert!(!log_path(tmp.path()).exists(), "validation failures must not write");
+    }
+
+    /// Req 4: the unknown-shape diagnosis fires on FAILURE legs only — extra
+    /// keys on an otherwise-valid record are ignored exactly as before, and
+    /// the record lands byte-identically.
+    #[test]
+    fn decision_log_extra_keys_on_valid_record_still_succeed_unchanged() {
+        let tmp = TempDir::new().unwrap();
+        let ctx = tool_ctx(tmp.path());
+        let mut input = sample_input();
+        {
+            let obj = input.as_object_mut().unwrap();
+            obj.insert("records".into(), json!([]));
+            obj.insert("type".into(), json!("eval-triage"));
+        }
+        let r = dispatch(&ctx, "decision_log", &input);
+        assert!(!r.is_error, "{}", r.content);
+        assert!(r.content.starts_with("recorded d"), "{}", r.content);
+        let records = read_records(tmp.path());
+        assert_eq!(records.len(), 1, "exactly one line appended");
+        assert_eq!(records[0]["class"], "validation-routing");
+        assert_eq!(records[0]["subject"], "T70");
+        assert_eq!(records[0]["confidence"], 0.9);
     }
 }
