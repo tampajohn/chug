@@ -96,13 +96,16 @@ impl, never 2 impls):
              clippy + test green. Commit your work here. DO NOT touch TODO.md
              or LEDGER.md — bookkeeping is the orchestrator's."
      model:       "anthropic-system.ai.glm-5-3-flash"
-     max_iters:   50
+     max_iters:   65
      max_minutes: 35
    ```
-   `max_iters: 50` and `max_minutes: 35` are explicit — delegate's
+   `max_iters: 65` and `max_minutes: 35` are explicit — delegate's
    defaults are 40/35, and T21's headroom must survive the migration.
-   (50, not 40: 3 of the last 5 glm impl children died at 40/40 with the work
-   done — T15/T17/T20; minutes were never binding, T20 used 6 of 35.)
+   (65, not 50: 4 of the last 6 glm impl children died at 50/50 with the work
+   done — T83/T85/T89/T90; T84 at 48/50; minutes never binding, t90 used
+   8m24s of 35 for 60 iterations. Measure: if >1 of the next 6 impl children
+   still dies at 65/65, the next eval considers 80 or a work-splitting
+   doctrine instead.)
    The goal carries the T47 export because delegate cannot pass env — a child
    that skips it just builds cold into its own worktree's target dir
    (harmless, slow).
@@ -132,7 +135,7 @@ impl, never 2 impls):
    incomplete work, the FIRST recovery is ONE `delegate` relaunch in the
    SAME worktree with `resume: true` — same spec, same goal (the goal
    re-carries the T47 `CARGO_TARGET_DIR` export), same model, same
-   budgets (50/35 impl, 50/30 validate) — which continues the child's
+   budgets (65/35 impl, 50/30 validate) — which continues the child's
    prior transcript in that worktree instead of starting cold. Resume
    works because the worktree is never removed pre-harvest (T19), so the
    child's untracked `.chug/` transcript persists, and `delegate status`

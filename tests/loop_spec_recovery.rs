@@ -138,7 +138,7 @@ fn leg_names_mechanics_and_scope_guards_inside_step_2() {
         "`resume: true`",
         "SAME worktree",
         "re-carries the T47",
-        "50/35 impl, 50/30 validate",
+        "65/35 impl, 50/30 validate",
         "continues the child's",
         "never removed pre-harvest (T19)",
         "LATEST run segment (T58)",
