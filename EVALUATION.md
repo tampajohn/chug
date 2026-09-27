@@ -1,266 +1,247 @@
-# EVALUATION — chug, assessed by chug-loop (2026-09-27, cycle 51)
+# EVALUATION — chug, assessed by chug-loop (2026-09-27, cycle 53)
 
-**MANDATORY fresh eval** — cycle 50 drained the queue (T1–T87 all done with
-refs), so the freshness-skip rule cannot fire; loopd's routing probe agreed
-at launch (`todo_rows=0 → eval cycle on kimi-k3`, loopd.log 22:17:02Z). The
-roadmap pull is **F4 (Permissions policy) → T90** — F1 landed T69, F13
-phase 1 landed T70, F2 phase 1 landed T73, F3 phase 1 landed T83 (cycle 49;
-all three phase-2s deferred with written reasons carried). This cycle is
-also the **T81 acceptance leg's eval-kimi half** — the cycle-47 eval that
-was supposed to record it DIED (§2 I1) and cycles 48–50 were glm routine
-legs; the wall-time/quality record for THIS eval lands in Outcomes at wrap.
+**MANDATORY fresh eval** — the queue is EMPTY again (T1–T90 all done with
+refs; cycle 52's flip landed the last row), so the freshness predicate's
+queue half fails and loopd routed an eval cycle (`todo_rows=0 → eval cycle
+on kimi-k3`, loopd.log 23:34:40Z). The roadmap pull is **F5 (Image input)
+→ T91, SPLIT**: phase 1 (`read_file` image support) filed now; phase 2
+(chat paste/drag) deferred with a written reason (§4). This is a DELTA eval
+over cycle 51's same-day eval: the new corpus is exactly the T90 arc plus
+the cycle-52 orchestrator stream, so findings concentrate on the T90
+landing, the watch items the cycle-51 eval owed a judgment, and the
+impl-child ceiling census that T90's run1 death completed.
 
 Corpus: `.chug/eval-digest.md` FIRST (FRESH at eval start — regenerated
-22:16:51Z, 104 s after the newest pre-cycle stream; the only post-generation
-events are THIS eval's own appends), then the orchestrator streams since the
-cycle-47 eval: cycle 47 (the died-at-44 eval itself,
-`events-20260927-201956.jsonl`), cycle 48 (`...-210537.jsonl`, glm 157/160),
-cycle 49 (`...-215944.jsonl`, glm 158/160), cycle 50
-(`...-221702.jsonl` segment, glm 78/160), plus the cycle-44/45/46 streams
-the dead eval never narrated (`...-183054/-192331/-200748.jsonl`), the 9
-child streams t83–t87 (impl/validate/fixup/resume segments),
-`.chug/loopd/loopd.log` (the 19:23Z + 20:07Z T50 re-execs, six routing
-lines), `TODO.md` (T1–T87 all done), `.chug/decisions.jsonl` (131 records —
-was 100 at the cycle-47 eval), `src/` (31,890 lines; driver.rs 4,898
-post-T84; hooks.rs 977 new; delegate.rs 3,498), `README.md` (cold read,
-§6 — zero findings).
+23:34:28Z, 69 s after the newest pre-cycle stream; the only
+post-generation events are THIS eval's own appends, so the mechanical
+staleness trip is self-inflicted and no regeneration is warranted), then
+cycle 51's eval stream (`events-20260927-230725.jsonl`, kimi 160/160 DIED
+— §2 I4), cycle 52's glm stream (rotated to `...-233440.jsonl`, 62/160,
+goal accepted), the t90 child streams (impl run1 + T63 resume #19,
+validate), `.chug/loopd/loopd.log` (routing lines 22:17Z–23:34Z),
+`TODO.md` (T1–T90 all done), `.chug/decisions.jsonl` (155 records — was
+131 at the cycle-47 eval), `src/` (34,001 lines; driver.rs 5,309 post-T90;
+permissions.rs 730 new; delegate.rs 3,992), `README.md` (full cold read,
+§6 — TWO findings: §6(b) density judged, §6(c) staleness bite).
 
 ## 1. What chug does well
 
-- **T81's routing is the quiet triumph of the era.** Four consecutive glm
-  routine cycles (46, 48, 49, 50) + this kimi eval, ALL launched by loopd's
-  mechanical freshness predicate, zero model judgment. The
-  glm-never-evaluates boundary HELD under stress: cycle 48 recovered the
-  dead cycle-47 eval by landing its artifacts verbatim and reconstructing
-  its records — explicitly honoring "glm never runs this phase" rather than
-  re-evaluating (EVALUATION.md cycle-48 Outcomes).
-- **Cross-cycle recovery is now routine machinery.** Cycle 49 budget-wrapped
-  with the T85-bundle impl in flight; cycle 50 found it, read its handoff
-  LEDGER, T63-resumed it (#17, accepted 20/50), validated, merged, flipped,
-  pushed — a mechanical recipe execution end-to-end. T63 resumes: **17/17
-  all-time.**
-- **The adversarial pipeline caught a REAL semantic bug, not another weak
-  test.** T83 kimi R1 FAIL: PostToolUse fired on PreToolUse-vetoed calls
-  (tool never executed; phantom advisory + phantom fire line). The fix-up
-  swept the CLASS (the sibling risk-gate-block path had the same hole —
-  T72 doctrine) with 2 RED-proven killing tests; R2 PASS 0 blocking. This
-  is exactly the bug shape the pipeline exists for.
-- **decision_log corpus is compounding.** 131 records (51 outcome, 22
-  eval-triage, 22 validation-verdict, 19 validation-routing, 16
-  recovery-routing, 1 overlap-routing) vs 100 at the cycle-47 eval — incl.
-  cycle-48's 11-record reconstruction of the dead eval (the recovery recipe
-  proving the corpus is reconstructable from git + eval text when the
-  worst happens).
-- **T45 bundling handled a doctrine bundle honestly.** The T85+T86+T87
-  round: ONE impl child (3 commits in queue order), ONE kimi round, and the
-  T80 md-only classification correctly did NOT fire (T87 carried a `.rs`
-  pin file → full gates, 704/704 nextest-release) — the ambiguity-default
-  and pin-carrier rules practiced exactly as written.
-- **T84's extraction held.** driver.rs is 4,898 (5,488 → 4,509 by T84;
-  +~390 of T83 hooks integration since). trim.rs carries 1,007; the ~4,500
-  trip line stays uncrossed-with-extraction; no new monolith alarm.
-  delegate.rs (3,498) and tgrep.rs (2,527) are the next-largest modules —
-  watch, no trip line declared.
+- **The T63 resume machinery is the era's workhorse — 19/19 all-time.**
+  T90's impl run1 died 50/50 uncommitted (+511/−2 staged); resume #19
+  accepted 10/50 in ~2 min and the arc closed clean. Every glm ceiling
+  death since T63 has been recovered in-worktree, zero losses.
+- **Family-independent validation keeps paying.** t90-validate (kimi,
+  38/50) PASS 0 blocking with 6/6 mutants RED in 2 parallel T79 waves
+  under role-keyed mut dirs — and its 4 non-blocking findings were written
+  well enough that TWO became this eval's rows (T93 canary, T96
+  check-filter breadth) with zero re-investigation.
+- **Cycle 52 was the leanest item arc yet measured:** 62/160 iterations
+  for the cycle-51 wrap remainder + a full T90 arc (worktree, impl,
+  resume, validation, merge, flip, push, wrap) — the first cycle on a
+  post-T89 binary (terminal waits), child-watching collapsed as predicted
+  (§2 I4).
+- **decision_log adoption is structural.** 155 records; cycle 52 shipped
+  7 with zero omissions, and T88's corrective errors caught a real
+  malformed call in-cycle (`options must be a string, got missing` — one
+  diagnostic, fixed next call).
+- **The T90 policy chain landed in the designed order.** permissions →
+  hooks → plan/MCP/risk gate on one `blocked` flag, zero hook fires on a
+  deny, plan-mode parity, 24 tests incl. ZERO-hook-fire ordering pins —
+  the F3/F4 composition worked exactly as the cycle-51 spec wrote it.
 
 ## 2. Incidents worth fixing
 
-**I1 — decision_log one-field-at-a-time validation errors are not
-corrective; the class turned FATAL → T88 (pri 2, robustness).** Nine
-schema-fumble sightings across BOTH model families and every role:
-t74-impl ×2 (`choice`, `options`), t85-impl ×1 (`options`), cycle-50
-orchestrator ×1 (`options`) — all self-corrected — and the FATAL one: the
-**cycle-47 eval itself** (kimi, `events-20260927-201956.jsonl`) announced
-"Logging the eval-triage records (5 filed + 4 weighed-and-rejected)" then
-made FIVE consecutive identical `missing or non-string field: class`
-errors → stuck tripwire abort at 44/160, evaluation written but
-uncommitted, zero records logged. Cycle 48 landed the artifacts verbatim
-(`89d1b5a`) and reconstructed 11 records. The cycle-47 eval had filed the
-glm fumbles as "minor, no row" HOURS before the same class killed it —
-the new data flips that call. The contract stays ONE-record-per-call
-(batch ids + outcome subjects depend on it; batching WEIGHED AND REJECTED);
-the fix is the error text: list EVERY bad field at once, name the received
-top-level keys when none match (the batched/aliased shape), name the JSON
-type for non-object input, and append the full required list. Success path
-byte-identical. Spec: `specs/t88-decision-log-corrective-errors.md`.
+### I1 — glm impl children keep dying at the 50/50 ceiling with the work done → T92
 
-**I2 — the orchestrator's delegate-poll loop is the loop's dominant
-iteration tax, and the 160 cap is now binding → T89 (pri 2, robustness +
-doctrine).** Measured: cycle 48 = **116 delegate calls of 157 iterations**,
-cycle 49 = **123 of 158** (~75%). Each poll is one orchestrator iteration =
-one full-context LLM round trip (265–470k cumulative input late-cycle).
-T29/T68 collapsed the WALL cost of waiting; the ITERATION cost is
-structural: the significant-change wake set includes `last_iteration`, so
-even `wait_secs: 600` wakes on EVERY child iteration advance (~15–90 s for
-glm) — waiting on a 40-iteration child costs ~40 orchestrator iterations.
-Ceiling pressure at the T36 cap (120→160, cycle 16): cycle 44 ran 158/160
-(budget_low fired), **cycle 45 died 160/160 with goal never claimed**
-(wrap lost; cycle 46 reconstructed the T81/T82 mid-arc state), cycles 48
-and 49 both 157–158/160 with budget_low-forced wraps that left children in
-flight. Cycle 50's 78/160 was a pure mechanical recovery — the exception
-that proves the tax is work-proportional. Fix: opt-in `terminal` wait mode
-(wake only on goal/abort/liveness-flip/events-creation/deadline — the four
-facts an orchestrator acts on) + LOOP-SPEC adoption as the default wait
-posture. A 40-iteration child then costs ~3–5 orchestrator iterations
-(launch + terminal waits + collect), not ~40. Spec:
-`specs/t89-delegate-terminal-wait.md`. **Doctrine item — runs alone.**
+Census of the last six glm impl children (digest-verified): T83 run1 50/50
+abort (→ 2 resumes, 136 iters total), T84 48/50 (one from death),
+T85-bundle run1 50/50 abort (resume #17), T88 33/50 clean, T89 run1 50/50
+abort (resume #18), T90 run1 50/50 abort (resume #19). **4 of 6 hit the
+ceiling, 5 of 6 were in the ceiling zone** — the exact "3 of the last 5"
+shape T21 was filed on at the 40 cap. Completed-work totals: 57 (t89), 60
+(t90), 70 (t85), 136 (t83 grinder). Resume recovers every death (~2 min +
+an orchestrator relaunch arc), but the death is now the MEDIAN outcome for
+a feature-sized row, and each one spends an orchestrator recovery arc and
+leaves an uncommitted-worktree window. Fix: T21-class one-step widening of
+the LOOP-SPEC §2 step-2 impl-child template `max_iters: 50 → 65` (+30%,
+the T21 proportional step), the T63 resume-budgets sentence and fix-up
+children with it, validator budget UNCHANGED (validators finish 12–48/50).
+Measure-clause (written into the row): if >1 of the next 6 impl children
+still dies at 65/65, the next eval considers 80 or a work-splitting
+doctrine instead. Pin surface: `tests/loop_spec_recovery.rs:141` pins
+`"50/35 impl, 50/30 validate"`; LOOP-SPEC lines 99/102–105/135 carry the
+template digits + rationale parenthetical; the step-4 validator template
+(50/30) is untouched.
 
-**I3 — T83 grinder: 136 child iterations across three runs for one feature
-item → no row, spec-size guard adopted.** hooks phase 1 (977-line
-hooks.rs + driver integration + 24 tests) blew TWO 50-iteration budgets
-uncommitted before resume #16 accepted at 36/50; the row recipe sanctioned
-the second resume (T63's cap is ONE — the deviation worked and is recorded,
-but the cap's text and the practice now diverge). Root cause is upstream:
-the spec was ~2.5 child-budgets of work. Adopted fix (not a row): feature
-specs now carry an explicit size guard with a split seam — T90's spec has
-one ("≤ ~350 production lines or split"). Watch: if the next feature spec
-with a size guard still grinds, file the doctrine row then.
+### I2 — t90 validator finding (1): the `mcp__` matcher-fit canary over-rejects server-specific globs → T93
 
-**Minor — macOS `timeout` mirage, 3rd sighting (t84-validate, kimi) —
-rejected, no row.** T22's bash-description note holds severity at ~1
-iteration self-correct; incidence is 3 all-time across both families.
+`src/permissions.rs:352–354`: matcher-fit validation uses ONE canary
+candidate `"mcp__server__tool"`; a rule `{"tool": "mcp__fs__*", "path":
+…}` fails the canary (the glob's literal `mcp__fs__` prefix never matches
+the canary string) and is SKIPPED as matcher-that-cannot-fit — the
+operator's deny never enforces (warned-once, fail-open by design, so
+severity is bounded — but it is a policy-intent hole in a just-landed
+security surface: the glob is valid, the canary is wrong). Fix: any
+`mcp__`-prefixed tool glob fits any matcher (MCP tools carry arbitrary
+args — the canary's own comment says exactly that), with a RED-proven
+killing test. permissions.rs only → kimi optional per §2 step 4.
 
-**Minor — BSD/GNU grep dialect** (`repetition-operator operand invalid`,
-t84-validate ×1, self-corrected) — first sighting, below the bar. Watch.
+### I3 — t88-impl's false self-diagnosis: the `old_string` alias class → T94
 
-**Carried rejection — path-escapes-cwd friction: T85 LANDED, measurement
-window opens NOW.** t83-validate1 hit the refusal ×3 (21:16Z) writing
-T79 mutant-leg scripts — but that validator RAN BEFORE T85's doctrine
-landed (22:10Z, cycle 50). Every post-T85 stream is the measurement; one
-cycle of evidence is owed before judging the fix.
+The glm impl hit `missing or non-string field: old` ×3, self-reported a
+tool BUG in its own decision record, and routed around via bash heredoc —
+transcript forensics proved it sent `old_string` (the Anthropic-canonical
+alias): the model fumbled and the error text gave it nothing to
+self-correct with. The cycle-51 eval named the generalized fix a next-eval
+candidate; this eval files it. `src/tools.rs:217` `get_str` — the ONE
+extraction helper behind the tools' string params — names the received
+keys on a miss (`missing or non-string field: old (received keys: path,
+old_string, new_string)`), so the model corrects in ONE iteration instead
+of three. Success path byte-identical; the T88 decisions.rs change is the
+shape template (error-text-only failure legs, pre-existing pins
+unmodified). tools.rs is on the REQUIRED list → kimi validation.
 
-**Carried rejections re-affirmed (eval-triage records logged):**
-longer-API-retry-for-outages (stands from cycle 47 — the halt is the
-pager); cross-tree read-tools release (stands — pinned contract, doctrine
-fix landed instead); RED-proof-mandate-in-every-spec (stands — ceiling-zone
-headroom is the binding child budget); transcript-archive forensics gap
-(operator prunes `transcript-*.jsonl` by doctrine — "transcript harvest is
-the operator's choice (size)"; the events stream + console log carried
-enough to diagnose I1 anyway); hooks micro-polish (PostToolUse
-signal-death `(exit none)` asymmetry; chat per-turn config reload —
-documented behavior, polish below the bar).
+### I4 — cycle-51's eval died at 160/160 — assessed, NOT filed (T89 re-measure says wait)
 
-**Weighed-and-rejected THIS eval — raise loopd `--max-iters` 160→200.**
-The T36 pattern says raise when scrapes accumulate, and we have 4 scrapes
-+ 1 death. But the same doctrine fixed BURN before raising CAPS (T27
-followed T13/T18; T36 followed T29/T68): T89 attacks the burn directly and
-should cut routine cycles to well under the cap; the T18 budget_low margin
-+ preserve-worktree + row-recipe recovery absorbed 4 of 5 scrapes with zero
-lost work (the cycle-45 wrap loss was reconstructed in minutes). Re-measure
-next eval: if post-T89 cycles still scrape, the raise is due.
-(eval-triage record logged.)
+The kimi eval stream: 160/160, 45m3s wall, 1.4M input tokens, abort
+mid-T90-dispatch after landing T88+T89. Pre-T89 binaries paid ~10–15
+orchestrator poll iterations per child arc (cycle-51 Outcomes measured
+~15 across three arcs even with the paced cadence). Cycle 52 — the FIRST
+post-T89 cycle — ran a wrap remainder + a full item arc in 62/160 with
+terminal waits: child-watching collapsed to ~3–4 iterations per arc
+(launch + terminal wait + collect). The 160 cap's T36 sizing (eval ≈45–55
++ item ≈28–35 + wrap ≈10) now has real slack. Verdict: the death was real
+but its cause (pre-T89 polling overhead on an eval+2-item+dispatch cycle)
+is already fixed by T89's adoption; no 160→200 row. Watch item: the next
+TWO eval cycles' iteration counts close the question — re-file if either
+scrapes ≥150 without a recovery arc.
 
-## 3. Friction hot spots
+### I5 — t90 validator finding (2): the spec `check:` filter was narrower than the change's own test surface → T96
 
-- **decision_log schema fumbles** — GRADUATED to T88 (§2 I1): from
-  cycle-47's "minor watch" to the fatal-incident class in one cycle.
-- **delegate polling** — GRADUATED to T89 (§2 I2): the T68 watch closes
-  superseded; wake-on-advance IS the tax.
-- **edit_file `old` not-found** — 5 sightings (t83-impl ×3:
-  README/driver.rs/hooks.rs; cycle-48 orchestrator ×2: EVALUATION.md), all
-  self-corrected at ~1 iter each via re-read. T5's disambiguation holds;
-  steady frequency, below the bar. Watch.
-- **path-escapes-cwd** — §2 carried: 3 sightings, all pre-T85; measuring
-  from this cycle.
-- **Prior fixes assessed, not re-filed:** T74 body_watchdog — zero
-  sightings since landing; T31 parallel-load family — quiet; T79 parallel
-  mutants — exercised again (t85-validate M1/M2 in 2 throwaway worktrees);
-  T80 md-only gate slimming — STILL UNEXERCISED (the T85 bundle carried
-  T87's `.rs` pin file → full gates correctly; no pure-md round has
-  occurred since T80 landed — third cycle carrying this telemetry leg);
-  T82 nextest — every gate this era ran nextest-first (~9 s vs ~22 s
-  fallback), zero red-only families.
+`cargo test --bin chug permissions` missed the 5 strongest
+driver-integration legs (a mutant survived under the plural filter, killed
+under the broader `permission` stem). Third spec-authoring lesson in the
+quality-bar's class (worktree-relative checks, T30; no `--lib`, T67-era),
+and lessons in this class are per-author, not per-spec — the bar grows a
+third sentence: a cargo-test `check:` filter MUST be broad enough to run
+every test the change adds (prefer the module stem over a narrower
+substring), verified by running the filter and confirming the new tests
+are in the run set. META-META-SPEC edit (T30/T33 precedent: not a
+human-spec file) → T96, kimi REQUIRED (doctrine).
 
-## 4. Capability gaps — ROADMAP PULL (required)
+## 3. Friction hot spots — fix assessment
 
-**PULL: F4 → T90 (pri 2, feature), SPLIT per the FEATURES.md working
-rules.** F4 (Permissions policy) is the top unworked Tier-1 item. Phase 1
-(this row, `specs/t90-permissions-deny-list.md`): `.chug/permissions.json`
-deny-list — in-process per-tool rules (`{"tool": glob}` + optional
-`command`/`path`/`url` arg glob) evaluated BEFORE the T83 hook seam; a
-match denies with the veto-shaped `[permission denied] …` tool error the
-model routes around; config problems fail OPEN (warn-once + one
-`permission_error` line, T83 parity); a rule match fails CLOSED (there is
-no spawn to fail — the differentiator from hooks); policy order
-permissions → hooks → risk gate established; run + chat + plan surfaces
-(plan can only be restricted further — e.g. deny `read_file *.key` inside a
-plan session); events telemetry per the T83 two-line pattern. **Phase 2
-DEFERRED with written reasons:** allow-rules short-circuiting the risk
-gate (the F4 "one policy source among several" leg — needs risk-gate
-plumbing of its own), ask-mode (chat interactive prompt — TUI surface
-item), settings.json unification, `--permissions` CLI flag. The size guard
-from I3 is in the spec.
+- **path-escapes-cwd (T85)**: EARLY PASS, window stays open — the T89 and
+  T90 validators both used bash cross-tree reads with zero
+  `path escapes cwd` errors. Two more clean cycles close it.
+- **edit_file / alias fumbles**: the t88-impl ×3 is the error-TEXT gap,
+  filed as T94 (I3). T5's disambiguation shows no regression.
+- **macOS `timeout` mirage (T22)**: zero sightings in the cycle-51/52
+  streams (cycle 52's `head: illegal line count` is a flag-syntax fumble,
+  not the timeout class).
+- **cargo-nextest absent**: uninstalled ~22:16Z before cycle 51; every
+  gate since runs the unconditional fallback (745/745 in ~21s vs nextest's
+  ~9s). T82's doctrine absorbs it cleanly; host tooling is the operator's
+  call, no row. Watch: if still absent at cycle 56, re-measure whether the
+  runner-comparison debt closes by doctrine edit.
+- **T80 md-only floor**: 5th cycle without a true md-only landing (the
+  T85 bundle carried a `.rs` pin file → full gates, correctly). Telemetry
+  watch stands.
+- **decision_log malformed-call leg**: cycle 52's one `options must be a
+  string, got missing` corrective did its job in one iteration. Closed.
 
-**FEATURES.md bookkeeping (this eval commit):** F3's row gains its
-phase-1 annotation (`T83 LANDED ccb828a, cycle 49; phase 2 deferred`) —
-the check-off was missed at cycle-49's merge (orchestrator duty per
-META-META-SPEC §4; the evaluator repairs the roadmap surface it owns).
+## 4. Capability gaps — ROADMAP PULL: F5 (Image input) → T91, SPLIT
 
-**New finds beyond the roadmap:** none appended. T89 is loop-internal
-iteration economics (a benchmark-neutral capability on an existing tool);
-T88 is robustness. Neither is a benchmark capability gap.
+F1, F13-p1, F2-p1, F3-p1, F4-p1 all landed; the top unworked roadmap item
+is **F5 (Image input)**. Split per the FEATURES.md working rules (full
+scope blows one child budget): **phase 1 → T91: `read_file` image
+support** — png/jpg/jpeg/gif/webp under the cwd sandbox return a base64
+image content block plus a short text note, instead of today's
+lossy-mojibake text read that silently poisons context; `ToolResult` gains
+an image channel, api.rs gains `KnownBlock::Image`, the driver wraps
+tool_result content as a block array when images ride along; a size guard
+refuses oversized images with a tool error naming the cap; and the
+load-bearing safety leg: **endpoint-rejection degrade** — if the API 400s
+on image content, ONE retry with image blocks replaced by a text
+placeholder + an events note, so a non-vision endpoint degrades instead of
+poisoning every subsequent request in the run. Events/tool previews never
+carry base64. Phase 2 (chat paste/drag of screenshots) DEFERRED with
+written reason: terminal clipboard/inline-image input is TUI +
+terminal-capability work with no loop consumer — the loop's need (children
+reading screenshots and image fixtures) is fully served by phase 1 — and
+it rides the F7 streaming-UX surface more than the tool surface.
+FEATURES.md F5 carries the SPLIT annotation from this eval; the phase-1
+check-off lands in T91's row-flip commit. REQUIRED kimi validation
+(api.rs + driver.rs + tools.rs are ALL on the §2 step-4 list).
+
+Beyond the pull: **no new roadmap appends this eval.** F6–F12 stand; the
+F2/F3/F4 phase-2 deferrals stand (layad endpoint absent; risk-gate
+plumbing; chat ask-mode UX) — reaffirmed, not re-litigated.
 
 ## 5. Top 3 priorities
 
-1. **T88 decision_log corrective errors** (robustness; the FATAL class) —
-   smallest diff of the three, error-text-only on failure legs, kills the
-   stuck-abort-by-malformed-bookkeeping class at the corrective surface.
-2. **T89 delegate terminal-wait** (robustness + doctrine) — the loop's
-   iteration economics; expected to lift the 160-cap pressure without
-   raising it (re-measure next eval).
-3. **T90 F4 permissions deny-list** (roadmap pull, feature) — the
-   fail-closed policy layer; REQUIRED kimi validation (driver.rs dispatch
-   + events.rs).
+1. **T92** (impl-child 50→65) — the median feature-row death is the
+   loop's largest standing recovery tax; landing it FIRST also gives every
+   later child this cycle the wider budget.
+2. **T93** (mcp__ canary) — a policy-intent hole in a just-landed
+   security surface; small, mechanical, RED-provable.
+3. **T91** (F5 phase 1) — the mandatory roadmap pull; biggest row of the
+   queue, sized for the post-T92 budget.
 
-## 6. README audit (usability, not just accuracy)
+## 6. README audit (usability)
 
-Cold read, top to bottom, as a newcomer. (a) **Reading order** — quickstart
-→ chat → run → plan → TUI → tools → risk gate → **hooks** → MCP → Langfuse
-→ self-hosting → continuous → development: T83's Hooks section landed IN
-ORDER between risk gate and MCP (policy surfaces together), not appended;
-the integration doctrine held. (b) **Redundancy** — the delegate paragraph
-remains the densest block (SIXTH consecutive eval watch — still 3 actions;
-wait_secs + resume + collect documented inline at reference density; a
-fourth action or the terminal-wait clause T89 adds tips it to a split
-row); the continuous-mode section (routing + gate-runner + digest + four
-caches + mutant caches + re-exec) is the second-densest (2nd watch) —
-both still accurate. (c) **Staleness** — ZERO findings: T86's layout fix
-landed (27/27 set-equality re-verified this eval against `ls src/*.rs`
-minus main.rs); plan mode's "Not yet" tail is accurate; hooks phase-2
-deferrals named. (d) **Balance** — the hooks section carries config shape
-+ semantics appropriate for a user surface; continuous-mode rationale
-paragraphs name their specs. (e) **Quickstart truth** — install/run
-commands verified against the live tree (T35's `cargo install --path .`;
-the `check:` convention intact). **Zero findings this audit** — the docs
-row bar is not met; the two density watches carry.
+(a) **Reading order**: correct — what-it-is → quickstart → chat → run →
+plan → TUI → tools → risk gate → hooks → permissions → MCP → Langfuse →
+specs → loopd → development; T90's Permissions section landed INTEGRATED
+after Hooks, not appended. (b) **Redundancy/density**: the `delegate`
+paragraph in ## Tools is ONE ~24-line paragraph now carrying five
+sub-behaviors (launch / status / collect / wait_secs+terminal / the
+sandbox exception) — the 7-eval density watch is JUDGED: it crosses the
+readability threshold → T97 (per-action sub-bullets, restructure-only,
+zero behavior-text change, pin needles intact). No drift-duplication
+found. (c) **Staleness**: ONE bite — the Development layout line lists 27
+modules; `src/` has 28: **`permissions` is missing** (T90 added the module
+and its README section but not the layout line — the T86 class, second
+sighting) → T95 fixes the line AND adds the mechanical set-equality guard
+the class has earned (two sightings = automate). (d) **Balance**: fine —
+reference detail sits in reference sections; loopd carries the
+runner/cache rationale at the right altitude. (e) **Quickstart truth**:
+the commands work as written in the order given (T35's `cargo install
+--path .` step holds; this host's operator runs `./target/release/chug`
+directly per the ps record — a built-binary alternative the Development
+section's commands also cover).
 
-## Handoff — recommended execution order
+## Handoff
 
-Strictly serial (T89 is doctrine → never overlaps; T90 touches the dispatch
-chain → no disjoint-files case against anything):
-
-1. **T88** (robustness, pri 2) — src/decisions.rs + its test module ONLY;
-   NOT on step-4's REQUIRED list → kimi validation OPTIONAL (T16/T31
-   precedent: orchestrator gates + the spec's RED-proven error legs
-   suffice). Estimate: one short child arc.
-2. **T89** (robustness + doctrine, pri 2) — src/delegate.rs + LOOP-SPEC §2
-   step 2 + README + any wrapped pins; doctrine → runs ALONE; LOOP-SPEC.md
-   is on the REQUIRED list → kimi REQUIRED. Estimate: one arc, one
-   validation round.
-3. **T90** (feature, pri 2) — new src/permissions.rs + driver.rs dispatch +
-   events.rs/eventlog.rs + README; REQUIRED kimi; budget for one fix-up
-   round (the T83 grinder lesson — the spec's size guard should prevent a
-   second).
-
-**Human items:** none this eval. **Owed at THIS wrap:** the T81 acceptance
-leg's eval-kimi half (this cycle's wall time + outcome quality — the
-routine-glm half was recorded cycle 46). **Watch items carried:** T80
-md-only telemetry (3rd cycle unexercised); T85 cross-tree doctrine
-measurement (window opened at its landing); delegate-paragraph density
-(6th eval); continuous-mode density (2nd); T83's two non-blocking
-validator observations (signal-death `(exit none)` asymmetry; chat
-per-turn hooks reload); edit_file not-found frequency; F13 phases 2–3 +
-F2 phase 2 + F3 phase 2 deferrals stand (layad endpoint absent; written
-reasons carried); delegate.rs (3,498) / tgrep.rs (2,527) module sizes.
+- **Work order** (bugs > robustness > features > DX > docs): **T92**
+  (doctrine — runs ALONE, kimi REQUIRED) → **T93** (permissions.rs only;
+  kimi OPTIONAL per §2 step 4 — not on the REQUIRED list; orchestrator
+  gates + the child's RED proofs suffice, T16/T31 precedent) → **T91**
+  (feature, kimi REQUIRED, budget one fix-up round) → **T94** (tools.rs
+  error text, kimi REQUIRED; the T88 arc is the shape template) →
+  **T95** (README word + new guard test — NOT md-only (a `.rs` lands), full
+  gates, kimi optional) → **T96** (META-META-SPEC doctrine, kimi REQUIRED,
+  T30/T33-shaped) → **T97** (README restructure, md-only floor, kimi
+  skipped per T16/T31). T95/T96/T97 are bundle-eligible ONLY pairwise per
+  T45's conjunctive predicate — T95's guard test likely breaks condition
+  (a), so expect them separate.
+- **SELF-SPEC**: none. **Human items**: none new — the untracked
+  `com.tampajohn.chug-loopd.plist` stays the operator's call (carried).
+- **Watch items carried**: T89 re-measure (I4 — closes after two more
+  eval cycles); T85 cross-tree window (two more clean cycles); T80 md-only
+  telemetry (6th cycle); nextest-absence re-measure (cycle 56); F13
+  phases 2–3 + F2/F3/F4 phase-2 deferrals (layad endpoint absent, written
+  reasons carried); delegate.rs 3,992 / tgrep.rs 2,527 / driver.rs 5,309
+  module sizes (delegate.rs +494 since cycle 51 — the next delegate
+  feature lands the split conversation).
+- **Weighed and REJECTED this eval** (eval-triage records in
+  `.chug/decisions.jsonl`): loopd cap 160→200 (I4 — T89 re-measure first);
+  t90 finding (3) stderr warn-latch test-observability (the events line IS
+  observable; stderr adds no decision-relevant signal); t90 finding (4)
+  permissions.rs 363-vs-~350 size split (soft convention, at-edge is
+  acceptable — split when it grows, not before); F13 phases 2–3 now
+  (layad endpoint absent — standing deferral reaffirmed); delegate.rs /
+  tgrep.rs module-size splits now (no incident; watch item covers it).
 
 ## Outcomes (filled at cycle wrap — LOOP-SPEC Phase 3)
 
