@@ -4,10 +4,11 @@
 //! T33/T34/T35/T40/T72 class) pays the full gate suite 2–4 times per item:
 //! worktree review gates, the validator's independent re-run, and main's
 //! post-merge gates — 500+ tests + clippy, ~10–30s each even warm, on a
-//! diff the suite cannot go red for (guard suites excepted). The remedy is
+//! diff the suite cannot go red for (guard suites excepted — and see leg
+//! (i): an edit touching a PINNED doctrine carrier CAN go red). The remedy is
 //! orchestrator-side and mechanical: when the round diff touches ONLY
 //! `*.md`, the gates shrink to the guard floor (`cargo test --test
-//! todo_consistency`, plus `bash -n` on any `.sh` in the diff) at review
+//! todo_consistency`) at review
 //! AND post-merge, with the classification stated as a template command so
 //! no judgment call is needed; validators keep an explicit escape clause
 //! (a doc diff that QUOTES commands or check lines — the T67 class, where a
@@ -55,15 +56,14 @@ const NOT_MOSTLY: &str = "not \"mostly docs\"";
 const FULL_GATES_ARROW: &str = "\u{2192} full gates";
 
 /// (e) The reduced gate set: the guard-floor phrase, the guard-suite floor
-/// command, the `bash -n` leg, and the skip scope (full build/clippy/test
-/// skipped at review AND post-merge). The phrase/command/leg needles must
-/// each occur EXACTLY once in LOOP-SPEC.md. FLOOR_CMD is pinned
+/// command, and the skip scope (full build/clippy/test skipped at review
+/// AND post-merge). The phrase/command needles must occur EXACTLY once in
+/// LOOP-SPEC.md. FLOOR_CMD is pinned
 /// window-scoped, not whole-file: step 5 already carries one
 /// `cargo test --test todo_consistency` occurrence (the T8 guard run after
 /// every TODO.md edit), so the whole-file count is 2 — one per window.
 const FLOOR: &str = "gates shrink to the guard floor";
 const FLOOR_CMD: &str = "cargo test --test todo_consistency";
-const BASH_N: &str = "bash -n";
 const SKIP: &str = "skipped at review AND post-merge";
 
 /// (f) The validator escape clause (T67 class): validators retain the right
@@ -86,6 +86,20 @@ const DEFAULTS_FULL: &str = "defaults to full gates";
 /// `applies here too` — so the step-5 pins in shared_target_dir.rs keep
 /// their exact counts.)
 const POST_MERGE_SHRINK: &str = "the guard floor replaces the full suite here too";
+
+/// (i) The honest go-red risk model (T87): the floor's rationale must not
+/// overclaim. Unpinned md-only edits cannot go red in the full suite, but
+/// an md-only edit touching a PINNED doctrine carrier (a paragraph pinned
+/// by tests/loop_spec_*.rs, tests/shared_target_dir.rs, or
+/// tests/nextest_gate_runner.rs) CAN go red — it can break a pin the floor
+/// does not run — so the editor ALSO runs the affected pin file's tests.
+/// Both needles occur EXACTLY once in LOOP-SPEC.md and live inside step 3's
+/// window (where the floor's rationale is stated). The removed `bash -n`
+/// leg is blessed NO LONGER: no needle in this file guards it — re-inserting
+/// the dead leg into LOOP-SPEC.md leaves this file green, and the spec
+/// check's negated grep is the only remaining guard against it.
+const RISK_CARRIER: &str = "pinned doctrine carrier";
+const RISK_EDITOR: &str = "runs the affected pin file's tests";
 
 /// Step headings, matched LOOSELY — number + bold marker only (the T64
 /// heading-scope pattern): a wording tweak of a heading's text must not
@@ -195,8 +209,8 @@ fn predicate_is_mechanical_and_file_extension_exact() {
     );
 }
 
-/// (e) The reduced gate set: guard-floor phrase, `bash -n` leg, and skip
-/// scope each occur exactly once (whole file); the guard-suite floor
+/// (e) The reduced gate set: guard-floor phrase and skip scope each occur
+/// exactly once (whole file); the guard-suite floor
 /// command occurs exactly once INSIDE step 3's window (the new override's
 /// floor) and the pre-existing T8 occurrence stays exactly once inside
 /// step 5's window (the guard run after every TODO.md edit) — window-scoped
@@ -213,7 +227,6 @@ fn reduced_gate_set_names_the_guard_floor_and_skip_scope() {
     let spec = flat(&loop_spec());
     for (needle, what) in [
         (FLOOR, "the gates-shrink-to-the-guard-floor phrase"),
-        (BASH_N, "the `bash -n` leg"),
         (SKIP, "the skipped-at-review-AND-post-merge scope"),
     ] {
         assert_eq!(
@@ -335,6 +348,44 @@ fn post_merge_gate_shrinks_for_docs_only_rounds_inside_step_5() {
         "step 5 must keep the T78 full-gate form alongside the docs-only \
          shrink — the shrink replaces it only for docs-only rounds"
     );
+}
+
+/// (i) The go-red risk model is honest and pinned: the pinned-doctrine-
+/// carrier hazard and the editor-runs-the-pin-file clause occur exactly
+/// once, inside step 3's window where the floor's rationale lives. Delete
+/// the risk-model sentence and both needles go red (count 0); duplicating
+/// the statement elsewhere also goes red.
+#[test]
+fn go_red_risk_model_names_the_pinned_carrier_hazard_inside_step_3() {
+    assert!(
+        RISK_CARRIER.contains("pinned doctrine carrier") && RISK_EDITOR.contains("pin file"),
+        "the needles must carry the honest go-red risk model"
+    );
+    // Wrap-insensitive for both the uniqueness counts and the window check
+    // (the T78 flat idiom): the rationale sentence wraps mid-phrase.
+    let spec = loop_spec();
+    let flat_spec = flat(&spec);
+    for (needle, what) in [
+        (RISK_CARRIER, "the pinned-doctrine-carrier go-red hazard"),
+        (RISK_EDITOR, "the editor-runs-the-pin-file clause"),
+    ] {
+        assert_eq!(
+            flat_spec.matches(needle).count(),
+            1,
+            "LOOP-SPEC must state {what} exactly once — zero means the \
+             honest risk model was dropped, more than one means it is \
+             stated twice"
+        );
+    }
+    let step3 = window_between(&spec, STEP3, STEP4, "step 3");
+    let flat_step3 = flat(step3);
+    for needle in [RISK_CARRIER, RISK_EDITOR] {
+        assert!(
+            flat_step3.contains(needle),
+            "the risk-model needle {needle:?} must live inside step 3's \
+             window — the go-red risk model sits where the floor is defined"
+        );
+    }
 }
 
 /// No step renumbering (T19/T21/T30 rule): all four §2 step headings are
