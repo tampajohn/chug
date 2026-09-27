@@ -353,9 +353,15 @@ kimi-k3) and `LOOP_ROUTINE_MODEL` (default glm-5-3-flash) — setting
 operation.
 The supervisor builds the release binary (`cargo build --release`) before
 each cycle and the loop runs on it — delegate children re-launch that same
-executable, and the bounded review/validation gates run `cargo test
---release` (the first release build into a cold cache is slower to compile;
-the shared caches below amortize it).
+executable, and the bounded review/validation gates run the nextest-first
+gate runner (T82): `cargo nextest run --release` when `cargo nextest` is on
+PATH — a host tool, not a crate dependency — falling back unconditionally
+to `cargo test --release` when it is absent (never a hard dependency; the
+first cycle after the switch runs both runners once and records both wall
+times in Outcomes — the measurement that justifies keeping it;
+`loopd.sh` checks at startup and logs which runner cycles use to
+loopd.log). The first release build into a cold cache is slower to compile;
+the shared caches below amortize it.
 Before each cycle the supervisor refreshes `.chug/eval-digest.md` via
 `scripts/eval-digest.sh` — a deterministic (jq/awk-only, sub-second) digest of
 the `.chug/events*.jsonl` corpus (per-file iterations, wall time, tool
