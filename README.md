@@ -358,7 +358,11 @@ The supervisor creates four gitignored build caches, one per cargo-consumer
 role, warm after first use: `target-shared/` (implementation children and
 worktree-review gates), `target-shared-validate/` (validators),
 `target-shared-gates/` (overlap-window gates), and `target-shared-main/`
-(post-merge and final main gates). The supervisor hands `CARGO_TARGET_DIR`
+(post-merge and final main gates). Validation rounds that mutation-test in
+parallel (T79) add per-leg caches `target-shared-mut-<k>/` — one per mutant
+leg, cap 3, gitignored by glob, created on demand in the repo root and
+never shared across legs (the same role-keying, one level down).
+The supervisor hands `CARGO_TARGET_DIR`
 to each cycle as a per-invocation env prefix; loopd.sh carries the
 rationale. Why role-keyed: cargo's artifact filename excludes the checkout
 path, so one shared dir is last-builder-wins — role-keyed dirs keep each

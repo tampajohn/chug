@@ -59,6 +59,12 @@ const MAIN: &str = "CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-
 /// The repo's OWN target dir — no template may ever point CARGO_TARGET_DIR at
 /// it (that is the separation the T47 review is required to check).
 const REPO_TARGET: &str = "CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target";
+/// T79: the per-mutant-leg role-keyed target dir — LOOP-SPEC step 4 spells
+/// it in full; META-SPEC §6's goal text carries the repo-root-agnostic
+/// `...` elision (the T79 spec's own spelling).
+const MUT_DIR: &str = "CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-mut-<k>";
+/// T79: one throwaway worktree per mutant leg.
+const MUT_WT: &str = "/tmp/chug-mut-<item>-<k>";
 
 // T48: cargo runs test binaries with cwd = the package root; the compile-time env! path is wrong under the T47 shared cache (cycle-21) — resolve at runtime.
 fn repo_root() -> PathBuf {
@@ -837,5 +843,160 @@ fn loopd_and_readme_release_carriers_are_pinned_per_carrier() {
         1,
         "README names the release gate form (wrap-insensitive — the clause \
          line-wraps between `cargo test` and `--release`) (T78)",
+    );
+}
+
+/// T79 — parallel mutation legs: after the clean-tree gates pass, the
+/// validator MAY run its mutation legs in parallel — one throwaway worktree
+/// per mutant (`/tmp/chug-mut-<item>-<k>`), each with its OWN role-keyed
+/// target dir (the T52 lesson one level down: a mutant's binaries must
+/// never share a target dir with another checkout's builds — the exact
+/// cross-checkout artifact race T52 fixed), capped at 3 legs in flight,
+/// serial the default when mutants touch overlapping files (the overlap
+/// judgment declared in the verdict notes), tree-restored semantics
+/// unchanged (main worktree byte-clean before the verdict; throwaway
+/// worktrees removed after results are collected), findings referencing
+/// mutant names — not leg dirs. LOOP-SPEC's step-4 clause spells the
+/// repo-root path in full (it resolves §6's `...` elision for the loop's
+/// delegates); the wrap points are chosen so every carrier sits on ONE
+/// line, so a rewrap that splits a carrier goes red (the T63/T72
+/// byte-identity stance).
+#[test]
+fn loop_spec_parallel_mutant_legs_are_pinned() {
+    let spec = read("LOOP-SPEC.md");
+    // Needle self-check (T48 idiom): a mangled needle must not let this
+    // pin pass silently.
+    assert!(
+        MUT_DIR.contains("-mut-<k>") && MUT_WT.contains("<item>"),
+        "the needles must carry the per-leg dir and per-mutant worktree shapes"
+    );
+    // Every carrier occurs EXACTLY once spec-wide — zero means the clause
+    // was dropped, more than one means it is stated twice (the T67
+    // self-match lesson).
+    for (needle, what) in [
+        ("Parallel mutants (T79,", "the T79 knob's name carrier"),
+        (MUT_WT, "the per-mutant throwaway worktree path"),
+        (MUT_DIR, "the per-leg role-keyed target dir (full path)"),
+        ("MAY run its mutation legs", "the validator-discretion MAY"),
+        ("cap legs in flight at 3", "the 3-leg parallelism cap"),
+        (
+            "declares that overlap judgment in its verdict notes",
+            "the overlapping-files serial-default clause",
+        ),
+        ("byte-clean before the verdict", "the tree-restored byte-clean leg"),
+        (
+            "throwaway worktrees removed after results are collected",
+            "the post-collection worktree cleanup leg",
+        ),
+        ("mutant names, not leg dirs", "the VERDICT-format preservation leg"),
+    ] {
+        count_eq(&spec, needle, 1, &format!("LOOP-SPEC T79 carrier: {what}"));
+    }
+    // Scope: the whole clause lives INSIDE step 4 (between step 4's and
+    // step 5's headings) — the T72 window pattern.
+    let start = spec
+        .find("4. **Adversarial validation")
+        .expect("LOOP-SPEC step-4 heading present (T79)");
+    let end = start
+        + spec[start..]
+            .find("5. **Harvest")
+            .expect("LOOP-SPEC step-5 heading after step 4 (T79)");
+    let window = &spec[start..end];
+    assert!(
+        window.contains("Parallel mutants (T79,") && window.contains(MUT_WT),
+        "the T79 parallel-mutant clause must live inside step 4; got:\n{window}"
+    );
+}
+
+/// T79 in META-SPEC §6: the validator GOAL TEXT carries the same mandate —
+/// this is the string children actually execute (LOOP-SPEC §2 step 4
+/// inherits §6's goal verbatim except its export line). The goal's line
+/// wraps are free (it is a quoted nohup/delegate argument, rewrapped at
+/// every doctrine edit), so the prose needles are pinned WRAP-INSENSITIVELY
+/// (the T78 README pattern): flattened newlines, exact wording — a dropped
+/// or reworded clause still goes red. The two path carriers stay on one
+/// line by construction and are pinned raw.
+#[test]
+fn meta_spec_validator_goal_carries_the_parallel_mutant_mandate() {
+    let meta = read("META-SPEC.md");
+    // The §6 goal-text window: from the VALIDATION ONLY opener to the model
+    // flag that ends the goal argument.
+    let start = meta
+        .find("--goal \"VALIDATION ONLY")
+        .expect("META-SPEC §6 keeps the validator goal template (T79)");
+    let end = start
+        + meta[start..]
+            .find("--model anthropic-system.ai.kimi-k3")
+            .expect("META-SPEC §6 goal template ends at the model flag (T79)");
+    let goal = &meta[start..end];
+    // split_whitespace join (the T78 flat idiom): the goal text wraps with a
+    // 13-space continuation indent, so a bare '\n'→' ' replace leaves runs
+    // of spaces that break mid-phrase needles.
+    let flat = goal.split_whitespace().collect::<Vec<_>>().join(" ");
+    // The elided-path carrier (the T79 spec's own spelling — §6 stays
+    // repo-root-agnostic; LOOP-SPEC step 4 resolves it): exactly one, raw.
+    count_eq(
+        &meta,
+        "CARGO_TARGET_DIR=.../target-shared-mut-<k>",
+        1,
+        "META-SPEC §6 goal-text per-leg target dir carrier, elided form (T79)",
+    );
+    count_eq(
+        &meta,
+        "target-shared-mut-",
+        1,
+        "META-SPEC carries the mut-leg dir family exactly once — a second \
+         statement would fork the rule (T79)",
+    );
+    for (needle, what) in [
+        (MUT_WT, "the per-mutant throwaway worktree path"),
+        ("MAY run the mutation legs in PARALLEL", "the parallel MAY"),
+        ("cap legs in flight at 3", "the 3-leg parallelism cap"),
+        (
+            "declare that overlap judgment in your verdict notes",
+            "the overlapping-files serial-default clause",
+        ),
+        ("byte-clean before the verdict", "the tree-restored byte-clean leg"),
+        (
+            "remove the throwaway worktrees after the results are collected",
+            "the post-collection worktree cleanup leg",
+        ),
+        ("findings reference mutant names, not leg dirs", "the VERDICT-format leg"),
+    ] {
+        count_eq(
+            &flat,
+            needle,
+            1,
+            &format!("META-SPEC §6 validator goal (flat): {what} (T79)"),
+        );
+    }
+}
+
+/// T79 — the per-leg caches are gitignored BY GLOB (k varies per leg), and
+/// the glob line sits in the target-shared* block right after the T57
+/// four-dir run (the T57 contiguity pin above still holds; this pin adds
+/// the fifth line's exact position).
+#[test]
+fn gitignore_ignores_the_t79_mut_leg_cache_family() {
+    let gitignore = read(".gitignore");
+    count_eq(
+        &gitignore,
+        "target-shared-mut-*/",
+        1,
+        ".gitignore target-shared-mut-* glob line (T79)",
+    );
+    let main_at = gitignore
+        .lines()
+        .position(|l| l.trim() == "target-shared-main/")
+        .expect(".gitignore keeps the T57 `target-shared-main/` line");
+    let mut_at = gitignore
+        .lines()
+        .position(|l| l.trim() == "target-shared-mut-*/")
+        .expect(".gitignore keeps the T79 `target-shared-mut-*/` line");
+    assert_eq!(
+        mut_at,
+        main_at + 1,
+        "the T79 mut-leg glob must sit directly after the T57 four-dir block \
+         in .gitignore (one contiguous cache family); got:\n{gitignore}"
     );
 }
