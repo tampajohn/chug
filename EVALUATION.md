@@ -264,7 +264,33 @@ reasons carried); delegate.rs (3,498) / tgrep.rs (2,527) module sizes.
 
 ## Outcomes (filled at cycle wrap — LOOP-SPEC Phase 3)
 
-### Cycle 51 (2026-09-27) — fresh eval (kimi, loopd-routed: queue empty) — T88 + T89 + T90 filed; T88 LANDED
+### Cycle 51 (2026-09-27) — fresh eval (kimi, loopd-routed: queue empty) — T88 + T89 + T90 filed; T88 + T89 LANDED
+
+**T89 delegate terminal-wait + LOOP-SPEC adoption — LANDED, merge d2b402a.**
+glm impl run1 died 50/50 ceiling-zone (work done, gates+commit unfinished —
+the T15/T17/T20 shape); T63 **resume #18** (pid 49989) accepted 7/50
+(commit 6e95df9, +532/−23: delegate.rs `terminal` flag + 8 RED-proven
+tests incl. two named mutant RED runs, tools.rs schema property +
+description, LOOP-SPEC §2 step 2 default-posture adoption with the
+iteration-economics clause, README integrated clause; pin sweep verified
+loop_spec_recovery.rs STEP2_ANCHOR bytes intact). Review 721/721
+fallback-release + clippy (target-shared). **kimi REQUIRED** (doctrine +
+tools.rs; pid 53370) **VERDICT: PASS 0 blocking** at 48/50 — gates
+independently re-run under target-shared-validate (721/721 fallback +
+79/79 spec check), **8/8 mutants killed** in 2 parallel T79 waves with
+role-keyed mut dirs (passthrough, never-wake, file-creation-drop,
+rejection-==999, budget_low-wake, liveness-off, schema-rename,
+launch-rejection-removal), tree byte-clean; 3 non-blocking notes carried
+(presence-vs-flip semantics documented; `terminal: false` launch leg
+untested; the one-call shorthand is bounded by the 600s cap). Recovery
+routing d1790549083-14, verdict d1790549953-15. **Adoption note:** THIS
+cycle's own binary predates the merge, so its `terminal` field would be
+silently ignored (unknown-key tolerance) — the cycle used the paced
+sleep+instant-poll cadence instead (~90s spacing cut validator-arc poll
+cost to ~10 orchestrator iterations vs the measured ~40–60 wake-per-
+advance pattern); the next cycle's rebuilt binary gets the real terminal
+waits, and T89's re-measurement (does the 160-cap pressure lift?) lands
+next eval.
 
 **T88 decision_log corrective validation errors — LANDED, merge c5a4f9e.**
 glm impl (pid 39838) accepted 33/50 CLEAN first-try (commit e127d96):
