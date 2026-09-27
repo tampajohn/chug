@@ -371,6 +371,13 @@ hosted (impl and validator alike) has been harvested.
 - Child harvests landed in the main repo's `.chug/`: each worked item's
   `events-t<N>-<role>-*.jsonl` (plus `LEDGER-t<N>-<role>-*.md` where
   non-trivial) — nothing died with a removed worktree.
+- `.chug/decisions.jsonl` carries the cycle's records — `eval-triage` at
+  eval time (filed rows AND rejected candidates), `recovery-routing` /
+  `model-fallback` at dispatch, `validation-routing` +
+  `validation-verdict` per item, `outcome` backfills at row flips;
+  a cycle that worked items with zero `decision_log` records
+  is an incomplete wrap (the T23→T24 zero-calls lesson; cycles 34+35
+  shipped nine routing/verdict decisions with none recorded).
 - EVALUATION.md's **Outcomes** section is complete and truthful — per-item
   entries were written at each landing (§2 step 5); wrap adds the
   skipped/deferred rows, the cycle-level notes (what the validators
