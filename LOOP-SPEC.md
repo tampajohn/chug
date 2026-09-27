@@ -64,9 +64,11 @@ impl, never 2 impls):
    CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared` then
    `cargo build --release` there — every worktree shares one incremental
    cache instead of a cold 43s–6 min build per round. T78: the warm build is
-   the release profile, because the review/validation gates below run
-   `cargo test --release`; release artifacts live in the SAME shared dir's
-   `release/` subdir (no new dirs), and the debug profile stays warm in it
+   the release profile, because the review/validation gates below run the
+   release-profile gate runner (T82: nextest when on PATH, else
+   `cargo test --release` — step 3's runner rule); release artifacts live
+   in the SAME shared dir's `release/` subdir (no new dirs), and the debug
+   profile stays warm in it
    from earlier cycles for the impl children's own debug `check:` gates. The
    dir is a NEW one, NOT the repo's
    own `target/` — the operator's build cache stays separate so a wedge can't
@@ -144,11 +146,26 @@ impl, never 2 impls):
    segment's verdict, the accepted goal's summary, the check cmd, and the
    commit refs in one bounded non-blocking read (every git failure degrades
    to a note) — then diff the branch, read the child's ledger if ambiguous,
-   and run bounded gates yourself (`CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared
-   perl -e 'alarm 600; exec @ARGV' cargo test --release --
-   --test-threads=4` — the T47 env prefix keeps the gate on the shared warm
-   cache; bash tool calls don't share env, so the step-1 export doesn't
-   persist between calls). The gates are the RELEASE profile (T78): the
+   and run bounded gates yourself (T82 gate runner, nextest-first — the
+   predicate is `command -v cargo-nextest`: when it succeeds run
+   `CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared perl -e 'alarm 600; exec @ARGV' cargo nextest run --release`,
+   else the same bounded cap around the fallback
+   `CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared perl -e 'alarm 600; exec @ARGV' cargo test --release -- --test-threads=4` —
+   the T47 env prefix keeps the gate on the shared warm cache; bash tool
+   calls don't share env, so the step-1 export doesn't persist between
+   calls). The runner rule (T82, operator-approved 2026-09-26): gates
+   prefer `cargo nextest run --release` — cargo-nextest is a HOST tool
+   (installed via `cargo install cargo-nextest` or the get.nexte.st
+   tarball), NOT a crate dependency — and the fallback to
+   `cargo test --release -- --test-threads=4` is unconditional: nextest is
+   never a hard dependency, and every template degrades gracefully when it
+   is absent. First cycle after the switch: run BOTH runners once in main
+   and record both wall times in that cycle's Outcomes (the measurement
+   that justifies keeping nextest). If a test family is red ONLY under
+   nextest, that family's gates use the fallback and the commit message
+   names the family. The docs-only guard floor below is exempt — it runs
+   one targeted test binary, where nextest's suite-wide scheduling buys
+   nothing. The gates are the RELEASE profile (T78): the
    first release build into a cold cache is slower (compile time), every
    subsequent run is faster than debug — the shared target dirs (T47/T52)
    amortize it. Role-key the dir (T52): the `target-shared` shown
@@ -247,7 +264,8 @@ impl, never 2 impls):
    ALWAYS, never conditionally on the T44 overlap (this is NOT step 3's
    role-keyed rule; step 3's worktree-review gates keep their T52
    `target-shared`/`target-shared-gates` split, scoped to worktree-review
-   gates). The gate command is the T78 release form:
+   gates). The gate command is step 3's T82 runner — `cargo nextest run --release` when
+   `cargo nextest` is on PATH, else
    `cargo test --release -- --test-threads=4` under the bounded cap — same
    tradeoff as step 3, and the dir is warm after its first release build.
    Docs-only rounds (step 3's classification — every changed file ends
@@ -362,7 +380,9 @@ hosted (impl and validator alike) has been harvested.
   refs, one-line verdict`) — the full narrative lives in git (row-flip
   commits + TODO done rows carry the refs), so compaction drops nothing
   that isn't one `git log` away.
-- Final gates green in main (build + clippy + `cargo test --release`) → push anything
+- Final gates green in main (build + clippy + step 5's T82 gate runner —
+  `cargo nextest run --release` when `cargo nextest` is on PATH, else
+  `cargo test --release`) → push anything
   remaining (eval commits, Outcomes) → `goal_complete` with the cycle
   summary. Final gates run in main under the T57 main-dedicated cache:
   `CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-main`, the

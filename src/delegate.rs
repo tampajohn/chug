@@ -2574,10 +2574,16 @@ log_tail: (none)";
     #[cfg(unix)]
     fn write_argv_stub(dir: &Path) -> PathBuf {
         use std::os::unix::fs::PermissionsExt;
+        // T82 check-fix: publish the dump ATOMICALLY (write argv.tmp, then
+        // rename). The old stub truncated argv.txt in place, so a poller
+        // could read the file in the truncate→printf window and take an
+        // EMPTY dump for the final one — observed as a flaky red in
+        // `cargo test` at default parallelism (the spec check) while
+        // `--test-threads=4` and nextest's process isolation stayed green.
         let stub = dir.join("chug-argv-stub.sh");
         fs::write(
             &stub,
-            "#!/bin/sh\nprintf '%s\\n' \"$@\" > argv.txt\nsleep 60\n",
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" > argv.tmp && mv argv.tmp argv.txt\nsleep 60\n",
         )
         .unwrap();
         fs::set_permissions(&stub, fs::Permissions::from_mode(0o755)).unwrap();
@@ -2592,7 +2598,14 @@ log_tail: (none)";
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
             if let Ok(text) = fs::read_to_string(&path) {
-                return text.lines().map(str::to_string).collect();
+                // The stub renames argv.tmp into place (atomic publish), so
+                // a successful read is complete; the non-empty guard is
+                // belt-and-braces for any future in-place writer — an empty
+                // dump must never satisfy the poll (T82 check-fix).
+                let argv: Vec<String> = text.lines().map(str::to_string).collect();
+                if !argv.is_empty() {
+                    return argv;
+                }
             }
             assert!(
                 Instant::now() < deadline,

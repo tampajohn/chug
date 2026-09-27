@@ -38,7 +38,10 @@
 //! META-SPEC nohup templates launch `target/release/chug` (delegate children
 //! re-launch the orchestrator's own executable — no binary path is needed in
 //! LOOP-SPEC's delegate template), and the bounded review/merge/validation
-//! gates run `cargo test --release`. These pins also enforce the sweep side:
+//! gates run the release profile — T82: the nextest-first gate runner
+//! (`cargo nextest run --release` when `cargo nextest` is on PATH, else the
+//! fallback `cargo test --release -- --test-threads=4`). These pins also
+//! enforce the sweep side:
 //! no `target/debug/chug` launch path may survive in loopd.sh or either
 //! template. The spec `check:` convention stays plain `cargo test` (debug) —
 //! release is for gates only.
@@ -221,12 +224,19 @@ fn loop_spec_templates_export_the_shared_dir() {
         1,
         "LOOP-SPEC step-2 delegate goal text (T47)",
     );
-    // (3) step-3 review-gate env prefix.
+    // (3) step-3 review-gate env prefix — both legs of the T82 runner
+    //     (nextest leg and fallback leg) carry the T47 prefix.
     count_eq(
         &spec,
-        &format!("{SHARED}\n   perl -e"),
+        &format!("{SHARED} perl -e 'alarm 600; exec @ARGV' cargo nextest run --release"),
         1,
-        "LOOP-SPEC step-3 review-gate prefix (T47)",
+        "LOOP-SPEC step-3 review-gate prefix, nextest leg (T47+T82)",
+    );
+    count_eq(
+        &spec,
+        &format!("{SHARED} perl -e 'alarm 600; exec @ARGV' cargo test --release"),
+        1,
+        "LOOP-SPEC step-3 review-gate prefix, fallback leg (T47+T82)",
     );
     // Tradeoff note: recovery is operator-owned and cheap.
     assert_contains(&spec, "rm -rf target-shared", "LOOP-SPEC.md");
@@ -278,12 +288,14 @@ fn loop_spec_validator_exports_the_validate_dir_always() {
 fn loop_spec_gate_dir_is_role_keyed_for_the_overlap_window() {
     let spec = read("LOOP-SPEC.md");
     // (1) step 3's gate template keeps the T47 shared dir as its base (the
-    //     no-child-in-flight arm) — the T47 carrier pin survives T52.
+    //     no-child-in-flight arm) — the T47 carrier pin survives T52 and
+    //     T82 (both legs of the runner rule carry the prefix; the counts
+    //     live in loop_spec_templates_export_the_shared_dir).
     count_eq(
         &spec,
-        &format!("{SHARED}\n   perl -e"),
+        &format!("{SHARED} perl -e 'alarm 600; exec @ARGV' cargo nextest run --release"),
         1,
-        "LOOP-SPEC step-3 review-gate base prefix (T47, unchanged by T52)",
+        "LOOP-SPEC step-3 review-gate base prefix, nextest leg (T47+T82)",
     );
     // (2) the conditional arm carries the gates dir exactly once.
     count_eq(
@@ -331,9 +343,11 @@ fn meta_spec_templates_export_the_shared_dir() {
     assert_contains(&spec, SHARED, "META-SPEC.md");
     // Per-carrier pins (T47 fix-up finding 2: the old bare `>= 3` count let
     // mutant M6 — dropping BOTH nohup env-prefixes — survive, because 3 of
-    // the 5 carriers were still standing). All five carriers are now pinned
+    // the 5 carriers were still standing). All carriers are now pinned
     // individually by name and location; dropping any ONE must fail.
-    count_eq(&spec, SHARED, 5, "META-SPEC total carrier count (T47)");
+    // T82: §5's review gate grew a second leg (nextest + fallback), so the
+    // total is 6.
+    count_eq(&spec, SHARED, 6, "META-SPEC total carrier count (T47+T82)");
     // (1) Why bullet — the child-binary bullet quotes the export verbatim.
     count_eq(
         &spec,
@@ -351,12 +365,19 @@ fn meta_spec_templates_export_the_shared_dir() {
         1,
         "META-SPEC §4 impl nohup launch template (T47)",
     );
-    // (3) review gate — the orchestrator's own `cargo test` is env-prefixed.
+    // (3) review gate — the orchestrator's own gate run is env-prefixed on
+    //     BOTH legs of the T82 runner.
     count_eq(
         &spec,
-        &format!("{SHARED} cargo test"),
+        &format!("{SHARED} cargo nextest run --release"),
         1,
-        "META-SPEC §5 review-gate cargo test prefix (T47)",
+        "META-SPEC §5 review-gate prefix, nextest leg (T47+T82)",
+    );
+    count_eq(
+        &spec,
+        &format!("{SHARED} cargo test --release -- --test-threads=4"),
+        1,
+        "META-SPEC §5 review-gate prefix, fallback leg (T47+T82)",
     );
     // (4) validator nohup launch template (§6).
     count_eq(
@@ -661,10 +682,11 @@ fn loopd_builds_and_launches_the_release_binary() {
 /// `target/release/chug`; LOOP-SPEC carries no binary path at all (delegate
 /// children re-launch the orchestrator's own executable) — pin the absence
 /// so a future editor cannot hardcode a debug path back in; the review,
-/// merge, and validator gate commands are `cargo test --release --
-/// --test-threads=4`; and the T78 tradeoff (first release build slower,
-/// shared target dirs amortize) is named in both templates. The spec
-/// `check:` convention stays debug — pinned via the T6 clause.
+/// merge, and validator gate commands carry the T82 runner (nextest when on
+/// PATH) with the T78 fallback `cargo test --release -- --test-threads=4`
+/// named at every carrier; and the T78 tradeoff (first release build
+/// slower, shared target dirs amortize) is named in both templates. The
+/// spec `check:` convention stays debug — pinned via the T6 clause.
 #[test]
 fn launch_paths_and_gates_are_the_release_profile() {
     let meta = read("META-SPEC.md");
@@ -689,21 +711,28 @@ fn launch_paths_and_gates_are_the_release_profile() {
          children re-launch the orchestrator's own executable, so no \
          binary path belongs in the spec (T78)"
     );
-    // (3) The release gate command at all four carriers: §5 review gate,
-    //     §6 validator goal text, §7 merge gate, T6 bounded-gates rule.
+    // (3) The T78 fallback gate command at all five carriers: §5 review
+    //     gate, §6 validator goal text, §7 merge gate, T6 rule's canonical
+    //     statement, T6 rule's fallback-cap clause (T82 moved the cap
+    //     examples to the nextest form — the fallback cap is stated in
+    //     prose there — so the fallback command itself is the carrier).
     count_eq(
         &meta,
         "cargo test --release -- --test-threads=4",
-        4,
-        "META-SPEC release-gate command carriers: §5 review, §6 validator \
-         goal, §7 merge gate, T6 rule (T78)",
+        5,
+        "META-SPEC T78-fallback gate command carriers: §5 review, §6 \
+         validator goal, §7 merge gate, T6 rule + its fallback-cap clause \
+         (T82)",
     );
-    // (4) LOOP-SPEC's executable review-gate template is the release form.
+    // (4) LOOP-SPEC's executable review-gate template is the release form —
+    //     now the T82 fallback leg (the nextest leg carries the same cap,
+    //     pinned in nextest_gate_runner.rs).
     count_eq(
         &loop_spec,
         "perl -e 'alarm 600; exec @ARGV' cargo test --release",
         1,
-        "LOOP-SPEC step-3 review-gate template is the release form (T78)",
+        "LOOP-SPEC step-3 review-gate template carries the T82 fallback \
+         leg under the same bounded cap (T78+T82)",
     );
     // (5) The tradeoff is NAMED in both templates (first release build
     //     slower, shared target dirs amortize).
@@ -752,28 +781,31 @@ fn loop_spec_release_carriers_are_pinned_per_carrier() {
         "LOOP-SPEC step-1 worktree build is the release form (T78 req 2; \
          kimi R1 mutant M8)",
     );
-    // step 1's why-prose states the gates' profile — a carrier too.
+    // step 1's why-prose states the gates' profile — a carrier too. T82
+    // rewrote it to name the nextest-first runner (the T78 release form is
+    // the fallback leg of step 3's rule).
     count_eq(
         &spec,
-        "gates below run\n   `cargo test --release`",
+        "gates below run the\n   release-profile gate runner",
         1,
-        "LOOP-SPEC step-1 why-prose names the release gate profile (T78)",
+        "LOOP-SPEC step-1 why-prose names the T82 gate runner (T78+T82)",
     );
-    // (M10) step 5: the post-merge gate command is the T78 release form.
+    // (M10) step 5: the post-merge gate command is step 3's T82 runner, its
+    // fallback leg still the T78 release form under the bounded cap.
     count_eq(
         &spec,
         "`cargo test --release -- --test-threads=4` under the bounded cap",
         1,
-        "LOOP-SPEC step-5 gate command is the T78 release form under the \
-         bounded cap (T78 req 3; kimi R1 mutant M10)",
+        "LOOP-SPEC step-5 gate command keeps the T78 fallback form under \
+         the bounded cap (T78 req 3 + T82; kimi R1 mutant M10)",
     );
-    // (M11) Phase-3 wrap: the final gates name the release form.
+    // (M11) Phase-3 wrap: the final gates name the T82 runner.
     count_eq(
         &spec,
-        "clippy + `cargo test --release`",
+        "clippy + step 5's T82 gate runner",
         1,
-        "LOOP-SPEC Phase-3 wrap pins the final gates to `cargo test \
-         --release` (T78 req 3; kimi R1 mutant M11)",
+        "LOOP-SPEC Phase-3 wrap pins the final gates to step 5's T82 gate \
+         runner (T78 req 3 + T82; kimi R1 mutant M11)",
     );
 }
 
@@ -788,20 +820,21 @@ fn meta_spec_release_carriers_are_pinned_per_carrier() {
         "META-SPEC why-bullet worktree build is the release form (T78 req 2; \
          kimi R1 mutant M9)",
     );
-    // The T6 rule's two wrapped examples are release-form carriers the
-    // single-line `cargo test --release -- --test-threads=4` needle (count
-    // 4 above) cannot see — they wrap mid-command.
+    // The T6 rule's two cap examples are now nextest-form carriers the
+    // single-line fallback needle (count 5 above) cannot see — the T82 cap
+    // examples show the nextest form; the fallback leg is stated in prose
+    // right after them ("the same caps wrap the fallback ... instead").
     count_eq(
         &meta,
-        "perl -e 'alarm 600; exec @ARGV' cargo test --release",
+        "perl -e 'alarm 600; exec @ARGV' cargo nextest run --release",
         1,
-        "META-SPEC T6 macOS example is the release form (T78 req 3)",
+        "META-SPEC T6 macOS example wraps the T82 nextest form (T82)",
     );
     count_eq(
         &meta,
-        "timeout 600 cargo test --release",
+        "timeout 600 cargo nextest run --release",
         1,
-        "META-SPEC T6 Linux example is the release form (T78 req 3)",
+        "META-SPEC T6 Linux example wraps the T82 nextest form (T82)",
     );
 }
 
@@ -819,13 +852,14 @@ fn loopd_and_readme_release_carriers_are_pinned_per_carrier() {
         "loopd.sh release-build carriers: the build line + the T47 comment \
          (T78 req 1)",
     );
-    // The T78 comment names the review/validation gates' release form.
+    // The T82 fallback leg is named by the else-branch startup log line
+    // (the T78 comment's restatement wraps mid-command, so the log line is
+    // the countable carrier; nextest_gate_runner.rs pins both branches).
     count_eq(
         &loopd,
-        "cargo test --release",
+        "cargo test --release -- --test-threads=4",
         1,
-        "loopd.sh T78 comment names the review/validation gate form (T78 \
-         req 3)",
+        "loopd.sh names the T82 fallback gate form (T78 req 3 + T82 req 2)",
     );
     // README's continuous-mode paragraph documents both carriers.
     count_eq(

@@ -130,6 +130,16 @@ trap 'rm -f "$PIDFILE"' EXIT
 mkdir -p target-shared
 
 echo "$(ts) loopd start (pid $$)" >> "$LOG"
+# T82: nextest-first gates (LOOP-SPEC step 3, META-SPEC gates rule). The
+# supervisor installs NOTHING — it only checks for the host tool and logs
+# which gate runner this install's cycles use, so loopd.log always names
+# the gate form; absence of cargo-nextest degrades to the unconditional
+# fallback by construction (nextest is never a hard dependency).
+if command -v cargo-nextest >/dev/null 2>&1; then
+  echo "$(ts) gate runner: cargo nextest run --release (cargo-nextest on PATH)" >> "$LOG"
+else
+  echo "$(ts) gate runner: cargo test --release -- --test-threads=4 (fallback — cargo-nextest absent)" >> "$LOG"
+fi
 # T50: content fingerprint of the running script, recorded BEFORE the cycle
 # loop. POSIX cksum is content-based — `touch` or a git checkout that
 # preserves content must not trigger a spurious re-exec; only a real content
@@ -173,9 +183,11 @@ while [ ! -f "$STOP" ]; do
   # T78: the loop runs the RELEASE binary — this build produces
   # ./target/release/chug, the cycle invocation below launches it, delegate
   # children re-launch the orchestrator's own executable (current_exe), and
-  # the review/validation gates run `cargo test --release` (LOOP-SPEC step 3,
-  # META-SPEC gates rule). First cycle after this lands pays a cold release
-  # build here AND into the shared cache; every later one is warm.
+  # the review/validation gates run the T82 gate runner — `cargo nextest
+  # run --release` when cargo-nextest is on PATH, else `cargo test
+  # --release` (LOOP-SPEC step 3, META-SPEC gates rule). First cycle after
+  # this lands pays a cold release build here AND into the shared cache;
+  # every later one is warm.
   # T46: refresh the Phase-1 corpus digest so every cycle's evaluation reads
   # .chug/eval-digest.md instead of re-mining raw events archives.
   scripts/eval-digest.sh >> "$LOG" 2>&1
