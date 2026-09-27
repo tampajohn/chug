@@ -253,6 +253,29 @@ phases 2–3 deferral stands.
   sweep-the-family. Orchestrator gates independently re-run 594/594 +
   clippy under target-shared. Kimi R2 validator IN FLIGHT (pid 7916,
   REQUIRED driver.rs, routing d1790468299-1, verdict record pending).
+- **T77 landed** (cache-stable transcript trimming — segment-frozen
+  prefix; merge `fedb9ef`, branch loop-t77 at `f83a9e7`). Recovered from
+  cycle-38 wrap state: fix-up-1 (pid 74447) accepted 38/50 → `a34d0c0`
+  tests-only (+204/−0), orchestrator gates independently 594/594. Kimi R2
+  FAIL ONE blocking (S1 stop-at-target break deletable — over-collapse
+  unpinned; R1's 3 mutants confirmed RED; S10 `seg.collapsed` disjunct
+  proven equivalent non-blocking) → fix-up-2 run1 50/50 abort with work
+  done uncommitted → T63 ELEVENTH resume accepted 7/50 → `f83a9e7`
+  tests-only (+237/−0, 6 mutants RED-proven: M1 stop-at-target, M2
+  pool-exhaustion, M3/M3b KEEP_LAST both directions, M4 segment-advance,
+  M5 engage-gate est∈(80k,120k] band — the child caught its own
+  first-surviving M5 fixture and rewrote it into the killing band).
+  Kimi R3 VERDICT PASS 0 blocking (49/50): S1 CLOSED RED by
+  `trim_stops_at_target_exact_collapse_extent` (6 markers vs pinned
+  exactly-4), production byte-identical f83a9e7 vs a5de407, 599/599 +
+  clippy on shasum-verified clean tree, 2 non-blocking benign
+  single-token boundary survivors (measure-zero vs the spec's own ~16k
+  estimate). Merge clean (no driver.rs conflicts vs T76). Post-merge
+  gates 641/641 + clippy under target-shared-main. 12 artifacts
+  harvested (6 event streams incl. 3 abort+resume two-segment T63 pairs,
+  5 LEDGERs, child decisions.jsonl). Spec repo-context line corrected
+  (trimming lives in driver.rs, not transcript.rs). Langfuse telemetry
+  acceptance leg is a later-cycle Outcomes item.
 - T44 overlap #6: T77 R2 validator (reads/mutates its own worktree) ran
   concurrently with the T76 main-checkout merge + post-merge gates —
   disjoint write surfaces, merges stayed serial (T76 first).

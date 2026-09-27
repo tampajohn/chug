@@ -14,8 +14,9 @@ cache-stable: freeze the prefix in segments.
 
 ## Repo context
 
-- `src/transcript.rs`: trimming (collapse old tool outputs past a token
-  estimate); rotation on fresh runs (T7); append pattern mirrored by
+- `src/driver.rs`: trimming (collapse old tool outputs past a token
+  estimate; segment-frozen prefix after T77); `src/transcript.rs`:
+  rotation on fresh runs (T7); append pattern mirrored by
   eventlog (T10).
 - `src/api.rs`: request assembly; usage accounting feeds events.jsonl
   iteration lines.
