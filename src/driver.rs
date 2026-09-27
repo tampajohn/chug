@@ -2162,6 +2162,243 @@ mod tests {
         assert_eq!(young_after, young, "young region byte-verbatim across trims");
     }
 
+    /// T77 fix-up round 2, killer for the chooser's STOP-AT-TARGET break
+    /// (`if total <= TRIM_TARGET_TOKENS { break; }`). Pins the EXACT extent
+    /// of collapse: for 60 distinct 4.4k-char pairs the trim must collapse
+    /// exactly the first four complete 16-message segments and nothing more
+    /// — exactly 4 canonical markers, a post-trim length of 61, the young
+    /// complete segments tu_32..tu_49 byte-verbatim at their mapped
+    /// positions, and the 20-message tail byte-verbatim. Deleting the break
+    /// over-collapses the pool (6 markers, young pool destroyed) and trips
+    /// every pin here; merely asserting `<= target` (the old
+    /// `trimming_respects_target_or_exhausts`) did not, because
+    /// over-collapse still lands under 80k.
+    #[test]
+    fn trim_stops_at_target_exact_collapse_extent() {
+        let long = "w".repeat(4_400);
+        let mut messages = vec![Message::user(vec![ContentBlock::text_block("kick")])];
+        let mut pre: Vec<String> = Vec::new();
+        let snap = |m: &Message| serde_json::to_string(m).unwrap();
+        pre.push(snap(&messages[0]));
+        for i in 0..60 {
+            let pair = use_result_pair(&format!("tu_{i}"), &format!("payload {i} {}", long));
+            for m in &pair {
+                pre.push(snap(m));
+            }
+            messages.extend(pair);
+        }
+        assert!(estimate_tokens(&messages) > TRIM_ABOVE_TOKENS);
+        assert!(transcript_trim(&mut messages), "trim engages");
+
+        // Exactly four oldest segments collapsed — one canonical marker
+        // each, in order, nothing else.
+        assert_eq!(
+            marker_texts(&messages),
+            vec!["[trimmed: ~18k tokens, 8 tool results]".to_string(); 4],
+            "exactly the 4 oldest complete segments collapsed, no more"
+        );
+        // Post-trim layout: 1 (msg0) + 4 markers + 36 young + 20 tail.
+        assert_eq!(messages.len(), 61, "4 segments of 16 messages became 4 markers");
+        for m in &messages[1..5] {
+            assert!(is_trim_marker(m), "markers occupy exactly indices 1..=4");
+        }
+        assert!(!is_trim_marker(&messages[5]), "marker run ends at index 4");
+        // The collapsed ranges were exactly pre[1..65]: young pool
+        // pre[65..101] -> post[5..41], byte-verbatim at the mapped index.
+        for k in 0..36 {
+            assert_eq!(
+                snap(&messages[5 + k]),
+                pre[65 + k],
+                "young pool message {k} (tu_{}) byte-verbatim at its mapped slot",
+                32 + k / 2
+            );
+        }
+        // And the protected tail pre[101..121] -> post[41..61], untouched.
+        for k in 0..20 {
+            assert_eq!(snap(&messages[41 + k]), pre[101 + k], "tail message {k} byte-verbatim");
+        }
+        // The target semantics still hold: under 80k after stopping.
+        assert!(estimate_tokens(&messages) <= TRIM_TARGET_TOKENS);
+    }
+
+    /// T77 fix-up round 2, killer for the chooser's POOL-EXHAUSTION no-op
+    /// (`if chosen.is_empty() { return false; }`). A resumed transcript
+    /// whose trimmable window holds ONLY frozen markers (nothing left to
+    /// collapse) while the estimate is still above the engage threshold
+    /// must be a `false` no-op — not a `true` "trimmed" that would make the
+    /// caller rewrite the transcript file for nothing. Deleting the guard
+    /// flips the return value (the splice loop over an empty `chosen` is
+    /// invisible), so the bool itself is pinned here, alongside byte
+    /// identity of the whole message vec.
+    #[test]
+    fn trim_pool_of_only_frozen_markers_is_a_noop_false() {
+        let tail_payload = "t".repeat(32_000);
+        let mut messages = vec![Message::user(vec![ContentBlock::text_block("kick")])];
+        // Two frozen markers already in the pool (a resumed transcript).
+        for _ in 0..2 {
+            messages.push(Message::user(vec![ContentBlock::text_block(trim_marker_text(
+                16_000, 0,
+            ))]));
+        }
+        // A 20-message protected tail big enough to keep the estimate above
+        // the engage threshold: 20 x ~8k tokens > 120k.
+        for i in 0..20 {
+            messages.push(Message::assistant(vec![ContentBlock::Known(KnownBlock::Text {
+                text: format!("tail {i} {}", tail_payload),
+            })]));
+        }
+        assert_eq!(messages.len(), 23);
+        assert_eq!(messages.len() - KEEP_LAST_MESSAGES, 3, "pool is exactly indices 1..=2");
+        assert!(is_trim_marker(&messages[1]) && is_trim_marker(&messages[2]));
+        assert!(estimate_tokens(&messages) > TRIM_ABOVE_TOKENS, "trim engages");
+
+        let before: Vec<String> = messages.iter().map(|m| serde_json::to_string(m).unwrap()).collect();
+        assert!(
+            !transcript_trim(&mut messages),
+            "pool of only frozen markers: false no-op, not a true rewrite"
+        );
+        let after: Vec<String> = messages.iter().map(|m| serde_json::to_string(m).unwrap()).collect();
+        assert_eq!(after, before, "no bytes moved");
+        assert!(!transcript_trim(&mut messages), "idempotent: still a no-op");
+    }
+
+    /// T77 fix-up round 2, killer for the KEEP_LAST window bound
+    /// (`messages.len().saturating_sub(KEEP_LAST_MESSAGES)`). Every message
+    /// here is a complete 16k singleton segment, so the chooser collapses
+    /// the ENTIRE pool (the 160k-token tail keeps the estimate above target
+    /// no matter how much collapses) — the collapse stops exactly at the
+    /// protected-tail edge. The count 20 is HARDCODED, not read from the
+    /// production constant, so shrinking KEEP_LAST intrudes a marker into
+    /// the pinned tail byte-verbatim region and growing it changes the
+    /// exact marker count.
+    #[test]
+    fn trim_protected_tail_is_exactly_20_messages_byte_verbatim() {
+        let big = "t".repeat(65_000); // ~16.2k tokens: one complete segment per message
+        let mut messages = vec![Message::user(vec![ContentBlock::text_block("kick")])];
+        let mut pre: Vec<String> = vec![serde_json::to_string(&messages[0]).unwrap()];
+        for i in 0..40 {
+            let m = Message::assistant(vec![ContentBlock::Known(KnownBlock::Text {
+                text: format!("seg {i} {}", big),
+            })]);
+            pre.push(serde_json::to_string(&m).unwrap());
+            messages.push(m);
+        }
+        assert!(estimate_tokens(&messages) > TRIM_ABOVE_TOKENS);
+        assert!(transcript_trim(&mut messages), "the whole collapsible pool collapses");
+        // Exactly the 20 pool messages (indices 1..=20 of 41) collapsed.
+        assert_eq!(
+            marker_texts(&messages),
+            vec!["[trimmed: ~16k tokens, 0 tool results]".to_string(); 20],
+            "exactly the 20 pool singletons collapsed"
+        );
+        assert_eq!(messages.len(), 41, "20 messages became 20 markers in place");
+        assert!(is_trim_marker(&messages[20]), "collapse stops flush against the tail");
+        assert!(!is_trim_marker(&messages[21]), "first tail message is real bytes");
+        // Hardcoded 20: the last 20 messages are byte-verbatim at the SAME
+        // indices (20-for-20 swap keeps positions stable).
+        for k in 21..41 {
+            assert_eq!(
+                serde_json::to_string(&messages[k]).unwrap(),
+                pre[k],
+                "protected tail message {k} byte-verbatim (hardcoded 20-message tail)"
+            );
+        }
+        assert_eq!(messages[0].content[0].text(), Some("kick"), "message 0 untouched");
+    }
+
+    /// T77 fix-up round 2, killer for the segment-start advance (`i = end`).
+    /// The walk must consume each segment whole: the next segment starts
+    /// where the previous ended, never re-slicing consumed messages.
+    /// Advancing by one instead overlaps every segment with its predecessor
+    /// — the chooser then picks overlapping ranges and the back-to-front
+    /// splice corrupts the transcript (shifted markers, duplicated or
+    /// destroyed payload regions). The 160k-token protected tail dominates
+    /// the estimate, so the target never binds and the marker vec is set
+    /// purely by the walk: two pure-pair segments (~18k/8 results), one
+    /// MIXED segment straddling the pair/tail seam (~2 pair remainder + 2
+    /// tail messages), then 2-message tail segments up to the window edge.
+    #[test]
+    fn trim_segment_walk_advances_to_end_not_re_sliced() {
+        let long = "w".repeat(4_400);
+        let mut messages = vec![Message::user(vec![ContentBlock::text_block("kick")])];
+        let mut pre: Vec<String> = vec![serde_json::to_string(&messages[0]).unwrap()];
+        for i in 0..18 {
+            let pair = use_result_pair(&format!("tu_{i}"), &format!("payload {i} {}", long));
+            for m in &pair {
+                pre.push(serde_json::to_string(m).unwrap());
+            }
+            messages.extend(pair);
+        }
+        for i in 0..24 {
+            let m = Message::assistant(vec![ContentBlock::Known(KnownBlock::Text {
+                text: format!("tail {i} {}", "t".repeat(32_000)),
+            })]);
+            pre.push(serde_json::to_string(&m).unwrap());
+            messages.push(m);
+        }
+        // len 61, window_end 41: pool = 1..41 = two 16-message pair
+        // segments, one mixed seam segment (4 pair msgs + 2 tail msgs),
+        // then one 2-message tail segment ending flush at the window edge.
+        assert_eq!(messages.len(), 61);
+        assert!(estimate_tokens(&messages) > TRIM_ABOVE_TOKENS);
+        assert!(transcript_trim(&mut messages));
+        assert_eq!(
+            marker_texts(&messages),
+            vec![
+                "[trimmed: ~18k tokens, 8 tool results]".to_string(),
+                "[trimmed: ~18k tokens, 8 tool results]".to_string(),
+                "[trimmed: ~21k tokens, 2 tool results]".to_string(),
+                "[trimmed: ~16k tokens, 0 tool results]".to_string(),
+            ],
+            "walk shape: pair, pair, mixed seam, tail — nothing re-sliced"
+        );
+        assert_eq!(messages.len(), 25, "40 pool messages became 4 markers");
+        for m in &messages[1..5] {
+            assert!(is_trim_marker(m), "markers occupy exactly indices 1..=4");
+        }
+        assert!(!is_trim_marker(&messages[5]), "marker run ends at index 4");
+        // Collapsed ranges were exactly pre[1..41] — the ENTIRE pool: the
+        // 20-message tail pre[41..61] survives verbatim at post[5..25].
+        for k in 0..20 {
+            assert_eq!(
+                serde_json::to_string(&messages[5 + k]).unwrap(),
+                pre[41 + k],
+                "tail message {k} byte-verbatim"
+            );
+        }
+    }
+
+    /// T77 fix-up round 2, killer for the ABOVE-THRESHOLD engage gate
+    /// (`if estimate_tokens(messages) <= TRIM_ABOVE_TOKENS { return false; }`).
+    /// The estimate sits strictly BETWEEN the two thresholds — above the
+    /// 80k target (so the chooser would act if engaged) but under the 120k
+    /// engage threshold — with a pool holding complete collapsible
+    /// segments. The gate is the ONLY thing returning false here; deleting
+    /// it collapses two segments and re-collapses on every call in this
+    /// band. (A pool under 80k total cannot kill the gate: the
+    /// stop-at-target break fires first — the band is the point.)
+    #[test]
+    fn trim_below_threshold_even_with_completable_pool_is_noop() {
+        let long = "w".repeat(4_400);
+        let mut messages = vec![Message::user(vec![ContentBlock::text_block("kick")])];
+        for i in 0..46 {
+            messages.extend(use_result_pair(&format!("tu_{i}"), &format!("payload {i} {}", long)));
+        }
+        assert_eq!(messages.len(), 93, "pool holds indices 1..=72");
+        let est = estimate_tokens(&messages);
+        assert!(est > TRIM_TARGET_TOKENS, "above target: the chooser would act: {est}");
+        assert!(est <= TRIM_ABOVE_TOKENS, "under the engage threshold: {est}");
+
+        let before: Vec<String> = messages.iter().map(|m| serde_json::to_string(m).unwrap()).collect();
+        assert!(
+            !transcript_trim(&mut messages),
+            "below TRIM_ABOVE_TOKENS: false no-op despite a collapsible pool"
+        );
+        assert!(marker_texts(&messages).is_empty(), "no marker may appear");
+        let after: Vec<String> = messages.iter().map(|m| serde_json::to_string(m).unwrap()).collect();
+        assert_eq!(after, before, "no bytes moved");
+    }
+
     fn marker_texts(messages: &[Message]) -> Vec<String> {
         messages
             .iter()
