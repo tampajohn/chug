@@ -223,6 +223,18 @@ phases 2–3 deferral stands.
 
 ## Outcomes (filled at cycle wrap — LOOP-SPEC Phase 3)
 
+### Cycle 38 (2026-09-26) — freshness-skip; T76 + T77 MID-ARC at budget wrap, nothing merged
+
+- Freshness rule fired (cycle-36 eval same-day, todo rows present). Worked T76 (pri 1 feature, cycle-37 mid-arc recovery) and T77 (pri 2) under T44 overlap #5 (disjoint files: tgrep.rs/tools.rs/main.rs/driver.rs vs driver.rs-transcript/api.rs; overlap record d1790450841-1; T78 skipped for the window — doctrine never overlaps).
+- T76 arc advanced FOUR validation rounds this cycle: fix-up-2 accepted 46/50 (f837e31) → kimi R3 FAIL (3 survivors, 2 vacuous-pin classes: MARKER_RESERVE band unexercised; symbols test-mod resumption unpinned) → fix-up-3 via T63 resume (146b89e, M1-M4 RED-proven) → kimi R4 FAIL (ONE finding: perf pin straddles load band = flaky goal gate; 21/21 mutants RED, zero survivors) → fix-up-4 (30dacb3: median-of-5 vs 1500ms, determinism byte-strong, RED both directions, 10/10 under 12-way CPU load). Orchestrator gates 627/627 + clippy at 30dacb3. Kimi R5 validator IN FLIGHT at wrap (pid 74446; full recovery recipe on the T76 row).
+- T77: impl via T63 resume accepted 12/50 (a5de407 — segment-frozen 16k trim; SPEC.md/README updated; 590/590 + clippy) → kimi R1 FAIL weak-tests-not-correctness (3/6 mutants survived: deletable pairing guard, unpinned SEGMENT_TOKENS, deletable completeness skip; tree restored pristine after validator budget-died mid-mutant and was itself T63-resumed) → fix-up IN FLIGHT at wrap (pid 74447; recipe on the T77 row).
+- T63 resume exercised 4x this cycle (T76 fixup-3, T77 impl, T77 validator mid-mutant, plus cycle-37's fixup-2 completed) — 10/10 career resumes accepted. First validator-resume with a live mutant: resume reverted and re-verified pristine.
+- Validators caught the vacuous-pin class twice more (T76 R3, T77 R1) plus a flaky-gate class (T76 R4): the T72 sweep-the-family + T54/T62 survivor-to-pin pipeline keeps paying; mutation leg counts 18 (R3) and 21 (R4) all-RED-but-named.
+- INCIDENTS: host under heavy EXTERNAL load mid-cycle (operator VM 564% CPU, load avg 57+) — orchestrator gates split per-suite to fit the 120s bash cap; multi-hour host sleep observed (minute budgets are awake-time, unaffected).
+- Cycle-38 decision records: 7 orchestrator records logged (overlap-routing, 2 validation-verdicts, validation-routing, 2 recovery-routings, T77 verdict) + child-side records (T76 validator d1790451351-1, T76 R4 validator d1790454196-1, fixup-4 child logs) — the T75 zero-call adoption gap is closed in practice this cycle (the T75 doctrine row itself carries, ready spec).
+- Carried with ready specs: T78 (pri 1), T75/T80/T79/T81/T77-in-flight, T82.
+
+
 ### Cycle 37 (2026-09-26, ~13:22–18:5x EDT) — freshness-skip; T73 recovered mid-arc + landed (merge 87fe53f); T76 MID-ARC (fix-up-2 in flight); I1 RESOLVED
 
 - **T73 landed** (`chug plan` read-only planning mode, FEATURES.md F2
