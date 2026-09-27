@@ -17,6 +17,7 @@ mod observ;
 mod plan;
 mod tools;
 mod transcript;
+mod trim;
 mod tui;
 mod mcp;
 mod mcp_http;
