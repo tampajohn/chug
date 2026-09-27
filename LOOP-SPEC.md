@@ -145,8 +145,10 @@ impl, never 2 impls):
    `delegate{action:"collect", cwd, pid}` call — it returns the latest run
    segment's verdict, the accepted goal's summary, the check cmd, and the
    commit refs in one bounded non-blocking read (every git failure degrades
-   to a note) — then diff the branch, read the child's ledger if ambiguous,
-   and run bounded gates yourself (T82 gate runner, nextest-first — the
+   to a note) — then diff the branch, read the child's ledger if ambiguous
+   (read worktree files via `bash` — the file tools are cwd-confined and
+   refuse `/tmp/chug-loop-*` paths with `path escapes cwd`), and run
+   bounded gates yourself (T82 gate runner, nextest-first — the
    predicate is `command -v cargo-nextest`: when it succeeds run
    `CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared perl -e 'alarm 600; exec @ARGV' cargo nextest run --release`,
    else the same bounded cap around the fallback

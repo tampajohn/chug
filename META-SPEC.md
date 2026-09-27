@@ -98,7 +98,10 @@ check: cd /Users/jadams/workspace/chug && cargo test
      --spec <the round's feature spec, e.g. SPEC-N-*.md> \
      --goal "VALIDATION ONLY — do not implement. Review the uncommitted/committed
              diff in this worktree against the spec: correctness bugs, missing
-             spec requirements, weak tests. Run cargo build + clippy + the
+             spec requirements, weak tests. Read worktree files via bash —
+             read_file/grep/glob/list_dir/edit_file are cwd-confined and
+             refuse cross-tree paths with `path escapes cwd`; cross-tree
+             reads go through bash. Run cargo build + clippy + the
              T82 gate runner yourself — cargo nextest run --release when
              cargo nextest is on PATH, else the fallback
              cargo test --release -- --test-threads=4 (nextest-first gates,
