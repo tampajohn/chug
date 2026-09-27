@@ -348,10 +348,18 @@ fn parse_rule(rule: &Value) -> anyhow::Result<DenyRule> {
 /// could judge? A matcher on tools that never carry the argument (e.g.
 /// `command` on `read_file`) could never fire — an operator mistake we
 /// surface as a malformed rule (skipped + warned), never a dead deny.
+///
+/// The `mcp__` prefix fits ANY matcher: a glob starting with `mcp__` — even
+/// a server-scoped one like `mcp__fs__*` — can only ever name MCP tools,
+/// which carry arbitrary args. Globs WITHOUT the prefix (e.g. `mcp*`, `*`)
+/// still must be able to match an actual `mcp__` name (the canary string)
+/// to ride this rule; everything else is judged by the builtin table.
 fn matcher_fits(tool_glob: &str, matcher: &ArgMatcher) -> bool {
     // MCP tools (`mcp__<server>__<tool>`) carry arbitrary args, so a glob
-    // that can match an mcp__ name fits any matcher.
-    if glob_matches(tool_glob, "mcp__server__tool") {
+    // that can match an mcp__ name fits any matcher — and a glob with the
+    // literal `mcp__` prefix names only MCP tools, so it fits even though
+    // it can never match the `mcp__server__…` canary string.
+    if tool_glob.starts_with("mcp__") || glob_matches(tool_glob, "mcp__server__tool") {
         return true;
     }
     matcher
@@ -611,6 +619,34 @@ mod tests {
         assert!(permissions.check("mcp__github__list_issues", &json!({}), &mut sink).is_none());
         assert!(permissions.check("mcp__fs__read", &json!({"path": "prod.env"}), &mut sink).is_some());
         assert!(permissions.check("mcp__fs__read", &json!({"path": "README.md"}), &mut sink).is_none());
+    }
+
+    /// A server-scoped `mcp__` glob with an arg matcher loads as a VALID
+    /// rule and denies: the `mcp__` prefix itself names only MCP tools,
+    /// which carry arbitrary args, so the prefix alone makes any matcher
+    /// fit — the canary string's literal `mcp__server__…` can never match a
+    /// `mcp__fs__*` glob, so without the prefix leg this rule was skipped
+    /// as matcher-that-cannot-fit (both calls allowed, one
+    /// `permission_error` line) — the canary was wrong, not the glob.
+    #[test]
+    fn mcp_server_prefixed_glob_with_arg_matcher_loads_and_denies() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_config(
+            tmp.path(),
+            json!({"permissions": {"deny": [{"tool": "mcp__fs__*", "path": "*.env"}]}}),
+        );
+        let mut sink = RecordingSink::default();
+        let permissions = load(tmp.path(), &mut sink);
+        assert!(
+            sink.errors().is_empty(),
+            "the rule loads VALID, never skipped: {:#?}",
+            sink.errors()
+        );
+        assert_eq!(
+            verdict(&permissions, "mcp__fs__read", json!({"path": "prod.env"}), &mut sink).unwrap(),
+            "[permission denied] deny mcp__fs__* path \"*.env\""
+        );
+        assert!(verdict(&permissions, "mcp__fs__read", json!({"path": "ok.txt"}), &mut sink).is_none());
     }
 
     // ---------- matcher legs (the deny path) ----------
