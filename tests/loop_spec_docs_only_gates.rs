@@ -121,6 +121,18 @@ fn window_between<'a>(
     &spec[start..end]
 }
 
+/// Wrap-insensitive copy of the spec (the T78 flat-readme idiom, hardened
+/// for the step paragraphs' 3-space continuation indent): the doctrine
+/// prose wraps mid-phrase, so a multi-word needle that crosses a break
+/// point must match whitespace-collapsed text or the pin goes red on the
+/// REAL doctrine — the cycle-44 orchestrator-review catch, where FLOOR
+/// ("gates shrink to the guard floor") and POST_MERGE_SHRINK ("the guard
+/// floor replaces the full suite here too") both spanned their sentences'
+/// wrap points and the committed pins failed against the committed text.
+fn flat(spec: &str) -> String {
+    spec.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 /// (a) The override's name phrase occurs in LOOP-SPEC.md exactly once.
 /// Delete the inserted step-3 block and this goes red (count 0); a
 /// duplicate statement of the override elsewhere also goes red.
@@ -196,7 +208,9 @@ fn reduced_gate_set_names_the_guard_floor_and_skip_scope() {
         FLOOR.contains("guard floor") && SKIP.contains("review AND post-merge"),
         "the needles must carry the floor phrase and the skip scope"
     );
-    let spec = loop_spec();
+    // Wrap-insensitive: FLOOR's phrase crosses the step-3 paragraph's wrap
+    // point ("gates\n   shrink to the guard floor"); the T78 flat idiom.
+    let spec = flat(&loop_spec());
     for (needle, what) in [
         (FLOOR, "the gates-shrink-to-the-guard-floor phrase"),
         (BASH_N, "the `bash -n` leg"),
@@ -297,7 +311,9 @@ fn post_merge_gate_shrinks_for_docs_only_rounds_inside_step_5() {
         POST_MERGE_SHRINK.contains("guard floor") && POST_MERGE_SHRINK.contains("here too"),
         "the needle must carry the step-5 shrink clause"
     );
-    let spec = loop_spec();
+    // Wrap-insensitive: the shrink sentence wraps between "the guard
+    // floor" and "replaces the full suite here too" in step 5's paragraph.
+    let spec = flat(&loop_spec());
     assert_eq!(
         spec.matches(POST_MERGE_SHRINK).count(),
         1,
