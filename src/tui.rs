@@ -360,6 +360,9 @@ impl App {
                     color: Color::Yellow,
                 });
             }
+            // T83: hook vetoes/notes reach the model inside the tool result;
+            // the fire/error lines are telemetry for events.jsonl.
+            Event::HookFired { .. } | Event::HookError { .. } => {}
             Event::TurnStart { objective } => {
                 let cwd = if let Some(chat) = &mut self.chat {
                     chat.state = ChatState::Working;

@@ -204,6 +204,30 @@ impl EventSink for EventLogSink<'_> {
                     "preview": preview,
                 }))
             }
+            Event::HookFired {
+                event,
+                tool,
+                command,
+                exit,
+                veto,
+                duration_ms,
+            } => Some(json!({
+                "type": "hook",
+                "ts": now_rfc3339(),
+                "event": event,
+                "tool": tool,
+                "command": command,
+                "exit": exit,
+                "veto": veto,
+                "duration_ms": duration_ms,
+            })),
+            // T83: one line per hooks problem (config load / spawn failure /
+            // timeout); hooks fail open, so this is never a run killer.
+            Event::HookError { detail } => Some(json!({
+                "type": "hook_error",
+                "ts": now_rfc3339(),
+                "detail": detail,
+            })),
             Event::Verifying { cmd } => Some(json!({
                 "type": "verifying",
                 "ts": now_rfc3339(),
