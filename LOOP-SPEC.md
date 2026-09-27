@@ -185,17 +185,24 @@ impl, never 2 impls):
    **Docs-only rounds skip the cargo gates (T80).** When the round diff
    touches ONLY `*.md` — file-extension-exact, not "mostly docs" — gates
    shrink to the guard floor `cargo test --test todo_consistency` (still
-   under the bounded-cap rule, same env prefix as the full gate), plus
-   `bash -n` on any `.sh` in the diff, and the full build/clippy/test is
-   skipped at review AND post-merge (step 5 applies the same
+   under the bounded-cap rule, same env prefix as the full gate), and the
+   full build/clippy/test is skipped at review AND post-merge (step 5
+   applies the same
    classification). The classification is mechanical and stated as a
    template — `git diff --name-only main...<branch> | grep -qvE '\.md$'`:
    exit 0 (some changed file does not end `.md`) → full gates; exit 1
    (every changed file ends `.md`) → the reduced set.
    `tests/todo_consistency.rs` covers the actual docs-only risk surface
-   (table format, doctrine tokens), so a README clause or a doctrine
-   sentence cannot go red in the full suite — for those diffs the full
-   runs are pure latency. Any ambiguity in the classification — a
+   (table format, doctrine tokens): an md-only edit to unpinned docs text
+   — a README clause, a doctrine sentence — cannot go red in the full
+   suite, so for those diffs the full runs are pure latency. But an
+   md-only edit touching a pinned doctrine carrier — a paragraph pinned
+   by `tests/loop_spec_*.rs`, `tests/shared_target_dir.rs`, or
+   `tests/nextest_gate_runner.rs` — CAN go red: it can break a pin the
+   floor does not run, so the editor (orchestrator or child) ALSO
+   runs the affected pin file's tests (seconds) before shrinking the
+   gates; any doubt is classification ambiguity and takes the
+   ambiguity default below. Any ambiguity in the classification — a
    predicate that cannot be evaluated, a diff shape it does not fit —
    defaults to full gates.
 4. **Adversarial validation (kimi, REQUIRED** for any item touching
