@@ -340,9 +340,17 @@ nohup ./loopd.sh > /dev/null 2>&1 &   # start (detached)
 ./loopd.sh stop                       # exits after the current cycle
 ```
 
-Per cycle: kimi-k3 orchestrates LOOP-SPEC (evaluate or skip per freshness,
-work the queue — bugs > robustness > **features** > DX > perf — glm-5-3-flash
-children implement, kimi validates adversarially, auto-push per item).
+Per cycle: the orchestrator's model is per-phase (T81) — kimi-k3
+orchestrates fresh-eval cycles, glm-5-3-flash routine ones, decided by
+`loopd.sh` before launch from LOOP-SPEC's freshness rule (a non-empty queue
+with a same-UTC-day EVALUATION.md means routine; `./loopd.sh routing` prints
+the decision the next cycle would get): work the queue — bugs > robustness >
+**features** > DX > perf — glm-5-3-flash children implement, kimi validates
+adversarially regardless of who orchestrates (family independence: glm never
+validates glm), auto-push per item. Two env knobs: `LOOP_ORCH_MODEL` (default
+kimi-k3) and `LOOP_ROUTINE_MODEL` (default glm-5-3-flash) — setting
+`LOOP_ROUTINE_MODEL=anthropic-system.ai.kimi-k3` restores single-model
+operation.
 The supervisor builds the release binary (`cargo build --release`) before
 each cycle and the loop runs on it — delegate children re-launch that same
 executable, and the bounded review/validation gates run `cargo test

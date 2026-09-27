@@ -23,10 +23,72 @@ LOG=$STATE/loopd.log
 
 ts() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 
+# T81 — per-phase model routing (operator-approved 2026-09-26). The
+# ORCHESTRATOR's model is per-cycle and the switch is the freshness rule —
+# never model judgment: when the queue holds `todo` rows AND EVALUATION.md
+# is fresh (same UTC day), Phase 1 would skip evaluation, so the cycle is
+# routine queue-working and launches on LOOP_ROUTINE_MODEL
+# (anthropic-system.ai.glm-5-3-flash — ~85 tok/s, 11+ consecutive clean
+# impl rounds); every other cycle is a fresh-eval cycle and launches on
+# LOOP_ORCH_MODEL (anthropic-system.ai.kimi-k3 — today's behavior).
+# Judgment stays kimi: fresh evaluations are kimi-only by construction
+# (a routine cycle is exactly one where Phase 1 is skipped), and the
+# spec's validation children are ALWAYS kimi — family independence, a
+# glm-orchestrated cycle never lets glm validate glm.
+# ROLLBACK: one env var restores single-model operation —
+#   LOOP_ROUTINE_MODEL=anthropic-system.ai.kimi-k3 ./loopd.sh
+LOOP_ORCH_MODEL="${LOOP_ORCH_MODEL:-anthropic-system.ai.kimi-k3}"
+LOOP_ROUTINE_MODEL="${LOOP_ROUTINE_MODEL:-anthropic-system.ai.glm-5-3-flash}"
+
+# The mechanical half of LOOP-SPEC Phase 1's freshness rule ("skip
+# evaluation if TODO.md has `todo` rows AND EVALUATION.md is fresh (same
+# UTC day)"), evaluated by the supervisor BEFORE launch so the
+# routine-vs-eval switch is the RULE, not a model's opinion — and so the
+# orchestrator's own Phase-1 decision (same predicate, same files, one
+# single-driver writer) always agrees with it. CHUG_ROUTINE_TODAY pins the
+# "today" side for tests, the eval-digest.sh CHUG_DIGEST_NOW pattern.
+todo_rows() { # count of TODO.md data rows whose status cell is `todo`
+  [ -f "$1" ] || { echo 0; return; }
+  awk -F'|' '/^[|]/ {
+    id=$2; gsub(/[ \t]/, "", id)
+    if (id ~ /^T[0-9]+$/) { s=$6; gsub(/[ \t]/, "", s); if (s == "todo") n++ }
+  } END { print n + 0 }' "$1"
+}
+eval_fresh() { # EVALUATION.md was written today (same UTC day)
+  [ -f "$1" ] || return 1
+  today="${CHUG_ROUTINE_TODAY:-$(date -u +%Y-%m-%d)}"
+  if epoch=$(stat -f %m "$1" 2>/dev/null); then
+    mday=$(TZ=UTC date -r "$epoch" +%Y-%m-%d)
+  elif epoch=$(stat -c %Y "$1" 2>/dev/null); then
+    mday=$(date -u -d "@$epoch" +%Y-%m-%d)
+  else
+    return 1
+  fi
+  [ "$mday" = "$today" ]
+}
+# route <TODO.md> <EVALUATION.md> — prints "<mode> <orchestrator-model>".
+# The ONE place the switch is decided; both fields are echoed so callers
+# can log the model next to the mode.
+route() {
+  if [ "$(todo_rows "$1")" -gt 0 ] && eval_fresh "$2"; then
+    echo "routine $LOOP_ROUTINE_MODEL"
+  else
+    echo "eval $LOOP_ORCH_MODEL"
+  fi
+}
+
 case "${1:-run}" in
   stop)
     touch "$STOP"
     echo "stop requested — supervisor exits after the current cycle"
+    exit 0
+    ;;
+  routing)
+    # T81: print the routing decision (mode + orchestrator model) for the
+    # cycle that WOULD launch now, launching nothing — the operator's
+    # probe and the test surface for the freshness predicate
+    # (tests/loopd_model_routing.rs runs this mode against fixtures).
+    route TODO.md EVALUATION.md
     exit 0
     ;;
   status)
@@ -43,7 +105,7 @@ case "${1:-run}" in
     exit 0
     ;;
   run) ;;
-  *) echo "usage: loopd.sh [run|stop|status]" >&2; exit 2 ;;
+  *) echo "usage: loopd.sh [run|stop|status|routing]" >&2; exit 2 ;;
 esac
 
 # T50: same-pid pass. `exec` preserves the pid, so a re-exec'd self finds its
@@ -118,7 +180,17 @@ while [ ! -f "$STOP" ]; do
   # .chug/eval-digest.md instead of re-mining raw events archives.
   scripts/eval-digest.sh >> "$LOG" 2>&1
   cycle_log="$STATE/cycle-$(date -u +%Y%m%d-%H%M%S).log"
-  echo "$(ts) cycle start -> $cycle_log" >> "$LOG"
+  # T81: route THIS cycle before launch — the freshness predicate (the same
+  # mechanical rule LOOP-SPEC Phase 1 gives the orchestrator) picks the
+  # mode, the mode picks the orchestrator model. Logged to loopd.log so it
+  # always explains a model change (the T50 re-exec-log rule) and echoed as
+  # the cycle log's first line, so every cycle record names who ran it.
+  routing="$(route TODO.md EVALUATION.md)"
+  mode=${routing%% *}
+  orch_model=${routing#* }
+  echo "$(ts) routing: todo_rows=$(todo_rows TODO.md) eval_fresh=$(eval_fresh EVALUATION.md && echo yes || echo no) -> $mode cycle on $orch_model" >> "$LOG"
+  echo "$(ts) cycle start -> $cycle_log ($mode cycle, orchestrator $orch_model)" >> "$LOG"
+  echo "[loopd $(ts)] T81 routing: $mode cycle — orchestrator model $orch_model" > "$cycle_log"
   # cycle budget: fresh Phase 1 ≈45–55 iters + ~28–35/item + ~10 wrap (cycle-16 eval Q1); 160 fits eval + 3 items + wrap; minutes never binding (56–117 of 240)
   # T47: the shared cache reaches the cycle as a per-invocation env prefix on
   # the chug call — NEVER as a bare `export`. An export inside this while loop
@@ -131,8 +203,8 @@ while [ ! -f "$STOP" ]; do
   # ./target/release/chug keeps resolving to a freshly built binary.
   CARGO_TARGET_DIR="$ROOT/target-shared" ./target/release/chug run --spec LOOP-SPEC.md \
     --goal "Run the full self-improvement cycle per LOOP-SPEC: evaluate or skip per the freshness rule, work the queue (features are first-class per the amended doctrine — close capability gaps, not only harden), adversarial validation for core-logic items, you own all bookkeeping, push after each item lands green + remainder at wrap. Your wrap IS the next cycle's input — leave TODO.md, EVALUATION.md and specs/ such that a cold next cycle needs zero human words." \
-    --model anthropic-system.ai.kimi-k3 --max-iters 160 --max-minutes 240 \
-    > "$cycle_log" 2>&1
+    --model "$orch_model" --max-iters 160 --max-minutes 240 \
+    >> "$cycle_log" 2>&1
   if grep -q "chug: goal complete" "$cycle_log"; then
     summary=$(grep "^summary:" "$cycle_log" | head -1 | cut -c1-200)
     echo "$(ts) cycle OK: $summary" >> "$LOG"
