@@ -1958,6 +1958,210 @@ mod tests {
         assert!(!uses.is_empty(), "the tail keeps real pairs");
     }
 
+    /// T77 fix-up killer (surviving mutant M1, clause 2): a transcript whose
+    /// trimmable window ends ON an assistant tool_use leaves that use's
+    /// tool_result as the first PROTECTED message. The window's last segment
+    /// is complete, but collapsing it would orphan the protected
+    /// tool_result — production 400. `pairing_unsafe` must refuse it while
+    /// the older safe segments still collapse.
+    #[test]
+    fn trim_refuses_pairing_unsafe_window_edge_segment() {
+        fn tool_use_msg(id: &str, payload: &str) -> Message {
+            Message::assistant(vec![ContentBlock::Known(KnownBlock::ToolUse {
+                id: id.to_string(),
+                name: "bash".into(),
+                input: json!({ "command": payload }),
+            })])
+        }
+        let big = "u".repeat(70_000);
+        let mut messages = vec![Message::user(vec![ContentBlock::text_block("kick")])];
+        for i in 0..20 {
+            messages.push(tool_use_msg(&format!("tu_{i}"), &big));
+            messages.push(Message::user(vec![ContentBlock::tool_result_block(
+                &format!("tu_{i}"),
+                "done".to_string(),
+                false,
+            )]));
+        }
+        // Mid-turn transcript tail: the last assistant tool_use has not been
+        // answered yet, which makes the window end on a tool_use.
+        messages.push(tool_use_msg("tu_20", &big));
+        let w = messages.len() - KEEP_LAST_MESSAGES;
+        assert_eq!(w % 2, 0, "window ends on an even index = a tool_use");
+        assert_eq!(
+            messages[w].content[0].text(),
+            None,
+            "window's last in-pool boundary message is the bare tool_use"
+        );
+
+        assert!(transcript_trim(&mut messages), "safe segments collapse");
+        // The pairing-unsafe segment was refused: tu_10's tool_use (the
+        // window's last message) and its protected tool_result both survive.
+        let mut uses = std::collections::BTreeSet::new();
+        let mut results = std::collections::BTreeSet::new();
+        for msg in messages.iter() {
+            for block in &msg.content {
+                match block {
+                    ContentBlock::Known(KnownBlock::ToolUse { id, .. }) => {
+                        uses.insert(id.clone());
+                    }
+                    ContentBlock::Known(KnownBlock::ToolResult { tool_use_id, .. }) => {
+                        results.insert(tool_use_id.clone());
+                    }
+                    _ => {}
+                }
+            }
+        }
+        assert!(
+            results.iter().all(|r| uses.contains(r)),
+            "no orphaned tool_result: {results:?} vs {uses:?}"
+        );
+        assert!(uses.contains("tu_10"), "window-edge tool_use kept verbatim");
+        assert_eq!(
+            marker_texts(&messages).len(),
+            10,
+            "exactly the 10 safe pair-segments collapsed, not the unsafe one"
+        );
+    }
+
+    /// T77 fix-up killer (surviving mutant M1, clause 1): a segment whose
+    /// FIRST message carries a tool_result pairs with a tool_use BEFORE the
+    /// segment — collapsing it orphans that use. The walk must refuse the
+    /// segment (and still collapse the safe younger ones).
+    #[test]
+    fn trim_refuses_segment_starting_on_tool_result() {
+        let big = "v".repeat(70_000);
+        let mut messages = vec![Message::assistant(vec![ContentBlock::Known(
+            KnownBlock::ToolUse {
+                id: "tu_a".into(),
+                name: "bash".into(),
+                input: json!({ "command": "kick" }),
+            },
+        )])];
+        // A leading tool_result whose tool_use sits in message 0.
+        messages.push(Message::user(vec![ContentBlock::tool_result_block(
+            "tu_a",
+            big.clone(),
+            false,
+        )]));
+        for i in 0..15 {
+            messages.push(Message::assistant(vec![ContentBlock::Known(
+                KnownBlock::ToolUse {
+                    id: format!("tu_{i}"),
+                    name: "bash".into(),
+                    input: json!({ "command": big.clone() }),
+                },
+            )]));
+            messages.push(Message::user(vec![ContentBlock::tool_result_block(
+                &format!("tu_{i}"),
+                "done".to_string(),
+                false,
+            )]));
+        }
+        assert!(transcript_trim(&mut messages), "safe segments collapse");
+        // The leading tool_result survived verbatim: its segment was refused.
+        let first = &messages[1].content[0];
+        match first {
+            ContentBlock::Known(KnownBlock::ToolResult { tool_use_id, content, .. }) => {
+                assert_eq!(tool_use_id, "tu_a");
+                assert_eq!(content, &big, "leading tool_result kept verbatim");
+            }
+            other => panic!("expected the surviving leading tool_result, got {other:?}"),
+        }
+        let mut uses = std::collections::BTreeSet::new();
+        for msg in messages.iter() {
+            for block in &msg.content {
+                if let ContentBlock::Known(KnownBlock::ToolUse { id, .. }) = block {
+                    uses.insert(id.clone());
+                }
+            }
+        }
+        assert!(uses.contains("tu_a"), "message-0 tool_use still answered");
+        assert!(!marker_texts(&messages).is_empty(), "safe segments did collapse");
+    }
+
+    /// T77 fix-up killer (surviving mutant M2): the FIXED segment size is
+    /// 16k tokens. With ~8k-token plain text messages a completed segment is
+    /// exactly TWO messages — 16k pins the boundary there (8k would make
+    /// every single message a segment, 32k would need four). The marker
+    /// count and the canonical `~16k` text both move if the constant moves.
+    #[test]
+    fn trim_segment_boundaries_form_at_16k_not_8k_or_32k() {
+        let big = "t".repeat(32_000);
+        let mut messages = vec![Message::user(vec![ContentBlock::text_block("kick")])];
+        for _ in 0..44 {
+            messages.push(Message::assistant(vec![ContentBlock::text_block(
+                big.clone(),
+            )]));
+        }
+        assert!(transcript_trim(&mut messages));
+        let markers = marker_texts(&messages);
+        assert_eq!(
+            markers.len(),
+            12,
+            "24 pool messages of ~8k tokens = 12 fixed 16k segments"
+        );
+        for m in &markers {
+            assert_eq!(
+                m, "[trimmed: ~16k tokens, 0 tool results]",
+                "canonical marker pins the 16k segment size"
+            );
+        }
+    }
+
+    /// T77 fix-up killer (surviving mutant M3): a segment YOUNGER than the
+    /// 16k threshold (incomplete) must stay verbatim even when the chooser
+    /// still wants more collapses (pool exhausted, estimate above target).
+    /// Only whole complete segments advance the marker count, and a second
+    /// trim with nothing new complete is a no-op.
+    #[test]
+    fn trim_young_incomplete_segment_stays_verbatim_under_pool_exhaustion() {
+        let big = "s".repeat(32_000);
+        let small = format!("{}{}", "note ".repeat(20), "{i}");
+        let mut messages = vec![Message::user(vec![ContentBlock::text_block("kick")])];
+        // One complete 16k segment (two ~8k-token messages)...
+        for i in 0..2 {
+            messages.push(Message::assistant(vec![ContentBlock::text_block(
+                format!("{i} {}", big),
+            )]));
+        }
+        // ...then a young, far-below-threshold remainder...
+        for i in 0..10 {
+            messages.push(Message::user(vec![ContentBlock::text_block(
+                small.replace("{i}", &i.to_string()),
+            )]));
+        }
+        // ...and a big protected tail that keeps the estimate above target.
+        for i in 0..20 {
+            messages.push(Message::assistant(vec![ContentBlock::text_block(
+                format!("tail {i} {}", big),
+            )]));
+        }
+        let w = messages.len() - KEEP_LAST_MESSAGES;
+        assert!(estimate_tokens(&messages) > TRIM_ABOVE_TOKENS);
+        assert!(transcript_trim(&mut messages), "the complete segment collapses");
+        assert_eq!(
+            marker_texts(&messages),
+            vec!["[trimmed: ~16k tokens, 0 tool results]".to_string()],
+            "only the one complete segment collapsed"
+        );
+        let young: Vec<String> = messages[2..w]
+            .iter()
+            .map(|m| serde_json::to_string(m).unwrap())
+            .collect();
+        assert_eq!(young.len(), 11, "the young remainder is still there");
+
+        // Pool exhausted: another trim must be a no-op — the young segment
+        // never collapses, the marker count never advances.
+        assert!(!transcript_trim(&mut messages), "young segment refuses to collapse");
+        assert_eq!(marker_texts(&messages).len(), 1, "marker count frozen");
+        let young_after: Vec<String> = messages[2..w]
+            .iter()
+            .map(|m| serde_json::to_string(m).unwrap())
+            .collect();
+        assert_eq!(young_after, young, "young region byte-verbatim across trims");
+    }
+
     fn marker_texts(messages: &[Message]) -> Vec<String> {
         messages
             .iter()
