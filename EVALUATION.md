@@ -281,6 +281,29 @@ the T88-class shape, now the template for what a well-specced small row
 costs post-T89 (terminal waits: 2 orchestrator iterations for two child
 runs).
 
+**T93 permissions `mcp__` canary prefix leg — LANDED, fast-forward merge aeb12ea.**
+glm impl (pid 15046) goal-accepted **23/65 in ~2.5 min** — the FIRST child
+launched at the post-T92 budget (not that it needed it). One-condition fix
+exactly per spec: `matcher_fits` gains `tool_glob.starts_with("mcp__") ||
+glob_matches(...)` so a server-scoped glob like `mcp__fs__*` + an arg
+matcher loads VALID (the canary string could never match it) and denies
+`mcp__fs__read prod.env` while allowing `ok.txt`; non-prefixed globs ride
+the canary leg unchanged, builtin fit-rejections (`command` on
+`read_file`, `bash`+`path`) byte-identical. **RED proven test-first**: the
+new test ran against UNFIXED code and failed with the exact skip line
+(`path matcher does not fit tool glob mcp__fs__*`, 22/22 others green),
+then passed post-fix — the child also filed its own decision records
+(d1790553165-1 test-first, d1790553167-2 accept). Review: diff is
+src/permissions.rs ONLY (+38/−2), nextest **746/746** (745+1) + clippy
+under target-shared, spec check `cargo test --bin chug permission` **23/23**
+— the broader stem catching the driver legs T90's plural filter missed
+(the T96 lesson practiced a cycle before its own doctrine lands). kimi
+SKIPPED per routing d1790553020-16 (permissions.rs not on the REQUIRED
+list; T16/T31 precedent). Post-merge: nextest 746/746 10.7s + clippy
+under target-shared-main. 2 artifacts harvested pre-removal (impl stream,
+child decisions). Arc: 1 impl, 0 resumes, 0 fix-ups, 0 validator rounds,
+~5 min wall — back-to-back clean smalls after T92.
+
 ### Cycle 52 (2026-09-27) — routine glm freshness-skip; T90 LANDED (e9afed9, fast-forward merge) — F4 permissions phase 1: the deny-only fail-closed policy layer
 
 - **T90 LANDED** (e9afed9): `.chug/permissions.json` deny-list — new `src/permissions.rs` (363 prod lines, at the ~350 guard's edge) holds all policy logic: absent/empty config = zero rules + zero cost; malformed config fails OPEN (one stderr warn + one `permission_error` line, T83 parity); per-rule malformed legs (unknown key, two matchers, non-string value, missing tool, matcher-that-cannot-fit) are skipped in place with valid siblings still denying; deny rules are a tool glob + at most one `command`/`path`/`url` arg matcher, first-match-wins, missing/non-string arg under an arg rule fails toward execution; deny text `[permission denied] <rule summary>`. Driver gates dispatch FIRST (permissions → PreToolUse hooks → plan/MCP/risk gate) riding the T83 `blocked` flag in run+chat+plan, so a denied call fires no hooks and never executes. `hooks::glob_matches` made pub(crate), reused byte-identically. README Permissions section integrated after Hooks; FEATURES F4 row annotated at flip. 24 tests (17 unit + 7 driver integration incl. ZERO-hook-fires ordering pins + plan-mode leg + fail-open-exactly-once).
