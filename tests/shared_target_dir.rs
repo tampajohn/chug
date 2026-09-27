@@ -723,3 +723,119 @@ fn launch_paths_and_gates_are_the_release_profile() {
          gates run the release form (T78 req 4)"
     );
 }
+
+/// T78 sweep — kimi round-1 verdict: FAIL (weak tests, not correctness).
+/// Four mutants survived because each reverted ONE `--release` carrier back
+/// to the debug form and nothing counted it: M8 (LOOP-SPEC step-1 worktree
+/// build), M9 (META-SPEC why-bullet build), M10 (LOOP-SPEC step-5 gate
+/// form), M11 (LOOP-SPEC Phase-3 wrap). These tests close the class: EVERY
+/// `cargo build --release` / `cargo test --release` carrier the T78 diff
+/// (a74769f) introduced is exact-count-pinned, granularly — one pin per
+/// carrier, so each carrier's revert is independently observable —
+/// including carriers the earlier single-line needles cannot see
+/// (META-SPEC T6's two line-wrapped examples, README's line-wrapped gate
+/// form, loopd.sh's comment restatements).
+#[test]
+fn loop_spec_release_carriers_are_pinned_per_carrier() {
+    let spec = read("LOOP-SPEC.md");
+    // (M8) step 1: the worktree build-warm command is the release form.
+    count_eq(
+        &spec,
+        "cargo build --release",
+        1,
+        "LOOP-SPEC step-1 worktree build is the release form (T78 req 2; \
+         kimi R1 mutant M8)",
+    );
+    // step 1's why-prose states the gates' profile — a carrier too.
+    count_eq(
+        &spec,
+        "gates below run\n   `cargo test --release`",
+        1,
+        "LOOP-SPEC step-1 why-prose names the release gate profile (T78)",
+    );
+    // (M10) step 5: the post-merge gate command is the T78 release form.
+    count_eq(
+        &spec,
+        "`cargo test --release -- --test-threads=4` under the bounded cap",
+        1,
+        "LOOP-SPEC step-5 gate command is the T78 release form under the \
+         bounded cap (T78 req 3; kimi R1 mutant M10)",
+    );
+    // (M11) Phase-3 wrap: the final gates name the release form.
+    count_eq(
+        &spec,
+        "clippy + `cargo test --release`",
+        1,
+        "LOOP-SPEC Phase-3 wrap pins the final gates to `cargo test \
+         --release` (T78 req 3; kimi R1 mutant M11)",
+    );
+}
+
+#[test]
+fn meta_spec_release_carriers_are_pinned_per_carrier() {
+    let meta = read("META-SPEC.md");
+    // (M9) the why-bullet's per-worktree build is the release form.
+    count_eq(
+        &meta,
+        "cargo build --release",
+        1,
+        "META-SPEC why-bullet worktree build is the release form (T78 req 2; \
+         kimi R1 mutant M9)",
+    );
+    // The T6 rule's two wrapped examples are release-form carriers the
+    // single-line `cargo test --release -- --test-threads=4` needle (count
+    // 4 above) cannot see — they wrap mid-command.
+    count_eq(
+        &meta,
+        "perl -e 'alarm 600; exec @ARGV' cargo test --release",
+        1,
+        "META-SPEC T6 macOS example is the release form (T78 req 3)",
+    );
+    count_eq(
+        &meta,
+        "timeout 600 cargo test --release",
+        1,
+        "META-SPEC T6 Linux example is the release form (T78 req 3)",
+    );
+}
+
+#[test]
+fn loopd_and_readme_release_carriers_are_pinned_per_carrier() {
+    let loopd = read("loopd.sh");
+    let readme = read("README.md");
+    // Both loopd.sh `cargo build --release` carriers: the build line
+    // (full-line-pinned above) and the T47 stale-binary comment's
+    // restatement of it — T78 rewrote that comment too.
+    count_eq(
+        &loopd,
+        "cargo build --release",
+        2,
+        "loopd.sh release-build carriers: the build line + the T47 comment \
+         (T78 req 1)",
+    );
+    // The T78 comment names the review/validation gates' release form.
+    count_eq(
+        &loopd,
+        "cargo test --release",
+        1,
+        "loopd.sh T78 comment names the review/validation gate form (T78 \
+         req 3)",
+    );
+    // README's continuous-mode paragraph documents both carriers.
+    count_eq(
+        &readme,
+        "cargo build --release",
+        1,
+        "README names the supervisor's release build (T78)",
+    );
+    // ... and the gate form — line-wrapped mid-command in the prose, so
+    // match it wrap-insensitively.
+    let flat_readme = readme.replace('\n', " ");
+    count_eq(
+        &flat_readme,
+        "cargo test --release",
+        1,
+        "README names the release gate form (wrap-insensitive — the clause \
+         line-wraps between `cargo test` and `--release`) (T78)",
+    );
+}
