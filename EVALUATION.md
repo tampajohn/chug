@@ -223,7 +223,7 @@ phases 2–3 deferral stands.
 
 ## Outcomes (filled at cycle wrap — LOOP-SPEC Phase 3)
 
-### Cycle 39 (2026-09-26, ~20:1x-2x:xx EDT) — freshness-skip; T76 recovered + LANDED (merge 355f253); T77 mid-arc (fix-up-1 landed a34d0c0, kimi R2 in flight)
+### Cycle 39 (2026-09-26, ~20:1x-21:2x EDT) — freshness-skip; T76 + T77 both recovered and LANDED (merges 355f253, fedb9ef; pushed 26b547d, 09d9f03); T78 MID-ARC (impl in flight)
 
 - **T76 landed** (tgrep token-budgeted ranked context retrieval, 13th
   tool; merge `355f253`, branch loop-t76 at `30dacb3`). Recovered from
@@ -279,9 +279,32 @@ phases 2–3 deferral stands.
 - T44 overlap #6: T77 R2 validator (reads/mutates its own worktree) ran
   concurrently with the T76 main-checkout merge + post-merge gates —
   disjoint write surfaces, merges stayed serial (T76 first).
-- Cycle-39 records so far: validation-routing d1790468299-1 (T77 R2),
-  validation-verdict d1790468338-2 (T76 R5 PASS). Outcome backfills for
-  T76's cycle-37/38 ids appended at the row flip.
+- **T78 MID-ARC at budget wrap** (8 iters left): impl child pid 20743 IN
+  FLIGHT (glm 50/35, /tmp/chug-loop-t78, loop-t78 at 09d9f03 base,
+  worktree preserved). Full recovery recipe on the T78 row. Dispatch
+  record d1790471401-24 (mis-classed validation-routing in wrap haste;
+  it was the solo-dispatch routing — doctrine never overlaps).
+- Cycle-39 ledger: T76 + T77 both recovered from cycle-38 MID-ARC state
+  and LANDED with pushes (26b547d, 09d9f03). TWO double-recoveries
+  closed. T63 resume 2x this cycle (T77 fix-up-2 run1 abort → resume
+  accepted 7/50; career 11/11) — plus one NOT needed (T76 R5 validator
+  finished on its own). Validators caught: nothing new post-recovery —
+  R5 (T76) PASS first-try this cycle, T77 R2's S1 over-collapse survivor
+  was the cycle's one blocking catch (collapse-EXTENT pin class: assert
+  exact marker counts + verbatim survivors, not ≤bounds — closed by
+  f83a9e7 and proven RED in R3). T44 overlap #6 (T77 R2 validator ∥ T76
+  main-merge, disjoint surfaces, serial merges kept). Host external load
+  eased mid-cycle (mutant cycles back to seconds by ~01:00 UTC).
+- Cycle-39 records: d1790468299-1 (T77 R2 routing), d1790468338-2 (T76
+  R5 PASS), d1790468491-3..-10 (T76 backfills x8), d1790469659-11 (T77
+  R2 FAIL), d1790470425-12 (fixup-2 T63 recovery), d1790470664-13 (T77
+  R3 routing), d1790471194-14 (T77 R3 PASS), d1790471336-15..-23 (T77
+  backfills x9), d1790471401-24 (T78 dispatch).
+- Carried with ready specs: T78 (MID-ARC, recipe on row), T80/T81
+  (pri 2 doctrine), T75/T79/T82 (pri 3 doctrine) — all doctrine, all run
+  alone, no overlap possible. Final main gates this cycle: 641/641 +
+  clippy under target-shared-main at fedb9ef (only doc/bookkeeping
+  commits since).
 
 ### Cycle 38 (2026-09-26) — freshness-skip; T76 + T77 MID-ARC at budget wrap, nothing merged
 
