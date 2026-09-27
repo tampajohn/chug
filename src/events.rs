@@ -75,6 +75,25 @@ pub enum Event {
     },
     /// An `allow destructive` operator note disabled the gate for this run.
     RiskGateDisabled,
+    /// T83 telemetry: one hook execution fired (PreToolUse veto-gate /
+    /// PostToolUse advisory). `exit` is `None` when the hook died without
+    /// an exit code; a timed-out hook emits a HookError line instead of a
+    /// fire line.
+    HookFired {
+        /// `PreToolUse` or `PostToolUse`.
+        event: String,
+        tool: String,
+        command: String,
+        exit: Option<i32>,
+        veto: bool,
+        duration_ms: u64,
+    },
+    /// T83: a hooks problem (config load, spawn failure, timeout). Hooks
+    /// fail open, so this is telemetry only: the run continues with the
+    /// call allowed (a config error continues with zero hooks).
+    HookError {
+        detail: String,
+    },
     /// Chat mode: the user submitted a new objective and a turn is starting.
     TurnStart {
         objective: String,
@@ -266,6 +285,9 @@ impl EventSink for ConsoleSink {
             Event::RiskGateDisabled => {
                 let _ = writeln!(self.err, "[chug] risk gate disabled by operator note");
             }
+            // T83: telemetry only — hook vetoes/notes reach the model inside
+            // the tool result; no console output.
+            Event::HookFired { .. } | Event::HookError { .. } => {}
             // No headless chat: turn-boundary events are TUI-only.
             Event::TurnStart { .. } | Event::TurnEnd { .. } => {}
         }

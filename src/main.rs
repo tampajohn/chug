@@ -11,6 +11,7 @@ mod driver;
 mod driver_lock;
 mod eventlog;
 mod events;
+mod hooks;
 mod riskgate;
 mod ledger;
 mod observ;

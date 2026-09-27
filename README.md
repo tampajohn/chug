@@ -254,6 +254,42 @@ an error the model can see and route around; `allow destructive` in a steering
 note disables the gate for the run. Fail-open if the judge is down. Verdicts
 logged to `.chug/risk_verdicts.jsonl`.
 
+## Hooks (`.chug/hooks.json`)
+
+Operator policy-as-config: shell commands fire around every tool call. The
+file lives in the run cwd's `.chug/` (gitignored, per-checkout — a worktree
+child has its own; no search chain, no CLI flag):
+
+```json
+{"hooks": {
+  "PreToolUse":  [{"match": "bash",  "command": "./.chug/hooks/gate.sh"}],
+  "PostToolUse": [{"match": "edit_*", "command": "./.chug/hooks/note.sh"}]
+}}
+```
+
+`match` is a glob on the tool name (`*`/`?`; `mcp__*` matches MCP tools by
+their registered `mcp__<name>__<tool>` name like any other). Runs in run and
+chat mode; **plan mode never fires hooks** (its tool contract is exactly the
+five read-only tools). Each hook runs `sh -c <command>` in its own process
+group, cwd = the run cwd, with a JSON payload on stdin:
+`{"event","tool","input","cwd"}` (+ `"is_error"` for PostToolUse).
+
+- **PreToolUse** (before the tool executes): exit 0 → allow; non-zero →
+  **veto** — the tool does not execute and the model receives a tool error
+  `[hook veto] <stderr>` it routes around (the risk-gate shape).
+- **PostToolUse** (after, ok or error): advisory only — non-empty
+  stdout+stderr is appended to the tool result as `\n\n[hook] <text>`
+  (` (exit <n>)` when non-zero); it never blocks or changes the result.
+
+Bounds: 10s wall cap per hook (expiry SIGKILLs the whole process group), hook
+output tail-anchored to ≤2000 chars, and everything **fails open** — an
+absent/empty config is zero hooks and zero cost; a malformed config or a
+failing/spawn-erroring hook warns once on stderr + one line in
+`.chug/events.jsonl` (`"type":"hook"` per fire, `"type":"hook_error"` per
+problem) and the run continues. A hook never triggers hooks. Phase 2 scope
+(again as config, no doctrine forks): Stop/GoalComplete events, arg-glob
+matchers, `--hooks` CLI flag, and the Laya stop-hook reference consumer.
+
 ## MCP servers (`mcp.json`)
 
 chug consumes tools from MCP servers (tools capability) over **stdio** or
