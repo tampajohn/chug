@@ -2733,6 +2733,105 @@ mod tests {
         );
     }
 
+    /// T76 integration: a scripted driver run where the model calls `tgrep`
+    /// on a 300-hit corpus. The tool result the NEXT LLM call sees must stay
+    /// under the requested budget and carry the omission marker.
+    #[test]
+    fn tgrep_scripted_run_stays_under_budget_and_marks_omissions() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut body = String::new();
+        // 300 hits, one every 10 lines, windows never touching: 300 clusters.
+        for i in 1..=3000 {
+            let line = if i % 10 == 0 {
+                format!("needle line {i}\n")
+            } else {
+                format!("filler line {i} padding padding padding\n")
+            };
+            body.push_str(&line);
+        }
+        fs::write(tmp.path().join("hay.rs"), body).unwrap();
+        // Round-3 sweep (blocking class 1, driver leg): the <=budget claim
+        // must EXERCISE the omitted-marker band the reserve guards, so the
+        // budget is calibrated at runtime from measured cluster sizes (the
+        // fixed 600-token budget left ~200 chars of headroom — a
+        // reserve-deletion mutant ran green). band::calibrate picks the
+        // budget where the shipped reserve stays under budget but a
+        // delete/shrink mutant (reserve → 0/8/16/32) re-packs one more
+        // cluster and overflows.
+        // Round-4 timing sweep (T72 family): this leg has NO wall-clock
+        // asserts — every pin here is SIZE-based (chars / budgets / cluster
+        // counts) and band::calibrate measures rendered cluster sizes,
+        // never time — so the leg is load-immune by construction. The only
+        // timing assert on the tgrep surface is deterministic_and_fast's
+        // SPEED leg (src/tgrep.rs, median-of-5 vs a load-robust bound).
+        let measure_ctx = ToolCtx {
+            cwd: tmp.path().to_path_buf(),
+            bash_timeout: Duration::from_secs(crate::tools::BASH_TIMEOUT_SECS),
+        };
+        let measured = crate::tools::dispatch(
+            &measure_ctx,
+            "tgrep",
+            &json!({"query": "needle", "budget": 8000u64}),
+        );
+        assert!(!measured.is_error, "{}", measured.content);
+        // The 300-cluster measure pass at the 8000-token ceiling itself
+        // truncates (300 x ~300 chars > 32000); calibrate only needs the
+        // header's total plus the first ~100 rendered sizes — packing is
+        // prefix-based, and the picked budgets show < 20 clusters.
+        let (budget, shown96, body96, over0, header_len) =
+            crate::tgrep::band::calibrate(&measured.content, 3);
+        let (_llm, _events, _lines) = run_t38(
+            &tmp,
+            vec![
+                tool_use_response("tgrep", json!({"query": "needle", "budget": budget})),
+                tool_use_response("goal_complete", json!({"summary": "done"})),
+            ],
+        );
+        // The second LLM call is the first to see the tgrep tool result.
+        assert_eq!(_llm.calls.len(), 2);
+        let (content, is_error) = tool_result_text(&_llm.calls[1].1).unwrap();
+        assert!(!is_error, "{content}");
+        // Marker fires; shown + omitted = 300 with at least one cluster shown.
+        let marker_at = content
+            .find("[more: ")
+            .unwrap_or_else(|| panic!("no omission marker: {content}"));
+        let marker_end = content[marker_at..].find(']').unwrap() + marker_at;
+        let omitted: usize = content[marker_at..marker_end]
+            .trim_start_matches("[more: ")
+            .trim_end_matches(" clusters omitted")
+            .parse()
+            .unwrap();
+        let shown = content.matches(" (exact-phrase)").count();
+        assert_eq!(shown + omitted, 300, "{content}");
+        assert!(shown > 0, "{content}");
+        assert_eq!(
+            shown, shown96,
+            "reserve pushed out exactly one cluster: {content}"
+        );
+        assert!(
+            content.contains("300 clusters in 1 file"),
+            "header names the corpus: {content}"
+        );
+        // The output is EXACTLY header + reserve-limited body + marker, and
+        // the band pins hold: without the reserve the packing takes one more
+        // cluster and overflows by `over0` chars — the fixture straddles the
+        // marker band, so the invariant below is genuinely exercised.
+        assert_eq!(
+            content.chars().count(),
+            header_len + 2 + body96 + 59 + omitted.to_string().len(), // line1\n + marker\n
+            "packing drifted: {content}"
+        );
+        assert!(over0 > 0, "fixture drifted out of the reserve band (over0 = {over0})");
+        assert!(over0 <= 24, "band too loose: over0 = {over0}");
+        assert!(
+            content.chars().count() <= budget * 4,
+            "tgrep output {} chars exceeds the {}-token budget: {}",
+            content.chars().count(),
+            budget,
+            content
+        );
+    }
+
     /// T38: a truncated response (`stop_reason=max_tokens`) injects the
     /// pinned advisory as the last user message before the next LLM call —
     /// transcript + memory — and records exactly one `output_truncated`
@@ -4414,9 +4513,10 @@ for line in sys.stdin:
     }
 
     /// Regression pin: the run-mode advertised tool list equals the exact
-    /// pre-change set — twelve tools today (T73 added plan mode's surface
-    /// without touching this list). If a rebase changes the set, update this
-    /// pin in the same diff and say so.
+    /// pre-change set — thirteen tools today (T73 added plan mode's surface
+    /// without touching this list; T76 added tgrep and updated this pin in
+    /// the same diff). If a rebase changes the set, update this pin in the
+    /// same diff and say so.
     #[test]
     fn run_mode_advertised_tool_list_is_exactly_the_pre_change_set() {
         let schemas = crate::tools::tool_schemas();
@@ -4431,6 +4531,7 @@ for line in sys.stdin:
             "edit_file",
             "bash",
             "grep",
+            "tgrep",
             "glob",
             "list_dir",
             "update_ledger",

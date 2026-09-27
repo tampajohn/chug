@@ -169,7 +169,7 @@ panic-safe terminal restore.
 
 `read_file` (`offset`/`limit` page past the 2000-line cap), `write_file`,
 `edit_file` (+`replace_all`), `bash`, `grep`,
-`glob`, `list_dir`, `update_ledger`, `goal_complete`, `delegate`, `web_fetch`,
+`tgrep`, `glob`, `list_dir`, `update_ledger`, `goal_complete`, `delegate`, `web_fetch`,
 `decision_log`.
 All paths sandboxed to `--cwd` (`delegate` and `web_fetch` are
 the two documented exceptions — `delegate`'s absolute `cwd`/`spec` target child
@@ -225,6 +225,22 @@ retry. Strictly less powerful than the `curl` already available through
 extraction, `events.jsonl` previews) that a raw shell fetch doesn't give the
 loop. Like `delegate`, it reaches outside the cwd sandbox by design — it is
 network, not filesystem.
+
+`tgrep` — token-budgeted ranked context search: locate the 20 relevant lines
+without reading a whole file. `query` is one or more terms (ranked AND-ish;
+`"quoted phrases"` must appear exactly); results are ranked match CLUSTERS
+(file:line + ±3-line window, best-first, each with a score; overlapping
+windows merge into one cluster) and the output stops at `budget` (default
+2000 tokens, above-8000 clamped down) with a `[more: N clusters omitted]`
+marker — the tool result can never balloon the way a 200-hit grep does.
+Optional `path` narrows to a glob (`src/**/*.rs`), a directory, or one file;
+`symbols: true` with a Rust file in `path` returns its fn/struct/impl
+signature skeleton (no bodies) for orientation. Ranking is deterministic
+hand-rolled scoring — exact-phrase > all-terms-in-window > term density,
+with a path-basename boost; no embeddings, no LLM. The workflow it teaches:
+tgrep to locate, then a targeted `read_file` with `offset`/`limit` around
+the best cluster. Like the file tools it is cwd-sandboxed (`path escapes
+cwd` refused; `bash` is the cross-tree escape).
 
 ## Risk gate (`--risk-gate`)
 

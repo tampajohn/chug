@@ -160,6 +160,8 @@ pub fn tool_schemas() -> Vec<Value> {
         // T37: schema lives in webfetch.rs (single source of truth for the
         // description the model sees), registered here alongside the builtins.
         crate::webfetch::schema(),
+        // T76: schema lives in tgrep.rs (same single-source pattern).
+        crate::tgrep::schema(),
         json!({
             "name": "goal_complete",
             "description": "Assert that the goal is fully met and verified. Verification runs the spec's `check:` command if present; a failing check rejects the claim and the loop continues.",
@@ -197,6 +199,7 @@ fn inner(ctx: &ToolCtx, name: &str, input: &Value) -> anyhow::Result<ToolResult>
         "list_dir" => list_dir(ctx, input),
         "delegate" => crate::delegate::delegate(ctx, input),
         "web_fetch" => crate::webfetch::web_fetch(input),
+        "tgrep" => crate::tgrep::tgrep(ctx, input),
         "decision_log" => crate::decisions::decision_log(&ctx.cwd, input),
         "update_ledger" => update_ledger(ctx, input),
         "goal_complete" => Ok(ToolResult {
