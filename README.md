@@ -343,6 +343,11 @@ nohup ./loopd.sh > /dev/null 2>&1 &   # start (detached)
 Per cycle: kimi-k3 orchestrates LOOP-SPEC (evaluate or skip per freshness,
 work the queue — bugs > robustness > **features** > DX > perf — glm-5-3-flash
 children implement, kimi validates adversarially, auto-push per item).
+The supervisor builds the release binary (`cargo build --release`) before
+each cycle and the loop runs on it — delegate children re-launch that same
+executable, and the bounded review/validation gates run `cargo test
+--release` (the first release build into a cold cache is slower to compile;
+the shared caches below amortize it).
 Before each cycle the supervisor refreshes `.chug/eval-digest.md` via
 `scripts/eval-digest.sh` — a deterministic (jq/awk-only, sub-second) digest of
 the `.chug/events*.jsonl` corpus (per-file iterations, wall time, tool
