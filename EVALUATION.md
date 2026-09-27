@@ -244,6 +244,42 @@ section's commands also cover).
   tgrep.rs module-size splits now (no incident; watch item covers it).
 
 ## Outcomes (filled at cycle wrap — LOOP-SPEC Phase 3)
+## Outcomes (filled at cycle wrap — LOOP-SPEC Phase 3)
+
+### Cycle 53 (2026-09-27) — fresh eval (kimi, loopd-routed: queue empty) — T91–T97 filed (F5 SPLIT phase 1 → T91); T92 LANDED (9db86bc) — impl children now get 65 iterations
+
+**T92 LOOP-SPEC impl-child template 50→65 — LANDED, fast-forward merge 9db86bc.**
+glm impl (pid 2631) goal-accepted **19/50 in ~96 s** — the cleanest arc in
+the queue's history (one hunk per surface, zero fumbles): step-2 template
+`max_iters:   65` (three-space surface; validator 50/30 untouched),
+rationale parenthetical replaced with the new census (T83/T85/T89/T90 +
+T84 at 48/50) CARRYING the written measure clause (>1 of the next 6
+impl children dying at 65/65 → next eval considers 80 or work-splitting),
+T63 resume sentence → `65/35 impl, 50/30 validate`. Pin
+tests/loop_spec_recovery.rs:141 updated + RED-proven (pre-edit LOOP-SPEC →
+leg_names_mechanics_and_scope_guards_inside_step_2 FAILED, restored 4/4);
+sweep found no other casualty (eval_digest.rs `max_iters":50` are
+event-stream fixtures, untouched). Review: diff byte-exact vs the spec's
+named surface, 745/745 fallback-release + clippy under target-shared, spec
+check verbatim. kimi REQUIRED validation (doctrine; pid 8451, **16/50,
+~2.5 min**) VERDICT: PASS 0 blocking — gates independently re-run
+(745/745 + clippy + check-line verbatim), M-A resume-sentence-revert RED
+via the updated pin, M-B/M-C informational guard-boundary notes (template
+number check-line-guarded; measure clause review-enforced — per spec
+design), tree byte-clean. Routing d1790552895-13, verdict d1790552895-14.
+Post-merge: **nextest 745/745 in 10.4 s** + clippy under
+target-shared-main — **cargo-nextest is back on PATH**
+(`/Users/jadams/.cargo/bin/cargo-nextest`; uninstalled ~22:16Z during
+cycle 51, reinstalled by the operator before this cycle — the T82
+nextest-first runner rule is live again; this cycle's earlier review gate
+ran the fallback before the reinstall was noticed, 745/745 green both
+ways). 3 artifacts harvested pre-removal (impl + validate streams, child
+decisions). **Effect: every impl child launched after this merge gets 65
+iterations — T91's feature arc is the first beneficiary.** Arc shape: 1
+impl, 0 resumes, 0 fix-ups, 1 validator round, ~7 min wall end-to-end —
+the T88-class shape, now the template for what a well-specced small row
+costs post-T89 (terminal waits: 2 orchestrator iterations for two child
+runs).
 
 ### Cycle 52 (2026-09-27) — routine glm freshness-skip; T90 LANDED (e9afed9, fast-forward merge) — F4 permissions phase 1: the deny-only fail-closed policy layer
 
