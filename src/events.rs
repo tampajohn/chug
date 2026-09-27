@@ -94,6 +94,23 @@ pub enum Event {
     HookError {
         detail: String,
     },
+    /// T90 telemetry: one permission deny — a `.chug/permissions.json` deny
+    /// rule matched and the call was refused before execution (fail-closed:
+    /// the tool never ran; the model received a `[permission denied]` tool
+    /// error).
+    PermissionDenied {
+        tool: String,
+        /// The matched rule, in its config shape (e.g.
+        /// `deny bash command "*rm -rf*"`).
+        rule: String,
+    },
+    /// T90: a permissions config problem (unreadable/malformed config, or a
+    /// malformed rule skipped while valid siblings load). Permissions fail
+    /// open on config problems, so this is telemetry only: the run
+    /// continues with zero (or fewer) rules.
+    PermissionError {
+        detail: String,
+    },
     /// Chat mode: the user submitted a new objective and a turn is starting.
     TurnStart {
         objective: String,
@@ -288,6 +305,10 @@ impl EventSink for ConsoleSink {
             // T83: telemetry only — hook vetoes/notes reach the model inside
             // the tool result; no console output.
             Event::HookFired { .. } | Event::HookError { .. } => {}
+            // T90: telemetry only — the deny text reaches the model inside
+            // the tool result; the config-problem warn already went to
+            // stderr at load time. No console output.
+            Event::PermissionDenied { .. } | Event::PermissionError { .. } => {}
             // No headless chat: turn-boundary events are TUI-only.
             Event::TurnStart { .. } | Event::TurnEnd { .. } => {}
         }

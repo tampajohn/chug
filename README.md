@@ -296,6 +296,59 @@ problem) and the run continues. A hook never triggers hooks. Phase 2 scope
 (again as config, no doctrine forks): Stop/GoalComplete events, arg-glob
 matchers, `--hooks` CLI flag, and the Laya stop-hook reference consumer.
 
+## Permissions (`.chug/permissions.json`)
+
+Declarative per-tool deny rules, evaluated in-process before every tool
+call — the fail-closed policy surface hooks deliberately are not (a hook
+runs in a spawned `sh -c` and fails open on any spawn/config problem; a deny
+rule has no process to spawn and nothing to fall back through — a match
+denies, period). The two layers compose: permissions for the rules that must
+not depend on a shell, hooks for everything programmable. The file lives in
+the run cwd's `.chug/` (gitignored, per-checkout — a worktree child has its
+own and does NOT inherit the parent's rules; no search chain, no CLI flag):
+
+```json
+{"permissions": {"deny": [
+  {"tool": "bash", "command": "*rm -rf*"},
+  {"tool": "write_file", "path": "*.pem"},
+  {"tool": "web_fetch"}
+]}}
+```
+
+A rule is `{"tool": "<glob>"}` plus at most one arg matcher: `command`
+(glob against the bash command string), `path` (glob against the tool's
+`path` argument — the file tools), or `url` (glob against web_fetch's url).
+A rule with no matcher denies the whole named tool. Tool globs are plain
+`*`/`?` globs (`mcp__*` matches MCP tools by their registered
+`mcp__<name>__<tool>` name like any other). Matching is fail-toward-
+execution on a missing/non-string arg: a bash call without a string
+`command` under a `command` rule does not match (the matcher had nothing to
+judge); whole-tool rules always deny.
+
+**Policy order**: permissions → PreToolUse hooks → plan gate / MCP / risk
+gate. A denied call fires no hooks, reaches none of the later gates, and
+never executes; the model receives a `[permission denied] <rule>` tool error
+it routes around and the loop continues. Rules run in config order, first
+match wins.
+
+**Failure semantics**: the opposite polarity of hooks, both pinned — config
+problems (unreadable/malformed config, a rule with an unknown key, two
+matchers, or a matcher that cannot fit the named tool, e.g. `command` on
+`read_file`) **fail open**: each is skipped with one stderr warning per run +
+one `"type":"permission_error"` line in `.chug/events.jsonl` (a malformed
+RULE is skipped in place; valid siblings still deny), and the run continues.
+A rule match **fails closed**: it always denies, recording one
+`"type":"permission_denied"` line per deny.
+
+Surfaces: run, chat, and plan mode (an in-process policy can only restrict
+further — denying `read_file *.key` inside a plan session is exactly the
+point; the five-tool plan contract is unchanged). Phase 2, deferred with
+reasons: allow-rules that short-circuit the risk gate (needs risk-gate
+plumbing of its own — that is the leg that makes `--risk-gate` one policy
+source among several), ask-mode (a chat/TUI interactive prompt),
+settings.json unification (one config shape across policy layers), and a
+`--permissions` CLI flag.
+
 ## MCP servers (`mcp.json`)
 
 chug consumes tools from MCP servers (tools capability) over **stdio** or

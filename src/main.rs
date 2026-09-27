@@ -22,6 +22,7 @@ mod trim;
 mod tui;
 mod mcp;
 mod mcp_http;
+mod permissions;
 mod sse;
 mod tgrep;
 mod webfetch;

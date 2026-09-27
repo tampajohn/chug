@@ -363,6 +363,9 @@ impl App {
             // T83: hook vetoes/notes reach the model inside the tool result;
             // the fire/error lines are telemetry for events.jsonl.
             Event::HookFired { .. } | Event::HookError { .. } => {}
+            // T90: the deny text reaches the model inside the tool result;
+            // deny/config-error lines are telemetry for events.jsonl.
+            Event::PermissionDenied { .. } | Event::PermissionError { .. } => {}
             Event::TurnStart { objective } => {
                 let cwd = if let Some(chat) = &mut self.chat {
                     chat.state = ChatState::Working;

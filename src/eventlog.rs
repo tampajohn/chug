@@ -228,6 +228,24 @@ impl EventSink for EventLogSink<'_> {
                 "ts": now_rfc3339(),
                 "detail": detail,
             })),
+            // T90: one line per permission deny (tool + the matched rule in
+            // its config shape). A deny is fail-closed and never executes
+            // the tool, so these lines are the postmortem record of what was
+            // refused.
+            Event::PermissionDenied { tool, rule } => Some(json!({
+                "type": "permission_denied",
+                "ts": now_rfc3339(),
+                "tool": tool,
+                "rule": rule,
+            })),
+            // T90: one line per permissions config problem (unreadable or
+            // malformed config, or a malformed rule skipped while valid
+            // siblings load); fail-open, never a run killer.
+            Event::PermissionError { detail } => Some(json!({
+                "type": "permission_error",
+                "ts": now_rfc3339(),
+                "detail": detail,
+            })),
             Event::Verifying { cmd } => Some(json!({
                 "type": "verifying",
                 "ts": now_rfc3339(),

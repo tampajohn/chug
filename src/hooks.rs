@@ -447,7 +447,9 @@ fn parse_config(value: &Value) -> anyhow::Result<(Vec<HookEntry>, Vec<HookEntry>
 
 /// Glob match on the tool name (`*`/`?` semantics). An unparsable glob
 /// matches nothing — deterministic, and fail-closed for that entry only.
-fn glob_matches(pattern: &str, tool: &str) -> bool {
+/// `pub(crate)` since T90: the permissions layer reuses this matcher
+/// byte-identically (one glob semantics across both policy layers).
+pub(crate) fn glob_matches(pattern: &str, tool: &str) -> bool {
     match glob::Pattern::new(pattern) {
         Ok(p) => p.matches(tool),
         Err(_) => false,
