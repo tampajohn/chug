@@ -3,5 +3,6 @@ target-shared/
 target-shared-validate/
 target-shared-gates/
 target-shared-main/
+target-shared-mut-*/
 .chug/
 LEDGER.md

@@ -106,7 +106,20 @@ check: cd /Users/jadams/workspace/chug && cargo test
              new code (flip a condition, drop a check, corrupt a value) and
              confirm the round's tests catch it — green tests that survive
              mutations are vacuous (round 1 shipped dead code with 245/245
-             green until mutations exposed it). End with a verdict line
+             green until mutations exposed it). After the clean-tree gates
+             pass, you MAY run the mutation legs in PARALLEL (T79): one
+             throwaway git worktree per mutant (/tmp/chug-mut-<item>-<k>),
+             each with its own role-keyed target dir
+             CARGO_TARGET_DIR=.../target-shared-mut-<k> (the T52 lesson per
+             leg: a mutant's binaries must never share a target dir with
+             another checkout's builds), each running its targeted test;
+             collect the results yourself; cap legs in flight at 3; and
+             remove the throwaway worktrees after the results are
+             collected. Serial stays the default when mutants touch
+             overlapping files — declare that overlap judgment in your
+             verdict notes. The tree-restored rule is unchanged: the main
+             worktree must be byte-clean before the verdict; findings
+             reference mutant names, not leg dirs. End with a verdict line
              VERDICT: PASS or VERDICT: FAIL plus a numbered findings list." \
      --model anthropic-system.ai.kimi-k3 --max-iters 40 --max-minutes 30 \
      > /tmp/chug-round-N-validate.log 2>&1 & echo "validator pid: $!"

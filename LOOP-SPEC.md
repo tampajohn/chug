@@ -187,9 +187,25 @@ impl, never 2 impls):
    can never occupy an artifact slot another checkout's gates or impl builds
    read — same artifact-name mechanism as step 3). The dir persists across
    cycles — warm after first use; the first use is a cold build, the
-   accepted one-time cost per role; this
+   accepted one-time cost per role. This
    paragraph is a LOOP-SPEC override of §6's launch
-   mechanics only, and META-SPEC.md is not edited. FAIL → fix-up child
+   mechanics only, and META-SPEC.md is not edited.
+   Parallel mutants (T79, operator-approved 2026-09-26): after the gates
+   pass on the clean tree, the validator MAY run its mutation legs in
+   parallel — one throwaway worktree per mutant
+   (`/tmp/chug-mut-<item>-<k>`), each with its own role-keyed target dir
+   `CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-mut-<k>`
+   (the T52 lesson per leg: a mutant's binaries must never share a target
+   dir with another checkout's builds), each running its targeted test,
+   results collected by the validator; cap legs in flight at 3 (the host
+   has other work; validators are already 1 of max-2 children). Serial
+   stays the default when mutants touch overlapping files — the validator
+   declares that overlap judgment in its verdict notes. Tree-restored
+   semantics unchanged: main worktree byte-clean before the verdict;
+   throwaway worktrees removed after results are collected; findings
+   reference mutant names, not leg dirs. META-SPEC §6's goal template
+   carries the same T79 mandate (that edit, not this paragraph's launch
+   override, is what touches META-SPEC.md). FAIL → fix-up child
    with the findings pasted into its goal — and when a finding names one
    instance of a class (a vacuous pin, a missing reset, an unchecked error
    leg), the goal ALSO names the class and requires
