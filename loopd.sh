@@ -107,7 +107,13 @@ while [ ! -f "$STOP" ]; do
     sleep 120
     continue
   fi
-  cargo build >> "$LOG" 2>&1
+  cargo build --release >> "$LOG" 2>&1
+  # T78: the loop runs the RELEASE binary — this build produces
+  # ./target/release/chug, the cycle invocation below launches it, delegate
+  # children re-launch the orchestrator's own executable (current_exe), and
+  # the review/validation gates run `cargo test --release` (LOOP-SPEC step 3,
+  # META-SPEC gates rule). First cycle after this lands pays a cold release
+  # build here AND into the shared cache; every later one is warm.
   # T46: refresh the Phase-1 corpus digest so every cycle's evaluation reads
   # .chug/eval-digest.md instead of re-mining raw events archives.
   scripts/eval-digest.sh >> "$LOG" 2>&1
@@ -117,13 +123,13 @@ while [ ! -f "$STOP" ]; do
   # T47: the shared cache reaches the cycle as a per-invocation env prefix on
   # the chug call — NEVER as a bare `export`. An export inside this while loop
   # would persist in the supervisor's environment across iterations, so from
-  # cycle 2 on the `cargo build` above would run with the var set, land in
-  # target-shared, and never refresh ./target/debug/chug (stale supervisor
-  # binary). The prefix is visible only to this cycle's orchestrator process
-  # and the delegate children that inherit its launch env; the supervisor's
-  # own build above always stays in ./target, so ./target/debug/chug keeps
-  # resolving to a freshly built binary.
-  CARGO_TARGET_DIR="$ROOT/target-shared" ./target/debug/chug run --spec LOOP-SPEC.md \
+  # cycle 2 on the `cargo build --release` above would run with the var set,
+  # land in target-shared, and never refresh ./target/release/chug (stale
+  # supervisor binary). The prefix is visible only to this cycle's
+  # orchestrator process and the delegate children that inherit its launch
+  # env; the supervisor's own build above always stays in ./target, so
+  # ./target/release/chug keeps resolving to a freshly built binary.
+  CARGO_TARGET_DIR="$ROOT/target-shared" ./target/release/chug run --spec LOOP-SPEC.md \
     --goal "Run the full self-improvement cycle per LOOP-SPEC: evaluate or skip per the freshness rule, work the queue (features are first-class per the amended doctrine — close capability gaps, not only harden), adversarial validation for core-logic items, you own all bookkeeping, push after each item lands green + remainder at wrap. Your wrap IS the next cycle's input — leave TODO.md, EVALUATION.md and specs/ such that a cold next cycle needs zero human words." \
     --model anthropic-system.ai.kimi-k3 --max-iters 160 --max-minutes 240 \
     > "$cycle_log" 2>&1

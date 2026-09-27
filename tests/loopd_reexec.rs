@@ -75,8 +75,8 @@ fn loopd_reexecs_at_the_top_of_the_while_body() {
         .expect("loopd.sh must re-exec itself when its script changed on \
                   disk (T50)");
     // FIRST statement inside the while body — before the single-driver
-    // check and before `cargo build` — so a re-exec only ever happens
-    // BETWEEN cycles, never mid-cycle. The while condition itself is the
+    // check and before `cargo build --release` — so a re-exec only ever
+    // happens BETWEEN cycles, never mid-cycle. The while condition itself is the
     // STOP guard: evaluated before the body, a pending stop exits without
     // re-exec'ing.
     let loop_top = loopd
@@ -89,13 +89,13 @@ fn loopd_reexecs_at_the_top_of_the_while_body() {
                   LOOP-SPEC.md\"` — pgrep is blind to the launchd-spawned \
                   loopd tree on this host, so a pgrep guard fails OPEN");
     let build = loopd
-        .find("  cargo build >> \"$LOG\" 2>&1")
+        .find("  cargo build --release >> \"$LOG\" 2>&1")
         .expect("loopd.sh builds its own binary");
     assert!(
         loop_top < compare && compare < exec && exec < driver_check && exec < build,
         "the re-exec block must be the FIRST statement inside the while \
-         body — before the single-driver check and `cargo build` — so it \
-         only ever runs BETWEEN cycles, never mid-cycle (T50)"
+         body — before the single-driver check and `cargo build --release` — \
+         so it only ever runs BETWEEN cycles, never mid-cycle (T50)"
     );
 }
 

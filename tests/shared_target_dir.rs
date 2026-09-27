@@ -32,6 +32,16 @@
 //! by construction. These pins guard the new carriers (step 5's re-run,
 //! Phase 3's final gates, the .gitignore line, the README clause) and that
 //! the dir never leaks into META-SPEC.md or loopd.sh.
+//!
+//! T78 — release builds for the loop: the supervisor builds and launches the
+//! RELEASE binary (`cargo build --release` → `./target/release/chug`), the
+//! META-SPEC nohup templates launch `target/release/chug` (delegate children
+//! re-launch the orchestrator's own executable — no binary path is needed in
+//! LOOP-SPEC's delegate template), and the bounded review/merge/validation
+//! gates run `cargo test --release`. These pins also enforce the sweep side:
+//! no `target/debug/chug` launch path may survive in loopd.sh or either
+//! template. The spec `check:` convention stays plain `cargo test` (debug) —
+//! release is for gates only.
 
 use std::path::PathBuf;
 
@@ -130,7 +140,7 @@ fn loopd_creates_target_shared_at_supervisor_start() {
     // At supervisor start: before the cycle loop and before the first build,
     // so the shared cache exists for every cycle including the first.
     let first_build = loopd
-        .find("  cargo build >> \"$LOG\" 2>&1")
+        .find("  cargo build --release >> \"$LOG\" 2>&1")
         .expect("loopd.sh builds its own binary");
     let loop_start = loopd
         .find("while [ ! -f \"$STOP\" ]")
@@ -138,7 +148,7 @@ fn loopd_creates_target_shared_at_supervisor_start() {
     assert!(
         mkdir < first_build && mkdir < loop_start,
         "loopd.sh must create target-shared at supervisor start — before the \
-         cycle loop and the first `cargo build` (T47)"
+         cycle loop and the first `cargo build --release` (T47)"
     );
 }
 
@@ -162,7 +172,7 @@ fn loopd_prefixes_the_chug_invocation_never_the_supervisor_env() {
     // prefix on the chug call: only that process — and the delegate children
     // that inherit its launch env — sees the shared cache.
     let invocation = loopd
-        .find("CARGO_TARGET_DIR=\"$ROOT/target-shared\" ./target/debug/chug run")
+        .find("CARGO_TARGET_DIR=\"$ROOT/target-shared\" ./target/release/chug run")
         .expect(
             "loopd.sh must env-prefix the chug invocation itself with \
              CARGO_TARGET_DIR=\"$ROOT/target-shared\" so only the cycle's \
@@ -170,16 +180,16 @@ fn loopd_prefixes_the_chug_invocation_never_the_supervisor_env() {
              shared cache (T47)",
         );
     // Ordering pin: the supervisor builds its own binary FIRST — into
-    // ./target, which is what `./target/debug/chug` resolves to — and the
+    // ./target, which is what `./target/release/chug` resolves to — and the
     // shared-cache prefix applies only to the cycle invocation after it.
     let build = loopd
-        .find("  cargo build >> \"$LOG\" 2>&1")
+        .find("  cargo build --release >> \"$LOG\" 2>&1")
         .expect("loopd.sh builds its own binary first");
     assert!(
         build < invocation,
-        "loopd.sh's own `cargo build` (into ./target) must precede the \
-         env-prefixed chug invocation — the supervisor's binary cache stays \
-         separate from the shared children's cache (T47)"
+        "loopd.sh's own `cargo build --release` (into ./target) must precede \
+         the env-prefixed chug invocation — the supervisor's binary cache \
+         stays separate from the shared children's cache (T47)"
     );
 }
 
@@ -329,7 +339,7 @@ fn meta_spec_templates_export_the_shared_dir() {
     count_eq(
         &spec,
         &format!(
-            "{SHARED} nohup /Users/jadams/workspace/chug/target/debug/chug \
+            "{SHARED} nohup /Users/jadams/workspace/chug/target/release/chug \
              run \\\n     --spec <your feature spec file>"
         ),
         1,
@@ -346,7 +356,7 @@ fn meta_spec_templates_export_the_shared_dir() {
     count_eq(
         &spec,
         &format!(
-            "{SHARED} nohup /Users/jadams/workspace/chug/target/debug/chug \
+            "{SHARED} nohup /Users/jadams/workspace/chug/target/release/chug \
              run \\\n     --spec <the round's feature spec"
         ),
         1,
@@ -606,4 +616,226 @@ fn t57_dir_stays_scoped_to_the_orchestrator_surfaces() {
              to LOOP-SPEC.md (+ .gitignore/README) (T57 req 5)"
         );
     }
+}
+
+/// T78 — the supervisor binary: loopd builds the RELEASE profile and the
+/// cycle invocation launches it. Exact-count pins per the T47 carrier
+/// doctrine, plus the sweep side: a `target/debug/chug` launch path must
+/// not survive anywhere in loopd.sh. (Historical receipts that QUOTE the
+/// old debug path — this file's T47 finding comments, specs/ of past items —
+/// are not launch paths and stay untouched.)
+#[test]
+fn loopd_builds_and_launches_the_release_binary() {
+    let loopd = read("loopd.sh");
+    // (1) The supervisor's own build is the release form, exactly once.
+    count_eq(
+        &loopd,
+        "  cargo build --release >> \"$LOG\" 2>&1",
+        1,
+        "loopd.sh release build line (T78)",
+    );
+    // (2) The sweep: no debug-binary launch path survives in loopd.sh.
+    assert!(
+        !loopd.contains("./target/debug/chug"),
+        "loopd.sh must not reference ./target/debug/chug anywhere — the \
+         supervisor builds and launches the release binary (T78)"
+    );
+    // (3) The cycle invocation launches the release binary, env-prefixed,
+    //     exactly once (the T47 prefix pin, restated at the release path).
+    count_eq(
+        &loopd,
+        "CARGO_TARGET_DIR=\"$ROOT/target-shared\" ./target/release/chug run",
+        1,
+        "loopd.sh env-prefixed release invocation (T78)",
+    );
+}
+
+/// T78 — the templates: every launch path and gate is the release profile.
+/// The two META-SPEC nohup templates (the M6-mutant pair) must BOTH launch
+/// `target/release/chug`; LOOP-SPEC carries no binary path at all (delegate
+/// children re-launch the orchestrator's own executable) — pin the absence
+/// so a future editor cannot hardcode a debug path back in; the review,
+/// merge, and validator gate commands are `cargo test --release --
+/// --test-threads=4`; and the T78 tradeoff (first release build slower,
+/// shared target dirs amortize) is named in both templates. The spec
+/// `check:` convention stays debug — pinned via the T6 clause.
+#[test]
+fn launch_paths_and_gates_are_the_release_profile() {
+    let meta = read("META-SPEC.md");
+    let loop_spec = read("LOOP-SPEC.md");
+    // (1) Both nohup launch templates carry the release path (the T47 M6
+    //     pin, restated at the T78 path).
+    count_eq(
+        &meta,
+        &format!("{SHARED} nohup /Users/jadams/workspace/chug/target/release/chug run"),
+        2,
+        "META-SPEC both nohup templates launch target/release/chug (T78)",
+    );
+    // (2) The sweep: no debug launch path survives in either template.
+    assert!(
+        !meta.contains("target/debug/chug"),
+        "META-SPEC.md must not reference target/debug/chug — child and \
+         validator launches use target/release/chug (T78)"
+    );
+    assert!(
+        !loop_spec.contains("target/debug/chug"),
+        "LOOP-SPEC.md must not reference target/debug/chug — delegate \
+         children re-launch the orchestrator's own executable, so no \
+         binary path belongs in the spec (T78)"
+    );
+    // (3) The release gate command at all four carriers: §5 review gate,
+    //     §6 validator goal text, §7 merge gate, T6 bounded-gates rule.
+    count_eq(
+        &meta,
+        "cargo test --release -- --test-threads=4",
+        4,
+        "META-SPEC release-gate command carriers: §5 review, §6 validator \
+         goal, §7 merge gate, T6 rule (T78)",
+    );
+    // (4) LOOP-SPEC's executable review-gate template is the release form.
+    count_eq(
+        &loop_spec,
+        "perl -e 'alarm 600; exec @ARGV' cargo test --release",
+        1,
+        "LOOP-SPEC step-3 review-gate template is the release form (T78)",
+    );
+    // (5) The tradeoff is NAMED in both templates (first release build
+    //     slower, shared target dirs amortize).
+    for (name, text) in [("META-SPEC.md", &meta), ("LOOP-SPEC.md", &loop_spec)] {
+        assert!(
+            text.contains("first release build into a cold cache is slower"),
+            "{name} must name the T78 build-time tradeoff: the first release \
+             build into a cold cache is slower (compile time) (T78)"
+        );
+        assert!(
+            text.contains("amortize"),
+            "{name} must name the T78 tradeoff's other half: the shared \
+             target dirs amortize it (T78)"
+        );
+    }
+    // (6) The spec `check:` convention stays debug — the T6 rule says so
+    //     explicitly, so a future editor cannot "fix" spec check lines to
+    //     --release.
+    assert!(
+        meta.contains("stays plain `cargo test`"),
+        "META-SPEC's gates rule must state that the spec `check:` convention \
+         stays plain `cargo test` (debug) — only review/merge/validation \
+         gates run the release form (T78 req 4)"
+    );
+}
+
+/// T78 sweep — kimi round-1 verdict: FAIL (weak tests, not correctness).
+/// Four mutants survived because each reverted ONE `--release` carrier back
+/// to the debug form and nothing counted it: M8 (LOOP-SPEC step-1 worktree
+/// build), M9 (META-SPEC why-bullet build), M10 (LOOP-SPEC step-5 gate
+/// form), M11 (LOOP-SPEC Phase-3 wrap). These tests close the class: EVERY
+/// `cargo build --release` / `cargo test --release` carrier the T78 diff
+/// (a74769f) introduced is exact-count-pinned, granularly — one pin per
+/// carrier, so each carrier's revert is independently observable —
+/// including carriers the earlier single-line needles cannot see
+/// (META-SPEC T6's two line-wrapped examples, README's line-wrapped gate
+/// form, loopd.sh's comment restatements).
+#[test]
+fn loop_spec_release_carriers_are_pinned_per_carrier() {
+    let spec = read("LOOP-SPEC.md");
+    // (M8) step 1: the worktree build-warm command is the release form.
+    count_eq(
+        &spec,
+        "cargo build --release",
+        1,
+        "LOOP-SPEC step-1 worktree build is the release form (T78 req 2; \
+         kimi R1 mutant M8)",
+    );
+    // step 1's why-prose states the gates' profile — a carrier too.
+    count_eq(
+        &spec,
+        "gates below run\n   `cargo test --release`",
+        1,
+        "LOOP-SPEC step-1 why-prose names the release gate profile (T78)",
+    );
+    // (M10) step 5: the post-merge gate command is the T78 release form.
+    count_eq(
+        &spec,
+        "`cargo test --release -- --test-threads=4` under the bounded cap",
+        1,
+        "LOOP-SPEC step-5 gate command is the T78 release form under the \
+         bounded cap (T78 req 3; kimi R1 mutant M10)",
+    );
+    // (M11) Phase-3 wrap: the final gates name the release form.
+    count_eq(
+        &spec,
+        "clippy + `cargo test --release`",
+        1,
+        "LOOP-SPEC Phase-3 wrap pins the final gates to `cargo test \
+         --release` (T78 req 3; kimi R1 mutant M11)",
+    );
+}
+
+#[test]
+fn meta_spec_release_carriers_are_pinned_per_carrier() {
+    let meta = read("META-SPEC.md");
+    // (M9) the why-bullet's per-worktree build is the release form.
+    count_eq(
+        &meta,
+        "cargo build --release",
+        1,
+        "META-SPEC why-bullet worktree build is the release form (T78 req 2; \
+         kimi R1 mutant M9)",
+    );
+    // The T6 rule's two wrapped examples are release-form carriers the
+    // single-line `cargo test --release -- --test-threads=4` needle (count
+    // 4 above) cannot see — they wrap mid-command.
+    count_eq(
+        &meta,
+        "perl -e 'alarm 600; exec @ARGV' cargo test --release",
+        1,
+        "META-SPEC T6 macOS example is the release form (T78 req 3)",
+    );
+    count_eq(
+        &meta,
+        "timeout 600 cargo test --release",
+        1,
+        "META-SPEC T6 Linux example is the release form (T78 req 3)",
+    );
+}
+
+#[test]
+fn loopd_and_readme_release_carriers_are_pinned_per_carrier() {
+    let loopd = read("loopd.sh");
+    let readme = read("README.md");
+    // Both loopd.sh `cargo build --release` carriers: the build line
+    // (full-line-pinned above) and the T47 stale-binary comment's
+    // restatement of it — T78 rewrote that comment too.
+    count_eq(
+        &loopd,
+        "cargo build --release",
+        2,
+        "loopd.sh release-build carriers: the build line + the T47 comment \
+         (T78 req 1)",
+    );
+    // The T78 comment names the review/validation gates' release form.
+    count_eq(
+        &loopd,
+        "cargo test --release",
+        1,
+        "loopd.sh T78 comment names the review/validation gate form (T78 \
+         req 3)",
+    );
+    // README's continuous-mode paragraph documents both carriers.
+    count_eq(
+        &readme,
+        "cargo build --release",
+        1,
+        "README names the supervisor's release build (T78)",
+    );
+    // ... and the gate form — line-wrapped mid-command in the prose, so
+    // match it wrap-insensitively.
+    let flat_readme = readme.replace('\n', " ");
+    count_eq(
+        &flat_readme,
+        "cargo test --release",
+        1,
+        "README names the release gate form (wrap-insensitive — the clause \
+         line-wraps between `cargo test` and `--release`) (T78)",
+    );
 }

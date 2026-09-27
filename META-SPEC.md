@@ -20,11 +20,14 @@ check: cd /Users/jadams/workspace/chug && cargo test
 - Children MUST NOT share your cwd: chug writes `.chug/transcript.jsonl` and
   `LEDGER.md` under cwd, and a child in your cwd would corrupt your own
   transcript. Therefore every child round runs in its own **git worktree**.
-- The child binary: `target/debug/chug` inside each round worktree (build it
-  there first: `cargo build` in the worktree, exporting
+- The child binary: `target/release/chug` (T78 — the loop runs release
+  binaries; delegate children re-launch the orchestrator's own executable,
+  and the hand-rolled nohup templates below launch the main tree's
+  `target/release/chug`). Build it in each round worktree first:
+  `cargo build --release` there, exporting
   `CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared` — T47: all
   worktree builds share one warm cache, so the binary lands in
-  `target-shared/debug/chug`; a poisoned shared cache affects all children,
+  `target-shared/release/chug`; a poisoned shared cache affects all children,
   recovery is `rm -rf target-shared`, cheap, rebuild once — and no
   `git clean`/`cargo clean` is ever automatic, reclaiming is the operator's
   call, `du -sh target-shared`).
@@ -66,7 +69,7 @@ check: cd /Users/jadams/workspace/chug && cargo test
 4. **Launch child (backgrounded + polled, one at a time — see the 120s bash
    cap note above):**
    ```
-   cd /tmp/chug-round-N && CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared nohup /Users/jadams/workspace/chug/target/debug/chug run \
+   cd /tmp/chug-round-N && CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared nohup /Users/jadams/workspace/chug/target/release/chug run \
      --spec <your feature spec file> \
      --goal "ROUND GOAL: <G>. Implement ONLY this slice. Keep cargo build and
              cargo test green. Do not touch unrelated files." \
@@ -80,19 +83,23 @@ check: cd /Users/jadams/workspace/chug && cargo test
    may not commit — then inspect `git -C /tmp/chug-round-N status` + the
    files directly). Read the child's `LEDGER.md` and the tail of its
    `.chug/transcript.jsonl` if the outcome is ambiguous. Run
-   `cd /tmp/chug-round-N && CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared cargo test -- --test-threads=4` yourself
-   (bounded — see the gates rule below) — never trust a claim of
+   `cd /tmp/chug-round-N && CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared cargo test --release -- --test-threads=4` yourself
+   (bounded, release profile per the gates rule below — see it for the T78
+   build-time tradeoff) — never trust a claim of
    green without seeing it.
 6. **Validate (kimi-k3, REQUIRED).** Before merging any round, launch a
    validation child on kimi-k3 (no env prefix, backgrounded + polled like
    the implementation child):
    ```
-   cd /tmp/chug-round-N && CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared nohup /Users/jadams/workspace/chug/target/debug/chug run \
+   cd /tmp/chug-round-N && CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared nohup /Users/jadams/workspace/chug/target/release/chug run \
      --spec <the round's feature spec, e.g. SPEC-N-*.md> \
      --goal "VALIDATION ONLY — do not implement. Review the uncommitted/committed
              diff in this worktree against the spec: correctness bugs, missing
-             spec requirements, weak tests. Run cargo build + clippy + test
-             yourself. export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared
+             spec requirements, weak tests. Run cargo build + clippy +
+             cargo test --release -- --test-threads=4 yourself (T78 release
+             gates: the first release build into a cold cache is slower to
+             compile, every later run is faster than debug — the shared
+             target dir amortizes it). export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared
              before every cargo command (T47 shared build cache — mutations and
              reverts then rebuild incrementally, not from scratch). Where
              feasible, MUTATION-TEST: deliberately break the
@@ -111,7 +118,7 @@ check: cd /Users/jadams/workspace/chug && cargo test
    child committed: `git -C /Users/jadams/workspace/chug merge round-N`. If
    not: replicate the diff into the main tree (checkout the changed files:
    `git -C /Users/jadams/workspace/chug checkout round-N -- <files>` when the
-   child committed; otherwise copy the files) and `cargo test -- --test-threads=4`
+   child committed; otherwise copy the files) and `cargo test --release -- --test-threads=4`
    in the main tree before calling it landed. Red or off-spec → either fix
    trivially yourself or run round N+1 with the failure as feedback in the goal.
 8. **Ledger.** Record round outcome in YOUR LEDGER.md: scope, verdict, what
@@ -133,10 +140,17 @@ Derive 2-4 narrow slices from YOUR feature spec — one concern per round, each 
   count the round as feedback, move on.
 - **Gates are bounded (T6).** Any `cargo test` you run as a review or merge
   gate must be wall-clock bounded so a hung suite degrades to a FAILURE,
-  never a freeze: use `cargo test -- --test-threads=4` under an explicit
-  cap (e.g. `perl -e 'alarm 600; exec @ARGV' cargo test -- --test-threads=4`
-  on macOS, `timeout 600 cargo test -- --test-threads=4` on Linux) or the
-  driver's own bash timeout. A gate that hits its cap is RED — kill it,
+  never a freeze: use `cargo test --release -- --test-threads=4` under an
+  explicit cap (e.g. `perl -e 'alarm 600; exec @ARGV' cargo test --release
+  -- --test-threads=4` on macOS, `timeout 600 cargo test --release --
+  --test-threads=4` on Linux) or the driver's own bash timeout. Gates are
+  the RELEASE profile (T78): the
+  first release build into a cold cache is slower (compile time), every
+  subsequent run is faster than debug — the shared target dirs (T47/T52)
+  amortize it. The spec `check:` convention is
+  unchanged — a feature spec's `check:` line stays plain `cargo test`
+  (debug); only review/merge/validation gates run the release form. A gate
+  that hits its cap is RED — kill it,
   treat the round as failed, move on; never wait out a stub.
 - When every requirement of your feature spec is implemented in the main tree and
   `cargo build`, `cargo clippy --all-targets -- -D warnings`, and

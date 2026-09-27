@@ -49,8 +49,13 @@ impl, never 2 impls):
 1. **Worktree.** `git -C /Users/jadams/workspace/chug worktree add
    /tmp/chug-loop-t<N> -b loop-t<N>`; build warm (T47): `export
    CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared` then
-   `cargo build` there — every worktree shares one incremental cache instead
-   of a cold 43s–6 min build per round. The dir is a NEW one, NOT the repo's
+   `cargo build --release` there — every worktree shares one incremental
+   cache instead of a cold 43s–6 min build per round. T78: the warm build is
+   the release profile, because the review/validation gates below run
+   `cargo test --release`; release artifacts live in the SAME shared dir's
+   `release/` subdir (no new dirs), and the debug profile stays warm in it
+   from earlier cycles for the impl children's own debug `check:` gates. The
+   dir is a NEW one, NOT the repo's
    own `target/` — the operator's build cache stays separate so a wedge can't
    poison daily builds. Tradeoff: a poisoned shared cache affects all
    children; recovery is `rm -rf target-shared` (cheap, rebuild once). No
@@ -127,10 +132,13 @@ impl, never 2 impls):
    commit refs in one bounded non-blocking read (every git failure degrades
    to a note) — then diff the branch, read the child's ledger if ambiguous,
    and run bounded gates yourself (`CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared
-   perl -e 'alarm 600; exec @ARGV' cargo test --
+   perl -e 'alarm 600; exec @ARGV' cargo test --release --
    --test-threads=4` — the T47 env prefix keeps the gate on the shared warm
    cache; bash tool calls don't share env, so the step-1 export doesn't
-   persist between calls). Role-key the dir (T52): the `target-shared` shown
+   persist between calls). The gates are the RELEASE profile (T78): the
+   first release build into a cold cache is slower (compile time), every
+   subsequent run is faster than debug — the shared target dirs (T47/T52)
+   amortize it. Role-key the dir (T52): the `target-shared` shown
    above when NO child is in flight, but
    `CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-gates`
    whenever an impl child may be concurrently building — the T44 overlap
@@ -187,7 +195,10 @@ impl, never 2 impls):
    ALWAYS, never conditionally on the T44 overlap (this is NOT step 3's
    role-keyed rule; step 3's worktree-review gates keep their T52
    `target-shared`/`target-shared-gates` split, scoped to worktree-review
-   gates). Why a main-dedicated dir (T57):
+   gates). The gate command is the T78 release form:
+   `cargo test --release -- --test-threads=4` under the bounded cap — same
+   tradeoff as step 3, and the dir is warm after its first release build.
+   Why a main-dedicated dir (T57):
    cargo's artifact filename excludes the checkout path, so a shared dir's
    artifact slots are last-builder-wins — and only a dir whose builders are
    ALWAYS main checkouts keeps post-merge artifacts identical to main
@@ -295,7 +306,7 @@ hosted (impl and validator alike) has been harvested.
   refs, one-line verdict`) — the full narrative lives in git (row-flip
   commits + TODO done rows carry the refs), so compaction drops nothing
   that isn't one `git log` away.
-- Final gates green in main (build + clippy + test) → push anything
+- Final gates green in main (build + clippy + `cargo test --release`) → push anything
   remaining (eval commits, Outcomes) → `goal_complete` with the cycle
   summary. Final gates run in main under the T57 main-dedicated cache:
   `CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-main`, the
