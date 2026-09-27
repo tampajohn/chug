@@ -264,6 +264,35 @@ reasons carried); delegate.rs (3,498) / tgrep.rs (2,527) module sizes.
 
 ## Outcomes (filled at cycle wrap — LOOP-SPEC Phase 3)
 
+### Cycle 51 (2026-09-27) — fresh eval (kimi, loopd-routed: queue empty) — T88 + T89 + T90 filed; T88 LANDED
+
+**T88 decision_log corrective validation errors — LANDED, merge c5a4f9e.**
+glm impl (pid 39838) accepted 33/50 CLEAN first-try (commit e127d96):
+src/decisions.rs ONLY (+457/−27), all five reqs — one error lists every
+invalid field in schema order (req 1), received-keys + one-record reminder
+on unknown shapes (req 2 — trigger honestly widened to
+no-required-key-OR-unrecognized-key so the alias leg with 5/6 valid keys
+still diagnoses), JSON-type naming for non-object input (req 3), success
+path byte-identical (req 4 — 8 pre-existing pins green unmodified),
+confidence range message preserved (req 5); 9 new RED-proven legs. Review
+gates **713/713 fallback-release** (704 baseline + 9) + clippy under
+target-shared; post-merge 713/713 under target-shared-main. kimi SKIPPED
+per routing (d1790548521-11 — decisions.rs not REQUIRED; error-text-only
+failure legs; T16/T31 precedent). **T82 runner note:** cargo-nextest was
+uninstalled from the host at ~22:16Z (loopd re-exec probe at 22:16:48Z
+logged the fallback; cycles 48–50 genuinely ran nextest 0.9.146) — every
+gate this cycle runs the unconditional fallback, named in each commit.
+**Forensic bonus (filing-verified):** the glm impl hit `missing or
+non-string field: old` ×3 on edit_file and self-reported a tool bug in its
+own decision record — the harvested transcript proves it sent `old_string`
+(the Anthropic-canonical alias), NOT `old`: model fumble, tool contract
+correct, child's self-diagnosis FALSE (its bash-heredoc route-around cost 0
+iterations). Same alias class as T88's decision_log findings — generalized
+received-keys diagnosis for tools.rs `get_str` is a next-eval candidate
+(touches REQUIRED-listed tools.rs; pin sweep needed; out of T88's scope).
+Arc: 1 impl, 0 resumes, 0 fix-ups, 0 validator rounds — the T88-sized
+shape the queue wants.
+
 ### Cycle 50 (2026-09-27) — routine glm freshness-skip; T85+T86+T87 bundle LANDED (merge 2440520) — cycle-49's mid-arc recovery executed end-to-end
 - **T85 (128a4b3)** — the bash escape hatch is now doctrine in both review and validation surfaces: LOOP-SPEC §2 step 3's Review paragraph gains the parenthetical after "read the child's ledger if ambiguous" (file tools are cwd-confined and refuse `/tmp/chug-loop-*` paths with `path escapes cwd`; read worktree files via bash) and META-SPEC §6's validator goal template gains the same sentence after "weak tests." kimi (pid 14318) VERDICT PASS 0 blocking at 18/50: token verified in both required positions, §6 confirmed single edit point, pin-safety verified (zero pinned needles in inserted lines, all pin files green), gates re-run under target-shared-validate (build + clippy + nextest 704/704 + spec check), M1 loop-spec-insertion-removed + M2 meta-spec-insertion-removed both RED via parallel T79 throwaway worktrees (removed; byte-clean restore). Origin: cycle-47 eval I3.
 - **T86 (da1c51a)** — README Development `src/{...}` list gains tgrep, plan, hooks; set-equality verified 27/27 against `ls src/*.rs` minus main.rs by both the child and the orchestrator independently. Origin: cycle-47 eval §6(c) — first staleness finding in four audits.
