@@ -404,6 +404,20 @@ clean audit — no docs row.**
   decision records. Routing d1790595612-31 verdict d1790596580-32
   outcome landed-clean.
 
+- **T116 landed (eb55003, rebased-ff)** — the T111 validator's
+  actionable carried finding, closed: `todo_update` now rejects
+  empty/whitespace-only titles through ONE shared
+  `ensure_title_non_empty` helper in src/todos.rs (trim-then-check +
+  the error shape live together so the two paths cannot drift;
+  `todo_add`'s error stays byte-identical — pinned; the update-side
+  remedy names the rule; the check fires in the pre-lookup phase so
+  failed calls never write). 7 new test legs. glm impl 26/80
+  first-try. kimi SKIPPED (routing d1790596944-36 — src/todos.rs
+  only, none of the REQUIRED five, pri-4 trivial, T16/T31/T106
+  precedent, budget-low window). Review 918/918, post-rebase and
+  post-merge 924/924. Harvested: impl stream + child decisions.
+  Routing d1790596944-36 outcome landed-clean.
+
 ### Cycle 60 (2026-09-28) — fresh eval (kimi, loopd-routed: queue empty) — T110 + T111 filed (F8 SPLIT phase 1 → T111); BOTH landed (T110 5a16ce5, T111 d8fdea0+fc1d691)
 
 **T111 F8 phase 1 structured todo tool — LANDED, fast-forward.** The
