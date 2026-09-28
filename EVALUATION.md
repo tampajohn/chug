@@ -275,6 +275,26 @@ filed** — the second consecutive clean audit after T127's catch.
 
 ## Outcomes (filled at cycle wrap — LOOP-SPEC Phase 3)
 
+### Cycle 65 (2026-09-28) — fresh eval (kimi, loopd-routed: queue empty) — T128–T131 filed (F10 phase 2 PULLED + SPLIT); landings below in order.
+
+**T130** (chug_status weak-pin strengthening, robustness, pri 2):
+landed 976e4ae (fast-forward) — the era's only validator survivor
+closed. All six `chug_status` fail-fast legs now assert their
+DISTINCTIVE error phrase plus a negative guard against the shadow
+message; the sweep (the spec's sweep-the-family clause) found a
+SECOND real shadow beyond M3: the nonexistent-cwd leg's path
+assertion was substring-satisfied by the no-`.chug/` message for the
+same bogus path. glm impl 32/80 first-try, 7 mutants RED-proved
+(each died in 6-7s to its named leg; reword-mutants proved the new
+phrase assertions are unique killers). kimi SKIPPED (routing
+d1790620124-13 — tests-only, non-core, T16/T31 precedent);
+orchestrator independently re-killed the M3 mutant in the worktree
+(neutered `.chug` check → leg FAILED → revert → 28/28 green).
+Review + post-merge nextest 996/996. Estimate ~20 → actual +58
+(2.9x — pin density again, safely inside the trivial band). Outcome
+landed-clean. Impl stream harvested; LEDGER seed-trivial, skipped
+per doctrine.
+
 ### Cycle 64 (2026-09-28) — fresh eval (kimi, loopd-routed: queue empty) — T124–T127 filed; ALL FOUR landed clean (T127 5dbab0d README install truth, T125 532c403 estimate calibration, T124 d6264be F10-p1 mcp-serve+chug_status, T126 eef7a29 validator /tmp-heredoc doctrine) — the era's FOURTH all-PASS cycle after 58/61/62. Cycle notes below the per-item entries.
 
 **T127** (README Install staleness, docs, pri 2): landed 5dbab0d
