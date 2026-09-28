@@ -520,17 +520,24 @@ fn t99_timeline_bootstrap_entries_dedupe_and_audit() {
     let i8 = tl.find(&entry(&refs[4])).unwrap();
     let i11 = tl.find(&entry(&refs[5])).unwrap();
     assert!(i5 < i6 && i6 < i7 && i7 < i8 && i8 < i11, "entries ascend by commit time (req 4)");
-    // facts-only: the machine run (alpha..long) carries no <p>
-    assert!(!tl[i5..i11].contains("<p>"), "machine entries must not narrate");
+    // facts-only: the machine run (beta..long) carries no <p> — t6..t11 are
+    // adjacent machine entries (the Day-one prose now interleaves at its
+    // 09-20 day slot, before t6, so the no-<p> slice must start at t6)
+    assert!(!tl[i6..i11].contains("<p>"), "machine entries must not narrate");
     // curated entries take their commit-time slot too (req 1): the seed hand
     // entry cites refs[0], committed 2026-09-19 — the OLDEST entry, first
     let seed = tl.find(&format!("<span class=\"hash\">{}</span>", refs[0])).unwrap();
     assert!(seed < i5, "datable curated entry leads at its %ct slot: {tl}");
     // the Day-one hand entry cites f911488 — no such commit in the fixture
-    // repo — so it is UNDATABLE and sorts AFTER its dated neighbors, last
-    // (never before, req 1)
+    // repo — so it is UNDATABLE BY REF; T122: it dates by its own tl-date
+    // (2026-09-20, day precision = that day's last second) and sorts INTO
+    // 09-20: after t5 (an exact %ct — 09-20 12:00 — that a day-precision
+    // date cannot claim) and before t6 (09-21). T101's old bottom-pin
+    // ("after dated neighbors, never before") is what buried the live
+    // 09-27 curated milestones under 09-28 generated entries — dead.
     let day = tl.find("<h3>Day one").unwrap();
-    assert!(day > i11, "undatable curated entry stays after dated neighbors: {tl}");
+    assert!(day > i5, "undatable-by-ref entry must sit inside its tl-date day, after 09-20's noon %ct: {tl}");
+    assert!(day < i6, "…and BEFORE the next day's entries — the bottom-pin is dead: {tl}");
     assert!(tl[day..].contains("<p>Hand-written prose.</p>"), "undatable entry keeps its prose");
     // dedupe by commit ref: the hand-cited seed ref never gains an entry
     assert_eq!(count(&tl, &entry(&refs[0])), 0, "hand-cited ref duplicated");
@@ -772,4 +779,190 @@ fn t101_curated_ref_merges_into_one_entry_prose_wins() {
     let seed = tl.find(&format!("<span class=\"hash\">{}</span>", refs[0])).unwrap();
     let machine = tl.find(&format!("<span class=\"hash\">({})</span>", refs[1])).unwrap();
     assert!(seed < machine, "curated entry slotted by %ct (oldest here) — not dumped after: {tl}");
+}
+
+// --- T122 — curated entries sort by their tl-date, not the bottom ------------
+
+#[test]
+fn t122_undatable_curated_entries_sort_into_their_tl_date_day() {
+    // The live complaint: "The move to K7 — always-on" (no hash span) and
+    // "chug.sh — this site e998d45" (a SITE-repo hash, no commit in the chug
+    // repo) both carry tl-date 2026-09-27 yet rendered AFTER every
+    // 2026-09-28 generated entry — T101 keyed ref-less entries +inf
+    // ("after dated neighbors, never before"), which is the page bottom.
+    // T122: no resolvable ref => date by the entry's own tl-date, day
+    // precision. The +inf slot survives only for entries with neither a
+    // resolvable ref nor a parseable tl-date.
+    let (f, _refs, _orig) = fixture_t99();
+    let r28 = commit(&f.chug, "t88: newest item lands", None, "2026-09-28", true);
+    std::fs::write(
+        f.chug.join("TODO.md"),
+        format!(
+            concat!(
+                "# TODO\n\n| id | title | spec | pri | status | notes |\n",
+                "|----|-------|------|-----|--------|-------|\n",
+                "| T88 | newest item lands | specs/t88.md | 1 | done | done {} — x |\n"
+            ),
+            r28
+        ),
+    )
+    .unwrap();
+    // page with markers pre-wrapped (bootstrap skipped): Day one (09-20,
+    // undatable span), the two live 09-27 milestones, and one entry with
+    // NEITHER hash span nor tl-date — the truly-undatable case whose bottom
+    // slot T122 retains
+    std::fs::write(
+        f.site.join("index.html"),
+        concat!(
+            "<html><body>\n",
+            "<!-- STATS:BEGIN -->\n<div class=\"stats\"><b>stale</b></div>\n<!-- STATS:END -->\n",
+            "<div class=\"tl\">\n",
+            "<!-- TIMELINE:BEGIN -->\n",
+            "    <div class=\"tl-item major\">\n",
+            "      <div class=\"tl-date\">2026-09-20</div>\n",
+            "      <div class=\"tl-rail\"><span class=\"tl-dot\"></span></div>\n",
+            "      <div class=\"tl-body\">\n",
+            "        <h3>Day one <span class=\"hash\">f911488</span></h3>\n",
+            "        <p>Hand-written prose.</p>\n",
+            "      </div>\n",
+            "    </div>\n",
+            "    <div class=\"tl-item major\">\n",
+            "      <div class=\"tl-date\">2026-09-27</div>\n",
+            "      <div class=\"tl-rail\"><span class=\"tl-dot\"></span></div>\n",
+            "      <div class=\"tl-body\">\n",
+            "        <h3>The move to K7 — always-on</h3>\n",
+            "        <p>loopd moves under launchd.</p>\n",
+            "      </div>\n",
+            "    </div>\n",
+            "    <div class=\"tl-item major\">\n",
+            "      <div class=\"tl-date\">2026-09-27</div>\n",
+            "      <div class=\"tl-rail\"><span class=\"tl-dot\"></span></div>\n",
+            "      <div class=\"tl-body\">\n",
+            "        <h3>chug.sh — this site <span class=\"hash\">e998d45</span></h3>\n",
+            "        <p>chug builds its own public site.</p>\n",
+            "      </div>\n",
+            "    </div>\n",
+            "    <div class=\"tl-item\">\n",
+            "      <div class=\"tl-rail\"><span class=\"tl-dot\"></span></div>\n",
+            "      <div class=\"tl-body\">\n",
+            "        <h3>dateless stray</h3>\n",
+            "        <p>Neither a hash span nor a tl-date div.</p>\n",
+            "      </div>\n",
+            "    </div>\n",
+            "<!-- TIMELINE:END -->\n",
+            "</div>\n",
+            "</body></html>\n"
+        ),
+    )
+    .unwrap();
+    let out = run_sync(&f, true);
+    assert!(out.status.success(), "run: {:?}", String::from_utf8_lossy(&out.stderr));
+    let tl = region(&page(&f), "TIMELINE");
+    let day1 = tl.find("<h3>Day one").expect("Day one stays");
+    let k7 = tl.find("The move to K7").expect("K7 entry stays");
+    let site_e = tl.find("chug.sh — this site").expect("chug.sh entry stays");
+    let t88 = tl.find("<h3>newest item lands").expect("generated T88 entry present");
+    let stray = tl.find("dateless stray").expect("dateless entry stays");
+    // THE bug: both 09-27 curated milestones must render BEFORE the 09-28
+    // generated entry (the +inf pin put them after it)
+    assert!(k7 < t88, "K7 (tl-date 09-27) must precede the 09-28 generated entry: {tl}");
+    assert!(site_e < t88, "chug.sh (tl-date 09-27) must precede the 09-28 generated entry: {tl}");
+    // day grouping: the 09-20 undatable precedes the 09-27 undatables
+    assert!(day1 < k7, "09-20 tl-date sorts before the 09-27 entries: {tl}");
+    // same-day tie (req 2): equal day keys break by region position — K7 was
+    // authored before chug.sh
+    assert!(k7 < site_e, "same-day undatable entries keep their region order: {tl}");
+    // retained +inf: no ref AND no tl-date still sorts last, after T88
+    assert!(stray > t88, "truly undatable entry (no ref, no tl-date) keeps the bottom slot: {tl}");
+    // curated chunks stay verbatim: prose and tl-date text untouched
+    assert!(tl.contains("<p>loopd moves under launchd.</p>"));
+    assert_eq!(count(&tl, "<div class=\"tl-date\">2026-09-27</div>"), 2);
+    assert_eq!(count(&tl, "e998d45"), 1, "foreign-span entry renders exactly once, curated: {tl}");
+    // idempotence: the day-key path must be stable run to run
+    let before = page(&f);
+    let out2 = run_sync(&f, true);
+    assert!(out2.status.success());
+    assert_eq!(page(&f), before, "second run byte-identical");
+}
+
+#[test]
+fn t122_same_day_ties_keep_region_order_and_exact_refs_outrank_day_keys() {
+    // req 2 + the T101 regression leg, inside one day (09-27): the
+    // ref-resolved curated entry R (committed 09-27 noon) keeps its exact
+    // %ct slot — AHEAD of the day-keyed undatables even though the region
+    // lists R last — while the two undatables tie on the day key and keep
+    // their region flow (A before B). A 09-28 generated row still renders
+    // after all of them, and %ct stays the primary key (req 4).
+    let (f, _refs, _orig) = fixture_t99();
+    let rr = commit(&f.chug, "t77: same-day curated anchor lands", None, "2026-09-27", true);
+    let r28 = commit(&f.chug, "t66: newest item lands", None, "2026-09-28", true);
+    std::fs::write(
+        f.chug.join("TODO.md"),
+        format!(
+            concat!(
+                "# TODO\n\n| id | title | spec | pri | status | notes |\n",
+                "|----|-------|------|-----|--------|-------|\n",
+                "| T66 | newest item lands | specs/t66.md | 1 | done | done {} — x |\n"
+            ),
+            r28
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        f.site.join("index.html"),
+        format!(
+            concat!(
+                "<html><body>\n",
+                "<!-- STATS:BEGIN -->\n<div class=\"stats\"><b>stale</b></div>\n<!-- STATS:END -->\n",
+                "<div class=\"tl\">\n",
+                "<!-- TIMELINE:BEGIN -->\n",
+                "    <div class=\"tl-item\">\n",
+                "      <div class=\"tl-date\">2026-09-27</div>\n",
+                "      <div class=\"tl-rail\"><span class=\"tl-dot\"></span></div>\n",
+                "      <div class=\"tl-body\">\n",
+                "        <h3>first undatable A</h3>\n",
+                "        <p>No hash span at all.</p>\n",
+                "      </div>\n",
+                "    </div>\n",
+                "    <div class=\"tl-item\">\n",
+                "      <div class=\"tl-date\">2026-09-27</div>\n",
+                "      <div class=\"tl-rail\"><span class=\"tl-dot\"></span></div>\n",
+                "      <div class=\"tl-body\">\n",
+                "        <h3>second undatable B <span class=\"hash\">e998d45</span></h3>\n",
+                "        <p>Foreign hash span, no chug commit.</p>\n",
+                "      </div>\n",
+                "    </div>\n",
+                "    <div class=\"tl-item\">\n",
+                "      <div class=\"tl-date\">2026-09-27</div>\n",
+                "      <div class=\"tl-rail\"><span class=\"tl-dot\"></span></div>\n",
+                "      <div class=\"tl-body\">\n",
+                "        <h3>same-day ref entry <span class=\"hash\">{rr}</span></h3>\n",
+                "        <p>Cites a real 09-27 chug commit.</p>\n",
+                "      </div>\n",
+                "    </div>\n",
+                "<!-- TIMELINE:END -->\n",
+                "</div>\n",
+                "</body></html>\n"
+            ),
+            rr = rr
+        ),
+    )
+    .unwrap();
+    let out = run_sync(&f, true);
+    assert!(out.status.success(), "run: {:?}", String::from_utf8_lossy(&out.stderr));
+    let tl = region(&page(&f), "TIMELINE");
+    let a = tl.find("first undatable A").expect("A stays");
+    let b = tl.find("second undatable B").expect("B stays");
+    let r = tl.find(&format!("<span class=\"hash\">{}</span>", rr)).expect("R stays");
+    let t66 = tl.find("<h3>newest item lands").expect("generated T66 entry present");
+    // T101 leg intact: the ref-resolved entry keeps its exact %ct slot
+    // (09-27 noon), ahead of the day-precision keys of the same day —
+    // despite R sitting LAST in the region
+    assert!(r < a, "exact %ct outranks the day key within its own day: {tl}");
+    // req 2: equal day keys tie-break by region position — A before B
+    assert!(a < b, "same-day undatable tie keeps region order: {tl}");
+    assert!(b < t66, "the whole 09-27 group precedes the 09-28 generated entry: {tl}");
+    // T101 merge leg intact: curated R renders once, prose wins
+    assert_eq!(count(&tl, &rr), 1, "R renders exactly once (curated, no machine twin): {tl}");
+    assert!(tl.contains("<p>Cites a real 09-27 chug commit.</p>"), "prose wins: {tl}");
 }
