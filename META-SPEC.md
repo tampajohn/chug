@@ -48,7 +48,7 @@ check: cd /Users/jadams/workspace/chug && cargo test
   5xx), rerun that round's implementation child on kimi-k3 and note the
   fallback in your ledger.
 - **Alternative endpoint**: `muse-glimmer-30b` on the spark SGLang endpoint
-  (`ANTHROPIC_BASE_URL=http://spark-2e89.tail6a8e24.ts.net:8080
+  (`ANTHROPIC_BASE_URL=http://<your-spark-host>:8080
   ANTHROPIC_AUTH_TOKEN=$(cat ~/.muse-glimmer-key)`) remains available for
   fully-local/free implementation runs when the spark cluster is healthy —
   swap it in deliberately, not by default.
