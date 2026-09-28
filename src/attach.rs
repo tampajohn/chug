@@ -385,6 +385,31 @@ mod tests {
         assert_eq!(out.attached, vec!["a.txt"]);
     }
 
+    /// T134 F1 class sweep: @attach mentions ride strict `resolve_safe`, so
+    /// a symlinked path to an external file and a glob-metachar path both
+    /// degrade to the not-found note — external bytes never attach. The
+    /// symlink leg is green pre-fix (stage 2); the metachar leg is green
+    /// both sides (ENOENT pre-fix, refusal post-fix) — pinned so the
+    /// surface can never start expanding patterns.
+    #[cfg(unix)]
+    #[test]
+    fn t134f1_attach_never_expands_symlink_or_metachar_paths() {
+        let tmp = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        fs::write(outside.path().join("passwd"), "root:ATTACH-MARK\n").unwrap();
+        std::os::unix::fs::symlink(outside.path(), tmp.path().join("etcdir")).unwrap();
+        fs::write(tmp.path().join("real.txt"), "in-tree\n").unwrap();
+
+        let out = expand_message(tmp.path(), "@etcdir/passwd @*/* @real.txt");
+        let joined = out.llm_message.clone();
+        assert!(!joined.contains("ATTACH-MARK"), "{}", joined);
+        // The in-tree mention still attaches (no over-blocking)...
+        assert!(joined.contains("<file path=\"real.txt\">"), "{}", joined);
+        // ...and the refused mentions say not-found instead of expanding.
+        let note_count = joined.matches("not found").count();
+        assert!(note_count >= 2, "refusals must be visible notes: {}", joined);
+    }
+
     #[test]
     fn expand_quoted_path_with_spaces() {
         let tmp = tempfile::tempdir().unwrap();

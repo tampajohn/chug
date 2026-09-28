@@ -441,6 +441,32 @@ mod tests {
         );
     }
 
+    /// T134 F1 class sweep: `submit_plan --out` takes a literal write path,
+    /// so a glob-metachar path must be refused, not written as a literal
+    /// `*`-named file. RED pre-fix: resolve_safe passed `*/plan.md` through
+    /// as inert-missing and the plan landed at `<cwd>/*/plan.md`.
+    #[cfg(unix)]
+    #[test]
+    fn submit_plan_rejects_metachar_out_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let result = dispatch(
+            &ctx(tmp.path()),
+            "submit_plan",
+            &json!({"plan": PLAN}),
+            Some(&tmp.path().join("*/plan.md")),
+        );
+        assert!(result.is_error, "{}", result.content);
+        assert!(
+            result.content.contains("metachar") || result.content.contains("sandbox"),
+            "{}",
+            result.content
+        );
+        assert!(
+            !tmp.path().join("*").exists(),
+            "no glob-named junk may be created inside cwd"
+        );
+    }
+
     #[test]
     fn submit_plan_rejects_empty_and_missing_plan() {
         let tmp = tempfile::tempdir().unwrap();
