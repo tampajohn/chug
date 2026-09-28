@@ -111,7 +111,7 @@ mod tests {
         );
         assert_eq!(
             line,
-            "chug 0.1.0 (abc1234) cwd=/repo/work spec=/repo/SPEC.md model=claude-sonnet-4-6"
+            format!("chug {VERSION} (abc1234) cwd=/repo/work spec=/repo/SPEC.md model=claude-sonnet-4-6")
         );
         assert!(line.contains(VERSION), "package version present: {line}");
     }
@@ -161,7 +161,7 @@ mod tests {
         );
         assert_eq!(
             line,
-            "chug 0.1.0 (abc1234) cwd=/repo/work spec=/repo/SPEC.md model=claude-sonnet-4-6 head=loop-t18@9056c78"
+            format!("chug {VERSION} (abc1234) cwd=/repo/work spec=/repo/SPEC.md model=claude-sonnet-4-6 head=loop-t18@9056c78")
         );
     }
 
@@ -170,7 +170,7 @@ mod tests {
         // The unresolvable leg must stay byte-identical to the pre-T20
         // banner: no head= field, model still last.
         let line = banner("abc1234", None, Path::new("/w"), None, "m");
-        assert_eq!(line, "chug 0.1.0 (abc1234) cwd=/w spec=- model=m");
+        assert_eq!(line, format!("chug {VERSION} (abc1234) cwd=/w spec=- model=m"));
         assert!(!line.contains("head="), "no checkout field: {line}");
     }
 
