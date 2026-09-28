@@ -164,6 +164,38 @@ returns to idle, repeat. Natural stops end the turn; budgets are per turn.
   Fresh runs rotate a previous log to `.chug/events-<timestamp>.jsonl`
   alongside the transcript
 
+## Session forks (`chug fork`)
+
+Named save/restore slots over the two session files (`.chug/transcript.jsonl`
++ `LEDGER.md`) — the serial explore-two-approaches shape (benchmark:
+unreal-agent forking): run approach A, `fork save`, keep going or branch
+differently from the same state, `fork restore`, run approach B.
+
+```bash
+chug fork save approach-a     # snapshot the live session into .chug/sessions/approach-a/
+chug fork list                # one line per slot: name, transcript bytes, mtime, first-message preview
+chug fork restore approach-a  # put a slot back over the live state
+```
+
+- **Save** — snapshots the live transcript (required; absent or empty →
+  `fork: nothing to save`) and LEDGER.md (when present) into
+  `.chug/sessions/<name>/`. Names are `[A-Za-z0-9._-]+`; an existing slot is
+  never overwritten without `--force`.
+- **Restore is safe by construction** — it refuses while a live run holds
+  `.chug/driver.lock` (naming the pid; a stale lock proceeds, same reclaim
+  rule as the driver), then rotates the live transcript + non-seed ledger
+  aside with the same timestamped archive machinery a fresh run uses —
+  nothing is lost, the live session becomes a
+  `.chug/transcript-<ts>.jsonl` / `LEDGER-<ts>.md` archive — and only then
+  copies the slot into place. Copy semantics only: the slot never mutates,
+  so restoring the same slot twice is byte-identical. A slot saved without a
+  LEDGER.md restores to no ledger at all (the next fresh run seeds one).
+- **Serial, not concurrent** — one slot set per cwd; fork is a CLI op
+  outside the run loop (no events, no banner — the resumed run's own
+  `run_start` records the continuation). Concurrent same-cwd runs are
+  already barred by the driver lock; parallel exploration wants separate
+  worktrees (`delegate`).
+
 ## Plan mode (`chug plan`)
 
 A read-only planning session: the model explores the repo and drafts an
@@ -543,6 +575,6 @@ activate without an operator restart — a pending `stop` still wins.
 cargo build && cargo clippy --all-targets -- -D warnings && cargo test
 ```
 
-All three must stay green. Layout: `src/{api,archive,driver,driver_lock,eventlog,events,tools,tgrep,tui,webfetch,chat,
+All three must stay green. Layout: `src/{api,archive,driver,driver_lock,eventlog,events,fork,tools,tgrep,tui,webfetch,chat,
 attach,complete,decisions,delegate,permissions,plan,riskgate,hooks,mcp,mcp_http,sse,observ,auth,ledger,transcript,trim,build_info}.rs`
 (+ `main.rs`; `build.rs` only bakes the git commit into the startup banner).

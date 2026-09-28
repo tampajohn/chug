@@ -61,7 +61,9 @@ fn timestamp_now() -> String {
 
 /// Format seconds since the Unix epoch as `YYYYMMDD-HHMMSS` in UTC
 /// (Howard Hinnant's civil-from-days algorithm; no chrono dependency).
-fn format_timestamp(secs: u64) -> String {
+/// T105 seam: `pub(crate)` so `chug fork list` renders its mtime column in
+/// the same format as the archive names — no behavior change.
+pub(crate) fn format_timestamp(secs: u64) -> String {
     let days = (secs / 86_400) as i64;
     let rem = secs % 86_400;
     let (h, m, s) = (rem / 3600, (rem % 3600) / 60, rem % 60);

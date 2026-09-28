@@ -11,6 +11,7 @@ mod driver;
 mod driver_lock;
 mod eventlog;
 mod events;
+mod fork;
 mod hooks;
 mod riskgate;
 mod ledger;
@@ -121,6 +122,12 @@ enum CliCommand {
         #[arg(long, default_value_t = 0)]
         max_tokens: u64,
     },
+    /// Save/list/restore named session fork slots over the live transcript
+    /// + LEDGER.md (F6 phase 1): explore two approaches from one state.
+    Fork {
+        #[command(subcommand)]
+        action: ForkAction,
+    },
     /// Print the current LEDGER.md.
     Ledger {
         /// Working directory. Defaults to `.`.
@@ -165,6 +172,38 @@ enum CliCommand {
     },
 }
 
+/// `chug fork` actions (T105). Each carries its own `--cwd` like `ledger`.
+#[derive(Subcommand)]
+enum ForkAction {
+    /// Snapshot the live transcript + LEDGER.md into .chug/sessions/<name>/.
+    Save {
+        /// Slot name: 1+ chars of [A-Za-z0-9._-] (no path separators).
+        name: String,
+        /// Overwrite an existing slot.
+        #[arg(long)]
+        force: bool,
+        /// Working directory. Defaults to `.`.
+        #[arg(long)]
+        cwd: Option<PathBuf>,
+    },
+    /// List saved fork slots (name, transcript bytes, mtime, first-message
+    /// preview).
+    List {
+        /// Working directory. Defaults to `.`.
+        #[arg(long)]
+        cwd: Option<PathBuf>,
+    },
+    /// Restore a slot over the live state — archives the live session first
+    /// (nothing is lost); refuses while a live run holds .chug/driver.lock.
+    Restore {
+        /// Slot name: 1+ chars of [A-Za-z0-9._-] (no path separators).
+        name: String,
+        /// Working directory. Defaults to `.`.
+        #[arg(long)]
+        cwd: Option<PathBuf>,
+    },
+}
+
 fn main() -> ExitCode {
     let cli = Cli::parse();
     // SPEC-8: the observability sink must drain on EVERY exit path —
@@ -172,6 +211,7 @@ fn main() -> ExitCode {
     // the queued events still flush before the process exits.
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match cli.command {
         CliCommand::Ledger { cwd } => cmd_ledger(cwd),
+        CliCommand::Fork { action } => cmd_fork(action),
         CliCommand::Plan {
             goal,
             spec,
@@ -504,6 +544,26 @@ fn cmd_ledger(cwd: Option<PathBuf>) -> anyhow::Result<i32> {
     Ok(0)
 }
 
+/// `chug fork` (T105): a pure CLI op over the two session files — no driver,
+/// no events, no banner (the resumed run's own `run_start` records the
+/// continuation). Every failure leg is an anyhow error, so `main` prints the
+/// one-line stderr message and exits non-zero; success prints one line.
+fn cmd_fork(action: ForkAction) -> anyhow::Result<i32> {
+    let summary = match action {
+        ForkAction::Save { name, force, cwd } => {
+            let cwd = resolve_cwd(cwd)?;
+            fork::save(&cwd, &name, force)?
+        }
+        ForkAction::List { cwd } => fork::list(&resolve_cwd(cwd)?)?,
+        ForkAction::Restore { name, cwd } => {
+            let cwd = resolve_cwd(cwd)?;
+            fork::restore(&cwd, &name)?
+        }
+    };
+    println!("{summary}");
+    Ok(0)
+}
+
 /// T73: `chug plan` — the read-only planning session. Same model resolution
 /// and spec resolution as `run`; `--out` is passed through raw and resolved
 /// through the cwd sandbox when submit_plan writes.
@@ -630,6 +690,52 @@ mod tests {
             panic!("expected the chat subcommand");
         };
         assert_eq!(max_tokens, 1_000);
+    }
+
+    /// T105 clap pins: `chug fork` parses all three actions; `save` carries
+    /// the positional name + `--force`; `restore` has no `--force`.
+    #[test]
+    fn cli_fork_parses_save_list_restore() {
+        let cli = Cli::try_parse_from([
+            "chug",
+            "fork",
+            "save",
+            "approach-a",
+            "--force",
+            "--cwd",
+            "/tmp/x",
+        ])
+        .expect("fork save parses");
+        let CliCommand::Fork { action } = cli.command else {
+            panic!("expected the fork subcommand");
+        };
+        let ForkAction::Save { name, force, cwd } = action else {
+            panic!("expected the save action");
+        };
+        assert_eq!(name, "approach-a");
+        assert!(force);
+        assert_eq!(cwd.as_deref(), Some(std::path::Path::new("/tmp/x")));
+
+        let cli = Cli::try_parse_from(["chug", "fork", "list"]).expect("fork list parses");
+        assert!(matches!(
+            cli.command,
+            CliCommand::Fork { action: ForkAction::List { .. } }
+        ));
+
+        let cli = Cli::try_parse_from(["chug", "fork", "restore", "approach-b"])
+            .expect("fork restore parses");
+        let CliCommand::Fork { action } = cli.command else {
+            panic!("expected the fork subcommand");
+        };
+        let ForkAction::Restore { name, cwd } = action else {
+            panic!("expected the restore action");
+        };
+        assert_eq!(name, "approach-b");
+        assert!(cwd.is_none(), "cwd defaults to `.`");
+
+        // A name is required for save and restore.
+        assert!(Cli::try_parse_from(["chug", "fork", "save"]).is_err());
+        assert!(Cli::try_parse_from(["chug", "fork", "restore"]).is_err());
     }
 
     /// T73 clap pins: `chug plan` parses with the 30/20 defaults, carries the
