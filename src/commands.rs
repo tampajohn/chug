@@ -29,8 +29,10 @@
 //! body, the unknown/empty legs are hard errors naming the remedy, and the
 //! pack name rides `run_start` as `goal_pack`.
 //!
-//! Phase 2b (T118, deferred): Tab completion of pack names, frontmatter
-//! (description/allowed-tools).
+//! Phase 2b (T118, landed): chat UX. A pack file may open with YAML-ish
+//! frontmatter whose `description:` key is surfaced by `/help` ([`Pack`],
+//! [`split_frontmatter`]), and `/`-Tab completes pack names (the pure merge
+//! lives in `complete.rs`; the TUI passes [`names`]).
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -46,11 +48,16 @@ pub fn commands_dir(cwd: &Path) -> PathBuf {
 }
 
 /// One discovered pack: the file stem (exact, case-sensitive — `Review.md`
-/// and `review.md` are different commands) and the loaded body.
+/// and `review.md` are different commands), the body with any frontmatter
+/// stripped, and the frontmatter `description:` when one was given.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Pack {
     pub name: String,
     pub body: String,
+    /// The `description:` value from the pack's frontmatter, trimmed;
+    /// `None` when the pack carries no description (no frontmatter, no
+    /// `description:` key, or an empty value).
+    pub description: Option<String>,
 }
 
 /// Discover the packs in `<cwd>/.chug/commands/*.md`. Only `.md` files
@@ -85,10 +92,14 @@ pub fn discover(cwd: &Path) -> Vec<Pack> {
             continue;
         };
         match fs::read_to_string(&path) {
-            Ok(body) => packs.push(Pack {
-                name: name.to_string(),
-                body,
-            }),
+            Ok(raw) => {
+                let (description, body) = split_frontmatter(&raw);
+                packs.push(Pack {
+                    name: name.to_string(),
+                    body,
+                    description,
+                });
+            }
             Err(e) => {
                 eprintln!("chug: warning: commands: skipping {}: {e}", path.display());
             }
@@ -102,6 +113,59 @@ pub fn discover(cwd: &Path) -> Vec<Pack> {
 /// unknown-command remedy line (one discovery call, one truth).
 pub fn names(cwd: &Path) -> Vec<String> {
     discover(cwd).into_iter().map(|p| p.name).collect()
+}
+
+/// Split optional frontmatter off a raw pack file, returning
+/// `(description, body)`. A pack whose FIRST line is exactly `---` carries
+/// a metadata block: the lines up to the next line that is exactly `---`
+/// are metadata and are stripped from the body. The one supported key is
+/// `description:` (single line, value trimmed — a value containing colons
+/// keeps everything after the first `:`); an empty value yields `None`;
+/// unknown keys (`allowed-tools` et al.) are ignored silently —
+/// forward-compat for a later phase that gives them meaning. An unclosed
+/// fence (no closing `---` line) is NOT frontmatter: the whole file is
+/// body-as-written, no metadata. Lenient by design — a malformed block
+/// degrades to a plain body, never a hard error.
+fn split_frontmatter(raw: &str) -> (Option<String>, String) {
+    let mut lines = raw.split_inclusive('\n');
+    // Frontmatter must OPEN the file: a leading blank line (or any other
+    // first line) means body-as-written.
+    let Some(first) = lines.next() else {
+        return (None, raw.to_string());
+    };
+    if !is_fence(first) {
+        return (None, raw.to_string());
+    }
+    let mut description = None;
+    // Byte offset of the current line (split_inclusive keeps the `\n`, so
+    // offsets stay exact and always on char boundaries).
+    let mut offset = first.len();
+    for line in lines {
+        if is_fence(line) {
+            // Closed: the body is everything after the closing fence line.
+            return (description, raw[offset + line.len()..].to_string());
+        }
+        if let Some(value) = line
+            .trim_end_matches(['\n', '\r'])
+            .strip_prefix("description:")
+        {
+            let value = value.trim();
+            if !value.is_empty() {
+                description = Some(value.to_string());
+            }
+        }
+        offset += line.len();
+    }
+    // No closing fence: not frontmatter — the whole file is the body.
+    (None, raw.to_string())
+}
+
+/// A frontmatter fence: a line that is exactly `---`. A trailing `\r`
+/// (CRLF files) is tolerated; leading whitespace is not a fence.
+fn is_fence(line: &str) -> bool {
+    let line = line.trim_end_matches('\n');
+    let line = line.strip_suffix('\r').unwrap_or(line);
+    line == "---"
 }
 
 /// The outcome of trying to expand a chat `/name args` line as a pack.
@@ -288,6 +352,133 @@ mod tests {
         std::fs::write(dir.join("broken.md"), [0xFF, 0xFE, 0x00]).unwrap();
         std::fs::write(dir.join("review.md"), "real pack").unwrap();
         assert_eq!(names(tmp.path()), vec!["review"]);
+    }
+
+    // ---------- frontmatter (F9 phase 2b) ----------
+
+    /// Parse + strip: the `description:` value lands on the pack and the
+    /// whole `---` block is gone from the stored body.
+    #[test]
+    fn frontmatter_is_parsed_and_stripped() {
+        let tmp = tmp_dir_with(&[(
+            "review",
+            "---\ndescription: Review the current diff\n---\nReview $ARGUMENTS.\n",
+        )]);
+        let packs = discover(tmp.path());
+        assert_eq!(packs.len(), 1);
+        assert_eq!(
+            packs[0].description.as_deref(),
+            Some("Review the current diff")
+        );
+        assert_eq!(packs[0].body, "Review $ARGUMENTS.\n");
+        // A description-only frontmatter still parses; metadata lines after
+        // the closing fence are body, not keys.
+        let tmp = tmp_dir_with(&[(
+            "note",
+            "---\ndescription: say a thing\n---\ndescription: not a key\n",
+        )]);
+        let packs = discover(tmp.path());
+        assert_eq!(packs[0].description.as_deref(), Some("say a thing"));
+        assert_eq!(packs[0].body, "description: not a key\n");
+    }
+
+    /// No frontmatter: the body is stored byte-identical, description None.
+    #[test]
+    fn no_frontmatter_keeps_the_body_byte_identical() {
+        for raw in ["plain body\n", "plain body", ""] {
+            let tmp = tmp_dir_with(&[("plain", raw)]);
+            let packs = discover(tmp.path());
+            assert_eq!(packs[0].description, None, "raw {raw:?}");
+            assert_eq!(packs[0].body, raw, "raw {raw:?}");
+        }
+    }
+
+    /// An unclosed fence is NOT frontmatter: the whole file is
+    /// body-as-written, no metadata — never a hard error.
+    #[test]
+    fn unclosed_fence_means_the_whole_file_is_body() {
+        let raw = "---\ndescription: never closed\nno closing fence\n";
+        let tmp = tmp_dir_with(&[("broken", raw)]);
+        let packs = discover(tmp.path());
+        assert_eq!(packs[0].description, None);
+        assert_eq!(packs[0].body, raw);
+    }
+
+    /// Unknown keys are ignored silently (forward-compat); the description
+    /// key still lands when it shares the block with them.
+    #[test]
+    fn unknown_keys_are_ignored_silently() {
+        let tmp = tmp_dir_with(&[(
+            "review",
+            "---\nallowed-tools: Bash(read:*)\ndescription: the desc\n---\nbody\n",
+        )]);
+        let packs = discover(tmp.path());
+        assert_eq!(packs[0].description.as_deref(), Some("the desc"));
+        assert_eq!(packs[0].body, "body\n");
+
+        let tmp = tmp_dir_with(&[("review", "---\nallowed-tools: read\n---\nbody\n")]);
+        let packs = discover(tmp.path());
+        assert_eq!(packs[0].description, None);
+        assert_eq!(packs[0].body, "body\n");
+    }
+
+    /// An empty description value yields None (the /help line stays bare).
+    #[test]
+    fn empty_description_value_yields_none() {
+        for raw in [
+            "---\ndescription:\n---\nbody\n",
+            "---\ndescription:   \n---\nbody\n",
+        ] {
+            let tmp = tmp_dir_with(&[("bare", raw)]);
+            let packs = discover(tmp.path());
+            assert_eq!(packs[0].description, None, "raw {raw:?}");
+            assert_eq!(packs[0].body, "body\n", "raw {raw:?}");
+        }
+    }
+
+    /// A description value containing colons keeps everything after the
+    /// first `:` (only the key's own `:` is the separator).
+    #[test]
+    fn description_keeps_everything_after_the_first_colon() {
+        let tmp = tmp_dir_with(&[(
+            "review",
+            "---\ndescription: Review: the diff, :seriously:\n---\nbody\n",
+        )]);
+        let packs = discover(tmp.path());
+        assert_eq!(
+            packs[0].description.as_deref(),
+            Some("Review: the diff, :seriously:")
+        );
+    }
+
+    /// Frontmatter must OPEN the file: after a leading blank line the
+    /// `---` block is just body, byte-identical, no metadata.
+    #[test]
+    fn frontmatter_after_a_leading_blank_line_is_body() {
+        let raw = "\n---\ndescription: not frontmatter\n---\nbody\n";
+        let tmp = tmp_dir_with(&[("late", raw)]);
+        let packs = discover(tmp.path());
+        assert_eq!(packs[0].description, None);
+        assert_eq!(packs[0].body, raw);
+    }
+
+    /// Expansion (the T113 surface) sees the STRIPPED body: the
+    /// frontmatter block never reaches the model.
+    #[test]
+    fn expansion_sees_the_stripped_body() {
+        let tmp = tmp_dir_with(&[(
+            "review",
+            "---\ndescription: Review the diff\n---\nFocus: $ARGUMENTS\n",
+        )]);
+        assert_eq!(
+            expand(tmp.path(), "review", Some("the login bug")),
+            Expansion::Body("Focus: the login bug\n".into())
+        );
+        // Token present with no args → the empty string substitution.
+        assert_eq!(
+            expand(tmp.path(), "review", None),
+            Expansion::Body("Focus: \n".into())
+        );
     }
 
     // ---------- expansion ----------

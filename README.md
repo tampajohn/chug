@@ -81,8 +81,8 @@ returns to idle, repeat. Natural stops end the turn; budgets are per turn.
   steering note (`[operator] …`, consumed at the next iteration boundary)
 - **`@file` attachments** — `@src/main.rs` expands the file into your message
   (dirs → listings, missing → inline note); Tab-completes paths
-- **Tab autocomplete** — `/commands` and `@paths` (git ls-files-backed,
-  substring-ranked, candidate strip above the dock)
+- **Tab autocomplete** — `/commands` (built-ins + pack names) and `@paths`
+  (git ls-files-backed, substring-ranked, candidate strip above the dock)
 - **`/spec` `/goal` `/check` `/model` `/budget` `/ledger` `/quit` `/help`**
 - **Esc** interrupts the current turn, `q` quits from idle
 
@@ -103,8 +103,19 @@ Focus: $ARGUMENTS
   (`/review the login bug` → "Focus: the login bug"); no args → empty
   string. A body without the token gets the arguments appended after a
   blank line.
+- **Frontmatter `description:`** — a pack whose FIRST line is exactly `---`
+  carries a metadata block, stripped from the body before storage and
+  expansion; the one supported key is `description:` (single line, the
+  value trimmed — colons inside it are kept), and `/help` lists the pack
+  as `/name — description` (bare `/name` without one). Unknown keys
+  (`allowed-tools` et al.) are accepted and ignored silently — forward
+  compat for a later phase. Lenient by design: no closing `---` means the
+  whole file is body-as-written, no metadata; a malformed block is never
+  a hard error.
 - **Built-ins win** — a pack named `goal.md` is shadowed by the `/goal`
-  built-in; packs only fill names the built-ins don't use.
+  built-in; packs only fill names the built-ins don't use. Tab completion
+  follows the same rule: `/`-Tab offers the built-in commands first, then
+  discovered pack names (sorted) that don't collide with one.
 - **Per-checkout, like hooks/permissions** — `.chug/commands/` lives in the
   gitignored `.chug/` (no search chain, no CLI flag); a worktree child has
   its own (or none). Missing dir = zero packs, zero cost; a corrupt file is
@@ -131,8 +142,11 @@ Focus: $ARGUMENTS
   body) — that difference is the expansion, not a transmission garble; the
   parent's `goal_tail` composition check remains its garble surface.
 
-Phase 2b (T118, still pending): frontmatter (description/allowed-tools) and
-Tab completion of pack names.
+Phase 2b (T118, landed): frontmatter descriptions (`/help` surfacing) and
+Tab completion of pack names — that closes F9 phase 2 (run-side goals in
+phase 2a, chat UX in phase 2b). Still open, later phase: semantics for the
+other frontmatter keys (`allowed-tools` et al. are accepted and ignored
+today).
 
 ## Autonomous mode (`chug run`)
 

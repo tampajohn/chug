@@ -5,7 +5,9 @@
 //! - [`token_at_cursor`] finds the whitespace-delimited word ending at the
 //!   cursor (byte-safe).
 //! - `/`-tokens complete against [`SLASH_COMMANDS`] (prefix, case-sensitive)
-//!   via [`slash_candidates`].
+//!   plus discovered pack names ([`slash_candidates_with_packs`] — built-ins
+//!   first, packs sorted after, built-ins win name collisions) via
+//!   [`slash_candidates`].
 //! - `@`-tokens complete against a lazily-built, 30s-cached [`FileIndex`] of
 //!   paths under the chat cwd (`git ls-files` inside a repo, a bounded tree
 //!   walk otherwise) via [`FileIndex::candidates`] — case-insensitive
@@ -69,19 +71,44 @@ pub fn token_at_cursor(line: &str, cursor_byte: usize) -> (usize, &str) {
 
 // --- slash commands ---
 
-/// Candidates for a `/`-token (the token includes the leading `/`).
-/// Case-sensitive prefix match on the command name; a bare `/` lists every
-/// command. Candidates include the leading `/` so they can replace the token
+/// Candidates for a `/`-token (the token includes the leading `/`):
+/// built-in commands ([`SLASH_COMMANDS`], `/help` order) followed by
+/// discovered pack names — see [`slash_candidates_with_packs`]. Case-
+/// sensitive prefix match on the name; a bare `/` lists everything.
+/// Candidates include the leading `/` so they can replace the token
 /// verbatim. Empty for tokens that do not start with `/`.
 pub fn slash_candidates(token: &str) -> Vec<String> {
+    slash_candidates_with_packs(token, &[])
+}
+
+/// [`slash_candidates`] over built-ins PLUS pack names: built-in matches
+/// first (the [`SLASH_COMMANDS`] order), then pack names whose stem
+/// matches the same prefix, sorted (discovery order can never leak into
+/// the candidate order). EXCLUDED: any pack whose name collides with a
+/// built-in — built-ins always win (the F9 shadow rule: a `goal.md` pack
+/// never appears as a second `/goal` candidate). Pure: the pack names
+/// arrive as a slice (`commands::names(&cwd)` at the TUI call site) so
+/// the merge rule is testable without a filesystem; an empty pack set is
+/// byte-identical to the built-ins-only [`slash_candidates`].
+pub fn slash_candidates_with_packs(token: &str, packs: &[String]) -> Vec<String> {
     let Some(prefix) = token.strip_prefix('/') else {
         return Vec::new();
     };
-    SLASH_COMMANDS
+    let mut out: Vec<String> = SLASH_COMMANDS
         .iter()
         .filter(|cmd| cmd.starts_with(prefix))
         .map(|cmd| format!("/{cmd}"))
-        .collect()
+        .collect();
+    let mut names: Vec<&str> = packs
+        .iter()
+        .map(String::as_str)
+        // The shadow rule first (a colliding name is never a candidate,
+        // whatever the prefix), then the same prefix match as built-ins.
+        .filter(|name| !SLASH_COMMANDS.contains(name) && name.starts_with(prefix))
+        .collect();
+    names.sort_unstable();
+    out.extend(names.into_iter().map(|name| format!("/{name}")));
+    out
 }
 
 // --- file index ---
@@ -405,6 +432,71 @@ mod tests {
         assert!(slash_candidates("/He").is_empty());
         assert!(slash_candidates("help").is_empty());
         assert!(slash_candidates("").is_empty());
+    }
+
+    // --- slash candidates + pack names (F9 phase 2b) ---
+
+    fn packs(names: &[&str]) -> Vec<String> {
+        names.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// Packs are appended after the built-ins (in the `/help` order),
+    /// sorted, with the same leading-slash shape.
+    #[test]
+    fn pack_candidates_append_sorted_after_builtins() {
+        // Discovery order must not leak: "zeta" arrives first, "alpha" last.
+        let got = slash_candidates_with_packs("/", &packs(&["zeta", "alpha"]));
+        let mut want: Vec<String> = SLASH_COMMANDS
+            .iter()
+            .map(|c| format!("/{c}"))
+            .collect();
+        want.push("/alpha".into());
+        want.push("/zeta".into());
+        assert_eq!(got, want);
+        // Prefix filtering still applies to pack names.
+        assert_eq!(
+            slash_candidates_with_packs("/re", &packs(&["review", "triage"])),
+            vec!["/review".to_string()]
+        );
+        // No pack matches: built-ins only.
+        assert_eq!(
+            slash_candidates_with_packs("/b", &packs(&["review"])),
+            vec!["/budget".to_string()]
+        );
+    }
+
+    /// The shadow rule: a pack whose name collides with a built-in is never
+    /// a second candidate — built-ins always win.
+    #[test]
+    fn pack_shadow_collision_is_deduped_against_builtins() {
+        let got = slash_candidates_with_packs("/", &packs(&["goal", "review"]));
+        let goal_hits = got.iter().filter(|c| *c == "/goal").count();
+        assert_eq!(goal_hits, 1, "exactly one /goal: {got:?}");
+        assert_eq!(got.last(), Some(&"/review".to_string()));
+        // Even at an exact-match prefix the pack stays hidden.
+        assert_eq!(
+            slash_candidates_with_packs("/goal", &packs(&["goal"])),
+            vec!["/goal".to_string()]
+        );
+    }
+
+    /// An empty pack set is byte-identical to the built-ins-only behavior.
+    #[test]
+    fn empty_pack_set_is_byte_identical_to_builtins_only() {
+        for token in ["/", "/he", "/b", "/xyzzy", "/He", "help", ""] {
+            assert_eq!(
+                slash_candidates_with_packs(token, &[]),
+                slash_candidates(token),
+                "token {token:?}"
+            );
+        }
+    }
+
+    /// Non-slash tokens stay empty (the `@`/plain-token legs are untouched).
+    #[test]
+    fn pack_candidates_require_a_slash_token() {
+        assert!(slash_candidates_with_packs("review", &packs(&["review"])).is_empty());
+        assert!(slash_candidates_with_packs("", &packs(&["review"])).is_empty());
     }
 
     // --- longest_common_prefix ---
