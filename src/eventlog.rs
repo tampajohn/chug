@@ -293,6 +293,20 @@ impl EventSink for EventLogSink<'_> {
                 }
                 Some(line)
             }
+            // F7 phase 1 telemetry: a streaming request was answered with a
+            // plain JSON body (proxy downgrade) and parsed byte-identically to
+            // a non-streaming response. Latched first-per-session upstream
+            // (one line max, no per-response spam) — the tools-proxy
+            // compatibility probe.
+            Event::StreamFallback => Some(json!({
+                "type": "stream_fallback",
+                "ts": now_rfc3339(),
+            })),
+            // F7 phase 1: live model-text deltas are console cosmetics only —
+            // never transcript state, never event-log state (ModelText
+            // precedent: model text stays out of the log, keeping events.jsonl
+            // small). Pinned by silence tests on both sides.
+            Event::ModelTextDelta(_) => None,
             // Everything else (model text, tool starts, ledger snapshots,
             // steering, risk verdicts, chat turn boundaries) stays out of
             // the log per the T10 spec.
@@ -646,6 +660,23 @@ mod tests {
         let out = lines[0]["preview"].as_str().unwrap();
         assert_eq!(out, expected, "cut on char boundaries, within the budget");
         assert_eq!(out.chars().count(), 2000);
+    }
+
+    /// F7 phase 1: the streamed-response telemetry is exactly ONE line
+    /// (latched upstream), and live deltas NEVER enter the log (ModelText
+    /// precedent — events.jsonl stays small).
+    #[test]
+    fn stream_fallback_latches_one_line_and_deltas_stay_silent() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut inner = NullSink;
+        let mut sink = EventLogSink::new(tmp.path(), &mut inner);
+        sink.emit(Event::StreamFallback);
+        sink.emit(Event::StreamFallback);
+        sink.emit(Event::ModelTextDelta("typed".into()));
+        let lines = read_lines(tmp.path());
+        assert_eq!(lines.len(), 2, "two StreamFallback lines: the arm is not the latch");
+        assert_eq!(lines[0]["type"], "stream_fallback");
+        assert_eq!(lines[1]["type"], "stream_fallback");
     }
 
     #[test]

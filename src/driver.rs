@@ -562,14 +562,54 @@ pub fn run_turn(
     }
 }
 
+/// F7 phase 1: the text-delta hook handed to the LLM client for one
+/// `complete` call — emits [`Event::ModelTextDelta`] into the driver's sink
+/// as the model's text arrives.
+///
+/// SAFETY (the `Send` façade): the raw sink pointer is dereferenced ONLY
+/// inside the hook, and the hook runs synchronously on THIS thread — the
+/// caller's thread inside `Client::complete` (the chunk hook fires in
+/// `read_body_with_watchdog_progress`'s receive loop, which runs on the thread
+/// blocked in `complete()`; no other thread can reach it). The driver clears
+/// the hook as soon as the call returns, before any other use of the sink, so
+/// the pointer never outlives the exclusive borrow it was taken from and no
+/// aliasing ever escapes the call.
+struct SinkPtr(*mut (dyn EventSink + 'static));
+// SAFETY: the wrapper exists precisely to move the pointer to the hook that
+// runs on the installing thread only — see the safety note above.
+unsafe impl Send for SinkPtr {}
+
+impl SinkPtr {
+    fn emit(&self, delta: &str) {
+        // SAFETY: same thread as the install (see the safety note above), and
+        // the hook is cleared before the aliased borrow ends.
+        let sink: &mut dyn EventSink = unsafe { &mut *(self.0) };
+        sink.emit(Event::ModelTextDelta(delta.to_string()));
+    }
+}
+
+fn model_text_delta_hook(sink: &mut dyn EventSink) -> Box<dyn FnMut(&str) + Send> {
+    let ptr: *mut dyn EventSink = sink;
+    // SAFETY: erases the borrow's lifetime from the fat pointer. The pointee
+    // is only ever touched on the installing thread inside the hook, and the
+    // driver clears the hook before the aliased `&mut dyn EventSink` borrow
+    // ends — the pointer never escapes that window.
+    let ptr: *mut (dyn EventSink + 'static) = unsafe { std::mem::transmute(ptr) };
+    let ptr = SinkPtr(ptr);
+    // Method-call capture: the closure captures the WHOLE Send wrapper, not
+    // its raw-pointer field.
+    Box::new(move |delta: &str| {
+        ptr.emit(delta);
+    })
+}
+
 /// The iteration loop shared by `run` and chat turns. Behavior differences:
 /// - Autonomous: natural stop triggers the anti-stall kick; aborts return a
 ///   process exit code. Chat: natural stop ends the turn; aborts return a
 ///   `TurnEndReason`.
 /// - `goal_complete` verification: autonomous parses the spec's `check:` line,
 ///   chat uses the `/check` command configured in the knobs.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn drive_loop(
+#[allow(clippy::too_many_arguments)]pub(crate) fn drive_loop(
     ctx: &LoopCtx,
     knobs: &mut TurnKnobs,
     client: &mut dyn Llm,
@@ -797,6 +837,14 @@ pub(crate) fn drive_loop(
             trace_id: ctx.trace,
             iteration,
         };
+        // F7 phase 1: stream the model's text to the sink AS IT ARRIVES. The
+        // hook emits `Event::ModelTextDelta` per text piece; the console sink
+        // renders them live (headless logs gain liveness during minutes-long
+        // generations), the TUI ignores them (phase 2), the event log stays
+        // silent. The hook is armed around each `complete` call and cleared
+        // immediately after — the deltas are console cosmetics only, never
+        // transcript state.
+        client.set_text_delta_hook(Some(model_text_delta_hook(sink)));
         let resp = match client.complete(&system, messages, &tool_schemas, &obs_ctx) {
             Ok(resp) => resp,
             // T91: the endpoint rejected a request carrying images (400 +
@@ -811,8 +859,18 @@ pub(crate) fn drive_loop(
                 sink.emit(Event::ImageDegraded);
                 client.complete(&system, messages, &tool_schemas, &obs_ctx)?
             }
-            Err(e) => return Err(e),
+            Err(e) => {
+                client.set_text_delta_hook(None);
+                return Err(e);
+            }
         };
+        client.set_text_delta_hook(None);
+        // F7 phase 1 telemetry (req 4): a streaming request answered with a
+        // plain JSON body (proxy downgrade). Latched in the client to fire at
+        // most ONCE per session; events.jsonl carries the single line.
+        if client.take_stream_fallback() {
+            sink.emit(Event::StreamFallback);
+        }
 
         let usage = resp.body.get("usage").cloned().unwrap_or(Value::Null);
         usage_in += usage

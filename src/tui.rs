@@ -222,6 +222,13 @@ impl App {
     pub fn apply(&mut self, e: Event) {
         match e {
             Event::Iteration { n, max, .. } => self.iter = (n, max),
+            Event::ModelTextDelta(_) => {
+                // F7 phase 1: deliberately NO-OP — TUI live typing is phase 2
+                // (rides the tui.rs redraw architecture; deferred with a
+                // written reason in EVALUATION.md cycle-59 §4). The completing
+                // `Event::ModelText` still lands in the activity panel exactly
+                // as today, so nothing is lost — only the live typing waits.
+            }
             Event::ModelText(text) => {
                 for (i, line) in text.lines().enumerate() {
                     let text = if i == 0 {
@@ -363,6 +370,9 @@ impl App {
             // T83: hook vetoes/notes reach the model inside the tool result;
             // the fire/error lines are telemetry for events.jsonl.
             Event::HookFired { .. } | Event::HookError { .. } => {}
+            // F7 phase 1 telemetry: the events.jsonl log carries the single
+            // latched note; the TUI activity panel stays untouched.
+            Event::StreamFallback => {}
             // T91: the degrade placeholder already reached the model inside
             // the retried request; the events line is telemetry.
             Event::ImageDegraded => {}
@@ -1148,6 +1158,16 @@ mod tests {
     fn app() -> App {
         let (tx, _rx) = mpsc::channel::<String>();
         App::new("build the thing".into(), "test-model".into(), tx)
+    }
+
+    /// F7 phase 1 pin: the delta arm is a deliberate NO-OP (phase 2 rides the
+    /// redraw architecture) — applying a delta leaves ALL state unchanged.
+    #[test]
+    fn model_text_delta_is_a_no_op() {
+        let mut a = app();
+        let before = (a.iter, a.activity.len(), a.input_tokens);
+        a.apply(Event::ModelTextDelta("typed live".into()));
+        assert_eq!((a.iter, a.activity.len(), a.input_tokens), before);
     }
 
     #[test]

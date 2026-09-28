@@ -126,6 +126,22 @@ pub enum Event {
     TurnEnd {
         reason: TurnEndReason,
     },
+    /// F7 phase 1: one incremental piece of model text, emitted by the driver's
+    /// text-delta hook while the streamed response is still arriving. Console
+    /// cosmetics ONLY — the sink renders deltas live (headless `chug run` /
+    /// `delegate` logs gain liveness during minutes-long generations); the
+    /// events.jsonl log stays silent (ModelText precedent: model text never
+    /// enters the event log), and the transcript only ever sees the final
+    /// accumulated Response. Emitted between `ToolStart` boundaries; the
+    /// completing `Event::ModelText` still carries the full text (a streamed
+    /// response suppresses the console preview so text never double-prints).
+    ModelTextDelta(String),
+    /// F7 phase 1 telemetry: a streaming request was answered with a plain
+    /// JSON body (content-type not `text/event-stream` — typically a proxy
+    /// downgrade), so the driver parsed it exactly as a non-streaming
+    /// response. First occurrence per session latched (bounded telemetry for
+    /// the tools-proxy compatibility question; no per-response spam).
+    StreamFallback,
 }
 
 /// Which budget killed the loop (T12). `Some` on [`Event::Aborted`] only for
@@ -193,6 +209,10 @@ pub struct ConsoleSink {
     /// every response with run-to-date totals, so the last one wins. `None`
     /// until the first response (an early abort then prints no tokens line).
     last_usage: Option<(u64, u64)>,
+    /// F7 phase 1: live model-text streaming is mid-line — at least one
+    /// `ModelTextDelta` was printed (after the one-time `[chug] model: `
+    /// prefix) and no response boundary has closed the line yet.
+    stream_open: bool,
 }
 
 impl ConsoleSink {
@@ -203,6 +223,7 @@ impl ConsoleSink {
             cwd,
             last_ledger: String::new(),
             last_usage: None,
+            stream_open: false,
         }
     }
 
@@ -214,6 +235,7 @@ impl ConsoleSink {
             cwd,
             last_ledger: String::new(),
             last_usage: None,
+            stream_open: false,
         }
     }
 
@@ -231,7 +253,27 @@ impl EventSink for ConsoleSink {
             Event::Iteration { n, max, messages } => {
                 let _ = writeln!(self.err, "[chug] iteration {n} / {max} ({messages} messages)");
             }
+            Event::ModelTextDelta(delta) => {
+                // F7 phase 1: raw incremental writes — the model's text as it
+                // arrives, under a one-time prefix. No preview/truncation:
+                // these are the live bytes of the generation.
+                if !self.stream_open {
+                    let _ = write!(self.err, "[chug] model: ");
+                    self.stream_open = true;
+                }
+                let _ = write!(self.err, "{delta}");
+            }
             Event::ModelText(text) => {
+                if self.stream_open {
+                    // F7 phase 1: a streamed response already printed its text
+                    // live as deltas. Terminate the line and SUPPRESS the
+                    // preview so the text never double-prints.
+                    self.stream_open = false;
+                    if !text.is_empty() {
+                        let _ = writeln!(self.err);
+                    }
+                    return;
+                }
                 if !text.is_empty() {
                     let _ = writeln!(self.err, "[chug] model: {}", preview(&text, 200));
                 }
@@ -256,11 +298,22 @@ impl EventSink for ConsoleSink {
                 let _ = writeln!(self.out, "\n--- LEDGER.md ---");
                 let _ = writeln!(self.out, "{}", self.last_ledger);
             }
+            // F7 phase 1: telemetry only — the response was parsed exactly as
+            // a non-streaming one; events.jsonl carries the single latched
+            // note, the console stays silent.
+            Event::StreamFallback => {}
             Event::Aborted {
                 reason,
                 model,
                 budget,
             } => {
+                // F7 phase 1: if a streamed response was still open (the loop
+                // died mid-generation), terminate the line so abort output
+                // never runs into partial model text.
+                if self.stream_open {
+                    let _ = writeln!(self.err);
+                    self.stream_open = false;
+                }
                 let _ = writeln!(self.err, "chug: abort: {reason}");
                 let _ = writeln!(self.out, "--- LEDGER.md ---");
                 let _ = writeln!(self.out, "{}", self.last_ledger);
@@ -370,6 +423,66 @@ mod tests {
 
     fn out_bytes(shared: &Shared) -> String {
         String::from_utf8(shared.lock().unwrap().clone()).unwrap()
+    }
+
+    // ---- F7 phase 1: console streaming ----
+
+    #[test]
+    fn streamed_response_prints_deltas_live_and_suppresses_preview() {
+        let (mut sink, _out, err) = sink("/work/dir");
+        sink.emit(Event::ModelTextDelta("run".into()));
+        sink.emit(Event::ModelTextDelta("ning now".into()));
+        sink.emit(Event::ModelText("running now and much more than two hundred characters would be here to prove the preview truncation does not apply to the streamed leg which already printed everything".into()));
+        // The live deltas are the text ("run" + "ning now"); the completing
+        // ModelText (long enough to truncate a preview) only terminates the
+        // line — its preview is suppressed.
+        assert_eq!(
+            out_bytes(&err),
+            "[chug] model: running now\n",
+            "one-time prefix + raw deltas + terminating newline; NO truncated preview"
+        );
+    }
+
+    #[test]
+    fn non_streamed_response_keeps_the_preview_line_byte_identically() {
+        let (mut sink, _out, err) = sink("/work/dir");
+        sink.emit(Event::ModelText("short answer".into()));
+        assert_eq!(out_bytes(&err), "[chug] model: short answer\n");
+    }
+
+    #[test]
+    fn empty_model_text_stays_silent_in_both_legs() {
+        let (mut sink, _out, err) = sink("/work/dir");
+        sink.emit(Event::ModelText("".into()));
+        assert_eq!(out_bytes(&err), "");
+        // A streamed response whose text is empty still terminates the line.
+        sink.emit(Event::ModelTextDelta("x".into()));
+        sink.emit(Event::ModelText("".into()));
+        assert_eq!(out_bytes(&err), "[chug] model: x");
+    }
+
+    #[test]
+    fn abort_terminates_an_open_stream_line() {
+        let (mut sink, _out, err) = sink("/work/dir");
+        sink.emit(Event::ModelTextDelta("partial".into()));
+        sink.emit(Event::Aborted {
+            reason: "budget".into(),
+            model: "m".into(),
+            budget: None,
+        });
+        assert_eq!(
+            out_bytes(&err),
+            "[chug] model: partial\nchug: abort: budget\n",
+            "the abort output never runs into partial model text"
+        );
+    }
+
+    #[test]
+    fn stream_fallback_is_console_silent() {
+        let (mut sink, out, err) = sink("/work/dir");
+        sink.emit(Event::StreamFallback);
+        assert_eq!(out_bytes(&out), "");
+        assert_eq!(out_bytes(&err), "");
     }
 
     #[test]

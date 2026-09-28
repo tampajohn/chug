@@ -100,6 +100,15 @@ returns to idle, repeat. Natural stops end the turn; budgets are per turn.
   unchanged (the banner never fails the run)
 - **Anti-stall kick** — if the model stops without `goal_complete`, the driver
   injects "consult the ledger, continue" and keeps going
+- **Live model text (streaming)** — requests default to `"stream": true`: the
+  model's text appears on stderr as it arrives under a one-time
+  `[chug] model: ` prefix (`chug run` / `delegate` logs gain liveness during
+  minutes-long generations; the completing preview line is suppressed so text
+  never double-prints). `CHUG_STREAM=0` restores the byte-identical
+  non-streaming request and parse path. If an endpoint or proxy answers a
+  streamed request with a plain JSON body, behavior is unchanged and ONE
+  `stream_fallback` line is recorded in `.chug/events.jsonl` (first
+  occurrence only)
 - **LEDGER.md** — external memory the model updates each iteration; injected
   into every turn, so transcript trimming never loses progress. A fresh
   `chug run` never inherits a previous session's ledger: a non-seed

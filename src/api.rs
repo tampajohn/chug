@@ -297,6 +297,23 @@ pub(crate) trait Transport: Send + Sync {
         headers: &[(String, String)],
         body: &str,
     ) -> Result<RawResponse, TransportError>;
+
+    /// F7 phase 1: like [`Transport::send`], but invokes `on_chunk` with each
+    /// raw body chunk as it arrives so the caller can parse incrementally.
+    /// Default: ignore the hook and delegate to `send` — existing fakes (and
+    /// every non-streaming leg) compile unchanged and behave byte-identically.
+    /// The hook fires on the CALLER's thread inside this call (the body reader
+    /// hands progress to a channel drained right here), so no cross-thread
+    /// synchronization is needed to touch caller state.
+    fn send_with_progress(
+        &self,
+        url: &str,
+        headers: &[(String, String)],
+        body: &str,
+        _on_chunk: &mut dyn FnMut(&[u8]),
+    ) -> Result<RawResponse, TransportError> {
+        self.send(url, headers, body)
+    }
 }
 
 /// Production transport: reqwest blocking, with a read-side activity watchdog.
@@ -327,6 +344,38 @@ impl Transport for ReqwestTransport {
             .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string()))
             .collect();
         let body = read_body_with_watchdog(resp, self.activity_timeout)?;
+        Ok(RawResponse {
+            status,
+            headers: resp_headers,
+            body,
+        })
+    }
+
+    /// F7 phase 1: the streaming leg — same request, same watchdog margins,
+    /// but each body chunk is handed to `on_chunk` as it arrives so the SSE
+    /// accumulator can emit text deltas while the generation is still running.
+    fn send_with_progress(
+        &self,
+        url: &str,
+        headers: &[(String, String)],
+        body: &str,
+        on_chunk: &mut dyn FnMut(&[u8]),
+    ) -> Result<RawResponse, TransportError> {
+        let mut req = self.http.post(url);
+        for (name, value) in headers {
+            req = req.header(name, value);
+        }
+        let resp = req
+            .body(body.to_string())
+            .send()
+            .map_err(classify_reqwest)?;
+        let status = resp.status().as_u16();
+        let resp_headers: Vec<(String, String)> = resp
+            .headers()
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string()))
+            .collect();
+        let body = read_body_with_watchdog_progress(resp, self.activity_timeout, Some(on_chunk))?;
         Ok(RawResponse {
             status,
             headers: resp_headers,
@@ -395,11 +444,25 @@ fn is_connection_io_error(kind: std::io::ErrorKind) -> bool {
 /// blocked until the client's total read timeout errs it out — a bounded
 /// leak, never a hung caller.
 fn read_body_with_watchdog<R: Read + Send + 'static>(
-    mut reader: R,
+    reader: R,
     activity_timeout: Duration,
 ) -> Result<String, TransportError> {
+    read_body_with_watchdog_progress(reader, activity_timeout, None)
+}
+
+/// F7 phase 1 variant of [`read_body_with_watchdog`]: `on_chunk`, when
+/// present, is invoked with every raw body chunk ON THE CALLER'S THREAD (the
+/// `recv_timeout` loop below runs on the thread blocked in this function — no
+/// cross-thread synchronization needed). The activity-timeout/retry
+/// classification is unchanged: a stalled stream aborts at the SAME activity
+/// timeout (T74's margins untouched — the pins call the 2-arg wrapper).
+fn read_body_with_watchdog_progress<R: Read + Send + 'static>(
+    mut reader: R,
+    activity_timeout: Duration,
+    mut on_chunk: Option<ChunkHook<'_>>,
+) -> Result<String, TransportError> {
     enum BodyMsg {
-        Progress,
+        Progress(Vec<u8>),
         Done(Result<String, TransportError>),
     }
     let (tx, rx) = std::sync::mpsc::channel::<BodyMsg>();
@@ -410,8 +473,9 @@ fn read_body_with_watchdog<R: Read + Send + 'static>(
             match reader.read(&mut chunk) {
                 Ok(0) => break,
                 Ok(n) => {
-                    buf.extend_from_slice(&chunk[..n]);
-                    if tx.send(BodyMsg::Progress).is_err() {
+                    let bytes = chunk[..n].to_vec();
+                    buf.extend_from_slice(&bytes);
+                    if tx.send(BodyMsg::Progress(bytes)).is_err() {
                         // Consumer gone (activity timeout): stop reading.
                         return;
                     }
@@ -429,7 +493,11 @@ fn read_body_with_watchdog<R: Read + Send + 'static>(
 
     loop {
         match rx.recv_timeout(activity_timeout) {
-            Ok(BodyMsg::Progress) => continue,
+            Ok(BodyMsg::Progress(bytes)) => {
+                if let Some(hook) = on_chunk.as_deref_mut() {
+                    hook(&bytes);
+                }
+            }
             Ok(BodyMsg::Done(result)) => return result,
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
                 return Err(TransportError::Connection(format!(
@@ -446,7 +514,6 @@ fn read_body_with_watchdog<R: Read + Send + 'static>(
     }
 }
 
-#[derive(Clone)]
 pub struct Client {
     transport: Arc<dyn Transport>,
     retry_delays: Vec<Duration>,
@@ -454,6 +521,425 @@ pub struct Client {
     api_key: Option<String>,
     auth_token: Option<String>,
     model: String,
+    /// F7 phase 1: the live model-text delta hook (see
+    /// [`Llm::set_text_delta_hook`]). `RefCell` because `complete` takes
+    /// `&self` and the hook fires during the body read.
+    text_delta_hook: std::cell::RefCell<Option<TextDeltaHook>>,
+    /// F7 phase 1 fallback latch: set on the FIRST proxy downgrade this
+    /// session (req 4: one latched telemetry line, no per-response spam);
+    /// consumed by the driver via [`Llm::take_stream_fallback`].
+    fallback_latched: std::cell::Cell<bool>,
+}
+
+impl Clone for Client {
+    fn clone(&self) -> Self {
+        Client {
+            transport: self.transport.clone(),
+            retry_delays: self.retry_delays.clone(),
+            base_url: self.base_url.clone(),
+            api_key: self.api_key.clone(),
+            auth_token: self.auth_token.clone(),
+            model: self.model.clone(),
+            // The hook is per-call transient state (the driver arms it around
+            // each `complete`); clones start clean.
+            text_delta_hook: std::cell::RefCell::new(None),
+            fallback_latched: std::cell::Cell::new(false),
+        }
+    }
+}
+
+/// F7 phase 1: the driver-installed live model-text hook (see
+/// [`Llm::set_text_delta_hook`]).
+pub(crate) type TextDeltaHook = Box<dyn FnMut(&str) + Send>;
+/// F7 phase 1: the transport's per-chunk callback (fires on the caller's
+/// thread inside the body-read receive loop).
+type ChunkHook<'a> = &'a mut dyn FnMut(&[u8]);
+
+/// Why a streamed attempt failed to accumulate.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum StreamError {
+    /// The server sent an SSE `error` event: T1-RETRYABLE, classified exactly
+    /// like a connection failure (req 6).
+    Retryable(TransportError),
+    /// A malformed payload (unparseable `data:` JSON, unparseable tool_use
+    /// input). Parity (named): today's unparseable-2xx-body leg `bail!`s
+    /// WITHOUT retrying — so does this.
+    Malformed(String),
+}
+
+/// F7 phase 1: incremental accumulator for the Anthropic Messages SSE stream.
+/// Fed raw body chunks (via the transport's chunk hook when the transport
+/// supports it; once over the full body otherwise — both legs tested to
+/// identical results), it drives [`crate::sse::SseParser`] and at
+/// `message_stop`/end-of-body synthesizes the NON-STREAMING response body
+/// shape, so the existing `Response` parse path produces a Response whose
+/// `content_blocks()` / `stop_reason()` / `usage()` equal the non-streaming
+/// values for the same exchange (usage equality pinned explicitly, incl.
+/// cache fields — T15 budget enforcement is untouched).
+struct StreamAccumulator<'a> {
+    parser: crate::sse::SseParser,
+    /// Byte carry for UTF-8 boundary safety: a chunk may split a multi-byte
+    /// character, so undecodable tails stay here until more bytes arrive.
+    carry: Vec<u8>,
+    /// `message_start` skeleton fields, surfaced into the synthesized body.
+    message_id: Option<String>,
+    model: Option<String>,
+    /// Synthesized content blocks, in `content_block_start` order.
+    blocks: Vec<Value>,
+    /// The open block (between `content_block_start` and `content_block_stop`).
+    open: Option<OpenBlock>,
+    /// `message_delta`'s stop_reason, passed through.
+    stop_reason: Option<String>,
+    /// `message_start`'s usage object, with `message_delta`'s output_tokens
+    /// merged over it (the non-streaming shape: input + final output).
+    usage: Value,
+    /// First latched error, if any. Later feeds are ignored once latched.
+    error: Option<StreamError>,
+    /// The [`Llm::set_text_delta_hook`] hook — invoked per `text_delta` as it
+    /// arrives (console cosmetics only; never transcript state).
+    delta_hook: Option<&'a mut dyn FnMut(&str)>,
+}
+
+/// The block currently being accumulated between start/stop events.
+enum OpenBlock {
+    Text { index: u64, text: String },
+    ToolUse {
+        index: u64,
+        id: String,
+        name: String,
+        /// Concatenated `input_json_delta` partials, parsed at block stop.
+        input_json: String,
+    },
+    /// Kept for content parity with the non-streaming body (thinking-enabled
+    /// models re-serialize thinking blocks verbatim into the transcript).
+    Thinking {
+        index: u64,
+        thinking: String,
+        signature: String,
+    },
+}
+
+impl<'a> StreamAccumulator<'a> {
+    fn new(delta_hook: Option<&'a mut dyn FnMut(&str)>) -> Self {
+        StreamAccumulator {
+            parser: crate::sse::SseParser::new(),
+            carry: Vec::new(),
+            message_id: None,
+            model: None,
+            blocks: Vec::new(),
+            open: None,
+            stop_reason: None,
+            usage: Value::Null,
+            error: None,
+            delta_hook,
+        }
+    }
+
+    /// Feed raw body bytes. UTF-8-boundary safe: complete characters are
+    /// parsed immediately, a split tail is carried for the next chunk.
+    fn feed_bytes(&mut self, bytes: &[u8]) {
+        if self.error.is_some() {
+            return; // latched: a stream that errored stays dead
+        }
+        self.carry.extend_from_slice(bytes);
+        // Decode the longest valid UTF-8 prefix. The prefix is COPIED out so
+        // the parser call can take &mut self (the borrow of `carry` must not
+        // span it).
+        let valid = match std::str::from_utf8(&self.carry) {
+            Ok(_) => self.carry.len(),
+            Err(e) => e.valid_up_to(),
+        };
+        if valid > 0 {
+            let text = std::str::from_utf8(&self.carry[..valid])
+                .expect("validated prefix")
+                .to_string();
+            self.feed_text(&text);
+        }
+        self.carry.drain(..valid);
+        // A genuinely invalid byte (never a split character): drop it. SSE
+        // framing is ASCII; the non-streaming reader's lossy conversion has
+        // no meaningful parity here.
+        if let Some(len) = std::str::from_utf8(&self.carry)
+            .err()
+            .and_then(|e| e.error_len())
+        {
+            self.carry.drain(..len);
+        }
+    }
+
+    /// Feed decoded text through the SSE parser and apply every event.
+    fn feed_text(&mut self, text: &str) {
+        if self.error.is_some() {
+            return;
+        }
+        for event in self.parser.feed(text) {
+            if let Err(e) = self.apply_event(&event) {
+                self.error = Some(e);
+                return;
+            }
+        }
+    }
+
+    /// Append one `text_delta` to the open text block, invoking the delta
+    /// hook (console cosmetics only) with the raw piece as it arrived.
+    fn append_text(&mut self, index: u64, text: &str) -> Result<(), StreamError> {
+        let matches =
+            matches!(&self.open, Some(OpenBlock::Text { index: i, .. }) if *i == index);
+        if !matches {
+            return Ok(()); // defensive: a delta with no matching open block
+        }
+        if let Some(OpenBlock::Text { text: buf, .. }) = &mut self.open {
+            buf.push_str(text);
+        }
+        if let Some(hook) = self.delta_hook.as_deref_mut() {
+            hook(text);
+        }
+        Ok(())
+    }
+
+    /// Concatenate one `input_json_delta` partial onto the open tool_use
+    /// block; the full input is parsed once at `content_block_stop`.
+    fn append_tool_json(&mut self, index: u64, partial: &str) -> Result<(), StreamError> {
+        match &mut self.open {
+            Some(OpenBlock::ToolUse {
+                index: open_idx,
+                input_json,
+                ..
+            }) if *open_idx == index => {
+                input_json.push_str(partial);
+                Ok(())
+            }
+            // A delta with no matching open block: ignored (defensive).
+            _ => Ok(()),
+        }
+    }
+
+    fn append_thinking(&mut self, index: u64, piece: &str) -> Result<(), StreamError> {
+        match &mut self.open {
+            Some(OpenBlock::Thinking {
+                index: open_idx,
+                thinking,
+                ..
+            }) if *open_idx == index => {
+                thinking.push_str(piece);
+                Ok(())
+            }
+            _ => Ok(()),
+        }
+    }
+
+    fn append_signature(&mut self, index: u64, piece: &str) -> Result<(), StreamError> {
+        match &mut self.open {
+            Some(OpenBlock::Thinking {
+                index: open_idx,
+                signature,
+                ..
+            }) if *open_idx == index => {
+                signature.push_str(piece);
+                Ok(())
+            }
+            _ => Ok(()),
+        }
+    }
+
+    /// Finalize the open block (if any) into `blocks`.
+    fn close_open_block(&mut self) -> Result<(), StreamError> {
+        match self.open.take() {
+            None => Ok(()),
+            Some(OpenBlock::Text { text, .. }) => {
+                self.blocks.push(json!({"type": "text", "text": text}));
+                Ok(())
+            }
+            Some(OpenBlock::ToolUse {
+                id,
+                name,
+                input_json,
+                ..
+            }) => {
+                // Zero-arg tools arrive as an empty partial stream; the
+                // non-streaming body carries `input: {}` for the same call.
+                let input: Value = if input_json.is_empty() {
+                    json!({})
+                } else {
+                    serde_json::from_str(&input_json).map_err(|e| {
+                        StreamError::Malformed(format!(
+                            "malformed tool_use input JSON: {e}; partial: {}",
+                            preview(&input_json, 200)
+                        ))
+                    })?
+                };
+                self.blocks
+                    .push(json!({"type": "tool_use", "id": id, "name": name, "input": input}));
+                Ok(())
+            }
+            Some(OpenBlock::Thinking {
+                thinking,
+                signature,
+                ..
+            }) => {
+                let mut block = json!({"type": "thinking", "thinking": thinking});
+                if !signature.is_empty() {
+                    block["signature"] = json!(signature);
+                }
+                self.blocks.push(block);
+                Ok(())
+            }
+        }
+    }
+
+    /// Synthesize the NON-STREAMING response body shape from the accumulated
+    /// SSE events. Consumes the accumulator: a failed attempt discards it and
+    /// no half-accumulated Response ever escapes (req 6 — deltas already
+    /// printed are console cosmetics only, never transcript state).
+    fn finish(mut self) -> Result<Value, StreamError> {
+        if let Some(e) = self.error.take() {
+            return Err(e);
+        }
+        self.close_open_block()?;
+        let mut body = serde_json::Map::new();
+        if let Some(id) = &self.message_id {
+            body.insert("id".to_string(), json!(id));
+        }
+        body.insert("type".to_string(), json!("message"));
+        body.insert("role".to_string(), json!("assistant"));
+        if let Some(model) = &self.model {
+            body.insert("model".to_string(), json!(model));
+        }
+        body.insert("content".to_string(), Value::Array(self.blocks.clone()));
+        body.insert(
+            "stop_reason".to_string(),
+            self.stop_reason
+                .clone()
+                .map(Value::String)
+                .unwrap_or(Value::Null),
+        );
+        body.insert("stop_sequence".to_string(), Value::Null);
+        body.insert("usage".to_string(), self.usage.clone());
+        Ok(Value::Object(body))
+    }
+
+    /// Apply one parsed SSE event to the accumulator state.
+    fn apply_event(&mut self, event: &crate::sse::SseEvent) -> Result<(), StreamError> {
+        let data: Value = serde_json::from_str(&event.data).map_err(|e| {
+            StreamError::Malformed(format!(
+                "malformed SSE data payload: {e}; data: {}",
+                preview(&event.data, 200)
+            ))
+        })?;
+        match data.get("type").and_then(Value::as_str).unwrap_or("") {
+            "message_start" => {
+                let message = data.get("message").cloned().unwrap_or(Value::Null);
+                self.message_id = message.get("id").and_then(Value::as_str).map(str::to_string);
+                self.model = message
+                    .get("model")
+                    .and_then(Value::as_str)
+                    .map(str::to_string);
+                if let Some(usage) = message.get("usage") {
+                    self.usage = usage.clone();
+                }
+                Ok(())
+            }
+            "content_block_start" => {
+                let index = data.get("index").and_then(Value::as_u64).unwrap_or(0);
+                let block = data.get("content_block").cloned().unwrap_or(Value::Null);
+                match block.get("type").and_then(Value::as_str).unwrap_or("") {
+                    "text" => {
+                        self.open = Some(OpenBlock::Text {
+                            index,
+                            text: String::new(),
+                        })
+                    }
+                    "tool_use" => {
+                        self.open = Some(OpenBlock::ToolUse {
+                            index,
+                            id: block
+                                .get("id")
+                                .and_then(Value::as_str)
+                                .unwrap_or_default()
+                                .to_string(),
+                            name: block
+                                .get("name")
+                                .and_then(Value::as_str)
+                                .unwrap_or_default()
+                                .to_string(),
+                            input_json: String::new(),
+                        });
+                    }
+                    "thinking" => {
+                        self.open = Some(OpenBlock::Thinking {
+                            index,
+                            thinking: String::new(),
+                            signature: String::new(),
+                        });
+                    }
+                    // Unknown block types cannot be reconstructed from their
+                    // deltas; the parity pins cover text/tool_use/usage/
+                    // stop_reason only.
+                    _ => self.open = None,
+                }
+                Ok(())
+            }
+            "content_block_delta" => {
+                let index = data.get("index").and_then(Value::as_u64).unwrap_or(0);
+                let delta = data.get("delta").cloned().unwrap_or(Value::Null);
+                match delta.get("type").and_then(Value::as_str).unwrap_or("") {
+                    "text_delta" => {
+                        let text = delta.get("text").and_then(Value::as_str).unwrap_or("");
+                        self.append_text(index, text)
+                    }
+                    "input_json_delta" => {
+                        let partial = delta
+                            .get("partial_json")
+                            .and_then(Value::as_str)
+                            .unwrap_or("");
+                        self.append_tool_json(index, partial)
+                    }
+                    "thinking_delta" => {
+                        let t = delta.get("thinking").and_then(Value::as_str).unwrap_or("");
+                        self.append_thinking(index, t)
+                    }
+                    "signature_delta" => {
+                        let s = delta.get("signature").and_then(Value::as_str).unwrap_or("");
+                        self.append_signature(index, s)
+                    }
+                    _ => Ok(()),
+                }
+            }
+            "content_block_stop" => self.close_open_block(),
+            "message_delta" => {
+                let delta = data.get("delta").cloned().unwrap_or(Value::Null);
+                if let Some(reason) = delta.get("stop_reason").and_then(Value::as_str) {
+                    self.stop_reason = Some(reason.to_string());
+                }
+                if let Some(output) = data
+                    .get("usage")
+                    .and_then(|u| u.get("output_tokens"))
+                    .and_then(Value::as_u64)
+                {
+                    if self.usage.is_null() {
+                        self.usage = json!({"output_tokens": output});
+                    } else {
+                        self.usage["output_tokens"] = json!(output);
+                    }
+                }
+                Ok(())
+            }
+            "message_stop" => Ok(()),
+            "ping" => Ok(()),
+            "error" => {
+                let err = data.get("error").cloned().unwrap_or(Value::Null);
+                let kind = err.get("type").and_then(Value::as_str).unwrap_or("unknown");
+                let message = err
+                    .get("message")
+                    .and_then(Value::as_str)
+                    .unwrap_or("(no message)");
+                Err(StreamError::Retryable(TransportError::Connection(
+                    format!("stream error event: {kind}: {message}"),
+                )))
+            }
+            _ => Ok(()),
+        }
+    }
 }
 
 impl std::fmt::Debug for Client {
@@ -486,6 +972,20 @@ pub trait Llm {
     /// The model id subsequent `complete` calls will use (T12: abort output
     /// names it, so chat `/model` switches are reflected immediately).
     fn model(&self) -> &str;
+    /// F7 phase 1: install (`Some`) or clear (`None`) the live model-text
+    /// delta hook. The hook receives each text piece as it arrives DURING a
+    /// streamed `complete` call, synchronously on the thread that called
+    /// `complete` (the body reader's chunk hook fires in its caller-thread
+    /// receive loop). Default NO-OP: scripted doubles never stream, and the
+    /// driver only arms the hook around each `complete` call.
+    fn set_text_delta_hook(&mut self, _hook: Option<TextDeltaHook>) {}
+    /// F7 phase 1: whether the last `complete` fell back from a streaming
+    /// request to a plain JSON response (proxy downgrade, req 4). Consumed
+    /// (read-and-clear, latched upstream to fire at most once per session) so
+    /// the driver emits exactly ONE telemetry line for it.
+    fn take_stream_fallback(&mut self) -> bool {
+        false
+    }
 }
 
 /// Observability context for one `complete` call, supplied by the driver.
@@ -528,6 +1028,14 @@ impl Llm for Client {
 
     fn model(&self) -> &str {
         &self.model
+    }
+
+    fn set_text_delta_hook(&mut self, hook: Option<TextDeltaHook>) {
+        *self.text_delta_hook.borrow_mut() = hook;
+    }
+
+    fn take_stream_fallback(&mut self) -> bool {
+        self.fallback_latched.take()
     }
 }
 
@@ -638,6 +1146,8 @@ impl Client {
             api_key: ep.api_key,
             auth_token: ep.auth_token,
             model: model.to_string(),
+            text_delta_hook: std::cell::RefCell::new(None),
+            fallback_latched: std::cell::Cell::new(false),
         })
     }
 
@@ -655,6 +1165,8 @@ impl Client {
             api_key: None,
             auth_token: None,
             model: model.to_string(),
+            text_delta_hook: std::cell::RefCell::new(None),
+            fallback_latched: std::cell::Cell::new(false),
         })
     }
 
@@ -673,6 +1185,8 @@ impl Client {
             api_key: None,
             auth_token: None,
             model: model.to_string(),
+            text_delta_hook: std::cell::RefCell::new(None),
+            fallback_latched: std::cell::Cell::new(false),
         }
     }
 
@@ -681,9 +1195,18 @@ impl Client {
         self.model = model.to_string();
     }
 
-    /// One non-streaming Messages API call with T1 retry semantics: connection
-    /// failures and the gateway/overload statuses retry with exponential
-    /// backoff (honoring `retry-after`, capped); other HTTP errors fail fast.
+    /// One Messages API call with T1 retry semantics: connection failures and
+    /// the gateway/overload statuses retry with exponential backoff (honoring
+    /// `retry-after`, capped); other HTTP errors fail fast.
+    ///
+    /// F7 phase 1: the request carries `"stream": true` by default (kill
+    /// switch `CHUG_STREAM=0` restores the byte-identical non-streaming
+    /// request body AND parse path — both legs pinned). On the streaming leg
+    /// each body chunk feeds a fresh [`StreamAccumulator`], which emits text
+    /// deltas to the installed hook as they arrive and synthesizes the
+    /// non-streaming body shape at the end; a proxy downgrade (2xx body whose
+    /// content-type is not `text/event-stream`) parses byte-identically to
+    /// today and latches ONE telemetry note.
     pub fn complete(
         &self,
         system: &str,
@@ -691,7 +1214,8 @@ impl Client {
         tools: &[Value],
     ) -> anyhow::Result<Response> {
         let url = format!("{}/v1/messages", self.base_url.trim_end_matches('/'));
-        let body = json!({
+        let streaming = streaming_enabled();
+        let mut body = json!({
             "model": self.model,
             "max_tokens": MAX_TOKENS,
             "system": system,
@@ -699,6 +1223,9 @@ impl Client {
             "tools": tools,
             "tool_choice": { "type": "auto" },
         });
+        if streaming {
+            body["stream"] = json!(true);
+        }
         let body = serde_json::to_string(&body).context("serializing request body")?;
 
         let mut headers = vec![(
@@ -717,9 +1244,69 @@ impl Client {
         let mut attempts = 0;
         for attempt in 0..total_attempts {
             attempts += 1;
-            match self.transport.send(&url, &headers, &body) {
+            // F7 phase 1: a FRESH accumulator per attempt (req 6: a failed
+            // attempt discards it — no half-accumulated Response ever escapes;
+            // deltas already printed are console cosmetics only).
+            let mut hook_borrow = streaming.then(|| self.text_delta_hook.borrow_mut());
+            // RefMut -> Option -> (auto-deref chain) -> &mut dyn FnMut(&str).
+            // The accumulator exists whenever STREAMING — hook or not (an
+            // unarmed hook only means no delta cosmetics; the SSE parse leg
+            // still runs).
+            let mut acc = match hook_borrow.as_mut().and_then(|hook| hook.as_deref_mut()) {
+                Some(hook_dyn) => {
+                    let hook: &mut dyn FnMut(&str) = hook_dyn;
+                    Some(StreamAccumulator::new(Some(hook)))
+                }
+                None if streaming => Some(StreamAccumulator::new(None)),
+                None => None,
+            };
+            let send_result = match acc.as_mut() {
+                Some(acc) => {
+                    let mut on_chunk = |bytes: &[u8]| acc.feed_bytes(bytes);
+                    self.transport
+                        .send_with_progress(&url, &headers, &body, &mut on_chunk)
+                }
+                None => self.transport.send(&url, &headers, &body),
+            };
+            match send_result {
                 Ok(raw) => {
                     if (200..300).contains(&raw.status) {
+                        if let Some(acc) = acc {
+                            let content_type = raw
+                                .header("content-type")
+                                .unwrap_or("")
+                                .to_ascii_lowercase();
+                            if content_type.contains("text/event-stream") {
+                                // SSE leg: synthesize the non-streaming body
+                                // shape. An SSE `error` event retries like a
+                                // connection failure (T1); a malformed payload
+                                // fails fast, exactly like today's
+                                // unparseable-body leg.
+                                return match acc.finish() {
+                                    Ok(parsed) => Ok(Response { body: parsed }),
+                                    Err(StreamError::Malformed(msg)) => {
+                                        bail!("LLM request failed: {msg}")
+                                    }
+                                    Err(StreamError::Retryable(TransportError::Connection(
+                                        msg,
+                                    ))) => {
+                                        last_error = format!("connection error: {msg}");
+                                        if attempt + 1 == total_attempts {
+                                            break;
+                                        }
+                                        thread::sleep(self.retry_delays[attempt]);
+                                        continue;
+                                    }
+                                    Err(StreamError::Retryable(TransportError::Fatal(msg))) => {
+                                        bail!("LLM request failed: {msg}")
+                                    }
+                                };
+                            }
+                            // Fallback leg (req 4): streaming requested, but the
+                            // response is not SSE (proxy downgrade) — parse
+                            // byte-identically to today and latch ONE note.
+                            self.fallback_latched.set(true);
+                        }
                         let parsed: Value = serde_json::from_str(&raw.body).with_context(|| {
                             format!("parsing response JSON: {}", preview(&raw.body, 500))
                         })?;
@@ -764,6 +1351,14 @@ impl Client {
             .map(|secs| Duration::from_secs(secs.min(RETRY_AFTER_CAP_SECS)))
             .unwrap_or(self.retry_delays[attempt])
     }
+}
+
+/// F7 phase 1 kill switch: `CHUG_STREAM=0` (process env) restores the
+/// byte-identical non-streaming request body AND parse path — both legs
+/// pinned against a request-body-capturing fake transport. Any other value
+/// (unset included) streams.
+fn streaming_enabled() -> bool {
+    std::env::var("CHUG_STREAM").ok().as_deref() != Some("0")
 }
 
 fn build_http_client() -> anyhow::Result<reqwest::blocking::Client> {
@@ -1090,6 +1685,8 @@ mod tests {
             api_key: None,
             auth_token: None,
             model: "test-model".to_string(),
+            text_delta_hook: std::cell::RefCell::new(None),
+            fallback_latched: std::cell::Cell::new(false),
         }
     }
 
@@ -1498,4 +2095,476 @@ mod tests {
         let conn = anyhow::anyhow!("LLM request failed after 3 attempts; last error: connection error: reset");
         assert!(!is_image_rejection(&conn));
     }
+
+    // ---- F7 phase 1: streaming responses + text deltas ----
+
+    /// Build an SSE stream body from typed events (`event:` + `data:` lines).
+    fn sse_stream(events: &[Value]) -> String {
+        let mut out = String::new();
+        for e in events {
+            out.push_str(&format!(
+                "event: {}\ndata: {}\n\n",
+                e["type"].as_str().unwrap_or(""),
+                e
+            ));
+        }
+        out
+    }
+
+    fn msg_start() -> Value {
+        json!({
+            "type": "message_start",
+            "message": {
+                "id": "msg_1", "type": "message", "role": "assistant",
+                "model": "test-model", "content": [],
+                "usage": {"input_tokens": 100, "output_tokens": 1,
+                          "cache_read_input_tokens": 64},
+            }
+        })
+    }
+
+    /// A transport that records every request body and, per scripted response,
+    /// either feeds SSE chunks through `send_with_progress` or returns a plain
+    /// (non-SSE) body — the harness for both request legs + the fallback leg.
+    struct StreamingFake {
+        /// One entry per scripted response: SSE chunks (fed via the progress
+        /// hook) or a plain body. `Err` entries script transport failures.
+        responses: std::sync::Mutex<std::collections::VecDeque<Result<Vec<String>, TransportError>>>,
+        /// Response headers for the NEXT 2xx (content-type controls the leg).
+        content_type: String,
+        bodies: std::sync::Mutex<Vec<String>>,
+        calls: std::sync::Mutex<usize>,
+    }
+
+    impl StreamingFake {
+        fn sse(chunks: Vec<String>) -> Arc<Self> {
+            Arc::new(StreamingFake {
+                responses: std::sync::Mutex::new(vec![Ok(chunks)].into()),
+                content_type: "text/event-stream".to_string(),
+                bodies: std::sync::Mutex::new(Vec::new()),
+                calls: std::sync::Mutex::new(0),
+            })
+        }
+
+        fn plain(body: Value) -> Arc<Self> {
+            Arc::new(StreamingFake {
+                responses: std::sync::Mutex::new(vec![Ok(vec![body.to_string()])].into()),
+                content_type: "application/json".to_string(),
+                bodies: std::sync::Mutex::new(Vec::new()),
+                calls: std::sync::Mutex::new(0),
+            })
+        }
+
+        fn bodies(&self) -> Vec<String> {
+            self.bodies.lock().unwrap().clone()
+        }
+
+        fn calls(&self) -> usize {
+            *self.calls.lock().unwrap()
+        }
+    }
+
+    impl Transport for StreamingFake {
+        fn send(
+            &self,
+            _url: &str,
+            _headers: &[(String, String)],
+            body: &str,
+        ) -> Result<RawResponse, TransportError> {
+            *self.calls.lock().unwrap() += 1;
+            self.bodies.lock().unwrap().push(body.to_string());
+            match self
+                .responses
+                .lock()
+                .unwrap()
+                .pop_front()
+                .expect("script exhausted")
+            {
+                Ok(chunks) => Ok(RawResponse {
+                    status: 200,
+                    headers: vec![("content-type".to_string(), self.content_type.clone())],
+                    body: chunks.concat(),
+                }),
+                Err(e) => Err(e),
+            }
+        }
+
+        fn send_with_progress(
+            &self,
+            url: &str,
+            headers: &[(String, String)],
+            body: &str,
+            on_chunk: &mut dyn FnMut(&[u8]),
+        ) -> Result<RawResponse, TransportError> {
+            // Same request, chunk-fed: the harness for the live leg.
+            *self.calls.lock().unwrap() += 1;
+            self.bodies.lock().unwrap().push(body.to_string());
+            match self
+                .responses
+                .lock()
+                .unwrap()
+                .pop_front()
+                .expect("script exhausted")
+            {
+                Ok(chunks) => {
+                    for c in &chunks {
+                        on_chunk(c.as_bytes());
+                    }
+                    Ok(RawResponse {
+                        status: 200,
+                        headers: vec![("content-type".to_string(), self.content_type.clone())],
+                        body: chunks.concat(),
+                    })
+                }
+                Err(e) => Err(e),
+            }
+            .inspect(|raw| {
+                let _ = (url, headers);
+                let _ = raw;
+            })
+        }
+    }
+
+    fn run(client: &Client) -> anyhow::Result<Response> {
+        client.complete(
+            "sys",
+            &[Message::user(vec![ContentBlock::text_block("hi")])],
+            &[],
+        )
+    }
+
+
+    /// Serializes every test that calls `complete()` against the
+    /// CHUG_STREAM kill-switch flip (the env is process-global; the flip
+    /// window must not overlap another streaming-leg test).
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    // ---- F7 phase 1: accumulator unit tests ----
+
+    fn acc_feed_all(acc: &mut StreamAccumulator<'_>, chunks: &[&str]) {
+        for c in chunks {
+            acc.feed_bytes(c.as_bytes());
+        }
+    }
+
+    #[test]
+    fn accumulator_text_only_multi_chunk_with_deltas_in_order() {
+        let mut deltas: Vec<String> = Vec::new();
+        {
+            let mut hook = |d: &str| deltas.push(d.to_string());
+            let mut acc = StreamAccumulator::new(Some(&mut hook));
+            acc_feed_all(
+                &mut acc,
+                &[
+                    &sse_stream(&[msg_start()]),
+                    "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n",
+                    "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Hel\"}}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"lo w\"}}\n\n",
+                    "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"orld\"}}\n\n",
+                    "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\nevent: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":5}}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+                ],
+            );
+            let body = acc.finish().unwrap();
+            assert_eq!(deltas, ["Hel", "lo w", "orld"]);
+            assert_eq!(body["content"], json!([{"type": "text", "text": "Hello world"}]));
+            assert_eq!(body["stop_reason"], "end_turn");
+            assert_eq!(body["role"], "assistant");
+        }
+        // A latched error survives to finish(): the half-accumulated body is
+        // never unwrapped into a Response (req 6) — the caller discards it.
+        let mut acc = StreamAccumulator::new(None);
+        acc.feed_bytes(
+            b"event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"slow down\"}}\n\n",
+        );
+        let err = acc.finish().unwrap_err();
+        assert!(matches!(
+            err,
+            StreamError::Retryable(TransportError::Connection(_))
+        ));
+    }
+
+    #[test]
+    fn accumulator_tool_use_via_split_input_json_partials() {
+        let mut acc = StreamAccumulator::new(None);
+        acc_feed_all(
+            &mut acc,
+            &[
+                &sse_stream(&[json!({
+                    "type": "message_start",
+                    "message": {"id": "msg_2", "model": "m", "usage": {"input_tokens": 7, "output_tokens": 1}}
+                })]),
+                "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"tu_1\",\"name\":\"bash\",\"input\":{}}}\n\n",
+                // The tool input JSON split MID-OBJECT across partials.
+                "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"command\\\":\\\"ls\\\",\"}}\n\n",
+                "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"\\\"flag\\\":true}\"}}\n\n",
+                "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n",
+                "event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"},\"usage\":{\"output_tokens\":9}}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+            ],
+        );
+        let body = acc.finish().unwrap();
+        let resp = Response { body };
+        let blocks = resp.content_blocks();
+        let uses: Vec<_> = blocks.iter().filter_map(ContentBlock::tool_use).collect();
+        assert_eq!(uses.len(), 1);
+        assert_eq!(uses[0].0, "tu_1");
+        assert_eq!(uses[0].1, "bash");
+        assert_eq!(uses[0].2, &json!({"command": "ls", "flag": true}));
+        assert_eq!(resp.stop_reason().as_deref(), Some("tool_use"));
+    }
+
+    #[test]
+    fn accumulator_text_plus_tool_interleaved_and_thinking_kept() {
+        let mut acc = StreamAccumulator::new(None);
+        acc_feed_all(
+            &mut acc,
+            &[
+                &sse_stream(&[msg_start()]),
+                "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"thinking\",\"thinking\":\"\"}}\n\n",
+                "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\"look\"}}\n\n",
+                "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"signature_delta\",\"signature\":\"sig1\"}}\n\n",
+                "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n",
+                "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n",
+                "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"text_delta\",\"text\":\"running ls\"}}\n\n",
+                "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":1}\n\n",
+                "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":2,\"content_block\":{\"type\":\"tool_use\",\"id\":\"tu_9\",\"name\":\"bash\",\"input\":{}}}\n\n",
+                "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":2,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"command\\\":\\\"ls\\\"}\"}}\n\n",
+                "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":2}\n\n",
+                "event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"},\"usage\":{\"output_tokens\":12}}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+            ],
+        );
+        let body = acc.finish().unwrap();
+        let resp = Response { body };
+        let blocks = resp.content_blocks();
+        assert_eq!(blocks.len(), 3);
+        match &blocks[0] {
+            ContentBlock::Known(KnownBlock::Thinking { thinking, signature }) => {
+                assert_eq!(thinking, "look");
+                assert_eq!(signature.as_deref(), Some("sig1"));
+            }
+            other => panic!("expected thinking block, got {other:?}"),
+        }
+        assert_eq!(blocks[1].text().map(str::to_string), Some("running ls".to_string()));
+        assert_eq!(resp.text(), "running ls");
+    }
+
+    /// T15 budget enforcement rides `usage()` — the streaming synthesis must
+    /// equal the non-streaming values for the same exchange, cache fields
+    /// included.
+    #[test]
+    fn accumulator_usage_matches_non_streaming_incl_cache_fields() {
+        let mut acc = StreamAccumulator::new(None);
+        acc_feed_all(
+            &mut acc,
+            &[
+                &sse_stream(&[msg_start()]),
+                "event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":20}}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+            ],
+        );
+        let resp = Response { body: acc.finish().unwrap() };
+        assert_eq!(
+            resp.usage(),
+            crate::observ::Usage {
+                input: 100,
+                output: 20,
+                total: 120,
+                cache_read_input_tokens: Some(64),
+            }
+        );
+        assert_eq!(resp.stop_reason().as_deref(), Some("end_turn"));
+    }
+
+    /// The sse.rs parser-feed_split_across_chunks pattern, at full strength:
+    /// the SAME fixture split at EVERY byte produces the identical body.
+    #[test]
+    fn accumulator_chunk_boundary_splits_at_every_byte() {
+        let fixture = sse_stream(&[
+            msg_start(),
+            json!({"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}}),
+            json!({"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "héllo — wörld"}}),
+            json!({"type": "content_block_stop", "index": 0}),
+            json!({"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 3}}),
+            json!({"type": "message_stop"}),
+        ]);
+        let single = {
+            let mut acc = StreamAccumulator::new(None);
+            acc.feed_bytes(fixture.as_bytes());
+            acc.finish().unwrap()
+        };
+        let bytes = fixture.as_bytes();
+        for split in 0..=bytes.len() {
+            let mut acc = StreamAccumulator::new(None);
+            acc.feed_bytes(&bytes[..split]);
+            acc.feed_bytes(&bytes[split..]);
+            assert_eq!(acc.finish().unwrap(), single, "split at byte {split}");
+        }
+    }
+
+    #[test]
+    fn sse_error_event_is_t1_retryable_then_success() {
+        let _env = ENV_LOCK.lock().unwrap();
+        let error_stream = sse_stream(&[json!({
+            "type": "error",
+            "error": {"type": "overloaded_error", "message": "overloaded"}
+        })]);
+        let ok_stream = sse_stream(&[
+            msg_start(),
+            json!({"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}}),
+            json!({"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "ok"}}),
+            json!({"type": "content_block_stop", "index": 0}),
+            json!({"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 1}}),
+            json!({"type": "message_stop"}),
+        ]);
+        let ft = Arc::new(StreamingFake {
+            responses: std::sync::Mutex::new(
+                vec![Ok(vec![error_stream]), Ok(vec![ok_stream])].into(),
+            ),
+            content_type: "text/event-stream".to_string(),
+            bodies: std::sync::Mutex::new(Vec::new()),
+            calls: std::sync::Mutex::new(0),
+        });
+        let client = client_with(ft.clone(), &[0]);
+        let resp = run(&client).expect("the SSE error event retries (T1) then succeeds");
+        assert_eq!(resp.text(), "ok");
+        assert_eq!(ft.calls(), 2);
+    }
+
+    /// Req 4: streaming requested, plain JSON + `application/json` answered —
+    /// byte-identical parse, and ONE latched fallback note (take semantics).
+    #[test]
+    fn fallback_leg_parses_identically_and_latches_once() {
+        let _env = ENV_LOCK.lock().unwrap();
+        let ft = StreamingFake::plain(json!({
+            "stop_reason": "end_turn",
+            "content": [{"type": "text", "text": "plain"}],
+            "usage": {"input_tokens": 3, "output_tokens": 4},
+        }));
+        let mut client = client_with(ft.clone(), &[]);
+        let resp = run(&client).unwrap();
+        assert_eq!(resp.text(), "plain");
+        assert_eq!(resp.usage().input, 3);
+        assert!(client.take_stream_fallback(), "the fallback latched");
+        assert!(!client.take_stream_fallback(), "take semantics: fires once");
+        // The fallback leg does not switch the REQUEST leg: still streamed.
+        assert!(ft.bodies()[0].contains("\"stream\":true"));
+    }
+
+    // ---- F7 phase 1: request legs ----
+
+    #[test]
+    fn streaming_request_body_carries_stream_true_and_deltas_flow() {
+        let _env = ENV_LOCK.lock().unwrap();
+        let ft = StreamingFake::sse(vec![sse_stream(&[
+            msg_start(),
+            json!({"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}}),
+            json!({"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "hi"}}),
+            json!({"type": "content_block_stop", "index": 0}),
+            json!({"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 1}}),
+            json!({"type": "message_stop"}),
+        ])]);
+        let mut client = client_with(ft.clone(), &[]);
+        let deltas: std::sync::Arc<std::sync::Mutex<Vec<String>>> = Default::default();
+        client.set_text_delta_hook(Some(Box::new({
+            let log = deltas.clone();
+            move |d: &str| log.lock().unwrap().push(d.to_string())
+        })));
+        let resp = run(&client).unwrap();
+        client.set_text_delta_hook(None);
+        assert_eq!(resp.text(), "hi");
+        assert!(ft.bodies()[0].contains("\"stream\":true"));
+        assert_eq!(*deltas.lock().unwrap(), ["hi"], "the hook received the text delta");
+    }
+
+    /// Kill switch (req 1): CHUG_STREAM=0 restores the byte-identical
+    /// non-streaming request body AND parse path. The env is process-global;
+    /// the flip window is this test only (no other test pins a request body,
+    /// and the fallback leg keeps every other fake-transport test's JSON
+    /// parse byte-identical either way).
+    #[test]
+    fn kill_switch_restores_non_streaming_body_and_parse() {
+        let _env = ENV_LOCK.lock().unwrap();
+        let ft = StreamingFake::plain(json!({
+            "stop_reason": "end_turn",
+            "content": [{"type": "text", "text": "plain"}],
+            "usage": {"input_tokens": 1, "output_tokens": 2},
+        }));
+        let mut client = client_with(ft.clone(), &[]);
+        // SAFETY: single-threaded test process semantics are not guaranteed
+        // under the default harness, but no other test reads CHUG_STREAM and
+        // none pins a request body — the flip window is benign (see above).
+        unsafe { std::env::set_var("CHUG_STREAM", "0") };
+        let resp = run(&client).unwrap();
+        unsafe { std::env::remove_var("CHUG_STREAM") };
+        assert_eq!(resp.text(), "plain");
+        assert!(!ft.bodies()[0].contains("\"stream\""), "body has no stream field");
+        assert_eq!(ft.calls(), 1);
+        assert!(!client.take_stream_fallback(), "the non-streaming leg never latches");
+    }
+
+    /// Req 6: a mid-stream connection failure retries exactly like a mid-body
+    /// failure (T1), and the discarded accumulator never yields a Response.
+    #[test]
+    fn mid_stream_connection_failure_retries() {
+        let _env = ENV_LOCK.lock().unwrap();
+        let ok_stream = sse_stream(&[
+            msg_start(),
+            json!({"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}}),
+            json!({"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "ok"}}),
+            json!({"type": "content_block_stop", "index": 0}),
+            json!({"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 1}}),
+            json!({"type": "message_stop"}),
+        ]);
+        // Script: attempt 1 dies mid-stream AFTER a chunk was fed; attempt 2 succeeds.
+        let fake = Arc::new(StreamingFake {
+            responses: std::sync::Mutex::new(
+                vec![
+                    Err(TransportError::Connection("connection reset by peer".into())),
+                    Ok(vec![ok_stream]),
+                ]
+                .into(),
+            ),
+            content_type: "text/event-stream".to_string(),
+            bodies: std::sync::Mutex::new(Vec::new()),
+            calls: std::sync::Mutex::new(0),
+        });
+        let client = client_with(fake.clone(), &[0]);
+        let resp = run(&client).unwrap();
+        assert_eq!(resp.text(), "ok");
+        assert_eq!(fake.calls(), 2);
+    }
+
+    /// The streamed-stall leg: a stream that goes silent aborts at the SAME
+    /// activity timeout through the progress variant (T74 margins untouched).
+    #[test]
+    fn streamed_stall_aborts_at_activity_timeout() {
+        let err = read_body_with_watchdog_progress(
+            SilentAfterFirst { sent_first: false },
+            Duration::from_secs(1),
+            Some(&mut |_bytes: &[u8]| {}),
+        )
+        .unwrap_err();
+        match err {
+            TransportError::Connection(msg) => assert!(msg.contains("activity timeout"), "{msg}"),
+            other => panic!("expected connection error, got {other:?}"),
+        }
+    }
+
+    /// Hook hygiene: clearing the hook stops delta delivery (the driver's
+    /// clear-after-call contract).
+    #[test]
+    fn cleared_hook_receives_no_deltas() {
+        let _env = ENV_LOCK.lock().unwrap();
+        let ft = StreamingFake::sse(vec![sse_stream(&[
+            msg_start(),
+            json!({"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}}),
+            json!({"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "hi"}}),
+            json!({"type": "content_block_stop", "index": 0}),
+            json!({"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 1}}),
+            json!({"type": "message_stop"}),
+        ])]);
+        let mut client = client_with(ft.clone(), &[]);
+        client.set_text_delta_hook(None);
+        let deltas: std::sync::Arc<std::sync::Mutex<Vec<String>>> = Default::default();
+        let resp = run(&client).unwrap();
+        assert_eq!(resp.text(), "hi");
+        assert!(deltas.lock().unwrap().is_empty());
+    }
+
 }
