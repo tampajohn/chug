@@ -431,6 +431,14 @@ hosted (impl and validator alike) has been harvested.
   a cycle that worked items with zero `decision_log` records
   is an incomplete wrap (the T23→T24 zero-calls lesson; cycles 34+35
   shipped nine routing/verdict decisions with none recorded).
+- **Release trigger (T100): the loop cuts tags.** If ≥3 items landed
+  since the newest `v*` tag OR any FEATURES.md check-off landed: bump
+  Cargo.toml (minor for a feature, patch otherwise), `chore: release
+  vX.Y.Z` commit, `git tag vX.Y.Z`, push commit + tag. HARD RULES: tags
+  are immutable — never re-tag, never move, never force-push; tag only
+  with gates green at HEAD; ONE tag per wrap; tag message = generated
+  notes since the previous tag. A failed release workflow files a row —
+  never delete a published tag.
 - EVALUATION.md's **Outcomes** section is complete and truthful — per-item
   entries were written at each landing (§2 step 5); wrap adds the
   skipped/deferred rows, the cycle-level notes (what the validators
