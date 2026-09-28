@@ -108,7 +108,7 @@ pub fn tool_schemas() -> Vec<Value> {
         }),
         json!({
             "name": "glob",
-            "description": "Match file paths under the working directory with a glob pattern (e.g. src/**/*.rs). Returns sorted relative paths, capped at 200 with a truncation note. Paths outside the cwd are refused (`path escapes cwd`); cross-tree reads/writes (such as a child worktree in /tmp) go through `bash`.",
+            "description": "Match file paths under the working directory with a glob pattern (e.g. src/**/*.rs). Returns sorted relative paths, capped at 200 with a truncation note. Paths outside the cwd are refused (`path escapes cwd`), and matches that resolve outside via a symlink are dropped, never reported (T134 F1); cross-tree reads/writes (such as a child worktree in /tmp) go through `bash`.",
             "input_schema": {
                 "type": "object",
                 "properties": {
@@ -629,18 +629,25 @@ fn glob_tool(ctx: &ToolCtx, input: &Value) -> anyhow::Result<ToolResult> {
         None => ctx.cwd.clone(),
     };
     let joined = base.join(pattern);
-    // Same path-safety rules as the other file tools: rejects `..` traversal,
-    // absolute paths outside cwd, and symlinks resolving outside cwd
-    // (T134), before any globbing happens.
-    resolve_safe(&ctx.cwd, &joined.to_string_lossy()).map_err(|e| anyhow!("{e}"))?;
-    let matched = glob::glob(&joined.to_string_lossy())
+    // Same path-safety rules as the other file tools — rejects `..`
+    // traversal, absolute paths outside cwd, and symlinks resolving outside
+    // cwd (T134) — plus the pattern-aware rules (T134 F1): the literal
+    // prefix is stage-2 confined, and every concrete match below is
+    // re-confined through the full two-stage check because the glob crate
+    // follows symlinked directories during expansion.
+    let pattern_path = resolve_glob_pattern(&ctx.cwd, &joined.to_string_lossy())
+        .map_err(|e| anyhow!("{e}"))?;
+    let matched = glob::glob(&pattern_path.to_string_lossy())
         .map_err(|e| anyhow!("invalid glob pattern: {e}"))?
         .collect::<Result<Vec<PathBuf>, _>>()
         .map_err(|e| anyhow!("glob error: {e}"))?;
-    // Safety net: keep only entries lexically inside cwd, reported relative.
+    // Confinement, not a lexical courtesy: a match that resolves outside
+    // cwd through a symlinked directory is dropped, never reported
+    // (T134 F1 — the old lexical `starts_with` net passed `etcdir/...`
+    // straight through). Survivors are reported relative.
     let relative: Vec<String> = matched
         .into_iter()
-        .filter(|p| p.starts_with(&ctx.cwd))
+        .filter(|p| confine_glob_match(&ctx.cwd, p))
         .filter_map(|p| {
             p.strip_prefix(&ctx.cwd)
                 .ok()
@@ -757,6 +764,29 @@ const MAX_SYMLINK_HOPS: usize = 40;
 /// must name the fallback.
 const PATH_ESCAPES_CWD_SUFFIX: &str = " — cross-tree paths go through bash";
 
+/// The glob metacharacters the `glob` crate patterns chug builds recognize
+/// (T134 F1): a path component containing any of these is a PATTERN, not a
+/// literal file name. Public because tgrep's corpus arm branches
+/// pattern-vs-literal on the same set it resolves patterns with.
+pub const GLOB_METACHARS: [char; 3] = ['*', '?', '['];
+
+/// Does any component of `p` contain a glob metacharacter? Component-scoped
+/// and applied only to the model-supplied relative part, so a sandbox root
+/// whose own absolute path contains `[` (a bracketed checkout dir) keeps
+/// working — only the model's choice of name is policed.
+fn has_glob_metachar(p: &Path) -> bool {
+    p.components()
+        .any(|c| c.as_os_str().to_string_lossy().contains(&GLOB_METACHARS[..]))
+}
+
+fn metachar_refusal(path: &str) -> String {
+    format!(
+        "glob metacharacters in path: {path} — this tool reads literal paths only; \
+         put patterns in the glob/tgrep `pattern` or `path` glob arg, or use bash \
+         for a filename that really contains `*?[`"
+    )
+}
+
 /// Resolve `path` against `cwd`, rejecting anything that escapes it. Stage 1
 /// (`lexical_normalize`) is the original lexical pass: `..` traversal and
 /// absolute paths outside cwd. Stage 2 (`confine_symlinks`, T134 — codex
@@ -775,16 +805,92 @@ const PATH_ESCAPES_CWD_SUFFIX: &str = " — cross-tree paths go through bash";
 /// Race note: this closes the no-race escape the review describes; an
 /// attacker swapping a link between the walk and the actual read/write
 /// would need openat(2)-style handling, which std does not offer.
+///
+/// T134 F1 (kimi validator follow-up): `resolve_safe` is a LITERAL-path
+/// contract. Glob-metachar components are refused (fail closed, regardless
+/// of existence) — they used to fall into stage 2's "missing from here
+/// down" arm and pass as inert, which is exactly what let the glob crate's
+/// symlink-following expansion turn `**/passwd` into an external read.
+/// Pattern-carrying callers (the glob tool and tgrep's corpus glob arm)
+/// must go through [`resolve_glob_pattern`] and re-confine every concrete
+/// match with [`confine_glob_match`] instead.
 pub fn resolve_safe(cwd: &Path, path: &str) -> Result<PathBuf, String> {
     let normalized = lexical_normalize(cwd, path)
         .map_err(|_| format!("path escapes cwd: {path}{PATH_ESCAPES_CWD_SUFFIX}"))?;
     if !normalized.starts_with(cwd) {
         return Err(format!("path escapes cwd: {path}{PATH_ESCAPES_CWD_SUFFIX}"));
     }
+    // Metachars are patterns, not literal names (T134 F1) — scoped to the
+    // model-supplied relative part, so a sandbox root with `[` in its own
+    // path is unaffected.
+    let rel = normalized.strip_prefix(cwd).unwrap_or(&normalized);
+    if has_glob_metachar(rel) {
+        return Err(metachar_refusal(path));
+    }
     confine_symlinks(cwd, &normalized).map_err(|why| {
         format!("path escapes cwd: {path}{PATH_ESCAPES_CWD_SUFFIX} ({why})")
     })?;
     Ok(normalized)
+}
+
+/// Pattern-aware resolve for the two glob-expanding surfaces — the glob
+/// tool's joined `path` + `pattern` and tgrep's corpus glob arm (T134 F1).
+/// The same stage-1 lexical rules as [`resolve_safe`] (`..` traversal,
+/// absolute paths outside cwd), then stage-2 confinement of the LITERAL
+/// prefix: every component before the first metacharacter is resolved
+/// against the real filesystem, so a pattern rooted at an in-tree symlink
+/// to an external directory is refused up front. The metachar tail cannot
+/// be lstat'd, so it is NOT confined here — that is what
+/// [`confine_glob_match`] is for: every concrete match must pass the full
+/// two-stage check before its name is reported or its bytes are read.
+pub fn resolve_glob_pattern(cwd: &Path, pattern: &str) -> Result<PathBuf, String> {
+    let normalized = lexical_normalize(cwd, pattern)
+        .map_err(|_| format!("path escapes cwd: {pattern}{PATH_ESCAPES_CWD_SUFFIX}"))?;
+    if !normalized.starts_with(cwd) {
+        return Err(format!(
+            "path escapes cwd: {pattern}{PATH_ESCAPES_CWD_SUFFIX}"
+        ));
+    }
+    // Confine the literal prefix through stage 2. `lexical_normalize` keeps
+    // metachar components in place, so the walk below stops at the first
+    // one; a pattern that normalizes to a literal path (e.g. `*/../f`
+    // collapses the `*`) falls through with no metachars left.
+    let rel = normalized.strip_prefix(cwd).unwrap_or(&normalized);
+    let mut prefix = cwd.to_path_buf();
+    for comp in rel.components() {
+        if comp
+            .as_os_str()
+            .to_string_lossy()
+            .contains(&GLOB_METACHARS[..])
+        {
+            break;
+        }
+        prefix.push(comp);
+    }
+    confine_symlinks(cwd, &prefix).map_err(|why| {
+        format!("path escapes cwd: {pattern}{PATH_ESCAPES_CWD_SUFFIX} ({why})")
+    })?;
+    Ok(normalized)
+}
+
+/// Post-glob confinement (T134 F1): the `glob` crate FOLLOWS symlinked
+/// directories during pattern expansion, so a pattern like `**/passwd`
+/// yields matches that lexically sit inside cwd (`etcdir/passwd`) but
+/// physically resolve outside it. Every concrete match must re-pass the
+/// full two-stage check before its name is reported or its bytes are read;
+/// matches that fail are dropped (never surfaced), as are matches whose
+/// name itself carries a metacharacter — a literal `*`-named file is not
+/// worth reporting through a glob surface, and refusing keeps the
+/// drop-or-keep decision independent of filesystem state.
+pub fn confine_glob_match(cwd: &Path, matched: &Path) -> bool {
+    if !matched.starts_with(cwd) {
+        return false;
+    }
+    let rel = matched.strip_prefix(cwd).unwrap_or(matched);
+    if has_glob_metachar(rel) {
+        return false;
+    }
+    confine_symlinks(cwd, matched).is_ok()
 }
 
 /// Stage 1 (pre-T134 behavior, kept verbatim): resolve `path` lexically
@@ -1285,6 +1391,170 @@ mod tests {
         let r = dispatch(&ctx, "read_file", &json!({"path": "outside/secret.txt"}));
         assert!(r.is_error, "read_file must refuse: {}", r.content);
         assert!(!r.content.contains("top secret"), "{}", r.content);
+    }
+
+    // ---- T134 F1 (kimi validator follow-up): glob-metachar paths bypassed
+    // stage 2. `resolve_safe` treated literal `*`/`**` components as
+    // inert-missing (they lexically don't exist, so confine_symlinks' "missing
+    // from here down" arm made the tail unreachable), while the `glob` crate
+    // FOLLOWS symlinked directories during pattern expansion — so an in-tree
+    // `etcdir -> /etc` symlink plus `**/passwd` escaped. The glob tool leaked
+    // external NAMES (its safety net was lexical `starts_with`), and tgrep's
+    // corpus glob arm leaked external CONTENTS. Fix: strict `resolve_safe`
+    // refuses metachar paths, glob patterns resolve through
+    // `resolve_glob_pattern` (lexical + literal-prefix stage 2), and every
+    // concrete match is re-confined through the full two-stage check before
+    // its name is reported or its bytes are read. ----
+
+    /// The validator's exact glob-tool vector: an in-tree symlink to an
+    /// external directory plus a `**` pattern must surface no external
+    /// names. RED pre-fix (the lexical `starts_with` safety net passed
+    /// `etcdir/...` matches straight through).
+    #[cfg(unix)]
+    #[test]
+    fn t134f1_glob_tool_drops_matches_resolving_outside_sandbox() {
+        let tmp = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        fs::write(outside.path().join("passwd"), "root:x:0\n").unwrap();
+        fs::write(outside.path().join("shadow-secret"), "hash").unwrap();
+        std::os::unix::fs::symlink(outside.path(), tmp.path().join("etcdir")).unwrap();
+        fs::write(tmp.path().join("keep.txt"), "").unwrap();
+        let ctx = ToolCtx {
+            cwd: tmp.path().to_path_buf(),
+            bash_timeout: Duration::from_secs(BASH_TIMEOUT_SECS),
+        };
+
+        // A pattern that can only match through the symlinked dir: no
+        // external path may be reported.
+        let r = dispatch(&ctx, "glob", &json!({"pattern": "**/passwd"}));
+        assert!(!r.is_error, "{}", r.content);
+        assert_eq!(r.content, "no matches", "external name leaked: {}", r.content);
+
+        // The validator's name-leak probe (`**/*` listed every external
+        // entry — 60 hits probed against /etc): in-tree matches stay, all
+        // matches resolving outside are dropped.
+        let r = dispatch(&ctx, "glob", &json!({"pattern": "**/*"}));
+        assert!(!r.is_error, "{}", r.content);
+        assert!(r.content.contains("keep.txt"), "in-tree matches must survive: {}", r.content);
+        assert!(!r.content.contains("shadow-secret"), "external name leaked: {}", r.content);
+        assert!(!r.content.contains("passwd"), "external name leaked: {}", r.content);
+        assert!(!r.content.contains("etcdir/"), "external path leaked: {}", r.content);
+    }
+
+    /// A metacharacter in the `path` (base) argument is a PATTERN, not a
+    /// literal directory — the glob tool's base must be refused, not
+    /// expanded through symlinked dirs. RED pre-fix (`*` expanded to
+    /// `etcdir` and reported `etcdir/passwd`).
+    #[cfg(unix)]
+    #[test]
+    fn t134f1_glob_tool_metachar_base_is_refused_not_expanded() {
+        let tmp = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        fs::write(outside.path().join("passwd"), "root:x:0\n").unwrap();
+        std::os::unix::fs::symlink(outside.path(), tmp.path().join("etcdir")).unwrap();
+        let ctx = ToolCtx {
+            cwd: tmp.path().to_path_buf(),
+            bash_timeout: Duration::from_secs(BASH_TIMEOUT_SECS),
+        };
+        let r = dispatch(&ctx, "glob", &json!({"pattern": "passwd", "path": "*"}));
+        assert!(r.is_error, "metachar base must be refused: {}", r.content);
+        assert!(r.content.contains("metachar"), "{}", r.content);
+        assert!(!r.content.contains("etcdir/passwd"), "{}", r.content);
+    }
+
+    /// Strict `resolve_safe` refuses glob-metachar paths: this tool surface
+    /// reads literal paths, and a metachar component is either a mistake or
+    /// an expansion attempt. Fail closed regardless of existence — the old
+    /// inert-missing treatment is exactly what the glob arm exploited.
+    /// RED pre-fix (resolve_safe returned Ok for every case below).
+    #[test]
+    fn t134f1_resolve_safe_refuses_glob_metachar_paths() {
+        let tmp = tempfile::tempdir().unwrap();
+        for p in ["a/*/b", "*/x", "**/y", "notes[1].txt", "q?.txt", "*"] {
+            let err = resolve_safe(tmp.path(), p).unwrap_err();
+            assert!(err.contains("metachar"), "{p}: {err}");
+        }
+        // Scoping: metachars in the CWD PREFIX (the sandbox root's own
+        // name) must not break literal reads — only the model-supplied
+        // relative part is checked.
+        let weird = tmp.path().join("we[ird]");
+        fs::create_dir_all(&weird).unwrap();
+        fs::write(weird.join("f.txt"), "ok").unwrap();
+        let resolved = resolve_safe(&weird, "f.txt").unwrap();
+        assert_eq!(resolved, weird.join("f.txt"));
+    }
+
+    /// Class sweep — the single-path surfaces must refuse both vectors:
+    /// stage-2 symlink resolution (green pre-fix, pinned per surface) and
+    /// the new metachar refusal (RED pre-fix: read_file's message was a
+    /// plain ENOENT, list_dir's too — actionable wording only post-fix).
+    #[cfg(unix)]
+    #[test]
+    fn t134f1_list_dir_grep_read_file_refuse_symlink_and_metachar_paths() {
+        let tmp = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        fs::write(outside.path().join("f.txt"), "outside-bytes").unwrap();
+        std::os::unix::fs::symlink(outside.path(), tmp.path().join("etcdir")).unwrap();
+        let ctx = ToolCtx {
+            cwd: tmp.path().to_path_buf(),
+            bash_timeout: Duration::from_secs(BASH_TIMEOUT_SECS),
+        };
+
+        // Symlinked path args: stage 2 refuses before any fs touch.
+        for (tool, input) in [
+            ("list_dir", json!({"path": "etcdir"})),
+            ("grep", json!({"pattern": "outside-bytes", "path": "etcdir"})),
+            ("read_file", json!({"path": "etcdir/f.txt"})),
+        ] {
+            let r = dispatch(&ctx, tool, &input);
+            assert!(r.is_error, "{tool} must refuse: {}", r.content);
+            assert!(r.content.contains("escapes cwd"), "{tool}: {}", r.content);
+            assert!(!r.content.contains("outside-bytes"), "{tool}: {}", r.content);
+        }
+        // A metachar path arg: refused with the metachar wording, never
+        // silently expanded or treated as a missing literal.
+        for (tool, input) in [
+            ("list_dir", json!({"path": "*"})),
+            ("read_file", json!({"path": "*/secret"})),
+            ("grep", json!({"pattern": "x", "path": "*.txt"})),
+        ] {
+            let r = dispatch(&ctx, tool, &input);
+            assert!(r.is_error, "{tool} must refuse: {}", r.content);
+            assert!(r.content.contains("metachar"), "{tool}: {}", r.content);
+        }
+    }
+
+    /// T134 F2 (kimi validator): SPEC.md's corrected sandbox claim had no
+    /// pin — only README's did — so the doctrine could drift silently
+    /// again. Pin the same contract the README pin enforces: file-tool
+    /// paths confined including symlink resolution, glob matches confined,
+    /// and bash documented as NOT filesystem-confined. RED until SPEC.md
+    /// carries the wording.
+    #[test]
+    fn spec_sandbox_claim_names_symlink_confinement_and_bash_limits() {
+        let spec = fs::read_to_string(
+            std::env::current_dir()
+                .expect("cargo sets the test cwd to the package root")
+                .join("SPEC.md"),
+        )
+        .expect("SPEC.md readable from the crate root");
+        let flat: String = spec.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(
+            flat.contains(
+                "symlinks resolving outside it are refused (T134 — `resolve_safe` resolves the real filesystem"
+            ),
+            "SPEC.md does not state the symlink-confinement claim: {flat}"
+        );
+        assert!(
+            flat.contains(
+                "Glob patterns expand only to matches confined inside it — a match resolving outside via a symlink is dropped, never reported or read"
+            ),
+            "SPEC.md does not state the T134 F1 glob-confinement claim: {flat}"
+        );
+        assert!(
+            flat.contains("`bash` starts in this directory but is NOT filesystem-confined"),
+            "SPEC.md must keep bash's honest limits (drift §3): {flat}"
+        );
     }
 
     #[test]

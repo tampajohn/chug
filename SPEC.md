@@ -21,7 +21,9 @@ chug ledger [--cwd <dir>]     # print current LEDGER.md
   sandbox every path to this directory: `..` traversal, absolute paths
   outside it, and symlinks resolving outside it are refused (T134 —
   `resolve_safe` resolves the real filesystem, not just lexical
-  components). `bash` starts in this directory but is NOT
+  components). Glob patterns expand only to matches confined inside it —
+  a match resolving outside via a symlink is dropped, never reported or
+  read (T134 F1). `bash` starts in this directory but is NOT
   filesystem-confined: it can touch absolute paths and inherits chug's
   environment (API credentials included).
 - `--resume` reloads `<cwd>/.chug/transcript.jsonl` and continues from it.
@@ -59,9 +61,13 @@ returned as a `tool_result` content block; errors go in `content` with
 7. `goal_complete {summary}` → model asserts the goal is met. This does NOT end
    the run by itself — see Verification.
 
-Path safety: all paths resolved lexically against cwd; reject any resolved path
-escaping cwd (`..` traversal, absolute paths outside cwd). `bash` runs with cwd
-set but is otherwise unrestricted (the user runs chug on their own box).
+Path safety: `resolve_safe` resolves the real filesystem (T134) — stage 1
+lexically rejects `..` traversal and absolute paths outside cwd, stage 2
+resolves every component's symlinks and refuses when the resolution escapes
+cwd, and glob-metachar paths are refused (a pattern belongs in the glob/tgrep
+pattern args, where every concrete match is re-confined before use, T134 F1).
+`bash` runs with cwd set but is otherwise unrestricted (the user runs chug on
+their own box).
 
 ## Files on disk (under `--cwd`)
 

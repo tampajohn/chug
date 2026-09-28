@@ -337,7 +337,11 @@ downgraded to a placeholder when the endpoint rejects image content),
 All file-tool paths are sandboxed to `--cwd` — `..` traversal, absolute
 paths outside it, AND symlinks resolving outside it are refused (T134:
 `resolve_safe` resolves the real filesystem, so an in-tree link to
-`/etc` cannot smuggle a read or write through). `delegate` and
+`/etc` cannot smuggle a read or write through). Glob patterns are
+confined too (T134 F1: the glob crate follows symlinked directories
+during expansion, so `glob`/`tgrep` drop every match whose real
+resolution lands outside `--cwd`, and a metacharacter path passed to a
+literal-path tool is refused, never expanded). `delegate` and
 `web_fetch` remain the two documented exceptions — `delegate`'s absolute
 `cwd`/`spec` target child worktrees by design; `web_fetch` is network,
 not filesystem). `bash` is NOT filesystem-confined: it starts in `--cwd`

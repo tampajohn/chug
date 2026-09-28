@@ -37,7 +37,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{anyhow, bail};
 use serde_json::{json, Value};
 
-use crate::tools::{resolve_safe, ToolCtx, ToolResult};
+use crate::tools::{confine_glob_match, resolve_glob_pattern, resolve_safe, GLOB_METACHARS, ToolCtx, ToolResult};
 
 /// Default output budget in tokens (~8000 chars of cluster text).
 pub const TGREP_DEFAULT_BUDGET: usize = 2000;
@@ -86,7 +86,7 @@ pub fn schema() -> Value {
             "type": "object",
             "properties": {
                 "query": {"type": "string", "description": "One or more terms, ranked AND-ish; a \"quoted phrase\" must appear exactly. Required for search; ignored when symbols=true"},
-                "path": {"type": "string", "description": "Optional glob (e.g. `src/**/*.rs`), directory, or file relative to cwd; default the whole cwd. In symbols mode: the Rust file to skeleton"},
+                "path": {"type": "string", "description": "Optional glob (e.g. `src/**/*.rs`), directory, or file relative to cwd; default the whole cwd. Glob matches resolving outside cwd via a symlink are dropped, never read (T134 F1). In symbols mode: the Rust file to skeleton"},
                 "budget": {"type": "integer", "description": "Output token budget (default 2000; a request above 8000 is clamped down, not rejected)"},
                 "symbols": {"type": "boolean", "description": "true = signature skeleton mode: `path` must be a single Rust file (.rs); `query` is ignored"}
             },
@@ -212,15 +212,30 @@ fn collect_corpus(ctx: &ToolCtx, input: &Value) -> anyhow::Result<Corpus> {
             Ok(Corpus { files, capped_note })
         }
         Some(raw) => {
-            let resolved = resolve_safe(&ctx.cwd, raw).map_err(|e| anyhow!("{e}"))?;
-            if raw.contains('*') || raw.contains('?') || raw.contains('[') {
-                let pattern = resolved.to_string_lossy().into_owned();
+            // Pattern vs literal, decided BEFORE resolution (T134 F1): a
+            // metachar path is a glob to expand, not an inert-missing
+            // literal — resolve_safe used to pass `**/passwd` through
+            // stage 2's missing-arm and the expansion followed an in-tree
+            // symlink to an external directory.
+            if raw.contains(&GLOB_METACHARS[..]) {
+                let pattern = resolve_glob_pattern(&ctx.cwd, raw)
+                    .map_err(|e| anyhow!("{e}"))?
+                    .to_string_lossy()
+                    .into_owned();
                 let mut files: Vec<PathBuf> = Vec::new();
                 let mut oversized = 0usize;
                 for p in glob::glob(&pattern)
                     .map_err(|e| anyhow!("invalid glob pattern: {e}"))?
                     .filter_map(|p| p.ok())
                 {
+                    // The glob crate follows symlinked directories during
+                    // expansion, so every concrete match must re-pass the
+                    // full two-stage confinement before a byte of it is
+                    // read (T134 F1) — matches resolving outside are
+                    // dropped, never surfaced.
+                    if !confine_glob_match(&ctx.cwd, &p) {
+                        continue;
+                    }
                     if !p.is_file() {
                         continue;
                     }
@@ -243,6 +258,7 @@ fn collect_corpus(ctx: &ToolCtx, input: &Value) -> anyhow::Result<Corpus> {
                 );
                 return Ok(Corpus { files, capped_note });
             }
+            let resolved = resolve_safe(&ctx.cwd, raw).map_err(|e| anyhow!("{e}"))?;
             if resolved.is_file() {
                 // Single-file path honors the same size cap as walk/glob.
                 let len = fs::metadata(&resolved).map(|m| m.len()).unwrap_or(0);
@@ -2479,6 +2495,97 @@ pub fn last_survivor() {}
             "{}",
             result.content
         );
+    }
+
+    // ---- T134 F1 (kimi validator follow-up): the corpus glob arm was the
+    // content-leak leg of the glob-metachar bypass — `resolve_safe` accepted
+    // `**/passwd` (metachar components are lexically missing, so stage 2 had
+    // nothing to confine) and the `glob` crate expanded it THROUGH an in-tree
+    // symlink to an external directory, then the arm read the matched files'
+    // bytes. The validator exfiltrated /etc/passwd first lines end-to-end
+    // with a byte-exact resolve_safe + chug's own glob crate. The arm now
+    // confines the pattern's literal prefix and drops every concrete match
+    // whose real resolution escapes cwd before a byte is read. ----
+
+    /// The validator's two demo patterns against an in-tree symlink to an
+    /// external directory: no external byte may reach the result. RED
+    /// pre-fix (`**/passwd` and `*/*passwd*` both read the external files).
+    #[cfg(unix)]
+    #[test]
+    fn t134f1_tgrep_corpus_glob_never_reads_outside_sandbox() {
+        let tmp = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        fs::write(outside.path().join("passwd"), "root:RED-TEST-MARK\n").unwrap();
+        fs::create_dir_all(outside.path().join("pam.d")).unwrap();
+        fs::write(outside.path().join("pam.d/passwd"), "root:NESTED-MARK\n").unwrap();
+        std::os::unix::fs::symlink(outside.path(), tmp.path().join("etcdir")).unwrap();
+        fs::write(tmp.path().join("local.txt"), "root: in-tree haystack root\n").unwrap();
+        let ctx = ctx_for(&tmp);
+
+        for raw in ["**/passwd", "*/*passwd*"] {
+            let result = dispatch(&ctx, "tgrep", &json!({"query": "root", "path": raw}));
+            assert!(!result.is_error, "{raw}: {}", result.content);
+            assert!(
+                !result.content.contains("RED-TEST-MARK"),
+                "{raw} leaked external content: {}",
+                result.content
+            );
+            assert!(
+                !result.content.contains("NESTED-MARK"),
+                "{raw} leaked external content: {}",
+                result.content
+            );
+            assert!(
+                !result.content.contains("etcdir/"),
+                "{raw} leaked an external-resolving path: {}",
+                result.content
+            );
+        }
+        // The inverse pin: in-tree glob search still works.
+        let result = dispatch(&ctx, "tgrep", &json!({"query": "haystack", "path": "*.txt"}));
+        assert!(!result.is_error, "{}", result.content);
+        assert!(result.content.contains("local.txt:1"), "{}", result.content);
+    }
+
+    /// Class sweep — tgrep's OTHER path surfaces. The default no-path walk
+    /// uses `entry.file_type()` (symlinks are neither dirs to recurse nor
+    /// files to read) and symbols mode rides strict `resolve_safe`: both
+    /// stay green pre-fix, pinned here so the class can't regress through
+    /// them. A pattern rooted AT the outside symlink is refused up front by
+    /// the literal-prefix confinement.
+    #[cfg(unix)]
+    #[test]
+    fn t134f1_tgrep_walk_and_symbols_never_cross_symlinks() {
+        let tmp = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        fs::write(outside.path().join("leak.rs"), "red-test-mark here\n").unwrap();
+        std::os::unix::fs::symlink(outside.path(), tmp.path().join("etcdir")).unwrap();
+        fs::write(tmp.path().join("keep.rs"), "harmless\n").unwrap();
+        let ctx = ctx_for(&tmp);
+
+        // No path → walk arm: the external file is neither entered nor read.
+        // (Assert on the external FILENAME, not the marker: the header
+        // echoes the query verbatim.)
+        let result = dispatch(&ctx, "tgrep", &json!({"query": "red-test-mark"}));
+        assert!(!result.is_error, "{}", result.content);
+        assert!(
+            !result.content.contains("leak.rs"),
+            "walk followed the symlink: {}",
+            result.content
+        );
+        assert!(result.content.contains("searched 1 files"), "{}", result.content);
+        // Pattern rooted at the symlinked dir: refused before globbing.
+        let result = dispatch(&ctx, "tgrep", &json!({"query": "mark", "path": "etcdir/*.rs"}));
+        assert!(result.is_error, "{}", result.content);
+        assert!(result.content.contains("escapes cwd"), "{}", result.content);
+        // Symbols mode: the single-file path is stage-2 confined too.
+        let result = dispatch(
+            &ctx,
+            "tgrep",
+            &json!({"query": "ignored", "symbols": true, "path": "etcdir/leak.rs"}),
+        );
+        assert!(result.is_error, "{}", result.content);
+        assert!(result.content.contains("escapes cwd"), "{}", result.content);
     }
 
     /// Single-file paths honor the size cap too (consistency): an oversized
