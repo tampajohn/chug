@@ -495,7 +495,11 @@ fn t99_timeline_bootstrap_entries_dedupe_and_audit() {
         subjects.iter().any(|s| s.contains("site: FEATURES region markers bootstrap (T99)")),
         "features bootstrap commit missing: {subjects:?}"
     );
-    // req 1+5: one entry per verified done row, dated from git, newest first
+    // req 1+5: one entry per verified done row, dated from git — T101: the
+    // list ASCENDS by commit time (day-one → latest, req 4; T99's
+    // date-string/id-desc sort read newest-first against the page's
+    // chronological design): t5(09-20) < t6(09-21) < t7 < t8 (same day,
+    // ordered by %ct — t7's commit lands seconds before t8's) < t11(09-23)
     let entry = |r: &str| format!("<span class=\"hash\">({r})</span>");
     for (frag, r, date) in [
         ("<h3>delta item lands", &refs[4], "2026-09-22"),
@@ -510,11 +514,24 @@ fn t99_timeline_bootstrap_entries_dedupe_and_audit() {
         assert!(ctx.contains(&entry(r)), "ref not cited for {frag}: {ctx}");
         assert!(ctx.contains(date), "git date {date} missing for {frag}: {ctx}");
     }
-    let i11 = tl.find(&entry(&refs[5])).unwrap();
     let i5 = tl.find(&entry(&refs[1])).unwrap();
-    assert!(i11 < i5, "machine entries must be newest-first");
-    // facts-only: the machine block (newest entry to region end) has no <p>
-    assert!(!tl[i11..].contains("<p>"), "machine entries must not narrate");
+    let i6 = tl.find(&entry(&refs[2])).unwrap();
+    let i7 = tl.find(&entry(&refs[3])).unwrap();
+    let i8 = tl.find(&entry(&refs[4])).unwrap();
+    let i11 = tl.find(&entry(&refs[5])).unwrap();
+    assert!(i5 < i6 && i6 < i7 && i7 < i8 && i8 < i11, "entries ascend by commit time (req 4)");
+    // facts-only: the machine run (alpha..long) carries no <p>
+    assert!(!tl[i5..i11].contains("<p>"), "machine entries must not narrate");
+    // curated entries take their commit-time slot too (req 1): the seed hand
+    // entry cites refs[0], committed 2026-09-19 — the OLDEST entry, first
+    let seed = tl.find(&format!("<span class=\"hash\">{}</span>", refs[0])).unwrap();
+    assert!(seed < i5, "datable curated entry leads at its %ct slot: {tl}");
+    // the Day-one hand entry cites f911488 — no such commit in the fixture
+    // repo — so it is UNDATABLE and sorts AFTER its dated neighbors, last
+    // (never before, req 1)
+    let day = tl.find("<h3>Day one").unwrap();
+    assert!(day > i11, "undatable curated entry stays after dated neighbors: {tl}");
+    assert!(tl[day..].contains("<p>Hand-written prose.</p>"), "undatable entry keeps its prose");
     // dedupe by commit ref: the hand-cited seed ref never gains an entry
     assert_eq!(count(&tl, &entry(&refs[0])), 0, "hand-cited ref duplicated");
     assert_eq!(count(&html, &refs[0]), 1, "hand entry stays exactly once");
@@ -557,7 +574,7 @@ fn t99_timeline_cap_collapse_and_idempotence_then_new_landing() {
     assert!(tl.contains("…and 5 earlier milestones (T1–T5)"), "collapse line: {tl}");
     let i25 = tl.find("cap item 25").unwrap();
     let i24 = tl.find("cap item 24").unwrap();
-    assert!(i25 < i24, "newest first");
+    assert!(i24 < i25, "ascending commit-time order (T101 req 4)");
     // idempotence: second run byte-identical, no commit at all
     let before = page(&f);
     let n = all_commit_subjects(&f).len();
@@ -680,4 +697,79 @@ fn t99_best_effort_on_malformed_and_missing_blocks() {
         String::from_utf8_lossy(&out2.stderr)
     );
     assert_eq!(count(&page(&f2), "<!-- TIMELINE:BEGIN -->"), 1, "region untouched");
+}
+
+// --- T101 — commit-time order, curated merge, cap ----------------------------
+
+#[test]
+fn t101_commit_time_order_overrules_row_and_id_order_t99_before_t98() {
+    // The live complaint: T99 (d13a253) rendered BEFORE T98 (8721c83) and a
+    // 2026-09-26 entry after a wall of 09-27s — T99 sorted by date string
+    // desc then row id desc. Here T99's ROW sits ABOVE T98's ROW (row order)
+    // and T99 carries the HIGHER id (id order), but T98's commit is a full
+    // day earlier (%ct) — the ascending page must render T98 first.
+    let (f, _refs, _orig) = fixture_t99();
+    let r98 = commit(&f.chug, "t98: earlier commit lands", None, "2026-09-25", true);
+    let r99 = commit(&f.chug, "t99: later commit lands", None, "2026-09-26", true);
+    std::fs::write(
+        f.chug.join("TODO.md"),
+        format!(
+            concat!(
+                "# TODO\n\n| id | title | spec | pri | status | notes |\n",
+                "|----|-------|------|-----|--------|-------|\n",
+                "| T99 | later row item | specs/t99.md | 1 | done | done {} — x |\n",
+                "| T98 | earlier row item | specs/t98.md | 1 | done | done {} — x |\n"
+            ),
+            r99, r98
+        ),
+    )
+    .unwrap();
+    let out = run_sync(&f, true);
+    assert!(out.status.success(), "run: {out:?}");
+    let tl = region(&page(&f), "TIMELINE");
+    let i98 = tl.find("<h3>earlier row item").unwrap_or_else(|| panic!("T98 entry missing: {tl}"));
+    let i99 = tl.find("<h3>later row item").unwrap_or_else(|| panic!("T99 entry missing: {tl}"));
+    assert!(
+        i98 < i99,
+        "commit time (%ct) must order the list — row order and id order both say T99 first (the reported bug): {tl}"
+    );
+}
+
+#[test]
+fn t101_curated_ref_merges_into_one_entry_prose_wins() {
+    // req 2, the live report's leg (c): raw TODO titles were dumped AFTER the
+    // curated entries instead of merging by ref, burying the "chug.sh — this
+    // site" crescendo mid-list. A generated row whose commit matches a
+    // curated hash span must render NOWHERE — the curated entry is the ONE
+    // entry, at its own commit-time slot.
+    let (f, refs, _orig) = fixture_t99();
+    let todo = std::fs::read_to_string(f.chug.join("TODO.md")).unwrap();
+    std::fs::write(
+        f.chug.join("TODO.md"),
+        format!(
+            "{todo}| T77 | raw duplicate row | specs/t77.md | 1 | done | done {} — x |\n\
+             | T78 | ghost f911488 row | specs/t78.md | 1 | done | done f911488 — x |\n",
+            refs[0]
+        ),
+    )
+    .unwrap();
+    let out = run_sync(&f, true);
+    assert!(out.status.success(), "run: {out:?}");
+    let tl = region(&page(&f), "TIMELINE");
+    // T77: real commit, same ref the curated seed entry cites -> merged away
+    assert!(!tl.contains("raw duplicate row"), "row citing a curated ref must merge away: {tl}");
+    assert!(tl.contains("<p>More hand prose.</p>"), "curated text preserved (prose wins): {tl}");
+    assert_eq!(count(&tl, &refs[0]), 1, "one entry, not two: {tl}");
+    // T78: cites the curated Day-one hash f911488, which is no commit in the
+    // chug repo — the facts-only audit (req 5, unchanged) skips the row, and
+    // the curated Day-one prose stays, exactly once
+    assert!(!tl.contains("ghost f911488 row"), "unverifiable row never renders: {tl}");
+    assert!(tl.contains("<h3>Day one <span class=\"hash\">f911488</span></h3>"));
+    assert_eq!(count(&tl, "f911488"), 1, "curated Day-one entry stays unique: {tl}");
+    assert!(String::from_utf8_lossy(&out.stderr).contains("T78"), "audit warning for T78");
+    // the merged curated entry takes its commit-time slot: the seed commit
+    // (2026-09-19) predates every machine row, so the prose LEADS the list
+    let seed = tl.find(&format!("<span class=\"hash\">{}</span>", refs[0])).unwrap();
+    let machine = tl.find(&format!("<span class=\"hash\">({})</span>", refs[1])).unwrap();
+    assert!(seed < machine, "curated entry slotted by %ct (oldest here) — not dumped after: {tl}");
 }

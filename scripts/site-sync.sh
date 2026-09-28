@@ -465,51 +465,99 @@ hex_spans() { # file -> one ref per line
     }'
 }
 
-# timeline_generate REGIONFILE OUTFILE — build the new region content: the
-# hand-authored lines kept by tl_filter, then the machine block (one entry per
-# done row not already cited by a hand entry, newest first, latest 20 full,
-# older rows collapsed into one line). Skips itself (OUTFILE = the unchanged
-# region) when TODO.md is missing or no row survives the cat-file audit.
+# timeline_generate REGIONFILE OUTFILE — T101: ONE merged timeline. Every
+# entry (curated + machine) is sorted by COMMIT TIME ascending (%ct via
+# `git show -s --format=%ct`, reqs 1+4): T99's date-string/id-desc sort read
+# newest-first against the page's day-one→latest flow and put T99 (d13a253)
+# before T98 (8721c83). Curated entries keep their verbatim text wherever
+# their anchor commit's %ct places them — prose wins (req 2): a done row
+# whose verified commit matches ANY curated hash span merges away (one
+# entry, not two). A curated entry with no resolvable commit (site-side or
+# foreign hash, e.g. the live page's launchd plist) is undatable and sorts
+# AFTER its dated neighbors, never before (+inf, req 1). Machine entries
+# are rebuilt from verified done rows (cat-file audit unchanged, req 5) and
+# capped: the newest 20 render in full, older rows collapse into ONE
+# "…and N earlier milestones (T…)" line placed where the oldest collapsed
+# row sat (T99's rule, req 3 — pinned N=5 with 25 rows). Curated entries
+# never collapse. Idempotent: machine + collapse output carries no <p>, so
+# the next run re-classifies it as machine and rebuilds it byte-identically.
 TL_CAP=20
 timeline_generate() { # regionfile outfile
-  local region="$1" out="$2" kept entries id cands ref title date count full collapse nmin nmax
-  kept="$(mktemp "${TMPDIR:-/tmp}/site-sync-kept.XXXXXX")"
-  entries="$(mktemp "${TMPDIR:-/tmp}/site-sync-entries.XXXXXX")"
-  tl_filter "$region" "$kept"
-  # hand-cited refs: the dedupe keys (req 4 — the timeline child's entries stay)
-  hex_spans "$kept" > "$kept.refs"
-  # req 5: verify each row's ref with git cat-file before it can be rendered
+  local region="$1" out="$2"
+  local items stray meta keys machs span ct file
+  local ncur=0 nmach=0
+  items="$(mktemp "${TMPDIR:-/tmp}/site-sync-tli.XXXXXX")"
+  stray="$(mktemp "${TMPDIR:-/tmp}/site-sync-stray.XXXXXX")"
+  meta="$(mktemp "${TMPDIR:-/tmp}/site-sync-meta.XXXXXX")"
+  keys="$(mktemp "${TMPDIR:-/tmp}/site-sync-keys.XXXXXX")"
+  machs="$(mktemp "${TMPDIR:-/tmp}/site-sync-machs.XXXXXX")"
+  tl_split "$region" "$items" "$stray"
+  # --- curated entries: keep verbatim; anchor = first hash span that resolves
+  local initem=0
+  while IFS= read -r line; do
+    case "$line" in
+      "$(printf '\036')TL") initem=1; : > "$TMP_TLITEM"; continue ;;
+      "$(printf '\036')ENDTL")
+        initem=0
+        if [ -s "$TMP_TLITEM" ] && grep -q '<p' "$TMP_TLITEM"; then
+          file="$TMPD/tl-cur-$ncur"
+          cp "$TMP_TLITEM" "$file"
+          ct=""
+          for span in $(hex_spans "$TMP_TLITEM"); do
+            if git --no-pager -C "$CHUG" cat-file -e "$span^{commit}" 2>/dev/null; then
+              ct="$(commit_time "$span")"
+              if [ -n "$ct" ]; then break; fi
+            fi
+          done
+          # +inf for undatable: after every dated neighbor, never before
+          printf '%s\t0\t%s\t%s\n' "${ct:-9999999999}" "$ncur" "$file" >> "$meta"
+          hex_spans "$TMP_TLITEM" >> "$keys"
+          ncur=$((ncur + 1))
+        fi
+        continue ;;
+    esac
+    if [ "$initem" = 1 ]; then printf '%s\n' "$line" >> "$TMP_TLITEM"; fi
+  done < "$items"
+  # --- machine entries: verify each row's ref (req 5, unchanged) ...
   while IFS="$(printf '\t')" read -r id cands title; do
     [ -n "$id" ] || continue
-    ref=""; date=""
+    ref=""; ct=""; date=""
     for c in $cands; do
       if git --no-pager -C "$CHUG" cat-file -e "$c^{commit}" 2>/dev/null; then
-        date="$(git --no-pager -C "$CHUG" log -1 --format=%as "$c" 2>/dev/null)"
-        if [ -n "$date" ]; then ref="$c"; break; fi
+        ct="$(commit_time "$c")"
+        if [ -n "$ct" ]; then
+          ref="$c"
+          date="$(git --no-pager -C "$CHUG" show -s --format=%as "$c" 2>/dev/null)"
+          break
+        fi
       fi
     done
     if [ -z "$ref" ]; then
       warn "T${id#T}: done-row notes cite no commit found in the chug repo (git cat-file) — no timeline entry"
       continue
     fi
-    printf '%s\t%s\t%s\t%s\n' "$date" "${id#T}" "$ref" "$title" >> "$entries"
+    # ... then merge by ref (req 2): a curated entry already citing this
+    # commit keeps ITS prose — the raw row renders nowhere.
+    if grep -qxF "$ref" "$keys"; then continue; fi
+    nmach=$((nmach + 1))
+    printf '%s\t2\t%s\t%s\t%s\t%s\t%s\n' "$ct" "$nmach" "${id#T}" "$ref" "$date" "$title" >> "$machs"
   done < <(done_rows)
-  if [ ! -s "$entries" ]; then
-    warn "no done rows with verifiable commit refs — timeline not updated"
-    cat "$region" > "$out"; rm -f "$kept" "$kept.refs" "$entries"; return 0
+  if [ "$ncur" -eq 0 ] && [ "$nmach" -eq 0 ]; then
+    warn "no timeline entries (no curated <p> entries, no done rows with verifiable commit refs) — timeline not updated"
+    cat "$region" > "$out"
+    rm -f "$items" "$stray" "$meta" "$keys" "$machs"
+    return 0
   fi
+  cat "$machs" >> "$meta"
   {
-    cat "$kept"
-    # newest first: date desc, then id desc; skip refs the hand entries cite.
-    # Sort to a file: awk reads FILES below, so the sorted stream must be one
-    # (entries first, never empty — guarded above — keeping NR==FNR safe).
-    sort -t "$(printf '\t')" -k1,1r -k2,2nr "$entries" > "$entries.sorted"
+    # non-item region lines (hand-authored structure outside any tl-item)
+    # stay, verbatim, ahead of the merged list
+    cat "$stray"
+    # meta lines: KEY(%ct)\tRANK\tSEQ\tREST — rank 0 curated (REST = chunk
+    # file), rank 2 machine (REST = id\tref\tdate\ttitle). Stable insertion
+    # sort ascending by (key, rank, seq): same-second entries keep their
+    # source order (row order for machine), prose before raw on a tie.
     awk -F'\t' -v cap="$TL_CAP" '
-      NR == FNR {
-        if (!($3 in cited)) { n++; d[n] = $1; i[n] = $2; r[n] = $3; t[n] = $4 }
-        next
-      }
-      { cited[$1] = 1 }
       function collapse(c, mn, mx,   range) {
         range = (mn == mx) ? sprintf("T%d", mn) : sprintf("T%d–T%d", mn, mx)
         printf "    <div class=\"tl-item\">\n"
@@ -520,59 +568,97 @@ timeline_generate() { # regionfile outfile
         printf "      </div>\n"
         printf "    </div>\n"
       }
+      {
+        n++
+        K[n] = $1 + 0; R[n] = $2 + 0; S[n] = $3 + 0
+        F4[n] = $4; F5[n] = $5; F6[n] = $6; F7[n] = $7
+        i = n
+        while (i > 1 && (K[i - 1] > K[i] || (K[i - 1] == K[i] && (R[i - 1] > R[i] || (R[i - 1] == R[i] && S[i - 1] > S[i]))))) {
+          t = K[i]; K[i] = K[i - 1]; K[i - 1] = t
+          t = R[i]; R[i] = R[i - 1]; R[i - 1] = t
+          t = S[i]; S[i] = S[i - 1]; S[i - 1] = t
+          t = F4[i]; F4[i] = F4[i - 1]; F4[i - 1] = t
+          t = F5[i]; F5[i] = F5[i - 1]; F5[i - 1] = t
+          t = F6[i]; F6[i] = F6[i - 1]; F6[i - 1] = t
+          t = F7[i]; F7[i] = F7[i - 1]; F7[i - 1] = t
+          i--
+        }
+      }
       END {
+        # cap pass (machine only, req 3): the newest `cap` machine entries in
+        # this ascending order render in full; the older ones collapse
+        m = 0
+        for (k = 1; k <= n; k++) if (R[k] == 2) m++
+        coln = 0; seenc = 0; ak = 0; mn = 0; mx = 0
         for (k = 1; k <= n; k++) {
-          if (r[k] in cited) continue
-          if (++m <= cap) {
+          if (R[k] != 2) continue
+          seenc++
+          if (seenc + cap > m) continue
+          coln++
+          if (coln == 1) { ak = k; mn = F4[k] + 0; mx = F4[k] + 0 }
+          else { id = F4[k] + 0; if (id < mn) mn = id; if (id > mx) mx = id }
+          collapsed[k] = 1
+        }
+        # emit ascending; the collapse line sits where the oldest collapsed
+        # row sat (k >= ak precedes it)
+        done_col = 0
+        for (k = 1; k <= n; k++) {
+          if (coln > 0 && !done_col && k >= ak) { collapse(coln, mn, mx); done_col = 1 }
+          if (collapsed[k]) continue
+          if (R[k] == 0) {
+            while ((getline line < F4[k]) > 0) print line
+            close(F4[k])
+          } else {
             printf "    <div class=\"tl-item\">\n"
-            printf "      <div class=\"tl-date\">%s</div>\n", d[k]
+            printf "      <div class=\"tl-date\">%s</div>\n", F6[k]
             printf "      <div class=\"tl-rail\"><span class=\"tl-dot\"></span></div>\n"
             printf "      <div class=\"tl-body\">\n"
-            printf "        <h3>%s <span class=\"hash\">(%s)</span></h3>\n", t[k], r[k]
+            printf "        <h3>%s <span class=\"hash\">(%s)</span></h3>\n", F7[k], F5[k]
             printf "      </div>\n"
             printf "    </div>\n"
-          } else {
-            c++
-            if (c == 1 || i[k] + 0 < mn + 0) mn = i[k] + 0
-            if (c == 1 || i[k] + 0 > mx + 0) mx = i[k] + 0
           }
         }
-        if (c > 0) collapse(c, mn, mx)
-      }' "$entries.sorted" "$kept.refs"
+        if (coln > 0 && !done_col) collapse(coln, mn, mx)
+      }' "$meta"
   } > "$out"
-  rm -f "$kept" "$kept.refs" "$entries" "$entries.sorted"
+  rm -f "$items" "$stray" "$meta" "$keys" "$machs" "$TMPD"/tl-cur-*
 }
 
-# tl_filter — the hand-vs-machine discriminator, and the ONE deliberate
-# silent-drop shape in this script (T99 fix-up finding 1 sweep): a tl-item
-# CONTAINING <p> is hand-authored prose and is kept verbatim; a tl-item with
-# NO <p> is machine-generated (timeline_generate emits facts-only entries,
-# never a <p>) and is dropped here so the machine block can be rebuilt from
-# scratch each run — re-collapsing under the cap without dupes. The
-# convention this costs, stated plainly: every hand-authored timeline entry
-# MUST carry a <p>; an h3-only hand entry is treated as machine and rebuilt
-# away. Hand entries and all other lines are preserved verbatim, in order.
-tl_filter() { # regionfile keptfile
-  awk '
+# tl_split REGIONFILE ITEMSFILE STRAYFILE — split the region into tl-item
+# chunks (ALL of them: curated and machine, sentinel-delimited) plus the
+# non-item lines between them. Classification is per item downstream: a
+# tl-item CONTAINING <p> is hand-authored prose and is kept verbatim; a
+# tl-item with NO <p> is machine-generated (timeline_generate emits
+# facts-only entries, never a <p>) and is rebuilt from scratch each run —
+# re-collapsing under the cap without dupes. The convention this costs,
+# stated plainly: every hand-authored timeline entry MUST carry a <p>; an
+# h3-only hand entry is treated as machine and rebuilt away. (T101 supersedes
+# tl_filter's in-place walk: entries are no longer kept "in order then
+# appended after" — they are MERGED into one commit-time-ordered list.)
+tl_split() { # regionfile itemsfile strayfile
+  awk -v stray="$3" '
     /^[[:space:]]*<div class="tl-item/ {
+      printf "\036TL\n"
       buf = $0
       depth = gsub(/<div/, "&") - gsub(/<\/div/, "&")
-      if (depth <= 0) { flush_item(); next }
+      if (depth <= 0) { print buf; printf "\036ENDTL\n"; next }
       initem = 1; next
     }
     initem == 1 {
       buf = buf "\n" $0
       depth += gsub(/<div/, "&") - gsub(/<\/div/, "&")
-      if (depth <= 0) { flush_item(); next }
+      if (depth <= 0) { print buf; printf "\036ENDTL\n"; initem = 0; next }
       next
     }
-    { print }
-    function flush_item() {
-      initem = 0
-      if (buf ~ /<p/) print buf
-      buf = ""
-    }
+    { if ($0 !~ /^[[:space:]]*$/) print > stray }
   ' "$1" > "$2"
+}
+
+# commit_time REF — the commit's committer time (%ct), "" if unresolvable.
+# This is the ORDER key for every timeline entry (T101 req 1+4): a row's
+# position is its commit time, never its TODO.md row order or row id.
+commit_time() { # ref
+  git --no-pager -C "$CHUG" show -s --format=%ct "$1" 2>/dev/null
 }
 
 TMPD="$(mktemp -d "${TMPDIR:-/tmp}/site-sync.XXXXXXXX")" || exit 0
@@ -582,6 +668,7 @@ TMP_NEW="$TMPD/splice-stats"              # spliced after each region, in turn
 TMP_NEW2="$TMPD/splice-timeline"
 TMP_NEW3="$TMPD/splice-features"
 TMP_CARD="$TMPD/card"                     # current card chunk (features walk)
+TMP_TLITEM="$TMPD/tlitem"                 # current tl-item chunk (timeline walk)
 {
   printf '<div class="stats">\n'
   printf '  <div class="stat"><b>%s/%s</b><span>queue items landed — done rows in TODO.md, %s item rows total</span></div>\n' "$DONE" "$TOTAL" "$TOTAL"
