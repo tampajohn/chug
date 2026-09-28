@@ -221,11 +221,57 @@ fn inner(ctx: &ToolCtx, name: &str, input: &Value) -> anyhow::Result<ToolResult>
     }
 }
 
+/// T94: how many received keys a param-extraction miss error names before
+/// the `, … (+N more)` suffix. A malicious or accidental 500-key object must
+/// not balloon the error.
+const RECEIVED_KEYS_CAP: usize = 12;
+
+/// T94: the JSON type name for the non-object leg of [`received_hint`]
+/// (the T88 req-3 shape). Local copy: decisions.rs has its own for its
+/// one-module validation, and this row's diff is confined to tools.rs.
+fn json_type_name(value: &Value) -> &'static str {
+    match value {
+        Value::Null => "null",
+        Value::Bool(_) => "boolean",
+        Value::Number(_) => "number",
+        Value::String(_) => "string",
+        Value::Array(_) => "array",
+        Value::Object(_) => "object",
+    }
+}
+
+/// T94: the diagnostic appended to a param-extraction miss, naming what WAS
+/// received so an alias fumble (cycle-53 eval §2 I3: `old_string` sent where
+/// `old` is expected, three times, each error naming only the wanted field —
+/// self-reported as a tool bug) self-corrects in one iteration. Object input
+/// → the received keys, sorted, capped at [`RECEIVED_KEYS_CAP`] with a
+/// `, … (+N more)` suffix; an empty object → `(received keys: none)`. Any
+/// non-object input → the JSON type: `(received: array)`.
+fn received_hint(input: &Value) -> String {
+    match input {
+        Value::Object(map) => {
+            let mut keys: Vec<&str> = map.keys().map(String::as_str).collect();
+            keys.sort_unstable();
+            if keys.is_empty() {
+                return "(received keys: none)".to_string();
+            }
+            let total = keys.len();
+            keys.truncate(RECEIVED_KEYS_CAP);
+            let mut list = keys.join(", ");
+            if total > RECEIVED_KEYS_CAP {
+                list.push_str(&format!(", … (+{} more)", total - RECEIVED_KEYS_CAP));
+            }
+            format!("(received keys: {list})")
+        }
+        other => format!("(received: {})", json_type_name(other)),
+    }
+}
+
 pub(crate) fn get_str<'a>(input: &'a Value, key: &str) -> anyhow::Result<&'a str> {
     input
         .get(key)
         .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("missing or non-string field: {key}"))
+        .ok_or_else(|| anyhow!("missing or non-string field: {key} {}", received_hint(input)))
 }
 
 fn get_path(ctx: &ToolCtx, input: &Value) -> anyhow::Result<PathBuf> {
@@ -2024,5 +2070,136 @@ mod tests {
         );
         assert!(result.images.is_empty());
         let _ = fs::remove_file(&outside);
+    }
+
+    // ---- T94: `get_str` miss errors name the received keys (alias self-correction) ----
+
+    /// The exact t88 fumble (cycle-53 eval §2 I3): the Anthropic-canonical
+    /// `old_string`/`new_string` aliases sent to `edit_file`, which expects
+    /// `old`/`new`. The error must name the missing field AND list the
+    /// received keys sorted, so one-iteration self-correction is possible
+    /// instead of the model re-sending the same shape three times and
+    /// self-reporting a tool bug. Fires before any filesystem access
+    /// (`get_path`'s `resolve_safe` is lexical), so no fixture file needed.
+    #[test]
+    fn received_edit_file_alias_fumble_names_missing_key_and_sorted_received_keys() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ctx = ToolCtx {
+            cwd: tmp.path().to_path_buf(),
+            bash_timeout: Duration::from_secs(BASH_TIMEOUT_SECS),
+        };
+        let result = dispatch(
+            &ctx,
+            "edit_file",
+            &json!({"path": "f.txt", "old_string": "a", "new_string": "b"}),
+        );
+        assert!(result.is_error, "{}", result.content);
+        assert!(
+            result
+                .content
+                .contains("missing or non-string field: old"),
+            "the missing field is named: {}",
+            result.content
+        );
+        assert!(
+            result
+                .content
+                .contains("(received keys: new_string, old_string, path)"),
+            "received keys named in sorted order: {}",
+            result.content
+        );
+    }
+
+    /// Non-object input names the received JSON type instead (the T88 req-3
+    /// shape) — every non-object variant.
+    #[test]
+    fn received_non_object_input_names_the_json_type() {
+        for (input, ty) in [
+            (json!(["a", "b"]), "array"),
+            (json!("just a string"), "string"),
+            (json!(null), "null"),
+            (json!(42), "number"),
+            (json!(true), "boolean"),
+        ] {
+            let err = get_str(&input, "old").unwrap_err().to_string();
+            assert_eq!(
+                err,
+                format!("missing or non-string field: old (received: {ty})"),
+                "input: {input}"
+            );
+        }
+    }
+
+    /// An empty object has no keys to name: `(received keys: none)`.
+    #[test]
+    fn received_keys_none_for_empty_object() {
+        let err = get_str(&json!({}), "old").unwrap_err().to_string();
+        assert_eq!(err, "missing or non-string field: old (received keys: none)");
+    }
+
+    /// The key is present but not a string — still an object-input miss, so
+    /// the received-keys leg applies uniformly (the list shows the key IS
+    /// there under the right name, pointing at the value's type).
+    #[test]
+    fn received_key_present_but_non_string_still_names_received_keys() {
+        let err = get_str(&json!({"old": 42, "path": "f.txt"}), "old")
+            .unwrap_err()
+            .to_string();
+        assert_eq!(err, "missing or non-string field: old (received keys: old, path)");
+    }
+
+    /// Bound requirement: a 500-key object names the first 12 sorted keys,
+    /// then `, … (+N more)` — the error never balloons with the full list.
+    #[test]
+    fn received_keys_capped_at_twelve_with_more_suffix() {
+        let mut obj = serde_json::Map::new();
+        for i in 0..500 {
+            obj.insert(format!("k{i:03}"), json!(i));
+        }
+        let err = get_str(&Value::Object(obj), "old").unwrap_err().to_string();
+        assert!(
+            err.contains(
+                "(received keys: k000, k001, k002, k003, k004, k005, k006, k007, k008, k009, k010, k011, … (+488 more))"
+            ),
+            "{err}"
+        );
+        assert!(!err.contains("k012"), "list stops at the cap: {err}");
+        assert!(!err.contains("k499"), "tail keys omitted: {err}");
+    }
+
+    /// Exactly at the cap (12 keys): the full sorted list, no suffix.
+    #[test]
+    fn received_keys_at_exactly_twelve_have_no_suffix() {
+        let mut obj = serde_json::Map::new();
+        for i in 0..12 {
+            obj.insert(format!("k{i:02}"), json!(i));
+        }
+        let err = get_str(&Value::Object(obj), "old").unwrap_err().to_string();
+        assert_eq!(
+            err,
+            "missing or non-string field: old (received keys: k00, k01, k02, k03, k04, k05, k06, k07, k08, k09, k10, k11)"
+        );
+    }
+
+    /// Success path: present-and-string returns the value untouched — no
+    /// diagnostic anywhere, end-to-end edit_file still edits byte-identically.
+    /// (The byte-identical requirement is enforced suite-wide by the
+    /// pre-existing tools.rs tests, all green unmodified.)
+    #[test]
+    fn received_success_path_is_unchanged_clean_value_no_hint() {
+        assert_eq!(get_str(&json!({"old": "x"}), "old").unwrap(), "x");
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("f.txt"), "a b c").unwrap();
+        let ctx = ToolCtx {
+            cwd: tmp.path().to_path_buf(),
+            bash_timeout: Duration::from_secs(BASH_TIMEOUT_SECS),
+        };
+        let result = dispatch(
+            &ctx,
+            "edit_file",
+            &json!({"path": "f.txt", "old": "b", "new": "X"}),
+        );
+        assert!(!result.is_error, "{}", result.content);
+        assert_eq!(fs::read_to_string(tmp.path().join("f.txt")).unwrap(), "a X c");
     }
 }
