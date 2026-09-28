@@ -203,7 +203,12 @@ while [ ! -f "$STOP" ]; do
   echo "$(ts) routing: todo_rows=$(todo_rows TODO.md) eval_fresh=$(eval_fresh EVALUATION.md && echo yes || echo no) -> $mode cycle on $orch_model" >> "$LOG"
   echo "$(ts) cycle start -> $cycle_log ($mode cycle, orchestrator $orch_model)" >> "$LOG"
   echo "[loopd $(ts)] T81 routing: $mode cycle — orchestrator model $orch_model" > "$cycle_log"
-  # cycle budget: fresh Phase 1 ≈45–55 iters + ~28–35/item + ~10 wrap (cycle-16 eval Q1); 160 fits eval + 3 items + wrap; minutes never binding (56–117 of 240)
+  # cycle budget: eval ≈45–55 + items ≈28–35 each + wrap ≈10 ⇒ a 5-item eval
+  # cycle wants ≈195–240 — 200 fits it with a slim margin (T121). Cycle-61
+  # (2026-09-28) died 160/160 POST-wrap, pre-goal_complete (5-item eval
+  # queue; minutes 171/240 — never binding). The cap is also the stuck-cycle
+  # detector, so 200 costs ≤40 extra stuck iterations per stuck cycle before
+  # the HALT guard (3 consecutive failed cycles) trips.
   # T47: the shared cache reaches the cycle as a per-invocation env prefix on
   # the chug call — NEVER as a bare `export`. An export inside this while loop
   # would persist in the supervisor's environment across iterations, so from
@@ -215,7 +220,7 @@ while [ ! -f "$STOP" ]; do
   # ./target/release/chug keeps resolving to a freshly built binary.
   CARGO_TARGET_DIR="$ROOT/target-shared" ./target/release/chug run --spec LOOP-SPEC.md \
     --goal "Run the full self-improvement cycle per LOOP-SPEC: evaluate or skip per the freshness rule, work the queue (features are first-class per the amended doctrine — close capability gaps, not only harden), adversarial validation for core-logic items, you own all bookkeeping, push after each item lands green + remainder at wrap. Your wrap IS the next cycle's input — leave TODO.md, EVALUATION.md and specs/ such that a cold next cycle needs zero human words." \
-    --model "$orch_model" --max-iters 160 --max-minutes 240 \
+    --model "$orch_model" --max-iters 200 --max-minutes 240 \
     >> "$cycle_log" 2>&1
   if grep -q "chug: goal complete" "$cycle_log"; then
     summary=$(grep "^summary:" "$cycle_log" | head -1 | cut -c1-200)
