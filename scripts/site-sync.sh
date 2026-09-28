@@ -170,7 +170,12 @@ cycle_count() { # -> "<n>\t<source text>"
     return
   fi
   if [ -d "$CHUG/.chug/loopd" ]; then
-    n=$(grep -l 'chug: goal complete' "$CHUG"/.chug/loopd/cycle-*.log 2>/dev/null | wc -l | tr -d ' ')
+    # T142: count the supervisor's own rc-based verdict stamps, never raw
+    # child bytes — model text reaches a cycle log verbatim, so a spoofed
+    # `chug: goal complete` line in a failed cycle must not inflate the
+    # public cycle count (loopd.sh stamps `verdict: ...` from the child's
+    # exit status; logs older than that stamp carry none and count 0).
+    n=$(grep -l 'verdict: goal complete (rc=0)' "$CHUG"/.chug/loopd/cycle-*.log 2>/dev/null | wc -l | tr -d ' ')
     printf '%s\tcycle logs that reached goal complete (.chug/loopd/cycle-*.log)' "${n:-0}"
     return
   fi

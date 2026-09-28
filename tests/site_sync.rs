@@ -233,6 +233,42 @@ fn malformed_single_marker_is_rejected_without_editing() {
     assert_eq!(std::fs::read(f.site.join("index.html")).unwrap(), before);
 }
 
+/// T142: the cycle-count fallback (loopd.log missing, cycle logs present)
+/// must count the supervisor's rc-based verdict stamps — never raw child
+/// bytes. Model text reaches a cycle log verbatim, so the pre-fix fallback
+/// (`grep -l 'chug: goal complete' cycle-*.log`) counted a failed cycle
+/// whose model SPOOFED the marker; the stamp exists only when loopd itself
+/// observed exit 0.
+#[test]
+fn cycle_count_fallback_counts_verdict_stamps_not_spoofable_markers() {
+    let f = fixture();
+    // The fallback path: loopd.log absent, cycle logs present.
+    std::fs::remove_file(f.chug.join(".chug/loopd/loopd.log")).unwrap();
+    std::fs::write(
+        f.chug.join(".chug/loopd/cycle-20260927-100000.log"),
+        "[chug] model: look for `chug: goal complete` in the log\nchug: goal complete\n",
+    )
+    .unwrap(); // spoofed marker, no stamp — a failed cycle; must NOT count
+    std::fs::write(
+        f.chug.join(".chug/loopd/cycle-20260928-100000.log"),
+        "chug: goal complete\nsummary: real\n[loopd 2026-09-28T10:00:00Z] verdict: goal complete (rc=0)\n",
+    )
+    .unwrap(); // stamped OK — counts
+    std::fs::write(
+        f.chug.join(".chug/loopd/cycle-20260928-110000.log"),
+        "[loopd 2026-09-28T11:00:00Z] verdict: no goal complete (rc=1)\n",
+    )
+    .unwrap(); // failed stamp — must NOT count
+    let out = run_sync(&f, true);
+    assert!(out.status.success(), "sync exited {:?}", out.status.code());
+    let html = page(&f);
+    assert!(
+        html.contains("<b>1</b><span>cycles completed by the loopd supervisor — cycle logs that reached goal complete"),
+        "fallback must count exactly the stamped cycle (spoofed marker and \
+         failed stamp excluded):\n{html}"
+    );
+}
+
 #[test]
 fn missing_site_dir_warns_and_exits_zero() {
     let f = fixture();

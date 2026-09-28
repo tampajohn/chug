@@ -218,12 +218,34 @@ while [ ! -f "$STOP" ]; do
   # orchestrator process and the delegate children that inherit its launch
   # env; the supervisor's own build above always stays in ./target, so
   # ./target/release/chug keeps resolving to a freshly built binary.
-  CARGO_TARGET_DIR="$ROOT/target-shared" ./target/release/chug run --spec LOOP-SPEC.md \
+  # T142: the cycle verdict is the child's EXIT STATUS, never a log grep.
+  # Model text reaches the cycle log verbatim (raw stderr deltas, the F7
+  # raw-bytes doctrine), so a run that died on verification or budget while
+  # SAYING "chug: goal complete" used to satisfy the old log grep: the cycle
+  # was recorded OK, the failure counter reset, and site sync ran with no
+  # accepted goal. driver.rs maps run-mode exit 0 ⟺ accepted goal
+  # (RunFinished(0) only on the verified path; budget/abort exit 1, stuck 2),
+  # so the rc decides. The child's stdout — the only stream the
+  # goal-complete block is printed on — is captured apart from the mixed
+  # stderr log, so a model-forged `chug: goal complete` or `summary:` line
+  # can neither satisfy the marker grep nor shadow the recorded summary; the
+  # capture is appended back to the cycle log so the forensic record keeps
+  # the block. The supervisor then stamps its own rc-based verdict line into
+  # the cycle log — the only thing downstream consumers (site-sync's cycle
+  # count) may count, never raw child bytes.
+  chug_rc=0
+  chug_out="$(CARGO_TARGET_DIR="$ROOT/target-shared" ./target/release/chug run --spec LOOP-SPEC.md \
     --goal "Run the full self-improvement cycle per LOOP-SPEC: evaluate or skip per the freshness rule, work the queue (features are first-class per the amended doctrine — close capability gaps, not only harden), adversarial validation for core-logic items, you own all bookkeeping, push after each item lands green + remainder at wrap. Your wrap IS the next cycle's input — leave TODO.md, EVALUATION.md and specs/ such that a cold next cycle needs zero human words." \
     --model "$orch_model" --max-iters 200 --max-minutes 240 \
-    >> "$cycle_log" 2>&1
-  if grep -q "chug: goal complete" "$cycle_log"; then
-    summary=$(grep "^summary:" "$cycle_log" | head -1 | cut -c1-200)
+    2>> "$cycle_log")" || chug_rc=$?
+  printf '%s\n' "$chug_out" >> "$cycle_log"
+  if [ "$chug_rc" -eq 0 ]; then
+    echo "[loopd $(ts)] verdict: goal complete (rc=$chug_rc)" >> "$cycle_log"
+  else
+    echo "[loopd $(ts)] verdict: no goal complete (rc=$chug_rc)" >> "$cycle_log"
+  fi
+  if [ "$chug_rc" -eq 0 ] && printf '%s\n' "$chug_out" | grep -q "chug: goal complete"; then
+    summary=$(printf '%s\n' "$chug_out" | grep "^summary:" | head -1 | cut -c1-200)
     echo "$(ts) cycle OK: $summary" >> "$LOG"
     # T98: best-effort site stats sync — one line, failure-tolerant. The
     # script itself never fails a cycle (missing clone / rejected push /
