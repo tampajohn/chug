@@ -611,8 +611,10 @@ struct StreamAccumulator<'a> {
     open: Option<OpenBlock>,
     /// `message_delta`'s stop_reason, passed through.
     stop_reason: Option<String>,
-    /// `message_start`'s usage object, with `message_delta`'s output_tokens
-    /// merged over it (the non-streaming shape: input + final output).
+    /// `message_start`'s usage object, with `message_delta`'s usage merged
+    /// over it (the non-streaming shape: input + final output). T112: the
+    /// delta's input-side fields merge too when it carries them — some
+    /// proxies defer the real counts (input included) to `message_delta`.
     usage: Value,
     /// First latched error, if any. Later feeds are ignored once latched.
     error: Option<StreamError>,
@@ -932,15 +934,41 @@ impl<'a> StreamAccumulator<'a> {
                 if let Some(reason) = delta.get("stop_reason").and_then(Value::as_str) {
                     self.stop_reason = Some(reason.to_string());
                 }
-                if let Some(output) = data
-                    .get("usage")
-                    .and_then(|u| u.get("output_tokens"))
-                    .and_then(Value::as_u64)
-                {
-                    if self.usage.is_null() {
-                        self.usage = json!({"output_tokens": output});
-                    } else {
-                        self.usage["output_tokens"] = json!(output);
+                // T112: merge the delta's usage over the `message_start`
+                // skeleton. `output_tokens` keeps today's shape — the delta
+                // always carries the FINAL count and it overwrites
+                // unconditionally. The input-side fields merge only when the
+                // delta carries them (delta wins — latest is freshest); on
+                // the real Anthropic API `message_delta.usage` carries only
+                // `output_tokens`, so that merge is a no-op there and the
+                // T108 parity pins stay green. But some proxies send
+                // placeholder zeros in `message_start` and the real counts —
+                // input included — ONLY in `message_delta`; observed live on
+                // tools-proxy.videoamp-internal.com (cycle-61 probe):
+                //   message_start: "usage":{"input_tokens":0,"output_tokens":0}
+                //   message_delta: "usage":{"input_tokens":257,"output_tokens":1}
+                // Discarding that input made every streamed run report
+                // `input_tokens: 0` — ~95% of agentic-loop tokens invisible
+                // to T15 budget enforcement.
+                if let Some(usage) = data.get("usage").and_then(Value::as_object) {
+                    if let Some(output) = usage.get("output_tokens").and_then(Value::as_u64) {
+                        if self.usage.is_null() {
+                            self.usage = json!({"output_tokens": output});
+                        } else {
+                            self.usage["output_tokens"] = json!(output);
+                        }
+                    }
+                    for field in [
+                        "input_tokens",
+                        "cache_read_input_tokens",
+                        "cache_creation_input_tokens",
+                    ] {
+                        if let Some(count) = usage.get(field).and_then(Value::as_u64) {
+                            if self.usage.is_null() {
+                                self.usage = json!({});
+                            }
+                            self.usage[field] = json!(count);
+                        }
                     }
                 }
                 Ok(())
@@ -2446,6 +2474,88 @@ mod tests {
             }
         );
         assert_eq!(resp.stop_reason().as_deref(), Some("end_turn"));
+    }
+
+    /// T112 regression pin — the EXACT observed production shape
+    /// (tools-proxy.videoamp-internal.com, cycle-61 live probe): the proxy
+    /// sends placeholder zeros in `message_start` and the real counts — input
+    /// included — only in `message_delta`. The delta's usage must merge over
+    /// the skeleton so `usage()` reports the real run totals (pre-fix every
+    /// streamed run read `input_tokens: 0`, ~95% of agentic-loop tokens
+    /// invisible to T15 budget enforcement).
+    #[test]
+    fn accumulator_message_delta_usage_merges_input_over_zero_skeleton() {
+        let mut acc = StreamAccumulator::new(None);
+        acc_feed_all(
+            &mut acc,
+            &[
+                &sse_stream(&[json!({
+                    "type": "message_start",
+                    "message": {"id": "msg_1", "model": "m",
+                                "usage": {"input_tokens": 0, "output_tokens": 0}}
+                })]),
+                "event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"input_tokens\":257,\"output_tokens\":1}}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+            ],
+        );
+        let resp = Response { body: acc.finish().unwrap() };
+        let usage = resp.usage();
+        assert_eq!(usage.input, 257);
+        assert_eq!(usage.output, 1);
+        assert_eq!(usage.total, 258);
+    }
+
+    /// T112: a `message_delta` carrying the input-side cache fields merges
+    /// them over the `message_start` skeleton (delta wins — latest is
+    /// freshest).
+    #[test]
+    fn accumulator_message_delta_usage_merges_cache_fields() {
+        let mut acc = StreamAccumulator::new(None);
+        acc_feed_all(
+            &mut acc,
+            &[
+                &sse_stream(&[json!({
+                    "type": "message_start",
+                    "message": {"id": "msg_1", "model": "m",
+                                "usage": {"input_tokens": 100, "output_tokens": 1}}
+                })]),
+                "event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"input_tokens\":180,\"output_tokens\":20,\"cache_read_input_tokens\":64,\"cache_creation_input_tokens\":7}}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+            ],
+        );
+        let body = acc.finish().unwrap();
+        let usage = Response { body: body.clone() }.usage();
+        assert_eq!(usage.input, 180);
+        assert_eq!(usage.output, 20);
+        assert_eq!(usage.total, 200);
+        assert_eq!(usage.cache_read_input_tokens, Some(64));
+        // `cache_creation_input_tokens` rides the synthesized body's usage
+        // object (observ::Usage has no slot for it — same as non-streaming).
+        assert_eq!(body["usage"]["cache_creation_input_tokens"], 7);
+    }
+
+    /// T112 no-op leg — today's real-API shape: `message_start` carries the
+    /// real input count and `message_delta.usage` carries ONLY
+    /// `output_tokens`. The input-side merge must be a no-op there, keeping
+    /// the `message_start` input (T108 parity pins stay green untouched).
+    #[test]
+    fn accumulator_message_delta_without_input_fields_keeps_message_start_usage() {
+        let mut acc = StreamAccumulator::new(None);
+        acc_feed_all(
+            &mut acc,
+            &[
+                &sse_stream(&[msg_start()]),
+                "event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":20}}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+            ],
+        );
+        let resp = Response { body: acc.finish().unwrap() };
+        assert_eq!(
+            resp.usage(),
+            crate::observ::Usage {
+                input: 100,
+                output: 20,
+                total: 120,
+                cache_read_input_tokens: Some(64),
+            }
+        );
     }
 
     /// The sse.rs parser-feed_split_across_chunks pattern, at full strength:
