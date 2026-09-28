@@ -108,6 +108,17 @@ exempt — the estimate line says so (the T104/T109 lesson: a 3,100-line
 byte-identical test move lands first-try at 75/80 — moved lines are not
 novel-logic lines; the T108 lesson: a ~700–900-line row is too big for
 any single-child budget, and filing time is where that must be decided).
+The estimate counts ALL changed lines — src + tests + docs — and
+feature-row test/doc density has empirically run ~1.5–3x the src diff
+(T113 ~455→583, T115 ~130→398, T116 ~30→116, T117 ~280→603 — the last
+died mid-impl at 80/80 with the work uncommitted, the cost of
+undershoot), so a novel-logic row whose all-in estimate exceeds ~400
+SHOULD be split at filing time even though the hard ceiling stays
+~500 — the band absorbs the observed undershoot, and the mechanical
+byte-identical move-row exemption is unchanged and applies to both
+numbers. Each evaluation re-checks landed actuals against filing
+estimates (the Outcomes records) and re-calibrates in the eval text —
+it does not edit the threshold number in passing.
 Priority doctrine: bugs > robustness > features > DX
 friction > performance — features are first-class (LOOP-SPEC §2): at
 equal pri, a credible feature row is worked before a DX-friction row.

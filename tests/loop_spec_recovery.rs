@@ -77,6 +77,27 @@
 //! budget-death-recovery paragraphs) and the sed-assertion rule inside
 //! step 5 (beside the TODO.md bookkeeping-edit discipline), both
 //! exactly-once + windowed in the T64/T114 pattern.
+//!
+//! T125 doctrine: the T110 estimate ceiling is only as good as the
+//! estimate under it, and the era's landed actuals show estimates
+//! undershooting SYSTEMATICALLY on feature rows, where test + doc density
+//! multiplies the src diff (T113 ~455→583, T115 ~130→398, T116 ~30→116,
+//! T117 ~280→603 — the last died mid-impl at 80/80, uncommitted, costing
+//! a T63 resume; its TRUE size was over the ~500 ceiling the ~280
+//! estimate claimed to be under). The failure mode is estimate ERROR, not
+//! ceiling value — a ~500 ceiling cannot catch a row filed at "~280" that
+//! lands at 603. META-META-SPEC's bar now carries the calibration rule
+//! beside the ceiling sentence it qualifies: estimates count ALL changed
+//! lines (src + tests + docs) at the observed ~1.5–3x test/doc density, a
+//! novel-logic row whose all-in estimate exceeds ~400 SHOULD split at
+//! filing time (the hard ~500 ceiling and the byte-identical move-row
+//! exemption are unchanged), and each evaluation re-calibrates from the
+//! Outcomes records instead of editing the threshold in passing. Legs
+//! (m)–(n) pin it in the T64/T114 pattern: the three load-bearing tokens
+//! exactly-once in META-META-SPEC.md, inside the spec-quality-bar window,
+//! after the estimate-ceiling sentence and before the Priority doctrine
+//! sentence — the same paragraph region evaluators read top-to-bottom at
+//! filing time.
 
 /// The leg's signature phrase: "resume" + the one-attempt cap language in
 /// one contiguous run. Must occur EXACTLY once in LOOP-SPEC.md.
@@ -696,5 +717,132 @@ fn sed_no_match_needle_occurs_exactly_once_inside_step_5() {
         "step 5's window must carry {SED_NO_MATCH:?} — the \
          edit-assertion rule was deleted, or moved out of step 5's \
          bookkeeping window"
+    );
+}
+
+// ---- T125 — the estimate-calibration rule (the ~400 should-split band) ----
+//
+// The T110 ceiling is only as good as the estimate under it, and the era's
+// landed actuals show estimates undershooting SYSTEMATICALLY on feature
+// rows, where test + doc density multiplies the src diff — T117's ~280
+// estimate landed at +603 and its impl child died mid-impl at 80/80, the
+// named cost of undershoot. The bar now carries the calibration rule
+// beside the ceiling sentence it qualifies; these legs pin it in the
+// T64/T114 pattern: the three load-bearing tokens exactly-once in
+// META-META-SPEC.md, inside the spec-quality-bar window, after the
+// estimate-ceiling sentence and before the Priority doctrine sentence —
+// the same paragraph region evaluators read top-to-bottom at filing time.
+
+/// The should-split band's threshold needle — the all-in estimate above
+/// which a novel-logic row SHOULD split at filing time even though the
+/// hard ~500 ceiling is unchanged. Must occur EXACTLY once in
+/// META-META-SPEC.md.
+const SPLIT_BAND_NEEDLE: &str = "~400";
+
+/// The evidence token — T117, the row whose ~280 estimate landed at +603
+/// and whose impl child died mid-impl at 80/80 with the work uncommitted:
+/// the named cost of undershoot. Must occur EXACTLY once in
+/// META-META-SPEC.md.
+const EVIDENCE_TOKEN_NEEDLE: &str = "T117";
+
+/// The density claim's needle — the observed test/doc density range the
+/// src diff multiplies by, in one contiguous run (the en dash is spelled
+/// as an escape so an editor normalization cannot silently unpin it:
+/// \u{2013} = en dash, matching the bar's existing `2–3 rows` dash).
+/// Must occur EXACTLY once in META-META-SPEC.md.
+const DENSITY_NEEDLE: &str = "1.5\u{2013}3x";
+
+/// The Priority doctrine sentence that opens the bar's next claim — the
+/// calibration rule must sit BEFORE it, i.e. in the same paragraph region
+/// as the estimate-ceiling sentence, not a new section.
+const PRIORITY_DOCTRINE: &str = "Priority doctrine:";
+
+/// (m) T125 — the calibration rule's three load-bearing tokens occur
+/// EXACTLY once each in META-META-SPEC.md. Delete the rule and all three
+/// go red (count 0); a duplicate statement of any token elsewhere (or a
+/// needle rewrapped across a line break) also goes red.
+#[test]
+fn estimate_calibration_tokens_occur_exactly_once() {
+    // Needle self-check (T48 idiom): a mangled needle must not let this
+    // pin pass silently.
+    assert!(
+        SPLIT_BAND_NEEDLE.starts_with('~') && SPLIT_BAND_NEEDLE.contains("400"),
+        "the band needle must be the ~400 should-split threshold verbatim"
+    );
+    assert!(
+        EVIDENCE_TOKEN_NEEDLE.starts_with('T') && EVIDENCE_TOKEN_NEEDLE.ends_with("117"),
+        "the evidence needle must be the T117 token verbatim"
+    );
+    assert!(
+        DENSITY_NEEDLE.starts_with("1.5") && DENSITY_NEEDLE.ends_with("3x"),
+        "the density needle must be the 1.5–3x range verbatim, en dash included"
+    );
+    let spec = meta_meta_spec();
+    for (needle, what) in [
+        (SPLIT_BAND_NEEDLE, "the ~400 should-split band threshold"),
+        (EVIDENCE_TOKEN_NEEDLE, "the T117 undershoot-cost evidence token"),
+        (DENSITY_NEEDLE, "the ~1.5–3x test/doc density claim"),
+    ] {
+        assert_eq!(
+            spec.matches(needle).count(),
+            1,
+            "META-META-SPEC must state {what} exactly once — zero means the \
+             calibration rule was deleted (or the needle was rewrapped \
+             across a line break), more than one means it is stated twice"
+        );
+    }
+}
+
+/// (n) T125 — the calibration rule sits INSIDE the spec-quality-bar window
+/// (the T64 loose-heading scope pattern: the "## Extend `TODO.md`" heading
+/// through the next "## Handoff" heading), AFTER the estimate-ceiling
+/// sentence (T110) it qualifies and BEFORE the Priority doctrine sentence
+/// that opens the bar's next claim — the same paragraph region, not a new
+/// section. The rule reads top-to-bottom as the bar demands: the density
+/// claim, then its evidence token, then the remedy band.
+#[test]
+fn estimate_calibration_rule_sits_after_ceiling_sentence_inside_quality_bar() {
+    let spec = meta_meta_spec();
+    let start = spec
+        .find(EXTEND_TODO_HEADING)
+        .expect("the Extend-TODO heading present");
+    let end = start
+        + spec[start..]
+            .find(HANDOFF_HEADING)
+            .expect("the Handoff heading present after the Extend-TODO heading");
+    let window = &spec[start..end];
+    let ceiling = window
+        .find(ESTIMATE_SENTENCE)
+        .expect("the spec-quality-bar window must carry the estimate-ceiling \
+                 sentence (T110)");
+    let density = window.find(DENSITY_NEEDLE).unwrap_or_else(|| {
+        panic!(
+            "the spec-quality-bar window must carry {DENSITY_NEEDLE:?} \
+             (density claim deleted, or moved out of the quality bar?)"
+        )
+    });
+    let evidence = window.find(EVIDENCE_TOKEN_NEEDLE).unwrap_or_else(|| {
+        panic!(
+            "the spec-quality-bar window must carry {EVIDENCE_TOKEN_NEEDLE:?} \
+             (evidence token deleted, or moved out of the quality bar?)"
+        )
+    });
+    let band = window.find(SPLIT_BAND_NEEDLE).unwrap_or_else(|| {
+        panic!(
+            "the spec-quality-bar window must carry {SPLIT_BAND_NEEDLE:?} \
+             (should-split band deleted, or moved out of the quality bar?)"
+        )
+    });
+    let priority = window
+        .find(PRIORITY_DOCTRINE)
+        .expect("the spec-quality-bar window must carry the Priority doctrine \
+                 sentence (bar reordered?)");
+    assert!(
+        ceiling < density && density < evidence && evidence < band && band < priority,
+        "the calibration rule must sit in the same paragraph region as the \
+         estimate ceiling, after it and before the Priority doctrine \
+         sentence — ceiling ({ceiling}), density claim ({density}), \
+         evidence token ({evidence}), remedy band ({band}), priority \
+         doctrine ({priority})"
     );
 }
