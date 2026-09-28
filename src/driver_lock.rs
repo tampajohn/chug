@@ -23,6 +23,23 @@
 //! discipline). Probes return bool; "error" maps to false exactly once, at
 //! the probe boundary, and never aborts the run.
 //!
+//! T135 (codex adversarial review: "two concurrent starters can both acquire
+//! driver.lock"): read-after-write verification alone does not make
+//! acquisition atomic — two starters that both read the same absent/stale
+//! lock can both write and both verify their own pid (the second's write
+//! lands after the first's verify). The whole read → decide → write → verify
+//! critical section therefore runs under a kernel-level mutex: an exclusive
+//! advisory `flock` on the `.chug` directory itself ([`dir_mutex`]; the
+//! directory inode is stable, unlike `driver.lock`'s, which release unlinks).
+//! [`Guard::drop`]'s compare-then-delete is swept under the same mutex — the
+//! same read-then-act shape, where a racing reclaimer's rewrite could
+//! otherwise be deleted by the guard it replaced. If the mutex is
+//! unobtainable (flock unsupported on the filesystem, budget expired), the
+//! run degrades to the pre-T135 best-effort behavior with a warning — never
+//! abort, never hang (T20). `simultaneous_starters_only_one_decides_from_an_
+//! absent_lock` pins the invariant: exactly one acquirer may decide from an
+//! absent lock.
+//!
 //! Release is best-effort on every normal exit path (the [`Guard`] drops
 //! when `run_loop` returns — goal accepted, abort, budget death, error
 //! unwind). SIGKILL bypasses destructors BY DESIGN: the holder dies without
@@ -43,6 +60,10 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+#[cfg(unix)]
+use std::os::unix::io::AsRawFd;
+#[cfg(unix)]
+use std::time::Duration;
 
 /// The lock file name under `<cwd>/.chug/`.
 const LOCK_FILE: &str = "driver.lock";
@@ -65,6 +86,63 @@ pub enum HolderStatus {
 /// Path of the lock file under `cwd`.
 pub fn lock_path(cwd: &Path) -> PathBuf {
     cwd.join(".chug").join(LOCK_FILE)
+}
+
+/// T135 — bounded wait for the acquisition mutex. Another acquirer holds the
+/// critical section for microseconds; 300 × 10ms covers pathological
+/// scheduling without ever hanging startup. (The T135 test's absent-reading
+/// gate holds it ~300ms by design, so this budget must stay well above that.)
+#[cfg(unix)]
+const MUTEX_TRIES_ACQUIRE: u32 = 300;
+/// Release-side budget: a run's exit must never stall for long.
+#[cfg(unix)]
+const MUTEX_TRIES_RELEASE: u32 = 50;
+#[cfg(unix)]
+const MUTEX_RETRY_PAUSE: Duration = Duration::from_millis(10);
+
+/// T135 — the acquisition mutex: an exclusive advisory `flock` on the `.chug`
+/// DIRECTORY itself (not on `driver.lock`, which [`Guard::drop`] unlinks — a
+/// file-based mutex would swap inodes under unlink+recreate and stop
+/// excluding). The directory's inode is stable for the life of the cwd, so
+/// this is a real kernel-level mutual-exclusion primitive across processes
+/// AND across separately-opened descriptors in one process (flock semantics),
+/// which is what makes the read → decide → write → verify critical section of
+/// [`acquire`] atomic: two simultaneous starters can no longer both read the
+/// same absent/stale state and both write (the reviewed race). `LOCK_NB` +
+/// bounded retries: an acquirer stuck inside the section costs a bounded
+/// wait, never a hang. `None` (cannot open the directory, `flock` unsupported
+/// on this filesystem, or the budget expired) degrades the caller to the
+/// pre-T135 best-effort path with a warning — T20 never-fail, no new abort or
+/// hang legs on the startup path. Dropping the returned file releases the
+/// mutex (close semantics).
+#[cfg(unix)]
+fn dir_mutex(dir: &Path, tries: u32) -> Option<fs::File> {
+    let file = fs::File::open(dir).ok()?;
+    for _ in 0..tries {
+        // SAFETY: flock(2) on a descriptor this function opened; the
+        // LOCK_EX | LOCK_NB combination is an advisory exclusive lock that
+        // never blocks.
+        let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+        if rc == 0 {
+            return Some(file);
+        }
+        if std::io::Error::last_os_error().raw_os_error() != Some(libc::EWOULDBLOCK) {
+            // flock unsupported here (e.g. some network filesystems) — the
+            // mutex is unobtainable; degrade rather than spin or abort.
+            return None;
+        }
+        std::thread::sleep(MUTEX_RETRY_PAUSE);
+    }
+    None // held for the whole budget — degrade, never hang
+}
+
+/// Non-unix: no `flock` — the mutex is unobtainable and every caller degrades
+/// to the pre-T135 best-effort behavior (the same shape as `pid_alive`'s
+/// non-unix leg).
+#[cfg(not(unix))]
+fn dir_mutex(_dir: &Path, _tries: u32) -> Option<fs::File> {
+    let _ = (_dir, _tries);
+    None
 }
 
 /// The pure decision matrix (T28/T20 seam style): given the lock file's
@@ -170,12 +248,27 @@ pub struct Guard {
 ///   and exiting non-zero (the startup-error convention in `main.rs`).
 ///
 /// Creates `.chug/` if needed, so this can sit BEFORE the first transcript
-/// rotation/append and serialize the rotations too. A concurrent starter may
-/// race the write; the write is verified and re-evaluated a bounded number
-/// of times before degrading to lockless continuation. Unwritable lock
+/// rotation/append and serialize the rotations too. Two simultaneous starters
+/// are serialized by the kernel mutex (see [`dir_mutex`] and the T135 module
+/// note) — only one of them can decide from the same absent/stale lock state;
+/// the other refuses against a live chug or reclaims a provably dead one. The
+/// read-after-write verify loop stays as a second line of defense (a
+/// non-cooperating writer that ignores the mutex) and re-evaluates a bounded
+/// number of times before degrading to lockless continuation. Unwritable lock
 /// infrastructure degrades the same way — warn on stderr, run anyway
 /// (T20: no new abort legs on the startup path).
 pub fn acquire(cwd: &Path) -> Result<Guard, String> {
+    acquire_with(cwd, std::process::id(), &|_| {})
+}
+
+/// The acquire body with the two knobs the T135 simultaneous-acquisition test
+/// needs: the holder pid this process would record (production: the real pid)
+/// and an observer invoked with the raw contents of every lock read that a
+/// decision is made from (production: a no-op). The observer is the test's
+/// synchronization point — it fires AFTER a read and BEFORE any write, so a
+/// test can pin both racers at "both have read the same absent lock" and then
+/// let them write, reproducing the reviewed interleaving deterministically.
+fn acquire_with(cwd: &Path, me: u32, observe: &dyn Fn(Option<&str>)) -> Result<Guard, String> {
     let path = lock_path(cwd);
     let dir = path.parent().unwrap_or(cwd).to_path_buf();
     if let Err(e) = fs::create_dir_all(&dir) {
@@ -183,11 +276,28 @@ pub fn acquire(cwd: &Path) -> Result<Guard, String> {
             "chug: warning: could not create {} ({e}); continuing without the driver lock",
             dir.display()
         );
-        return Ok(Guard { path: None, pid: std::process::id() });
+        return Ok(Guard { path: None, pid: me });
     }
-    let me = std::process::id();
+    // T135: EVERYTHING below — the read → decide → write → verify loop — is
+    // the critical section. Hold the kernel mutex across all of it (loop
+    // iterations included) so two simultaneous starters can never both read
+    // the same absent/stale lock and both write. The read-after-write verify
+    // alone is not atomic: a starter that writes after our verify still slips
+    // past it, which is exactly the reviewed both-proceed interleaving. When
+    // the mutex cannot be taken, the loop still runs — best-effort, warned,
+    // as before T135 (T20 never-fail).
+    let mutex = dir_mutex(&dir, MUTEX_TRIES_ACQUIRE);
+    if mutex.is_none() {
+        eprintln!(
+            "chug: warning: could not take the .chug acquisition mutex in {} (busy or \
+             unsupported filesystem); acquiring the driver lock best-effort without it",
+            dir.display()
+        );
+    }
+    let _mutex = mutex; // held across the loop; dropping releases
     for _ in 0..3 {
         let contents = fs::read_to_string(&path).ok();
+        observe(contents.as_deref());
         if let HolderStatus::Held(pid) =
             holder_status(contents.as_deref(), pid_alive, argv_names_chug)
         {
@@ -243,6 +353,14 @@ impl Drop for Guard {
         let Some(path) = self.path.take() else {
             return; // never held the file — nothing to release
         };
+        // T135 sweep (same read-then-act shape as acquisition): the
+        // compare-then-delete below must not race a concurrent acquirer. A
+        // reclaimer rewrites the lock under the same kernel mutex; taking it
+        // here closes the window where we read "still ours", a reclaimer
+        // rewrites, and our unlink then deletes THEIR exclusion. Best-effort:
+        // without the mutex we fall through to the unlocked
+        // compare-then-delete, which errs on the side of keeping the file.
+        let _mutex = path.parent().and_then(|dir| dir_mutex(dir, MUTEX_TRIES_RELEASE));
         // Compare-then-delete: unlink only when the file still names OUR
         // pid. If a concurrent acquirer reclaimed and rewrote the lock
         // (it believed us dead), deleting it would orphan THEIR exclusion.
@@ -261,6 +379,9 @@ impl Drop for Guard {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
+    use std::time::{Duration, Instant};
 
     // ---------- T55 pure decision matrix (injectable probes) ----------
 
@@ -457,6 +578,118 @@ mod tests {
         );
         drop(guard);
         assert!(!lock_path(tmp.path()).exists());
+    }
+
+    // ---------- T135: simultaneous acquisition (the reviewed race) ----------
+
+    /// Fake holder pids for the racers. Beyond every platform's pid_max
+    /// (Linux caps at 4194304, macOS at ~99998) yet parseable (≤ i32::MAX),
+    /// so `pid_alive` reports them dead on any machine and the decision is
+    /// probe-environment-independent.
+    const RACER_A: u32 = 900_000_001;
+    const RACER_B: u32 = 900_000_002;
+
+    /// How long a racer that has read the absent lock waits for the OTHER
+    /// racer to read it too (the review's synchronization point). Must stay
+    /// below the acquisition-mutex retry budget in production code
+    /// (MUTEX_TRIES_ACQUIRE × MUTEX_RETRY_PAUSE), or the post-fix loser
+    /// could time out of the mutex and read absent after all.
+    const ABSENT_GATE: Duration = Duration::from_millis(300);
+
+    /// Shared observation log for the T135 racers: (racer pid, the raw lock
+    /// contents its deciding read saw — `None` when absent).
+    type Observed = Vec<(u32, Option<String>)>;
+
+    /// T135 — the reviewed interleaving, pinned: two starters both read an
+    /// absent lock (synchronized AFTER the read, per
+    /// reviews/CODEX-REVIEW-20260928.md §"Lock tests exercise sequential
+    /// acquisition"), then both write and verify. Exactly ONE of them may
+    /// decide from an absent lock — a decision made from absent while
+    /// another starter's write is already observable is the lost update that
+    /// let both proceed into transcript housekeeping. The acquiring decision
+    /// must also be ordered AFTER the winner's write: the second decider's
+    /// first observation must name the winner's pid.
+    #[test]
+    fn simultaneous_starters_only_one_decides_from_an_absent_lock() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cwd = tmp.path().to_path_buf();
+        let absent = Arc::new(AtomicUsize::new(0));
+        let log: Arc<Mutex<Observed>> = Arc::new(Mutex::new(Vec::new()));
+
+        let racer = |pid: u32,
+                     cwd: PathBuf,
+                     absent: Arc<AtomicUsize>,
+                     log: Arc<Mutex<Observed>>| {
+            std::thread::spawn(move || {
+                let gate = absent.clone();
+                let logged = log.clone();
+                let observe = move |seen: Option<&str>| {
+                    if seen.is_none() && gate.fetch_add(1, Ordering::SeqCst) == 0 {
+                        // First reader here: hold until the second racer has
+                        // ALSO read the absent lock (or the gate times out —
+                        // post-fix the loser is locked out and cannot read).
+                        let deadline = Instant::now() + ABSENT_GATE;
+                        while gate.load(Ordering::SeqCst) < 2 && Instant::now() < deadline {
+                            std::thread::sleep(Duration::from_millis(5));
+                        }
+                    }
+                    logged.lock().unwrap().push((pid, seen.map(str::to_string)));
+                };
+                acquire_with(&cwd, pid, &observe)
+            })
+        };
+
+        let t1 = racer(RACER_A, cwd.clone(), absent.clone(), log.clone());
+        let t2 = racer(RACER_B, cwd.clone(), absent.clone(), log.clone());
+        let g1 = t1.join().unwrap();
+        let g2 = t2.join().unwrap();
+        let log = std::mem::take(&mut *log.lock().unwrap());
+        drop(g1);
+        drop(g2);
+
+        // The invariant under review: at most one acquirer's DECIDING read
+        // may observe the absent lock. Pre-fix both racers read absent, then
+        // both wrote and verified their own pid — two guards, both proceeding.
+        let first_seen: Vec<Option<String>> = {
+            let mut per_pid: std::collections::HashMap<u32, Option<String>> =
+                std::collections::HashMap::new();
+            for (pid, seen) in &log {
+                per_pid.entry(*pid).or_insert_with(|| seen.clone());
+            }
+            let mut firsts: Vec<Option<String>> =
+                [RACER_A, RACER_B].iter().map(|p| per_pid.remove(p).flatten()).collect();
+            firsts.retain(|s| s.is_none());
+            firsts
+        };
+        assert_eq!(
+            first_seen.len(),
+            1,
+            "two starters both decided from an absent lock — the reviewed race \
+             (both would proceed into transcript housekeeping); observations: {log:?}"
+        );
+
+        // Ordering: the second decider's first observation names the winner's
+        // pid — its decision was made after the winner's write landed.
+        let winner_pid = if log.iter().any(|(p, s)| *p == RACER_A && s.is_none()) {
+            RACER_A
+        } else {
+            RACER_B
+        };
+        let loser_pid = if winner_pid == RACER_A { RACER_B } else { RACER_A };
+        let loser_first = log
+            .iter()
+            .find(|(p, _)| *p == loser_pid)
+            .and_then(|(_, s)| s.clone())
+            .expect("the second decider observed the lock");
+        assert_eq!(
+            parse_holder_pid(&loser_first),
+            Some(winner_pid),
+            "the second decider must observe the winner's write, not a stale state"
+        );
+
+        // Both guards released: the surviving holder's compare-then-delete
+        // removes the file, the other no-ops.
+        assert!(!lock_path(&cwd).exists(), "release removes the lock");
     }
 
     #[test]
