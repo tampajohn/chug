@@ -375,6 +375,37 @@ decisions — the impl stream landed under its raw rotated name mid-harvest
 and was renamed to convention by hand). Arc: 1 impl, 1 validator round,
 ~7 min wall.
 
+**T98 site-sync (operator directive, filed mid-cycle b6787ed) — LANDED, merge 8721c83.**
+glm impl (pid 54557) goal-accepted **38/65 in ~7 min** under a goal-level
+CRITICAL CONSTRAINT (live clone never touched — fixture-only testing; the
+child verified the live HEAD 61a991d unchanged with 0 markers).
+`scripts/site-sync.sh` (+243): regenerates ONLY the `<!-- STATS:BEGIN/END
+-->` region of the site's index.html from repo facts — TODO.md done-row
+count, newest full-suite gate count in git log (nextest > suite-unit >
+bare-unit priority; filtered runs like `16/16` match nothing BY DESIGN so
+the card cites a full-suite gate or walks back), loopd cycle-OK count,
+EVALUATION.md git date, last-5 landed `tNN:` items with refs+dates
+(HTML-escaped, non-item commits excluded). No clock in the block →
+unchanged inputs byte-identical, no commit (idempotence cmp-pinned;
+CHUG_SYNC_NOW for tests). Safety legs per req 2/5: missing clone / non-git
+/ failed commit / **rejected push** all warn + exit 0; plain `git push`
+only, never force; marker pair absent/malformed → exit 3 WITHOUT editing
+(the child resolved the spec's internal tension — req-1's "add markers if
+absent" parenthetical vs the Tests section's "absent markers → nonzero
+WITHOUT editing" — toward never-inject; site-side marker insertion is
+one-time setup). `loopd.sh` +6: one failure-tolerant invocation after each
+`cycle OK`. 7 fixture integration tests (tests/site_sync.rs): contents
+match sources, byte-identical rerun, marker legs, push rejection,
+regeneration on new inputs. Review: nextest **776/776** (769+7) + clippy +
+bash -n under target-shared; post-merge 776/776 under target-shared-main.
+kimi SKIPPED per routing d1790555816-24 (zero src/ files; trust boundary
+weighed — every safety leg is fixture-test-pinned incl. dead-remote
+rejection; failure mode bounded to the operator's own site, hand-fixable,
+never a cycle failure). 1 artifact harvested. **Bootstrap carried to
+wrap**: the live site has 0 markers — orchestrator inserts the one-time
+marker pair at cycle-53 wrap so the NEXT loopd cycle runs the first real
+sync (acceptance: a later cycle's Outcomes records the site commit).
+
 ### Cycle 52 (2026-09-27) — routine glm freshness-skip; T90 LANDED (e9afed9, fast-forward merge) — F4 permissions phase 1: the deny-only fail-closed policy layer
 
 - **T90 LANDED** (e9afed9): `.chug/permissions.json` deny-list — new `src/permissions.rs` (363 prod lines, at the ~350 guard's edge) holds all policy logic: absent/empty config = zero rules + zero cost; malformed config fails OPEN (one stderr warn + one `permission_error` line, T83 parity); per-rule malformed legs (unknown key, two matchers, non-string value, missing tool, matcher-that-cannot-fit) are skipped in place with valid siblings still denying; deny rules are a tool glob + at most one `command`/`path`/`url` arg matcher, first-match-wins, missing/non-string arg under an arg rule fails toward execution; deny text `[permission denied] <rule summary>`. Driver gates dispatch FIRST (permissions → PreToolUse hooks → plan/MCP/risk gate) riding the T83 `blocked` flag in run+chat+plan, so a denied call fires no hooks and never executes. `hooks::glob_matches` made pub(crate), reused byte-identically. README Permissions section integrated after Hooks; FEATURES F4 row annotated at flip. 24 tests (17 unit + 7 driver integration incl. ZERO-hook-fires ordering pins + plan-mode leg + fail-open-exactly-once).
