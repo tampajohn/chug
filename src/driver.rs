@@ -609,7 +609,8 @@ fn model_text_delta_hook(sink: &mut dyn EventSink) -> Box<dyn FnMut(&str) + Send
 ///   `TurnEndReason`.
 /// - `goal_complete` verification: autonomous parses the spec's `check:` line,
 ///   chat uses the `/check` command configured in the knobs.
-#[allow(clippy::too_many_arguments)]pub(crate) fn drive_loop(
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn drive_loop(
     ctx: &LoopCtx,
     knobs: &mut TurnKnobs,
     client: &mut dyn Llm,
@@ -857,7 +858,13 @@ fn model_text_delta_hook(sink: &mut dyn EventSink) -> Box<dyn FnMut(&str) + Send
                 *messages = crate::api::replace_images_with_placeholder(messages);
                 images_degraded = true;
                 sink.emit(Event::ImageDegraded);
-                client.complete(&system, messages, &tool_schemas, &obs_ctx)?
+                // F7 hook hygiene (kimi finding 2): the hook is cleared on
+                // EVERY exit path of the LLM call — this `?` included.
+                // Propagating directly would leave the raw-pointer hook
+                // armed into the dropped sink borrow.
+                let retried = client.complete(&system, messages, &tool_schemas, &obs_ctx);
+                client.set_text_delta_hook(None);
+                retried?
             }
             Err(e) => {
                 client.set_text_delta_hook(None);

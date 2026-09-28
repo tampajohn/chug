@@ -527,8 +527,10 @@ pub struct Client {
     text_delta_hook: std::cell::RefCell<Option<TextDeltaHook>>,
     /// F7 phase 1 fallback latch: set on the FIRST proxy downgrade this
     /// session (req 4: one latched telemetry line, no per-response spam);
-    /// consumed by the driver via [`Llm::take_stream_fallback`].
-    fallback_latched: std::cell::Cell<bool>,
+    /// consumed by the driver via [`Llm::take_stream_fallback`]. Three-state
+    /// ([`FallbackLatch`]): after the one line fires, later downgrades never
+    /// re-latch.
+    fallback_latch: std::cell::Cell<FallbackLatch>,
 }
 
 impl Clone for Client {
@@ -543,7 +545,7 @@ impl Clone for Client {
             // The hook is per-call transient state (the driver arms it around
             // each `complete`); clones start clean.
             text_delta_hook: std::cell::RefCell::new(None),
-            fallback_latched: std::cell::Cell::new(false),
+            fallback_latch: std::cell::Cell::new(FallbackLatch::Fresh),
         }
     }
 }
@@ -551,6 +553,25 @@ impl Clone for Client {
 /// F7 phase 1: the driver-installed live model-text hook (see
 /// [`Llm::set_text_delta_hook`]).
 pub(crate) type TextDeltaHook = Box<dyn FnMut(&str) + Send>;
+
+/// F7 phase 1 fallback-latch state machine (kimi fix-up round: the
+/// validator's two-response probe caught the naive `Cell<bool>` re-latching
+/// on EVERY downgraded response — per-response `stream_fallback` spam,
+/// violating req 4's first-per-run latch).
+/// `Fresh` → (first downgrade) → `Pending` → (driver consumes) → `Consumed`;
+/// a downgrade never re-latches out of `Consumed`, so exactly ONE
+/// `stream_fallback` line is emitted per run no matter how many responses
+/// downgrade. A false take on a clean response leaves `Fresh` untouched, so
+/// the run's first downgrade still emits its one line.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FallbackLatch {
+    /// No downgrade yet; the first one latches.
+    Fresh,
+    /// A downgrade is latched, not yet consumed by the driver.
+    Pending,
+    /// The one telemetry line has fired; later downgrades stay silent.
+    Consumed,
+}
 /// F7 phase 1: the transport's per-chunk callback (fires on the caller's
 /// thread inside the body-read receive loop).
 type ChunkHook<'a> = &'a mut dyn FnMut(&[u8]);
@@ -979,10 +1000,12 @@ pub trait Llm {
     /// receive loop). Default NO-OP: scripted doubles never stream, and the
     /// driver only arms the hook around each `complete` call.
     fn set_text_delta_hook(&mut self, _hook: Option<TextDeltaHook>) {}
-    /// F7 phase 1: whether the last `complete` fell back from a streaming
-    /// request to a plain JSON response (proxy downgrade, req 4). Consumed
-    /// (read-and-clear, latched upstream to fire at most once per session) so
-    /// the driver emits exactly ONE telemetry line for it.
+    /// F7 phase 1: whether a `complete` fell back from a streaming request to
+    /// a plain JSON response (proxy downgrade, req 4). Read-and-clear, FIRST-
+    /// PER-RUN latched in the client: the first downgrade fires once and
+    /// consumes the latch — later downgrades never re-fire — so the driver
+    /// emits exactly ONE `stream_fallback` telemetry line per run no matter
+    /// how many responses downgrade.
     fn take_stream_fallback(&mut self) -> bool {
         false
     }
@@ -1035,7 +1058,16 @@ impl Llm for Client {
     }
 
     fn take_stream_fallback(&mut self) -> bool {
-        self.fallback_latched.take()
+        // First-per-run latch (req 4): only a PENDING downgrade fires, and
+        // firing consumes it — `Consumed` never re-latches. A false take on
+        // a clean response leaves `Fresh` untouched, so the run's first
+        // downgrade still emits its one line.
+        if self.fallback_latch.get() == FallbackLatch::Pending {
+            self.fallback_latch.set(FallbackLatch::Consumed);
+            true
+        } else {
+            false
+        }
     }
 }
 
@@ -1147,7 +1179,7 @@ impl Client {
             auth_token: ep.auth_token,
             model: model.to_string(),
             text_delta_hook: std::cell::RefCell::new(None),
-            fallback_latched: std::cell::Cell::new(false),
+            fallback_latch: std::cell::Cell::new(FallbackLatch::Fresh),
         })
     }
 
@@ -1166,7 +1198,7 @@ impl Client {
             auth_token: None,
             model: model.to_string(),
             text_delta_hook: std::cell::RefCell::new(None),
-            fallback_latched: std::cell::Cell::new(false),
+            fallback_latch: std::cell::Cell::new(FallbackLatch::Fresh),
         })
     }
 
@@ -1186,7 +1218,7 @@ impl Client {
             auth_token: None,
             model: model.to_string(),
             text_delta_hook: std::cell::RefCell::new(None),
-            fallback_latched: std::cell::Cell::new(false),
+            fallback_latch: std::cell::Cell::new(FallbackLatch::Fresh),
         }
     }
 
@@ -1304,8 +1336,12 @@ impl Client {
                             }
                             // Fallback leg (req 4): streaming requested, but the
                             // response is not SSE (proxy downgrade) — parse
-                            // byte-identically to today and latch ONE note.
-                            self.fallback_latched.set(true);
+                            // byte-identically to today and latch ONE note PER
+                            // RUN: only a Fresh client latches, so a second
+                            // downgrade (Pending or Consumed) stays silent.
+                            if self.fallback_latch.get() == FallbackLatch::Fresh {
+                                self.fallback_latch.set(FallbackLatch::Pending);
+                            }
                         }
                         let parsed: Value = serde_json::from_str(&raw.body).with_context(|| {
                             format!("parsing response JSON: {}", preview(&raw.body, 500))
@@ -1686,7 +1722,7 @@ mod tests {
             auth_token: None,
             model: "test-model".to_string(),
             text_delta_hook: std::cell::RefCell::new(None),
-            fallback_latched: std::cell::Cell::new(false),
+            fallback_latch: std::cell::Cell::new(FallbackLatch::Fresh),
         }
     }
 
@@ -2132,15 +2168,23 @@ mod tests {
         responses: std::sync::Mutex<std::collections::VecDeque<Result<Vec<String>, TransportError>>>,
         /// Response headers for the NEXT 2xx (content-type controls the leg).
         content_type: String,
+        /// Per-response content-type overrides (FIFO, one per scripted 2xx);
+        /// when exhausted, `content_type` applies. Lets one fake script MIXED
+        /// legs (SSE response, then downgraded JSON responses).
+        content_type_overrides: std::sync::Mutex<std::collections::VecDeque<String>>,
         bodies: std::sync::Mutex<Vec<String>>,
         calls: std::sync::Mutex<usize>,
     }
+
+    /// One scripted 2xx: its chunks plus (optionally) its content-type.
+    type Scripted2xx = (Option<&'static str>, Vec<String>);
 
     impl StreamingFake {
         fn sse(chunks: Vec<String>) -> Arc<Self> {
             Arc::new(StreamingFake {
                 responses: std::sync::Mutex::new(vec![Ok(chunks)].into()),
                 content_type: "text/event-stream".to_string(),
+                content_type_overrides: std::sync::Mutex::new(Default::default()),
                 bodies: std::sync::Mutex::new(Vec::new()),
                 calls: std::sync::Mutex::new(0),
             })
@@ -2150,6 +2194,30 @@ mod tests {
             Arc::new(StreamingFake {
                 responses: std::sync::Mutex::new(vec![Ok(vec![body.to_string()])].into()),
                 content_type: "application/json".to_string(),
+                content_type_overrides: std::sync::Mutex::new(Default::default()),
+                bodies: std::sync::Mutex::new(Vec::new()),
+                calls: std::sync::Mutex::new(0),
+            })
+        }
+
+        /// A multi-response fake with per-response content types: one entry
+        /// per scripted 2xx, `Some(ct)` overriding the default for that
+        /// response (mixed SSE/JSON legs — the fallback-latch cardinality
+        /// probes).
+        fn scripted(script: Vec<Scripted2xx>, default_ct: &str) -> Arc<Self> {
+            let (responses, overrides): (Vec<_>, Vec<_>) = script
+                .into_iter()
+                .map(|(ct, chunks)| {
+                    (
+                        Ok(chunks),
+                        ct.map(str::to_string).unwrap_or_else(|| default_ct.to_string()),
+                    )
+                })
+                .unzip();
+            Arc::new(StreamingFake {
+                responses: std::sync::Mutex::new(responses.into()),
+                content_type: default_ct.to_string(),
+                content_type_overrides: std::sync::Mutex::new(overrides.into()),
                 bodies: std::sync::Mutex::new(Vec::new()),
                 calls: std::sync::Mutex::new(0),
             })
@@ -2161,6 +2229,15 @@ mod tests {
 
         fn calls(&self) -> usize {
             *self.calls.lock().unwrap()
+        }
+        /// The content-type header for the next scripted 2xx: a per-response
+        /// override if one is queued, else the fake's default.
+        fn next_content_type(&self) -> String {
+            self.content_type_overrides
+                .lock()
+                .unwrap()
+                .pop_front()
+                .unwrap_or_else(|| self.content_type.clone())
         }
     }
 
@@ -2182,7 +2259,7 @@ mod tests {
             {
                 Ok(chunks) => Ok(RawResponse {
                     status: 200,
-                    headers: vec![("content-type".to_string(), self.content_type.clone())],
+                    headers: vec![("content-type".to_string(), self.next_content_type())],
                     body: chunks.concat(),
                 }),
                 Err(e) => Err(e),
@@ -2212,7 +2289,7 @@ mod tests {
                     }
                     Ok(RawResponse {
                         status: 200,
-                        headers: vec![("content-type".to_string(), self.content_type.clone())],
+                        headers: vec![("content-type".to_string(), self.next_content_type())],
                         body: chunks.concat(),
                     })
                 }
@@ -2417,6 +2494,7 @@ mod tests {
                 vec![Ok(vec![error_stream]), Ok(vec![ok_stream])].into(),
             ),
             content_type: "text/event-stream".to_string(),
+            content_type_overrides: std::sync::Mutex::new(Default::default()),
             bodies: std::sync::Mutex::new(Vec::new()),
             calls: std::sync::Mutex::new(0),
         });
@@ -2521,6 +2599,7 @@ mod tests {
                 .into(),
             ),
             content_type: "text/event-stream".to_string(),
+            content_type_overrides: std::sync::Mutex::new(Default::default()),
             bodies: std::sync::Mutex::new(Vec::new()),
             calls: std::sync::Mutex::new(0),
         });
@@ -2546,25 +2625,187 @@ mod tests {
         }
     }
 
-    /// Hook hygiene: clearing the hook stops delta delivery (the driver's
-    /// clear-after-call contract).
+    /// Hook hygiene (kimi finding 3, un-vacuumed): the hook is ARMED first and
+    /// proven live (call 1's deltas arrive), THEN cleared — and call 2 (also a
+    /// streamed call) delivers nothing to it. Kills a mutant whose
+    /// `set_text_delta_hook` ignores the `None` clear (the hook stays armed
+    /// and call 2's deltas leak into it).
     #[test]
     fn cleared_hook_receives_no_deltas() {
         let _env = ENV_LOCK.lock().unwrap();
-        let ft = StreamingFake::sse(vec![sse_stream(&[
+        let streamed = || {
+            sse_stream(&[
+                msg_start(),
+                json!({"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}}),
+                json!({"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "hi"}}),
+                json!({"type": "content_block_stop", "index": 0}),
+                json!({"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 1}}),
+                json!({"type": "message_stop"}),
+            ])
+        };
+        let ft = Arc::new(StreamingFake {
+            responses: std::sync::Mutex::new(
+                vec![Ok(vec![streamed()]), Ok(vec![streamed()])].into(),
+            ),
+            content_type: "text/event-stream".to_string(),
+            content_type_overrides: std::sync::Mutex::new(Default::default()),
+            bodies: std::sync::Mutex::new(Vec::new()),
+            calls: std::sync::Mutex::new(0),
+        });
+        let mut client = client_with(ft, &[]);
+        let deltas: std::sync::Arc<std::sync::Mutex<Vec<String>>> = Default::default();
+        {
+            let sink = deltas.clone();
+            client.set_text_delta_hook(Some(Box::new(move |d: &str| {
+                sink.lock().unwrap().push(d.to_string())
+            })));
+        }
+        // Call 1: the hook IS armed — deltas arrive (proves the hook works).
+        let resp = run(&client).unwrap();
+        assert_eq!(resp.text(), "hi");
+        assert_eq!(
+            deltas.lock().unwrap().as_slice(),
+            ["hi"],
+            "the armed hook received call 1's deltas"
+        );
+        // THE CLEAR under test.
+        client.set_text_delta_hook(None);
+        // Call 2: also streamed — the cleared hook must receive NOTHING.
+        let resp = run(&client).unwrap();
+        assert_eq!(resp.text(), "hi");
+        assert_eq!(
+            deltas.lock().unwrap().as_slice(),
+            ["hi"],
+            "a cleared hook receives no deltas from a later streamed call"
+        );
+    }
+
+    // ---- kimi FAIL findings on 53e4aed: the fix-up round's killing tests ----
+
+    /// Finding 1 (req 4, BLOCKING — the validator's two-response probe,
+    /// promoted verbatim): the fallback telemetry is FIRST-PER-RUN latched.
+    /// Two consecutive proxy-downgrade responses produce exactly ONE latched
+    /// note — the second `take_stream_fallback` is false. RED on 53e4aed
+    /// (the per-downgrade `set(true)` re-latched: true, true).
+    #[test]
+    fn stream_fallback_latch_fires_exactly_once_across_consecutive_downgrades() {
+        let _env = ENV_LOCK.lock().unwrap();
+        let plain_body = || {
+            json!({
+                "stop_reason": "end_turn",
+                "content": [{"type": "text", "text": "downgraded"}],
+                "usage": {"input_tokens": 3, "output_tokens": 4},
+            })
+            .to_string()
+        };
+        let ft: Arc<dyn Transport> = Arc::new(StreamingFake {
+            responses: std::sync::Mutex::new(
+                vec![Ok(vec![plain_body()]), Ok(vec![plain_body()])].into(),
+            ),
+            content_type: "application/json".to_string(),
+            content_type_overrides: std::sync::Mutex::new(Default::default()),
+            bodies: std::sync::Mutex::new(Vec::new()),
+            calls: std::sync::Mutex::new(0),
+        });
+        let mut client = client_with(ft, &[]);
+        run(&client).unwrap();
+        assert!(
+            client.take_stream_fallback(),
+            "the first downgrade latches"
+        );
+        run(&client).unwrap();
+        assert!(
+            !client.take_stream_fallback(),
+            "the SECOND downgrade must not re-latch: one stream_fallback line per run"
+        );
+    }
+
+    /// Fallback-latch family sweep, other cardinality edge: a take on a CLEAN
+    /// (SSE) response must not burn the latch — the run's first downgrade
+    /// still emits its one line, and only that one. Kills a mutant whose
+    /// take moves Fresh→Consumed on a false read (the driver takes after
+    /// EVERY complete, so the downgrade's line would be lost).
+    #[test]
+    fn stream_fallback_latch_survives_clean_responses_then_fires_once() {
+        let _env = ENV_LOCK.lock().unwrap();
+        let ok_sse = sse_stream(&[
             msg_start(),
             json!({"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}}),
-            json!({"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "hi"}}),
+            json!({"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "clean"}}),
             json!({"type": "content_block_stop", "index": 0}),
             json!({"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 1}}),
             json!({"type": "message_stop"}),
-        ])]);
-        let mut client = client_with(ft.clone(), &[]);
-        client.set_text_delta_hook(None);
-        let deltas: std::sync::Arc<std::sync::Mutex<Vec<String>>> = Default::default();
-        let resp = run(&client).unwrap();
-        assert_eq!(resp.text(), "hi");
-        assert!(deltas.lock().unwrap().is_empty());
+        ]);
+        let downgraded = json!({
+            "stop_reason": "end_turn",
+            "content": [{"type": "text", "text": "downgraded"}],
+            "usage": {"input_tokens": 3, "output_tokens": 4},
+        })
+        .to_string();
+        let ft = StreamingFake::scripted(
+            vec![
+                (Some("text/event-stream"), vec![ok_sse]),
+                (Some("application/json"), vec![downgraded.clone()]),
+                (Some("application/json"), vec![downgraded]),
+            ],
+            "text/event-stream",
+        );
+        let mut client = client_with(ft, &[]);
+        // Response 1: clean SSE — take is false and does NOT consume the
+        // right to latch later.
+        run(&client).unwrap();
+        assert!(!client.take_stream_fallback(), "no downgrade, no line");
+        // Response 2: the run's FIRST downgrade — exactly one line.
+        run(&client).unwrap();
+        assert!(
+            client.take_stream_fallback(),
+            "a downgrade after clean responses still latches once"
+        );
+        // Response 3: another downgrade — never re-latches.
+        run(&client).unwrap();
+        assert!(
+            !client.take_stream_fallback(),
+            "one line per run, no matter how many responses downgrade"
+        );
+    }
+
+    /// StreamAccumulator error-latch family sweep (per-attempt cardinality,
+    /// by design): the FIRST error wins — once latched, later feeds are
+    /// ignored, so a second, different error event can never overwrite the
+    /// first and the stream stays dead (finish still errors). Kills a mutant
+    /// that drops the `error.is_some()` feed guard (the second error event
+    /// would overwrite the first).
+    #[test]
+    fn accumulator_error_latch_first_error_wins_later_feeds_ignored() {
+        let mut acc = StreamAccumulator::new(None::<&mut dyn FnMut(&str)>);
+        acc.feed_bytes(
+            sse_stream(&[json!({
+                "type": "error",
+                "error": {"type": "overloaded_error", "message": "first failure"},
+            })])
+            .as_bytes(),
+        );
+        // Later feeds after the latch: a valid tail AND a second error event
+        // with a different message — neither may resurrect or overwrite.
+        acc.feed_bytes(
+            sse_stream(&[
+                json!({"type": "message_stop"}),
+                json!({
+                    "type": "error",
+                    "error": {"type": "api_error", "message": "second failure"},
+                }),
+            ])
+            .as_bytes(),
+        );
+        match acc.finish().unwrap_err() {
+            StreamError::Retryable(TransportError::Connection(msg)) => {
+                assert!(
+                    msg.contains("first failure") && !msg.contains("second failure"),
+                    "the FIRST error is latched, later feeds ignored: {msg}"
+                );
+            }
+            other => panic!("expected the latched retryable error, got {other:?}"),
+        }
     }
 
 }

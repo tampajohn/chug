@@ -450,6 +450,34 @@ mod tests {
         assert_eq!(out_bytes(&err), "[chug] model: short answer\n");
     }
 
+    /// F7 family sweep (kimi round): the streaming prefix /
+    /// preview-suppression latch is PER-RESPONSE by design. It opens on the
+    /// first delta of a response (prefix printed exactly ONCE no matter how
+    /// many deltas follow), closes at the response boundary, and RE-ARMS: a
+    /// second streamed response prints its own prefix, and a following
+    /// NON-streamed response prints today's preview line. Kills the
+    /// stick-across-responses mutant (the close on ModelText removed) and the
+    /// re-fire-within-one-response mutant (the prefix printed per delta).
+    #[test]
+    fn streaming_prefix_latch_opens_once_per_response_and_rearms() {
+        let (mut sink, _out, err) = sink("/work/dir");
+        // Response 1: streamed — one prefix, raw deltas, terminating newline.
+        sink.emit(Event::ModelTextDelta("one ".into()));
+        sink.emit(Event::ModelTextDelta("two".into()));
+        sink.emit(Event::ModelText("one two".into()));
+        // Response 2: streamed again — the latch re-arms (a latch stuck
+        // across responses would print neither the prefix nor the close).
+        sink.emit(Event::ModelTextDelta("three".into()));
+        sink.emit(Event::ModelText("three".into()));
+        // Response 3: NON-streamed — today's preview line, byte-identical.
+        sink.emit(Event::ModelText("preview line".into()));
+        assert_eq!(
+            out_bytes(&err),
+            "[chug] model: one two\n[chug] model: three\n[chug] model: preview line\n",
+            "prefix once per response, re-armed for the next, preview kept for non-streamed"
+        );
+    }
+
     #[test]
     fn empty_model_text_stays_silent_in_both_legs() {
         let (mut sink, _out, err) = sink("/work/dir");

@@ -96,6 +96,46 @@ impl Llm for UnrelatedErrLlm {
     }
 }
 
+/// F7 hook-hygiene double (kimi finding 2): call 1 fails with the T91
+/// image-rejection 400 (arming the degraded-retry path), call 2 — the
+/// degraded retry — fails with an unrelated error, exercising the `?`
+/// early return. Records whether a text-delta hook is installed at all
+/// times so the test can assert the driver cleared it on that path.
+struct HookLeakProbeLlm {
+    calls: usize,
+    hook_armed: bool,
+}
+
+impl Llm for HookLeakProbeLlm {
+    fn complete(
+        &mut self,
+        _system: &str,
+        _messages: &[Message],
+        _tools: &[Value],
+        _obs: &crate::api::ObsCtx<'_>,
+    ) -> anyhow::Result<crate::api::Response> {
+        self.calls += 1;
+        if self.calls == 1 {
+            return Err(anyhow::anyhow!(
+                "LLM request failed: HTTP 400: {{\"type\":\"error\",\"error\":{{\"type\":\"invalid_request_error\",\"message\":\"Requests must not contain image content blocks\"}}}}"
+            ));
+        }
+        Err(anyhow::anyhow!(
+            "LLM request failed: HTTP 400: {{\"error\":{{\"message\":\"max_tokens: field required\"}}}}"
+        ))
+    }
+
+    fn set_model(&mut self, _model: &str) {}
+
+    fn model(&self) -> &str {
+        "hook-leak-probe"
+    }
+
+    fn set_text_delta_hook(&mut self, hook: Option<crate::api::TextDeltaHook>) {
+        self.hook_armed = hook.is_some();
+    }
+}
+
 /// The full degrade arc: the request carrying a.png's image block is rejected
 /// with a 400 image-rejection body → ONE retry whose request carries ZERO
 /// image blocks and the placeholder text; ONE events note; and the latch
@@ -214,6 +254,43 @@ fn image_unrelated_400_keeps_fail_fast_error_path() {
     assert!(
         !sink.0.iter().any(|e| matches!(e, Event::ImageDegraded)),
         "no degrade note on an unrelated 400"
+    );
+}
+
+/// F7 hook hygiene (kimi finding 2): the text-delta hook is cleared on EVERY
+/// exit path of the LLM call — the T91 degraded-retry `?` early return
+/// included. Call 1 errors with the image-rejection 400, the degraded retry
+/// (call 2) errors again → drive_loop returns Err through the `?`; the hook
+/// must be CLEARED, not left armed (a dangling raw-pointer hook into the
+/// dropped sink borrow). RED on 53e4aed: the `?` propagated with the hook
+/// still armed.
+#[test]
+fn degraded_retry_error_path_still_clears_the_text_delta_hook() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (_utx, urx) = mpsc::channel::<SlashUpdate>();
+    let controls = Controls::detached();
+    let ctx = ctx_for(&tmp, Mode::Autonomous, &controls, &urx, None, &observ::Sink::Noop);
+    let mut knobs = knobs_with(10);
+    let mut llm = HookLeakProbeLlm { calls: 0, hook_armed: false };
+    let mut gate = None;
+    let mut messages = Vec::new();
+    let mut sink = RecordingSink::default();
+    let err = drive_loop(
+        &ctx,
+        &mut knobs,
+        &mut llm,
+        &mut gate,
+        &mut messages,
+        Some("check: true".to_string()),
+        &mut sink,
+        &mut McpRegistry::new(tmp.path(), true, None).unwrap(),
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("HTTP 400"), "{err}");
+    assert_eq!(llm.calls, 2, "the image-rejection 400 + the degraded retry");
+    assert!(
+        !llm.hook_armed,
+        "the hook is cleared on the degraded-retry error path"
     );
 }
 
