@@ -1442,7 +1442,9 @@ mod tests {
     /// the `collect` action with its user-facing semantics, and LOOP-SPEC §2
     /// step 3 carries the adoption sentence (the T23→T24 lesson: a capability
     /// without a doctrine sentence doesn't get called). Whitespace-normalized
-    /// so markdown rewrapping cannot unpin them.
+    /// so markdown rewrapping cannot unpin them. T97 split the paragraph into
+    /// per-action sub-bullets — the collect needle carries the bullet's
+    /// ` — ` label/verb separator (proven RED against the pre-T97 paragraph).
     #[test]
     fn readme_and_loop_spec_name_collect() {
         let root = std::env::current_dir().expect("cargo sets the test cwd to the package root");
@@ -1455,7 +1457,7 @@ mod tests {
         };
         let readme = flat("README.md");
         assert!(
-            readme.contains("**`collect`** returns the child's structured result in one bounded, non-blocking read"),
+            readme.contains("**`collect`** — returns the child's structured result in one bounded, non-blocking read"),
             "README delegate paragraph lost the collect clause: {readme}"
         );
         assert!(

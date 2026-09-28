@@ -191,42 +191,44 @@ best-effort) feeding the F13 distillation corpus; like the file tools it is
 cwd-sandboxed, so the two documented sandbox exceptions stay exactly two.
 
 `delegate` — launch, observe, or collect a bounded child `chug run` (e.g. in
-a git worktree). Three actions: **`launch`** spawns a detached child
-(`--spec`, `--goal`, `--model` required; `--max-iters`/`--max-minutes`
-optional, defaults 40/35; `--max-tokens` optional — the child's cumulative
-input+output token ceiling, omitted = no token ceiling; `resume: true`
-optional to continue the child's aborted run instead of starting fresh)
-against an absolute `cwd` you prepared, appends its stdout+stderr to
-`<cwd>/.chug/delegate.log`, and returns immediately with the child `pid`
-and the log/events paths — it never waits on the child. **`status`**
-reports the child's liveness (when you pass the `pid`), a summary of its
-`.chug/events.jsonl` — the child's latest run segment (state,
-`last_iteration` + `max_iters`, budget-low / goal / abort flags with the
-abort reason) — and the tail of its console log — instant polling never
-blocks. **`collect`** returns the child's structured result in one bounded,
-non-blocking read — the latest run segment's verdict (`goal-accepted` /
-`goal-rejected` / `aborted` with reason / `running` / `starting`), the
-accepted goal's summary (the child's own account of what it did), the
-segment's latest check cmd (the gate that decided the verdict), and
-best-effort `git log --oneline` commit refs of the child's cwd (optional
-`base` scopes the range to `<base>..HEAD`; every git failure degrades to a
-note, never an error) — pass the launch `pid` to add the same liveness line
-`status` renders; it never blocks or waits, so long-poll with `status`
-first. Optionally pass `wait_secs` (status-only;
-0/absent = instant, max 600) to collapse each idle wait window into one
-blocking status call: it returns early when the child's iteration
-advances, a verdict or budget-low flag appears, or its liveness flips to
-dead (per-tool-call `last_event` churn renders at the deadline but never
-wakes it), else at the deadline, and names the actual
-elapsed seconds on a `waited:` line; adding `terminal: true` (status-only,
-default false, requires `wait_secs > 0`) narrows the wake set to the
-terminal facts — the goal or abort verdict, liveness alive→dead, or
-events-file creation — so a working child never wakes the wait on
-iteration advances (one orchestrator iteration per child run, not per
-child iteration), while telemetry still renders at the deadline. `cwd` and
-`spec` must be absolute and
-may target child worktrees outside your own `--cwd`; worktree creation,
-building, harvest/merge, and killing the child stay with your `bash`.
+a git worktree). Three actions:
+- **`launch`** — spawns a detached child (`--spec`, `--goal`, `--model`
+  required; `--max-iters`/`--max-minutes` optional, defaults 40/35;
+  `--max-tokens` optional — the child's cumulative input+output token
+  ceiling, omitted = no token ceiling; `resume: true` optional to continue
+  the child's aborted run instead of starting fresh) against an absolute
+  `cwd` you prepared, appends its stdout+stderr to
+  `<cwd>/.chug/delegate.log`, and returns immediately with the child `pid`
+  and the log/events paths — it never waits on the child
+- **`status`** — reports the child's liveness (when you pass the `pid`), a
+  summary of its `.chug/events.jsonl` — the child's latest run segment
+  (state, `last_iteration` + `max_iters`, budget-low / goal / abort flags
+  with the abort reason) — and the tail of its console log — instant
+  polling never blocks. Optionally pass `wait_secs` (status-only;
+  0/absent = instant, max 600) to collapse each idle wait window into one
+  blocking status call: it returns early when the child's iteration
+  advances, a verdict or budget-low flag appears, or its liveness flips to
+  dead (per-tool-call `last_event` churn renders at the deadline but never
+  wakes it), else at the deadline, and names the actual elapsed seconds on
+  a `waited:` line; adding `terminal: true` (status-only, default false,
+  requires `wait_secs > 0`) narrows the wake set to the terminal facts —
+  the goal or abort verdict, liveness alive→dead, or events-file creation
+  — so a working child never wakes the wait on iteration advances (one
+  orchestrator iteration per child run, not per child iteration), while
+  telemetry still renders at the deadline
+- **`collect`** — returns the child's structured result in one bounded,
+  non-blocking read — the latest run segment's verdict (`goal-accepted` /
+  `goal-rejected` / `aborted` with reason / `running` / `starting`), the
+  accepted goal's summary (the child's own account of what it did), the
+  segment's latest check cmd (the gate that decided the verdict), and
+  best-effort `git log --oneline` commit refs of the child's cwd (optional
+  `base` scopes the range to `<base>..HEAD`; every git failure degrades to
+  a note, never an error) — pass the launch `pid` to add the same liveness
+  line `status` renders; it never blocks or waits, so long-poll with
+  `status` first
+- **Sandbox/cwd** — `cwd` and `spec` must be absolute and may target child
+  worktrees outside your own `--cwd`; worktree creation, building,
+  harvest/merge, and killing the child stay with your `bash`
 
 `web_fetch` — read-only HTTP(S) GET with hard bounds: `http://`/`https://` only,
 ≤5 redirects, connect 10s / total 30s, output capped at `max_chars` (default
