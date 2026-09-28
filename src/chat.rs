@@ -68,8 +68,14 @@ pub enum SlashCommand {
     Quit,
     /// `/help` lists the commands.
     Help,
-    /// Unknown `/x`.
-    Unknown(String),
+    /// Not a built-in: the chat dispatch first tries it as a
+    /// `.chug/commands/` pack (F9) before rendering the unknown-command
+    /// line. Carries the name and the post-command arguments separately
+    /// so the pack's `$ARGUMENTS` expansion gets only the args.
+    Unknown {
+        name: String,
+        args: Option<String>,
+    },
     /// Known command with malformed arguments.
     Usage(&'static str),
 }
@@ -110,7 +116,10 @@ pub fn parse_slash(line: &str) -> Option<SlashCommand> {
         },
         "quit" => SlashCommand::Quit,
         "help" => SlashCommand::Help,
-        other => SlashCommand::Unknown(other.to_string()),
+        other => SlashCommand::Unknown {
+            name: other.to_string(),
+            args: arg,
+        },
     })
 }
 
@@ -299,7 +308,18 @@ mod tests {
     fn parse_unknown_and_malformed() {
         assert_eq!(
             parse_slash("/xyzzy"),
-            Some(SlashCommand::Unknown("xyzzy".into()))
+            Some(SlashCommand::Unknown {
+                name: "xyzzy".into(),
+                args: None
+            })
+        );
+        // An unknown name keeps its arguments for the pack dispatcher (F9).
+        assert_eq!(
+            parse_slash("/review the diff"),
+            Some(SlashCommand::Unknown {
+                name: "review".into(),
+                args: Some("the diff".into())
+            })
         );
         assert_eq!(
             parse_slash("/budget 5"),
@@ -318,7 +338,13 @@ mod tests {
             Some(SlashCommand::Usage("/budget <iters> <minutes>"))
         );
         // Bare "/" is an (empty) unknown command, never an LLM round-trip.
-        assert_eq!(parse_slash("/"), Some(SlashCommand::Unknown("".into())));
+        assert_eq!(
+            parse_slash("/"),
+            Some(SlashCommand::Unknown {
+                name: "".into(),
+                args: None
+            })
+        );
     }
 
     #[test]

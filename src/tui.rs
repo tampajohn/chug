@@ -15,12 +15,15 @@ use ratatui::{Frame, Terminal};
 
 use crate::attach;
 use crate::chat::{self, ChatState, SlashCommand};
+use crate::commands;
 use crate::complete::{self, CandidateStrip, FileIndex};
 use crate::driver::SlashUpdate;
 use crate::events::{Event, TurnEndReason};
 
-/// `/help` output (SPEC-5 §2): one activity entry whose embedded newlines
-/// the wrap path renders as separate rows.
+/// The built-in command block of `/help` output (SPEC-5 §2): one activity
+/// entry whose embedded newlines the wrap path renders as separate rows.
+/// The F9 pack line (directory + discovered count) is appended by
+/// [`App::help_text`] in chat mode — it needs a live discovery count.
 const HELP_TEXT: &str = concat!(
     "/help — commands\n",
     "  /spec <path>   load/replace spec file (/spec alone clears)\n",
@@ -804,10 +807,10 @@ impl App {
                 self.should_quit = true;
             }
             SlashCommand::Help => {
-                self.notice(HELP_TEXT.to_string(), Color::Cyan);
+                self.notice(self.help_text(), Color::Cyan);
             }
-            SlashCommand::Unknown(name) => {
-                self.notice(format!("unknown command: /{name} (see /help)"), Color::Yellow);
+            SlashCommand::Unknown { name, args } => {
+                self.dispatch_pack(&name, args.as_deref());
             }
             SlashCommand::Usage(usage) => {
                 self.notice(format!("usage: {usage}"), Color::Yellow);
@@ -818,6 +821,80 @@ impl App {
     fn send_update(&mut self, update: SlashUpdate) {
         if let Some(chat) = &self.chat {
             let _ = chat.update_tx.send(update);
+        }
+    }
+
+    /// `/help` output: the built-in command block plus one F9 pack line
+    /// naming the pack directory and how many packs were discovered (the
+    /// count from the same discovery call the dispatcher uses). Run mode
+    /// has no cwd-scoped packs (phase 2), so it shows the built-ins only.
+    fn help_text(&self) -> String {
+        let Some(chat) = &self.chat else {
+            return HELP_TEXT.to_string();
+        };
+        let packs = commands::names(&chat.cwd);
+        let listing = if packs.is_empty() {
+            String::new()
+        } else {
+            let named: Vec<String> = packs.iter().map(|n| format!("/{n}")).collect();
+            format!(" ({})", named.join(", "))
+        };
+        // HELP_TEXT's last row carries no trailing newline — one goes here
+        // (or the pack line merges onto the Tab row), and none is appended
+        // (a trailing newline renders as an extra empty row).
+        format!(
+            "{HELP_TEXT}\n  packs          .chug/commands/*.md — {} discovered{listing}",
+            packs.len()
+        )
+    }
+
+    /// F9 phase 1: an unknown-to-the-built-ins `/name args` line first tries
+    /// the `.chug/commands/` packs. A hit sends the expanded body as the
+    /// user message (a normal turn, queued if one is already running — the
+    /// worker expands `@file` mentions inside it like any submitted line)
+    /// behind a one-line note. A miss keeps today's unknown-command line,
+    /// extended to name the available packs when any exist. Built-ins always
+    /// win: parse_slash dispatches them before this path ever runs.
+    fn dispatch_pack(&mut self, name: &str, args: Option<&str>) {
+        let Some(cwd) = self.chat.as_ref().map(|chat| chat.cwd.clone()) else {
+            // Run mode has no pack surface (phase 2): today's unknown line.
+            self.notice(
+                format!("unknown command: /{name} (see /help)"),
+                Color::Yellow,
+            );
+            return;
+        };
+        match commands::expand(&cwd, name, args) {
+            commands::Expansion::Body(body) => {
+                if let Some(chat) = &self.chat {
+                    let _ = chat.objective_tx.send(body);
+                }
+                self.notice(
+                    format!("/{name} → .chug/commands/{name}.md"),
+                    Color::Cyan,
+                );
+            }
+            commands::Expansion::Empty => {
+                self.notice(
+                    format!(
+                        "✗ /{name} expanded to nothing — put instructions in \
+                         .chug/commands/{name}.md"
+                    ),
+                    Color::Red,
+                );
+            }
+            commands::Expansion::Unknown(packs) => {
+                let suffix = if packs.is_empty() {
+                    String::new()
+                } else {
+                    let named: Vec<String> = packs.iter().map(|n| format!("/{n}")).collect();
+                    format!(" — available packs: {}", named.join(", "))
+                };
+                self.notice(
+                    format!("unknown command: /{name} (see /help){suffix}"),
+                    Color::Yellow,
+                );
+            }
         }
     }
 }
@@ -1580,7 +1657,8 @@ mod tests {
         assert!(f.objective_rx.try_recv().is_err());
         assert!(f.steer_rx.try_recv().is_err());
         let notices = notice_texts(&f.app);
-        assert_eq!(notices, vec![HELP_TEXT]);
+        // The help block plus the F9 pack line (0 packs in this fixture).
+        assert_eq!(notices, vec![f.app.help_text()]);
 
         type_text(&mut f.app, "/xyzzy", &abort);
         press(&mut f.app, KeyCode::Enter, &abort);
@@ -1790,21 +1868,161 @@ mod tests {
         type_text(&mut f.app, "/help", &abort);
         press(&mut f.app, KeyCode::Enter, &abort);
 
-        // One activity entry carrying the whole spec-format block...
+        // One activity entry carrying the whole block (built-ins + the F9
+        // pack line)...
+        let expected = f.app.help_text();
         let notices = notice_texts(&f.app);
-        assert_eq!(notices, vec![HELP_TEXT]);
+        assert_eq!(notices, vec![expected.clone()]);
         assert_eq!(HELP_TEXT.lines().count(), 10);
+        assert_eq!(expected.lines().count(), 11, "built-ins + the pack line");
 
         // ...which the draw path renders as separate rows (SPEC-5 §2).
         let rows = activity_lines(&f.app, 100, 100);
         let rendered: Vec<String> = rows.iter().map(line_text).collect();
-        assert_eq!(rendered.len(), 10);
-        for (got, want) in rendered.iter().zip(HELP_TEXT.lines()) {
+        assert_eq!(rendered.len(), expected.lines().count());
+        for (got, want) in rendered.iter().zip(expected.lines()) {
             assert_eq!(got.trim_start(), want.trim_start());
         }
         // The new @path and Tab rows are part of the format.
         assert!(HELP_TEXT.lines().any(|l| l.trim_start().starts_with("@path")));
         assert!(HELP_TEXT.lines().any(|l| l.trim_start().starts_with("Tab")));
+    }
+
+    // ---------- F9 phase 1: slash-command packs ----------
+
+    /// Write pack files into the fixture cwd's `.chug/commands/`.
+    fn write_pack(f: &ChatFixture, name: &str, body: &str) {
+        let cwd = f.app.chat.as_ref().unwrap().cwd.clone();
+        let dir = cwd.join(".chug").join("commands");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(format!("{name}.md")), body).unwrap();
+    }
+
+    /// T113: `/review <args>` with a pack present dispatches the EXPANDED
+    /// body as a normal turn (an objective on the worker channel), behind a
+    /// one-line note naming the pack file.
+    #[test]
+    fn chat_pack_invocation_sends_expanded_body_as_objective() {
+        let mut f = chat_app();
+        write_pack(&f, "review", "Review the diff. Focus: $ARGUMENTS");
+        let abort = Arc::clone(&f.abort);
+        type_text(&mut f.app, "/review the login bug", &abort);
+        press(&mut f.app, KeyCode::Enter, &abort);
+        // The expanded body is the user message; the raw slash line is not.
+        assert_eq!(
+            f.objective_rx.try_recv().unwrap(),
+            "Review the diff. Focus: the login bug"
+        );
+        assert!(f.steer_rx.try_recv().is_err());
+        assert!(f.update_rx.try_recv().is_err());
+        let notices = notice_texts(&f.app);
+        assert_eq!(
+            notices.last().unwrap(),
+            "/review → .chug/commands/review.md"
+        );
+    }
+
+    /// A body without `$ARGUMENTS` gets the args appended (the append leg,
+    /// pinned through the chat seam).
+    #[test]
+    fn chat_pack_without_token_appends_args() {
+        let mut f = chat_app();
+        write_pack(&f, "triage", "Triage the failing tests.");
+        let abort = Arc::clone(&f.abort);
+        type_text(&mut f.app, "/triage module b", &abort);
+        press(&mut f.app, KeyCode::Enter, &abort);
+        assert_eq!(
+            f.objective_rx.try_recv().unwrap(),
+            "Triage the failing tests.\n\nmodule b"
+        );
+    }
+
+    /// T113: an unknown `/nosuch` keeps today's unknown-command line,
+    /// extended to name the available packs when any exist.
+    #[test]
+    fn chat_unknown_command_names_available_packs() {
+        let mut f = chat_app();
+        write_pack(&f, "review", "Review: $ARGUMENTS");
+        write_pack(&f, "triage", "Triage: $ARGUMENTS");
+        let abort = Arc::clone(&f.abort);
+        type_text(&mut f.app, "/nosuch", &abort);
+        press(&mut f.app, KeyCode::Enter, &abort);
+        assert!(f.objective_rx.try_recv().is_err());
+        let notices = notice_texts(&f.app);
+        assert_eq!(
+            notices.last().unwrap(),
+            "unknown command: /nosuch (see /help) — available packs: /review, /triage"
+        );
+    }
+
+    /// No packs at all: the plain unknown line, unchanged (no empty
+    /// "available packs" suffix).
+    #[test]
+    fn chat_unknown_command_without_packs_keeps_plain_line() {
+        let mut f = chat_app();
+        let abort = Arc::clone(&f.abort);
+        type_text(&mut f.app, "/xyzzy", &abort);
+        press(&mut f.app, KeyCode::Enter, &abort);
+        let notices = notice_texts(&f.app);
+        assert_eq!(notices.last().unwrap(), "unknown command: /xyzzy (see /help)");
+    }
+
+    /// T113 precedence pin: built-ins always win — a pack named `goal.md`
+    /// is shadowed by the `/goal` built-in (parse_slash dispatches built-in
+    /// names before the pack lookup ever runs).
+    #[test]
+    fn chat_pack_goal_md_does_not_shadow_builtin_goal() {
+        let mut f = chat_app();
+        write_pack(&f, "goal", "PACK GOAL: $ARGUMENTS");
+        let abort = Arc::clone(&f.abort);
+        type_text(&mut f.app, "/goal ship it", &abort);
+        press(&mut f.app, KeyCode::Enter, &abort);
+        assert_eq!(
+            f.update_rx.try_recv().unwrap(),
+            SlashUpdate::Goal(Some("ship it".into()))
+        );
+        assert!(f.objective_rx.try_recv().is_err());
+    }
+
+    /// A pack that expands to nothing (empty body, no args) is not submitted
+    /// as an empty turn — the remedy names the file to edit.
+    #[test]
+    fn chat_empty_pack_is_remedy_not_empty_turn() {
+        let mut f = chat_app();
+        write_pack(&f, "hollow", "");
+        let abort = Arc::clone(&f.abort);
+        type_text(&mut f.app, "/hollow", &abort);
+        press(&mut f.app, KeyCode::Enter, &abort);
+        assert!(f.objective_rx.try_recv().is_err());
+        let notices = notice_texts(&f.app);
+        assert!(
+            notices
+                .last()
+                .unwrap()
+                .starts_with("✗ /hollow expanded to nothing")
+        );
+    }
+
+    /// T113: `/help` gains the pack line — the directory plus how many packs
+    /// were discovered (count asserted).
+    #[test]
+    fn chat_help_names_pack_directory_and_count() {
+        let mut f = chat_app();
+        write_pack(&f, "review", "Review: $ARGUMENTS");
+        write_pack(&f, "triage", "Triage: $ARGUMENTS");
+        let abort = Arc::clone(&f.abort);
+        type_text(&mut f.app, "/help", &abort);
+        press(&mut f.app, KeyCode::Enter, &abort);
+        let notices = notice_texts(&f.app);
+        assert_eq!(notices.len(), 1);
+        let help = notices.last().unwrap();
+        // Built-ins first, pack line last, exactly one line for it.
+        assert!(help.starts_with(HELP_TEXT));
+        assert_eq!(help.lines().count(), 11);
+        assert_eq!(
+            help.lines().last().unwrap(),
+            "  packs          .chug/commands/*.md — 2 discovered (/review, /triage)"
+        );
     }
 
     // ---------- SPEC-5: Tab completion ----------

@@ -4,6 +4,7 @@ mod attach;
 mod auth;
 mod build_info;
 mod chat;
+mod commands;
 mod complete;
 mod delegate;
 mod decisions;

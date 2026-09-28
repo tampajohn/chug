@@ -86,6 +86,37 @@ returns to idle, repeat. Natural stops end the turn; budgets are per turn.
 - **`/spec` `/goal` `/check` `/model` `/budget` `/ledger` `/quit` `/help`**
 - **Esc** interrupts the current turn, `q` quits from idle
 
+### Slash-command packs (`.chug/commands/*.md`)
+
+Repo-local commands, invocable from chat: drop a markdown file into the run
+cwd's `.chug/commands/` and its file stem becomes a `/`-command (`review.md`
+→ `/review`). Community-extensible without code — no registration, no
+rebuild; `/help` and unknown-name errors list what was discovered.
+
+```console
+$ cat .chug/commands/review.md
+Review the diff below for correctness and report findings.
+Focus: $ARGUMENTS
+```
+
+- **`$ARGUMENTS`** — everything after the command word replaces the token
+  (`/review the login bug` → "Focus: the login bug"); no args → empty
+  string. A body without the token gets the arguments appended after a
+  blank line.
+- **Built-ins win** — a pack named `goal.md` is shadowed by the `/goal`
+  built-in; packs only fill names the built-ins don't use.
+- **Per-checkout, like hooks/permissions** — `.chug/commands/` lives in the
+  gitignored `.chug/` (no search chain, no CLI flag); a worktree child has
+  its own (or none). Missing dir = zero packs, zero cost; a corrupt file is
+  skipped with one stderr note (fail-open) and the rest still load.
+- **A pack invocation is a normal turn** — the expanded body is submitted
+  as your objective (queued if a turn is already running); `@file` mentions
+  inside a pack body expand like any submitted line.
+
+Phase 2 (deferred with a written reason in EVALUATION.md cycle-61 §4):
+run-side invocation (`chug run --goal "/triage …"`), Tab completion of pack
+names, and frontmatter (description/allowed-tools).
+
 ## Autonomous mode (`chug run`)
 
 - **Startup banner** — `chug run` / `chug chat` print one stderr line at
@@ -606,5 +637,5 @@ cargo build && cargo clippy --all-targets -- -D warnings && cargo test
 ```
 
 All three must stay green. Layout: `src/{api,archive,driver,driver_lock,eventlog,events,fork,tools,todos,tgrep,tui,webfetch,chat,
-attach,complete,decisions,delegate,permissions,plan,riskgate,hooks,mcp,mcp_http,sse,observ,auth,ledger,transcript,trim,build_info}.rs`
+attach,complete,commands,decisions,delegate,permissions,plan,riskgate,hooks,mcp,mcp_http,sse,observ,auth,ledger,transcript,trim,build_info}.rs`
 (+ `main.rs`; `build.rs` only bakes the git commit into the startup banner).
