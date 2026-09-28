@@ -284,6 +284,28 @@ filed** — the second consecutive clean audit after T127's catch.
 
 ## Outcomes (filled at cycle wrap — LOOP-SPEC Phase 3)
 
+### Cycle 66 (2026-09-28) — routine (reconciled cycle-65 divergence first) — codex-intake queue T134–T142
+
+**T140 — goal_complete denial bypass (pri 1, landed 9b36a2e).** The
+cycle's first codex-review item: a permission-denied or hook-vetoed
+`goal_complete` still completed the run because `goal_summary` was
+populated from the tool name alone, without the `result.is_error`
+check `submit_plan` has always applied. Fix is the one-line latch
+guard at driver.rs:1084 (`!result.is_error`) — complete by
+construction for all three block classes (permission deny, PreToolUse
+veto, risk-gate block), each of which yields an is_error result
+without executing the tool. glm impl 61/80 first-try; 4 new tests RED
+pre-fix (permissions_policy + hooks_policy mods, +267/-1). kimi
+REQUIRED PASS (routing d1790625539-1, verdict d1790626612-2): 4/4
+mutants killed by named tests (revert, negate, is_error-only,
+assertion-drop), positive control proves legitimate completions still
+accept, class sweep confirmed goal_summary + plan_submitted are the
+only tool-name-keyed run exits and both guarded, tree byte-clean.
+Worktree gates nextest 1010/1010 + clippy clean; post-merge
+target-shared-main nextest 1010/1010. Outcome landed-clean
+d1790626687-3. T44 overlap: T141 impl (api.rs, disjoint) flew during
+T140 validation.
+
 ### Cycle 65 (2026-09-28) — fresh eval (kimi, loopd-routed: queue empty) — T128–T131 filed (F10 phase 2 PULLED + SPLIT); T130 + T128 LANDED (976e4ae, 85ca4c1); T129/T131 DEFERRED by mid-cycle operator intake (codex adversarial review, 9 HIGH rows T134–T142); cycle ended on a push divergence (doctrine: no mid-cycle reconcile). Cycle notes below the per-item entries.
 
 **CYCLE-65 CYCLE-LEVEL NOTES (wrap).** TWO items landed clean
