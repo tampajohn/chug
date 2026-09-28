@@ -605,6 +605,6 @@ activate without an operator restart — a pending `stop` still wins.
 cargo build && cargo clippy --all-targets -- -D warnings && cargo test
 ```
 
-All three must stay green. Layout: `src/{api,archive,driver,driver_lock,eventlog,events,fork,tools,tgrep,tui,webfetch,chat,
+All three must stay green. Layout: `src/{api,archive,driver,driver_lock,eventlog,events,fork,tools,todos,tgrep,tui,webfetch,chat,
 attach,complete,decisions,delegate,permissions,plan,riskgate,hooks,mcp,mcp_http,sse,observ,auth,ledger,transcript,trim,build_info}.rs`
 (+ `main.rs`; `build.rs` only bakes the git commit into the startup banner).
