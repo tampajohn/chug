@@ -334,6 +334,41 @@ Post-merge target-shared-main nextest 1015/1015. T44 overlap: T142
 impl (loopd.sh+events.rs, disjoint from api.rs) flew during T141
 validation.
 
+**T142 — loopd grep spoofing (pri 1, landed 3bc3169 + fix-up dd184d4,
+rebased ff).** The third codex-review item: the supervisor decided
+cycle OK/fail by grepping the mixed cycle log for `chug: goal
+complete` — but raw model text reaches that log verbatim (events.rs
+stderr deltas, the F7 raw-bytes doctrine), so a run that died on
+verification or budget while SAYING the marker recorded OK, reset the
+failure counter, and ran site sync. Fix (3341658, glm impl 56/80):
+the verdict is the child's EXIT STATUS (driver.rs run-mode exit 0 ⟺
+accepted goal; budget/abort 1, stuck 2) and the child's stdout is
+captured apart from the stderr log — forged lines can neither satisfy
+the marker grep nor shadow the recorded summary; the supervisor
+stamps an rc-based `verdict:` line for downstream consumers. kimi
+round 1 VERDICT FAIL (d1790630340-8): the primary fix verified
+correct + RED-proven, but F1 the site-sync cycle_count fallback just
+RENAMED the forgeable marker (`verdict: goal complete (rc=0)` still
+greppable in child bytes — real probe published "cycles 2" for a
+failed cycle) and F2 M5 stamp-branch inversion passed the entire
+suite. Fix-up (0b643be, glm 53/80, findings + class sweep in goal per
+the cycle-33 lesson): fallback counts a log only when its LAST
+verdict line stamps goal-complete (the supervisor writes nothing
+after child death → unforgeable), behavioral stamp↔rc ties both ways
+(inversion mutant now dead), observation 3 kept behavioral
+(rc-gate-drop killed only by the abort-path stdout-ledger test).
+kimi re-validation PASS (d1790634233-12): 10 mutants each killed on
+named tests, the original forged-marker attack re-probed end-to-end
+(3 forged lines in a FAILED cycle's bytes moved neither primary nor
+fallback count). Post-merge target-shared-main nextest 1027/1027.
+Two infra lessons logged: (1) T134-validator's note d1790632587-1 —
+the goal_complete check harness runs cargo test without the T52
+role-keyed dir, so concurrent loops sharing target-shared collide on
+same-named test binaries (first re-validation check rejected by
+exactly this while the T134 fix-up flew; retried clean); (2) T142
+re-validator hit the same class. Both are check-harness findings for
+the next eval, not row blockers.
+
 ### Cycle 65 (2026-09-28) — fresh eval (kimi, loopd-routed: queue empty) — T128–T131 filed (F10 phase 2 PULLED + SPLIT); T130 + T128 LANDED (976e4ae, 85ca4c1); T129/T131 DEFERRED by mid-cycle operator intake (codex adversarial review, 9 HIGH rows T134–T142); cycle ended on a push divergence (doctrine: no mid-cycle reconcile). Cycle notes below the per-item entries.
 
 **CYCLE-65 CYCLE-LEVEL NOTES (wrap).** TWO items landed clean
