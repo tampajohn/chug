@@ -320,6 +320,28 @@ readme_layout 1/1. Estimate ~8 → actual +8/-8 EXACT — the calibration
 era's first bullseye (T125's counter starts here). Impl stream
 harvested (7.7 KB).
 
+**T125** (estimate-calibration doctrine, pri 3): landed 532c403
+(fast-forward) — META-META-SPEC's spec bar gains the calibration rule
+immediately after the T110 ceiling sentence: estimates count ALL
+changed lines (src + tests + docs), feature-row test/doc density
+~1.5–3x with the four named data points (T113/T115/T116/T117, the
+last's mid-impl 80/80 death as the cost), a novel-logic row estimated
+over ~400 SHOULD split under the unchanged ~500 hard ceiling and
+unchanged move-row exemption, and each eval re-calibrates from the
+Outcomes records instead of editing the threshold in passing. Legs
+(m)–(n) pin the three tokens exactly-once + windowed placement with
+T48 needle self-checks. glm impl 37/80 first-try, RED-proven against
+pre-edit doctrine. kimi REQUIRED **PASS** 21/50: independent gates
+(14/14, clippy, nextest 966/966) + R1 RED-proof + M1–M4 mutants
+(corrupted ~400/T117/en-dash each kill (m); reorder kills (n) while
+(m) stays green); tree byte-clean. What the validator caught: no
+defects — and it logged the row's OWN estimate undershoot (~45 →
++159, 3.5x, all in the pins) as the rule's first re-calibration data
+point. Review + post-merge nextest 966/966. Both streams + validator
+ledger harvested (a validator mid-worktree launch rotates the impl
+stream aside — the harvest reads the rotated file, verified by
+run_start model + goal_sha256 prefix).
+
 ### Cycle 63 (2026-09-28) — routine glm freshness-skip — T122 LANDED (93dae89 fast-forward)
 
 **T122** (site-sync timeline curated sort, pri 2, user report): T101's "+inf for undatable" clause pinned ref-less curated entries BELOW newer generated entries — the live 09-27 K7/chug.sh milestones rendered after 09-28 items. Fix: key precedence per entry = commit %ct (ref resolves, unchanged) → the entry's own `tl-date` parsed at day precision (`day_key` = that day's 23:59:59Z via Fliegel–Van Flandern civil→JDN arithmetic in pure awk, TZ-independent, no date(1) dialects) → +inf sentinel only when NEITHER a ref NOR a parseable tl-date exists; same-day ties keep original region position (SEQ). Day-precision entries sort INSIDE their day (after same-day exact-%ct entries — a day claim cannot beat a second claim — before the next day's); T101's guarantees untouched (%ct primary, curated-text-wins merge, 20+collapse cap, cat-file audit). glm impl 38/80 first-try RED-proven (both new fixture tests + the flipped T99 bootstrap leg). kimi EXERCISED PASS 33/50: 4/4 mutants killed zero survivors (fallback-drop / precedence-flip / start-of-day / sentinel-zero), serial declared overlap, day_key arithmetic independently re-verified vs Python incl leap/epoch, tree byte-clean sha-match, 5 non-blocking informational findings (impossible-date rollover in day_key, no absolute-epoch unit pin, one comment overreach, in-day placement rationale, redundant seq tiebreak) — carried to next eval, none blocking. Review + post-merge nextest 964/964 under target-shared-main. Routing d1790609328-1 (optional→exercised: SECOND ordering bug in timeline_generate, user-visible on the live site), verdict d1790610212-2, outcome landed-clean ×2. 2 streams harvested (impl + validate).
