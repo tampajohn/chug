@@ -467,7 +467,11 @@ fn read_events_tail(events_path: &Path) -> anyhow::Result<Vec<String>> {
 /// legs. A missing/unreadable events log is the normal state before a child's
 /// first write — reported as an empty summary plus the `events: nothing read`
 /// note, never an error (T23 behavior, unchanged).
-fn read_events(events_path: &Path) -> (DelegateSummary, Option<String>) {
+///
+/// T124: also the read seam behind the `chug mcp-serve` `chug_status` tool —
+/// visibility-only change, behavior byte-identical (the note carries the read
+/// failure; `chug_status` maps a note to its `isError` result).
+pub(crate) fn read_events(events_path: &Path) -> (DelegateSummary, Option<String>) {
     match read_events_tail(events_path) {
         Ok(lines) => {
             let refs: Vec<&str> = lines.iter().map(String::as_str).collect();
@@ -615,7 +619,11 @@ fn delegate_status_wait(
 /// stream, torn last line, missing fields) is unit-tested through here.
 /// Malformed lines are skipped, never fatal — a torn final write must not
 /// blind the poll.
-fn summarize_events(lines: &[&str]) -> DelegateSummary {
+///
+/// T124: also the parse seam behind the `chug mcp-serve` `chug_status` tool
+/// (visibility-only change; the compact MCP renderer builds on this summary,
+/// never re-parsing the stream).
+pub(crate) fn summarize_events(lines: &[&str]) -> DelegateSummary {
     let mut s = DelegateSummary::default();
     for line in lines {
         let line = line.trim();
@@ -674,26 +682,31 @@ fn summarize_events(lines: &[&str]) -> DelegateSummary {
 }
 
 /// What `status` can say about a child's event stream.
+///
+/// T124: `pub(crate)` (fields too) so the `chug mcp-serve` compact renderer
+/// can read the same summary `status` renders — visibility-only, shape and
+/// behavior unchanged (the delegate tests construct it field-by-field and
+/// stay green unmodified).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-struct DelegateSummary {
+pub(crate) struct DelegateSummary {
     /// `max_iters` from `run_start`, when that line was seen.
-    max_iters: Option<u64>,
+    pub(crate) max_iters: Option<u64>,
     /// `n` of the last `iteration` line.
-    last_iteration: Option<u64>,
-    last_event_type: Option<String>,
-    last_event_ts: Option<String>,
-    budget_low_seen: bool,
-    goal_seen: bool,
-    abort_seen: bool,
+    pub(crate) last_iteration: Option<u64>,
+    pub(crate) last_event_type: Option<String>,
+    pub(crate) last_event_ts: Option<String>,
+    pub(crate) budget_low_seen: bool,
+    pub(crate) goal_seen: bool,
+    pub(crate) abort_seen: bool,
     /// `reason` of the abort line, when present.
-    abort_reason: Option<String>,
+    pub(crate) abort_reason: Option<String>,
 }
 
 impl DelegateSummary {
     /// `starting` = nothing read yet (child may not have written anything);
     /// `running` = events seen, no verdict; `done`/`aborted` = the stream
     /// ended in a goal or an abort.
-    fn state(&self) -> &'static str {
+    pub(crate) fn state(&self) -> &'static str {
         if self.abort_seen {
             "aborted"
         } else if self.goal_seen {
