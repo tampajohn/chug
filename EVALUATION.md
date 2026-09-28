@@ -245,6 +245,52 @@ section's commands also cover).
 
 ## Outcomes (filled at cycle wrap — LOOP-SPEC Phase 3)
 
+### Cycle 55 (2026-09-28) — eval-routed kimi cycle turned routine (operator's T99 directive filled the empty queue at launch); T99 LANDED (d13a253, fast-forward)
+
+**T99 site-sync v2: TIMELINE + FEATURES deterministic regions — LANDED,
+fast-forward d13a253 (impl a284065 + fix-up d13a253, +897/-10).** The
+operator directive ("keep the site up to date / reflective of the work /
+timeline etc") extends T98's stats block with two more machine-owned
+regions of chug.sh: TIMELINE (one fact-only entry per TODO done row —
+date from the commit's git author date, title from the row, short ref —
+deduped against the 16 hand-built entries by cited commit ref, verified
+with `git cat-file` before render (req 5), newest-first, latest 20 full +
+"…and N earlier milestones (T1–T<n>)" collapse, machine entries rebuilt
+from scratch each run so re-runs re-collapse without dupes) and FEATURES
+(FEATURES.md-derived grid: landed = checked-off row (strikethrough or
+LANDED annotation, legs pinned independently), in-flight = an active TODO
+row references the F-id (F1-vs-F13 / F2-vs-F21 boundaries pinned), else
+queued; existing cards keep position + markup with badges normalized to
+the machine vocabulary, uncovered F-items get synthesized cards, and NO
+card is ever dropped — now true). Req-4 bootstrap: when the live page
+lacks the markers, the script wraps the existing `<div class="tl">` /
+`<div class="grid">` blocks' INNER content verbatim in its own commit
+(pinned INSIDE the container — an outer-wrap mutant dies). glm impl run1
+died **65/65 uncommitted** (+816/-10 — the 5th ceiling death of the T92
+census); **T63 resume #20 accepted 28/65 (20/20 all-time)**. kimi
+validation (routing: optional→RUN, idle queue + new bootstrap surface
+outweighing the T98-skip precedent) paid immediately: **round 1 FAIL** —
+blocking finding: `flush_card`'s `<p` gate silently dropped any card
+without a `<p>` (h3-only/ul-body cards), contradicting req 2 and the
+code's own "No card is ever dropped" comment (the orchestrator's named
+probe, fixture-demonstrated by the validator); survivors M6 (bootstrap
+containment unpinned) + M7 (LANDED-leg removal vacuous). glm fix-up
+(28/65) swept the class with RED-proven pins (unconditional print,
+containment pin, split-leg landed fixtures, F21-boundary test), and
+**kimi round 2 PASS 42/50** re-ran every mutant to death (M6/M7a/M7b/M8
+all DEAD, meta-legs prove the pins are load-bearing; fresh sweep clean
+but one infinite-ladder non-blocker: the h3-less card shape is unpinned
+— zero live exposure, all 14 live cards have h3). Orchestrator gates:
+nextest 782/782 review + post-merge (main-dedicated cache), clippy,
+bash -n. Live site clone untouched by every child (fixtures only) — the
+first LIVE bootstrap fires at the next loopd wrap; NOTE for the
+operator: the site clone currently holds uncommitted WIP (index.html,
+verify.sh) and site-sync commits the whole index.html file, so that WIP
+rides the bootstrap commit (T98 design property — the loop owns the
+file's commits; hand-edit between syncs at your own risk). 8 artifacts
+harvested pre-removal (5 event streams incl. the killed misfire, 3
+LEDGERs).
+
 ### Cycle 54 (2026-09-28) — routine glm freshness-skip (queue carried T96 mid-arc + T97)
 
 **T96 META-META-SPEC check-filter-breadth — LANDED, merge 457720d (impl 962830d).**
