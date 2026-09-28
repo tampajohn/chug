@@ -426,6 +426,27 @@ target-shared; post-merge 777/777. kimi SKIPPED per routing
 d1790556692-25 (the guard is its own adversarial artifact). 1 artifact
 harvested. Arc: 1 misfired launch + 1 impl, ~5 min wall.
 
+**T96 META-META-SPEC check-filter-breadth — MID-ARC at wrap (impl committed, validation deferred).**
+glm impl (pid 78784) accepted 23/65, commit 962830d on branch loop-t96:
+ONE sentence woven into the spec-quality bar after the T67 `--lib`
+sentence (cargo-test check filter MUST run every test the change adds;
+t90 citation), +7/−1 with every other line cmp-proven byte-identical,
+todo_consistency 5/5. The merge is HELD: step-4 kimi validation is
+REQUIRED for loop/spec doctrine and the budget-low directive forbade new
+child launches. Worktree /tmp/chug-loop-t96 + branch PRESERVED; events
+harvested; full recovery recipe on the TODO row. **T97 carried** (docs-only,
+ready spec). Cycle-53 wrap: 5 items landed (T92/T93/T91/T94/T98/T95 — six
+counting the operator-filed T98), one mid-arc (T96), one carried (T97);
+T92 measure clause at 1-of-6 (T91's 65/65 death, resume-recovered);
+validators caught 0 blocking findings all cycle (T91: 7/10 mutants killed
++ 3 informational survivors carried not filed; T94: 5/6 + expected
+BTreeMap survivor); decision_log adoption 25 records this cycle;
+orchestrator incidents (mine, both recovered in-iteration): killed
+goal-corrupted validator launch pid 31078; wrong-spec-slug T95 misfire
+caught by spawn failure. Site-marker bootstrap for T98 done at wrap
+(markers committed to chug-site; first real sync is the next loopd
+cycle's — acceptance leg still open).
+
 ### Cycle 52 (2026-09-27) — routine glm freshness-skip; T90 LANDED (e9afed9, fast-forward merge) — F4 permissions phase 1: the deny-only fail-closed policy layer
 
 - **T90 LANDED** (e9afed9): `.chug/permissions.json` deny-list — new `src/permissions.rs` (363 prod lines, at the ~350 guard's edge) holds all policy logic: absent/empty config = zero rules + zero cost; malformed config fails OPEN (one stderr warn + one `permission_error` line, T83 parity); per-rule malformed legs (unknown key, two matchers, non-string value, missing tool, matcher-that-cannot-fit) are skipped in place with valid siblings still denying; deny rules are a tool glob + at most one `command`/`path`/`url` arg matcher, first-match-wins, missing/non-string arg under an arg rule fails toward execution; deny text `[permission denied] <rule summary>`. Driver gates dispatch FIRST (permissions → PreToolUse hooks → plan/MCP/risk gate) riding the T83 `blocked` flag in run+chat+plan, so a denied call fires no hooks and never executes. `hooks::glob_matches` made pub(crate), reused byte-identically. README Permissions section integrated after Hooks; FEATURES F4 row annotated at flip. 24 tests (17 unit + 7 driver integration incl. ZERO-hook-fires ordering pins + plan-mode leg + fail-open-exactly-once).
