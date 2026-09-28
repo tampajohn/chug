@@ -262,6 +262,23 @@ pre-edit, 3 parallel T79 mutants all killed (drop principle needle, drop
 t90 needle, corrupt the preserved `no library targets` token — pin proven
 live). 2 validate artifacts harvested pre-removal.
 
+**T97 README delegate paragraph → per-action sub-bullets — LANDED,
+fast-forward b0c6041.** glm impl (pid 394) goal-accepted **37/65
+first-try (~4 min)**: the ~24-line `delegate` paragraph split into a
+lead-in + four ` — ` sub-bullets (`launch`, `status` with wait_secs +
+terminal folded in, `collect`, `Sandbox/cwd`) — zero behavior-text
+change, token-multiset-verified, neighbors byte-identical. The
+spec-anticipated pin sweep found exactly one delegate-paragraph pin
+outside tests/: tools::tests::readme_and_loop_spec_name_collect (T69) —
+needle updated minimally (gains the ` — ` label separator) and PROVEN RED
+both directions (against pre-edit README and pre-update needle).
+Classification consequence: the pin update puts src/tools.rs in the diff
+→ md-only predicate fails → FULL gates at review and post-merge (nextest
+release 777/777 both, spec check + nextest_gate_runner 7/7 +
+shared_target_dir 22/22). kimi SKIPPED per routing (docs-only restructure
++ orchestrator claim-for-claim diff review, T16/T31/T95 precedent). 1
+artifact harvested pre-removal.
+
 ### Cycle 53 (2026-09-27) — fresh eval (kimi, loopd-routed: queue empty) — T91–T97 filed (F5 SPLIT phase 1 → T91); T92 LANDED (9db86bc) — impl children now get 65 iterations
 
 **T92 LOOP-SPEC impl-child template 50→65 — LANDED, fast-forward merge 9db86bc.**
