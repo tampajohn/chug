@@ -1075,7 +1075,13 @@ pub(crate) fn drive_loop(
             // Plan mode has no goal_complete exit: the call is rejected by
             // the plan gate above and the loop continues (the plan exit is
             // submit_plan below).
-            if name == "goal_complete" && ctx.mode != Mode::Plan {
+            // T140: the summary latch requires the call to have SUCCEEDED —
+            // a blocked call (permission deny, PreToolUse veto, risk-gate
+            // block) produces an is_error result without ever executing the
+            // tool, and accepting its summary would let the block bypass
+            // the only exit gate: the denied goal_complete would complete
+            // the run through verification. Same shape submit_plan checks.
+            if name == "goal_complete" && ctx.mode != Mode::Plan && !result.is_error {
                 goal_summary = Some(
                     input
                         .get("summary")

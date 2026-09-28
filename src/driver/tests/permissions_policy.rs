@@ -307,6 +307,127 @@
         assert!(!lines.iter().any(|l| l["type"] == "hook"), "{lines:?}");
     }
 
+    // ---------- T140: a denied `goal_complete` must not complete the run
+    // (codex adversarial review finding 1) ----------
+
+    /// THE DENIED-EXIT LEG (review trigger 1: no check configured). The
+    /// permission deny produces a tool error, but the goal_summary latch
+    /// keyed on the tool NAME alone — `result.is_error` was never checked on
+    /// this path, unlike `submit_plan` — so verification accepted and the
+    /// run completed with the goal "accepted" despite the operator
+    /// explicitly denying the exit tool. Mutation-style: reverting the fix
+    /// (name-only latch) turns this red — the outcome flips to
+    /// `GoalAccepted` and a `goal`/`accepted` line lands in events.jsonl.
+    #[test]
+    fn denied_goal_complete_does_not_complete_the_run() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_permissions_json(tmp.path(), json!([{"tool": "goal_complete"}]));
+        let (_utx, urx) = mpsc::channel::<SlashUpdate>();
+        let controls = Controls::detached();
+        let ctx = ctx_for(&tmp, Mode::Chat, &controls, &urx, None, &observ::Sink::Noop);
+        let mut knobs = knobs_with(5); // check_cmd stays None: the unverified leg
+        let mut llm = ScriptedLlm::new(vec![
+            tool_use_response("goal_complete", json!({"summary": "claim done"})),
+            text_only_response("routed around the deny"),
+        ]);
+        let mut gate = None;
+        let mut messages = Vec::new();
+        let mut sink = RecordingSink::default();
+        let outcome = drive_loop(
+            &ctx,
+            &mut knobs,
+            &mut llm,
+            &mut gate,
+            &mut messages,
+            None,
+            &mut sink,
+            &mut McpRegistry::new(tmp.path(), true, None).unwrap(),
+        )
+        .unwrap();
+        // The deny keeps the turn alive: the NEXT model iteration ran to
+        // natural completion — a denied exit call must never end the turn
+        // as goal-accepted.
+        assert!(
+            matches!(outcome, DriveOutcome::TurnEnded(TurnEndReason::Completed)),
+            "{outcome:?}"
+        );
+        // The model received the deny as a tool error naming the rule.
+        let (content, is_error) = tool_result_text(&messages).expect("a tool result exists");
+        assert!(is_error, "the deny is a tool error: {content:?}");
+        assert_eq!(content, "[permission denied] deny goal_complete", "{content:?}");
+        // NO acceptance anywhere — the review's exact missing trigger: no
+        // GoalAccepted event reaches the sink, and events.jsonl carries no
+        // goal/accepted line — just the one deny line.
+        assert!(
+            !sink.0.iter().any(|e| matches!(e, Event::GoalAccepted { .. })),
+            "a denied goal_complete must never be accepted: {:?}",
+            sink.0
+        );
+        let lines = events_jsonl(&tmp);
+        assert!(
+            !lines.iter().any(|l| l["type"] == "goal" && l["outcome"] == "accepted"),
+            "no accepted goal on a denied exit call: {lines:?}"
+        );
+        let denies: Vec<&Value> = lines
+            .iter()
+            .filter(|l| l["type"] == "permission_denied")
+            .collect();
+        assert_eq!(denies.len(), 1, "{lines:?}");
+        assert_eq!(denies[0]["tool"], "goal_complete");
+    }
+
+    /// THE PASSING-CHECK LEG (review trigger 2: `check: true`). The same
+    /// deny, but a check command IS configured and it passes — before the
+    /// fix the passing check "verified" the denied call and the run
+    /// completed anyway; after the fix the denied call never reaches
+    /// verification at all (the loop continues; the check is not consulted
+    /// for a call that never executed).
+    #[test]
+    fn denied_goal_complete_with_passing_check_still_does_not_complete() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_permissions_json(tmp.path(), json!([{"tool": "goal_complete"}]));
+        let (_utx, urx) = mpsc::channel::<SlashUpdate>();
+        let controls = Controls::detached();
+        let ctx = ctx_for(&tmp, Mode::Chat, &controls, &urx, None, &observ::Sink::Noop);
+        let mut knobs = knobs_with(5);
+        knobs.check_cmd = Some("true".to_string()); // always exits 0
+        let mut llm = ScriptedLlm::new(vec![
+            tool_use_response("goal_complete", json!({"summary": "claim done"})),
+            text_only_response("routed around the deny"),
+        ]);
+        let mut gate = None;
+        let mut messages = Vec::new();
+        let mut sink = RecordingSink::default();
+        let outcome = drive_loop(
+            &ctx,
+            &mut knobs,
+            &mut llm,
+            &mut gate,
+            &mut messages,
+            None,
+            &mut sink,
+            &mut McpRegistry::new(tmp.path(), true, None).unwrap(),
+        )
+        .unwrap();
+        assert!(
+            matches!(outcome, DriveOutcome::TurnEnded(TurnEndReason::Completed)),
+            "a passing check must not launder a denied exit call: {outcome:?}"
+        );
+        let (content, is_error) = tool_result_text(&messages).expect("a tool result exists");
+        assert!(is_error, "{content:?}");
+        assert_eq!(content, "[permission denied] deny goal_complete", "{content:?}");
+        let lines = events_jsonl(&tmp);
+        assert!(
+            !lines.iter().any(|l| l["type"] == "goal" && l["outcome"] == "accepted"),
+            "no accepted goal on a denied exit call: {lines:?}"
+        );
+        // The check never ran for the denied call: no verifying line.
+        assert!(
+            !lines.iter().any(|l| l["type"] == "verifying"),
+            "a denied call must not reach verification: {lines:?}"
+        );
+    }
+
     /// The config fail-open leg at driver level: a malformed permissions
     /// config warns + records exactly ONE error line even with two tool
     /// calls in the run (the load happens once per drive_loop invocation),

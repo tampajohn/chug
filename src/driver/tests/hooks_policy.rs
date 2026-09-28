@@ -323,3 +323,149 @@
         );
     }
 
+    /// T140 (codex review finding 1, the PreToolUse veto sibling): a veto of
+    /// `goal_complete` must not complete the run either. The veto result is
+    /// an error the model routes around — but the goal_summary latch keyed
+    /// on the tool NAME alone ignored it, so verification accepted (no
+    /// check configured) and the turn ended as goal-accepted. Reverting the
+    /// fix flips this red: `GoalAccepted` instead of `Completed`.
+    #[test]
+    fn vetoed_goal_complete_does_not_complete_the_run() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_hooks_json(
+            tmp.path(),
+            json!([hook_entry(
+                "goal_complete",
+                "echo no-exit-veto >&2; exit 2"
+            )]),
+            json!([]),
+        );
+        let (_utx, urx) = mpsc::channel::<SlashUpdate>();
+        let controls = Controls::detached();
+        let ctx = ctx_for(&tmp, Mode::Chat, &controls, &urx, None, &observ::Sink::Noop);
+        let mut knobs = knobs_with(5); // check_cmd stays None: the unverified leg
+        let mut llm = ScriptedLlm::new(vec![
+            tool_use_response("goal_complete", json!({"summary": "claim done"})),
+            text_only_response("routed around the veto"),
+        ]);
+        let mut gate = None;
+        let mut messages = Vec::new();
+        let mut sink = RecordingSink::default();
+        let outcome = drive_loop(
+            &ctx,
+            &mut knobs,
+            &mut llm,
+            &mut gate,
+            &mut messages,
+            None,
+            &mut sink,
+            &mut McpRegistry::new(tmp.path(), true, None).unwrap(),
+        )
+        .unwrap();
+        // The veto keeps the turn alive: the next iteration ran to natural
+        // completion — never a goal-accepted turn end.
+        assert!(
+            matches!(outcome, DriveOutcome::TurnEnded(TurnEndReason::Completed)),
+            "{outcome:?}"
+        );
+        // The model received the veto as a tool error carrying the hook's
+        // stderr.
+        let (content, is_error) = tool_result_text(&messages).expect("a tool result exists");
+        assert!(is_error, "the veto is a tool error: {content:?}");
+        assert!(content.starts_with("[hook veto] "), "{content:?}");
+        assert!(content.contains("no-exit-veto"), "{content:?}");
+        // NO acceptance anywhere.
+        assert!(
+            !sink.0.iter().any(|e| matches!(e, Event::GoalAccepted { .. })),
+            "a vetoed goal_complete must never be accepted: {:?}",
+            sink.0
+        );
+        let lines = events_jsonl(&tmp);
+        assert!(
+            !lines.iter().any(|l| l["type"] == "goal" && l["outcome"] == "accepted"),
+            "no accepted goal on a vetoed exit call: {lines:?}"
+        );
+        // The veto fire line names the exit tool.
+        let hook_lines: Vec<&Value> = lines.iter().filter(|l| l["type"] == "hook").collect();
+        assert_eq!(hook_lines.len(), 1, "{lines:?}");
+        assert_eq!(hook_lines[0]["tool"], "goal_complete");
+        assert_eq!(hook_lines[0]["veto"], true);
+    }
+
+    /// T140 POSITIVE CONTROL (kills the block-everything mutant): the veto
+    /// is stateful — the payload on stdin carries the tool input, so
+    /// `grep -q premature` rejects only the PREMATURE exit claim and allows
+    /// the honest one. The block keeps the loop running (real work
+    /// executes) and the later honest claim completes the run with ITS
+    /// summary. With the name-only latch reverted, the premature claim is
+    /// accepted immediately: the outcome lands before the bash call ever
+    /// runs and the accepted summary is "premature claim" — red.
+    #[test]
+    fn vetoed_premature_goal_complete_loops_until_honest_claim() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_hooks_json(
+            tmp.path(),
+            json!([hook_entry(
+                "goal_complete",
+                "grep -q premature && { echo premature-exit-veto >&2; exit 2; } || exit 0"
+            )]),
+            json!([]),
+        );
+        let (_utx, urx) = mpsc::channel::<SlashUpdate>();
+        let controls = Controls::detached();
+        let ctx = ctx_for(
+            &tmp,
+            Mode::Autonomous,
+            &controls,
+            &urx,
+            None,
+            &observ::Sink::Noop,
+        );
+        let mut knobs = knobs_with(5); // no check: acceptance is unverified
+        let mut llm = ScriptedLlm::new(vec![
+            tool_use_response("goal_complete", json!({"summary": "premature claim"})),
+            tool_use_response(
+                "bash",
+                json!({"command": "echo real-work > honest-work.txt"}),
+            ),
+            tool_use_response("goal_complete", json!({"summary": "honest claim"})),
+        ]);
+        let mut gate = None;
+        let mut messages = Vec::new();
+        let mut sink = RecordingSink::default();
+        let outcome = drive_loop(
+            &ctx,
+            &mut knobs,
+            &mut llm,
+            &mut gate,
+            &mut messages,
+            None,
+            &mut sink,
+            &mut McpRegistry::new(tmp.path(), true, None).unwrap(),
+        )
+        .unwrap();
+        // The run completed — via the HONEST claim.
+        assert!(matches!(outcome, DriveOutcome::RunFinished(0)), "{outcome:?}");
+        // The intermediate work actually ran: the premature claim did not
+        // end the run before iteration 2.
+        assert!(
+            tmp.path().join("honest-work.txt").exists(),
+            "the veto must keep the loop running (real work executes)"
+        );
+        // The accepted summary is the honest one — the premature claim was
+        // never accepted.
+        let lines = events_jsonl(&tmp);
+        let accepted: Vec<&Value> = lines
+            .iter()
+            .filter(|l| l["type"] == "goal" && l["outcome"] == "accepted")
+            .collect();
+        assert_eq!(accepted.len(), 1, "{lines:?}");
+        assert_eq!(accepted[0]["summary"], "honest claim", "{lines:?}");
+        // Both claims fired the hook (every matching hook fires even after
+        // one vetoes); exactly one of the two was a veto.
+        let hook_lines: Vec<&Value> = lines.iter().filter(|l| l["type"] == "hook").collect();
+        assert_eq!(hook_lines.len(), 2, "{lines:?}");
+        let vetoes: Vec<_> = hook_lines.iter().filter(|l| l["veto"] == true).collect();
+        assert_eq!(vetoes.len(), 1, "{lines:?}");
+    }
+
