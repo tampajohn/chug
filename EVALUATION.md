@@ -305,25 +305,42 @@ accurate. **One docs row filed (T127); no structural debt.**
 
 ## Outcomes (filled at cycle wrap — LOOP-SPEC Phase 3)
 
-### Cycle 64 (2026-09-28) — fresh eval (kimi, loopd-routed: queue empty) — T124–T127 filed — IN PROGRESS
+### Cycle 64 (2026-09-28) — fresh eval (kimi, loopd-routed: queue empty) — T124–T127 filed; ALL FOUR landed clean (T127 5dbab0d README install truth, T125 532c403 estimate calibration, T124 d6264be F10-p1 mcp-serve+chug_status, T126 eef7a29 validator /tmp-heredoc doctrine) — the era's FOURTH all-PASS cycle after 58/61/62. Cycle notes below the per-item entries.
 
-**T126** (META-SPEC §6 validator /tmp-heredoc doctrine, pri 4):
-landed eef7a29 (fast-forward) — §6's validator goal template gains
-the cross-tree WRITE half immediately after the byte-identical READ
-sentence: "Write /tmp helper scripts (the mutant apply/run legs) with
-bash heredocs — write_file and edit_file are cwd-confined the same way
-and refuse /tmp paths with `path escapes cwd`." The first META-SPEC
-pin: `meta_spec()` loader + leg (o) (needles exactly-once, windowed
-inside §6, read-sentence byte-identical guard + adjacency guard, T48
-self-checks). glm impl 35/80 first-try, RED-proven. kimi REQUIRED
-**PASS** 16/50: independent gates (build/clippy/nextest 996/996,
-loop_spec_recovery 15/15) + 5 parallel mutants ALL killed on distinct
-assert paths — M1's RED-proof failed ONLY leg (o) of 15 (specificity),
-M2 duplicate-count, M3 read-sentence guard, M4 relocation window, M5
-adjacency break. Zero blocking findings. Estimate ~25 → actual +192
-(7.7x — the pin-density pattern; validator logged it as T125
-calibration data). Review + post-merge nextest 996/996. Both streams
-+ validator ledger harvested.
+**T127** (README Install staleness, docs, pri 2): landed 5dbab0d
+(fast-forward) — the pre-release honesty pair deleted, replaced with
+versionless durable claims (releases cut on `v*` tags and published;
+three platform tarballs + sha256s `--release --locked` from the tagged
+commit; one-liner installs latest; tarball links ride GitHub's
+`releases/latest` redirect). glm impl 13/80 first-try green; the child
+live-verified chug.sh/install.sh + the latest-tarball 302→200 + its
+sha256 at edit time. kimi SKIPPED per docs-only precedent (routing
+d1790612463-18). Review + post-merge floor: todo_consistency 5/5 +
+readme_layout 1/1. Estimate ~8 → actual +8/-8 EXACT — the calibration
+era's first bullseye (T125's counter starts here). Impl stream
+harvested (7.7 KB).
+
+**T125** (estimate-calibration doctrine, pri 3): landed 532c403
+(fast-forward) — META-META-SPEC's spec bar gains the calibration rule
+immediately after the T110 ceiling sentence: estimates count ALL
+changed lines (src + tests + docs), feature-row test/doc density
+~1.5–3x with the four named data points (T113/T115/T116/T117, the
+last's mid-impl 80/80 death as the cost), a novel-logic row estimated
+over ~400 SHOULD split under the unchanged ~500 hard ceiling and
+unchanged move-row exemption, and each eval re-calibrates from the
+Outcomes records instead of editing the threshold in passing. Legs
+(m)–(n) pin the three tokens exactly-once + windowed placement with
+T48 needle self-checks. glm impl 37/80 first-try, RED-proven against
+pre-edit doctrine. kimi REQUIRED **PASS** 21/50: independent gates
+(14/14, clippy, nextest 966/966) + R1 RED-proof + M1–M4 mutants
+(corrupted ~400/T117/en-dash each kill (m); reorder kills (n) while
+(m) stays green); tree byte-clean. What the validator caught: no
+defects — and it logged the row's OWN estimate undershoot (~45 →
++159, 3.5x, all in the pins) as the rule's first re-calibration data
+point. Review + post-merge nextest 966/966. Both streams + validator
+ledger harvested (a validator mid-worktree launch rotates the impl
+stream aside — the harvest reads the rotated file, verified by
+run_start model + goal_sha256 prefix).
 
 **T124** (F10 phase 1 — `chug mcp-serve` + `chug_status`, feature,
 pri 2, THE ROADMAP PULL): landed d6264be (rebased a4e1bea onto main
@@ -365,40 +382,66 @@ goal/edit garbles — both read-backs proved the payloads INTACT
 (render artifacts in the orchestrator's own context view), no kills,
 no rework — the rule paying for itself.
 
-**T127** (README Install staleness, docs, pri 2): landed 5dbab0d
-(fast-forward) — the pre-release honesty pair deleted, replaced with
-versionless durable claims (releases cut on `v*` tags and published;
-three platform tarballs + sha256s `--release --locked` from the tagged
-commit; one-liner installs latest; tarball links ride GitHub's
-`releases/latest` redirect). glm impl 13/80 first-try green; the child
-live-verified chug.sh/install.sh + the latest-tarball 302→200 + its
-sha256 at edit time. kimi SKIPPED per docs-only precedent (routing
-d1790612463-18). Review + post-merge floor: todo_consistency 5/5 +
-readme_layout 1/1. Estimate ~8 → actual +8/-8 EXACT — the calibration
-era's first bullseye (T125's counter starts here). Impl stream
-harvested (7.7 KB).
+**T126** (META-SPEC §6 validator /tmp-heredoc doctrine, pri 4):
+landed eef7a29 (fast-forward) — §6's validator goal template gains
+the cross-tree WRITE half immediately after the byte-identical READ
+sentence: "Write /tmp helper scripts (the mutant apply/run legs) with
+bash heredocs — write_file and edit_file are cwd-confined the same way
+and refuse /tmp paths with `path escapes cwd`." The first META-SPEC
+pin: `meta_spec()` loader + leg (o) (needles exactly-once, windowed
+inside §6, read-sentence byte-identical guard + adjacency guard, T48
+self-checks). glm impl 35/80 first-try, RED-proven. kimi REQUIRED
+**PASS** 16/50: independent gates (build/clippy/nextest 996/996,
+loop_spec_recovery 15/15) + 5 parallel mutants ALL killed on distinct
+assert paths — M1's RED-proof failed ONLY leg (o) of 15 (specificity),
+M2 duplicate-count, M3 read-sentence guard, M4 relocation window, M5
+adjacency break. Zero blocking findings. Estimate ~25 → actual +192
+(7.7x — the pin-density pattern; validator logged it as T125
+calibration data). Review + post-merge nextest 996/996. Both streams
++ validator ledger harvested.
 
-**T125** (estimate-calibration doctrine, pri 3): landed 532c403
-(fast-forward) — META-META-SPEC's spec bar gains the calibration rule
-immediately after the T110 ceiling sentence: estimates count ALL
-changed lines (src + tests + docs), feature-row test/doc density
-~1.5–3x with the four named data points (T113/T115/T116/T117, the
-last's mid-impl 80/80 death as the cost), a novel-logic row estimated
-over ~400 SHOULD split under the unchanged ~500 hard ceiling and
-unchanged move-row exemption, and each eval re-calibrates from the
-Outcomes records instead of editing the threshold in passing. Legs
-(m)–(n) pin the three tokens exactly-once + windowed placement with
-T48 needle self-checks. glm impl 37/80 first-try, RED-proven against
-pre-edit doctrine. kimi REQUIRED **PASS** 21/50: independent gates
-(14/14, clippy, nextest 966/966) + R1 RED-proof + M1–M4 mutants
-(corrupted ~400/T117/en-dash each kill (m); reorder kills (n) while
-(m) stays green); tree byte-clean. What the validator caught: no
-defects — and it logged the row's OWN estimate undershoot (~45 →
-+159, 3.5x, all in the pins) as the rule's first re-calibration data
-point. Review + post-merge nextest 966/966. Both streams + validator
-ledger harvested (a validator mid-worktree launch rotates the impl
-stream aside — the harvest reads the rotated file, verified by
-run_start model + goal_sha256 prefix).
+**Cycle-64 notes.** kimi ran 3 rounds (T125 REQUIRED, T124
+optional-EXERCISED, T126 REQUIRED; T127 SKIPPED per docs-only
+precedent) — ALL PASS, 15 mutants total, ONE survivor (T124's M3
+weak-test, low severity — the `.chug/`-existence check inert under
+substring-satisfied assertions; **carried to next eval**, T119-class
+pin-strengthening), zero blocking findings: the era's fourth all-PASS
+cycle. Routing/verdict/outcome ids: T127 d1790612463-18 +
+d1790612498-19; T125 d1790613425-20/d1790613867-21/d1790613947-22;
+T124 d1790614884-23/d1790615724-24/d1790615847-25; T126
+d1790616483-26/d1790617141-27/d1790617196-28 (known typo: commit
+04281f9's message cites d1790613974-22 — the true record is
+d1790613947-22). T44 overlap ran once clean (T125-validator ∥
+T124-impl — disjoint spec-named files, strictly serial merges, one
+clean rebase-ff d6264be). ZERO budget deaths, ZERO T63 resumes
+(impl 13/37/78/35 of 80 — t124-impl's 78 with budget_low INSIDE the
+T18 margin, first-try; validators 21/37/16 of 50). T120
+verify-then-kill exercised ×3 (T124 validator goal + FEATURES edit +
+EVALUATION edit all LOOKED garbled in the orchestrator's context view;
+read-backs proved all three payloads INTACT; zero kills, zero rework —
+the render-artifact class is confined to the orchestrator's own
+viewing of long parameters; the composition-to-tool pipeline is
+intact — cycle-61's lesson fully internalized). Estimate recalibration
+counter (T125's rule, first cycle): T127 ~8→+8/-8 EXACT bullseye;
+T125 ~45→+159 (3.5x, all pins); T124 ~485→+1106 (2.3x — over BOTH the
+~400 band and the 500 ceiling: the band's proving case, filed hours
+before the band existed); T126 ~25→+192 (7.7x, pin density). Pattern
+for the next eval's recalibration text: pin/test density is THE
+multiplier; doctrine+pin rows undershoot hardest in ratio, feature
+rows in absolute lines. Harvest mechanics lesson: a validator launched
+fresh into a used worktree ROTATES the impl child's events.jsonl
+aside (standard rotation) — the harvest copies the current file as
+the validator stream and the rotated file as the impl stream,
+identified by run_start model + goal_sha256 prefix (impl LEDGER
+archives were seed/routine; their substance lives in the streams +
+these entries). 9 event streams + 3 validator ledgers harvested.
+F10: phase 1 LANDED, phase 2 (chug_collect + chug_launch write leg —
+permissions/hooks interaction) READY to file at next eval, phase 3
+deferred. T121 watch: reset — zero T81-tagged fumbles this cycle.
+Release: v0.3.0 cut at this wrap (4 items since v0.2.1 ≥ 3; T124 is
+a feature → minor bump) — the loop's FIRST self-cut tag (T100
+trigger's first firing). Queue EMPTY → next cycle eval-routes kimi.
+Final gates green at HEAD under target-shared-main.
 
 ### Cycle 63 (2026-09-28) — routine glm freshness-skip — T122 LANDED (93dae89 fast-forward)
 
@@ -740,147 +783,6 @@ T102-trip spec-size cap (MANDATORY weigh)**, F7 phase 2 TUI streaming
 — T109).
 
 ### Cycle 58 (2026-09-28) — fresh eval (kimi, loopd-routed: queue empty) — T102–T106 filed (F6 SPLIT phase 1 → T105); ALL FIVE landed clean (T102 ffebdaf, T103 80d4a14, T105 dc29137, T104 ee3943e, T106 e5cdebd)
-
-**T102 LOOP-SPEC impl-child template 65→80 — LANDED, fast-forward.** The
-T92 measure clause fired (3 of 12 post-T92 impl children died 65/65 with
-the work done — T91/T99/T100 run1s, totals 84/93/67; a rolling 6-window
-over children 5–10 holds two deaths) and the doctrine took its written
-next step: glm impl 20/65 first-try clean (three byte-exact LOOP-SPEC
-edits + the pin at tests/loop_spec_recovery.rs:141 RED-proven first),
-kimi REQUIRED PASS 18/50 zero blocking (M1 resume-budget revert KILLED
-by the pin, M5 full-spec revert KILLED; M2 check-grep-only and M3
-unpinned-prose survivors both by design). Review gates + post-merge
-nextest 820/820 + clippy under target-shared / target-shared-main.
-Every impl child from here launches at 80/35 (validators stay 50/30 —
-zero validator deaths era-wide). New measure clause: >1 of the next 6
-impl children dying at 80/80 with the work done → the next eval
-considers a spec-size cap (~500-line estimate ceiling forcing a split)
-instead of further iteration raises. Routing d1790570262-13, verdict
-d1790570426-14, outcome landed-clean.
-
-**T103 delegate launch asserts spec + cwd exist — LANDED, fast-forward.**
-The 4th field-corruption sighting filed the row and the fix is live:
-`delegate` launch now refuses a spec that is not an existing readable
-file and a cwd that is not an existing directory, errors naming the
-received path verbatim, no spawn, no `.chug/` created — the
-corrupted-launch class (cycle-53 goal bleed, cycle-55 pid 60756, T95
-wrong slug, cycle-57 duplicate key) now fails fast at the orchestrator's
-face in one iteration instead of spawning a doomed child. glm impl
-61/80 first-try clean (the first impl child on the post-T102 80 budget —
-61 would have been in the old 65 zone). kimi optional-TAKEN (cycle-55
-precedent — launch admission is loop-wide) PASS 31/50: 4/5 mutants
-killed independently re-proving the RED legs (probe-drop, is_file-drop,
-both message corruptions), M2 readability-leg survivor expected
-(chmod-000 fixtures are flaky under root); ONE non-blocking finding —
-an inverted rationale comment on the probe legs — fixed by the
-orchestrator as a trivial comment commit (80d4a14) per §7's
-fix-trivially prerogative. The child's disclosed spec-conflict
-resolution (7 pre-existing launch tests with fictional spec paths each
-gained one `ensure_spec_file` setup line, asserts byte-identical) was
-verified against the diff and accepted — the spec's "happy-path
-unmodified" bullet was literally unsatisfiable, a spec-writing lesson
-carried. Routing d1790571195-16, verdict d1790571562-17, outcome
-landed-clean.
-
-**T105 F6 phase 1: session fork slots — LANDED (rebased ff).** The
-mandatory roadmap pull landed: `chug fork save/list/restore` — named
-slots over `.chug/transcript.jsonl` + `LEDGER.md` under
-`.chug/sessions/<name>/`, giving the serial explore-two-approaches
-shape (run A, save, keep going, restore, run B). The safety design is
-the point: restore refuses a live driver lock (naming the pid, T55
-interlock), rotates the live session aside with the EXISTING T7/T3
-archive machinery before copying (a Failed rotation aborts the restore
-— nothing is ever overwritten un-archived), and slots are copy-only
-(idempotent restores). glm impl 43/80 first-try clean: fork.rs (656
-lines) + main.rs CLI wiring + README `## Session forks` + the one-line
-archive.rs seam; 18 fork tests with both dangerous legs (overwrite
-refusal, lock check) RED-proven and the readme_layout guard RED-then-
-green as the spec required. kimi SKIPPED (routing d1790571949-19): the
-subcommand is isolated from the run loop (no driver/tools/dispatch
-interaction) and has no loop consumer yet — the orchestrator's deep
-review plus a live binary smoke of the full leg set (save → mutate →
-list → restore → idempotent restore → overwrite refusal, all exit
-codes correct) substituted for the optional round. Merge needed a
-rebase onto main (T44 overlap with T103's flip — disjoint files,
-conflict-free, dc29137). Post-merge 842/842 + clippy under
-target-shared-main. FEATURES.md F6 carries the phase-1 check-off and
-the phase-2 deferral reason. Child decision record d1790571815-1
-harvested into main's decisions.jsonl. Outcome landed-clean.
-
-**T104 driver.rs test-module family split — LANDED, fast-forward.**
-The pre-declared trip line (~4,500) fired for the second time at 5,717
-and the T84-shaped extraction ran: driver.rs is now **1,457 lines**
-(production 1–1,452 + the `#[cfg(test)]` header + a one-line
-`pub(crate) mod tests;`) and the 4,259-line test body lives in
-`src/driver/tests/` as the shared harness (mod.rs, 236 lines) + 16
-family files. glm impl 75/80 — **the first child that would have DIED
-under the old 65 cap** (75 > 65 with the work done): T102's raise,
-landed three hours earlier, paid for itself on its very first big
-test. Orchestrator-verified byte-identity (production half + harness
-header diffed; moved-body multiset zero-loss with 92 accounted glue
-lines), 90/90 driver::tests, 710/710 bin, 842/842 + clippy,
-readme_layout green UNMODIFIED (the T95 non-recursive guard absorbed
-the submodule exactly as spec'd). kimi REQUIRED PASS 35/50:
-byte-identity independently re-proved THREE ways (multiset + in-order
-subsequence + count bijection), fn-token multiset 137==137 (no
-renames), and three PARALLEL T79 mutation legs all killed — M1
-mod-drop (842→837 count-pin), M2 assertion-flip RED from the new home,
-M3 `pub(crate)`-strip → E0603 at trim.rs:210 (the T84 seam is
-load-bearing). INCIDENT of the cycle: the impl child **committed its
-work to MAIN** (cd'd to the main repo for byte-identity checks, then
-committed from there — first worktree-discipline breach; ee3943e sat
-unpushed on local main). Recovery: branch created at the commit, main
-reset to the pushed state e2b7d1a, worktree re-pointed — the standard
-arc then ran untouched. Goal-text hardening candidate carried to the
-next eval ("Commit your work here" proved ambiguous once a child cd's
-out). Routing d1790573602-21, verdict d1790574301-22, outcome
-landed-clean.
-
-**T106 README Install names the pending first release — LANDED (rebased
-ff).** The cycle's trivial row: one honesty sentence in the Install
-section's first paragraph ("Until the first tag is cut there is **no
-release published yet** — the one-liner and tarball links below 404
-until then; use the from-source install at the bottom of this
-section.") — conditional wording true both before and after the first
-tag lands, so no follow-up edit is needed when the operator cuts it.
-glm impl 10/80; docs-only classification (exit 1) → guard floor
-(todo_consistency 5/5) at review AND post-merge; kimi SKIPPED per the
-T16/T31/T97 README precedent (routing d1790574440-24). Outcome
-landed-clean.
-
-**Cycle notes (wrap).** The full queue drained — 5/5 landed, every item
-pushed at landing, ZERO fix-up arcs (the era's first all-PASS cycle:
-kimi verdicts 18/31/35 of 50, all PASS; glm impls all first-try clean:
-20, 61, 43, 75, 10 of 80). **T102's raise paid for itself the same
-cycle**: T104's impl finished at 75/80 — a fourth 65/65 death avoided.
-**T44 pipeline overlap ran twice, clean**: T103-validator‖T105-impl and
-T104-validator‖T106-impl, both disjoint-file pairs, both merges
-rebased fast-forward (conflict-free). INCIDENT (first sighting):
-**T104's impl committed its work to MAIN** after cd'ing to the main
-repo for byte-identity checks — recovered by branching the commit,
-resetting local main to the pushed state (ee3943e never pushed), and
-re-pointing the worktree; the next eval weighs a goal-text hardening
-("commit ONLY in your worktree cwd" — "Commit your work here" proved
-ambiguous). Display-artifact watch: FOUR render-garble sightings this
-cycle (two validator-goal assemblies, two edit_file parameter renders)
-— every transmitted payload verified INTACT in the transcript/file;
-the read-back habit is the whole game and it held. T81 acceptance:
-eval-kimi leg = THIS cycle, ~1h33m wall, ~150/160 projected at
-goal_complete (consistent with the I6 closure — the 160 cap holds at
-5 items + eval; no re-measure alarm). SSH pushurl held all cycle (six
-pushes, zero auth friction); the gh-workflow-scope class is retired at
-host level. Wrap gates: nextest 842/842 + build + clippy under
-target-shared-main; README gate: T105's fork section + T106's Install
-sentence (child-integrated) + a Sandbox/cwd clause for T103's launch
-refusal (orchestrator-integrated at wrap). Tag doctrine: `git tag -l
-'v*'` still EMPTY — bootstrap holds, the first tag stays the
-operator's (cutting it also exercises T100's release workflow
-end-to-end). Next cycle: queue EMPTY → eval-routed kimi; candidates
-already queued: worktree-discipline goal hardening, T102 measure
-clause census (4 children at 80, zero deaths — window forming),
-validator 50/50 watch, T91 survivors, F13/F2/F3/F4 deferrals, module
-sizes (driver.rs now 1,457 — watch closed), delegate.rs 4,255 (+257
-this cycle — the split conversation moves closer).
 
 ### Cycle 57 (2026-09-28) — eval-routed kimi turned routine after reconciling cycle-56's origin divergence (T101 row appeared post-rebase, predicate held — cycle-56 precedent repeated); T101 LANDED (bcd0b66, fast-forward)
 
