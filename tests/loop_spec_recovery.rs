@@ -46,6 +46,20 @@
 //! split. Leg (h) pins the resolution now recorded in the parenthetical:
 //! the remedy is the filing-time ~500-line estimate ceiling in
 //! META-META-SPEC's spec quality bar, not further iteration raises.
+//!
+//! T114 doctrine: META-META-SPEC's spec quality bar covered the ADD side
+//! (T96: "broad enough to run every test the change adds") but nothing
+//! about the tests a change can BREAK without adding — the `tests/`
+//! integration pins over files the change touches. The T111 arc is the
+//! evidence: a spec's own `check: cargo test --bin chug` ran the bin unit
+//! tests only, so its goal gate never executed the `tests/readme_layout.rs`
+//! pin (T95) the spec's README edit broke — the REAL RED was caught by the
+//! ORCHESTRATOR's review gates instead. The bar now carries the BREAK-side
+//! rule, and legs (i)–(j) pin it: both check: needles exactly-once, inside
+//! the spec-quality-bar window (the T64 loose-heading scope pattern over
+//! the "## Extend `TODO.md`" section), AFTER the ADD-side sentence it
+//! extends and BEFORE the estimate-ceiling sentence — ordering pinned so
+//! the rule reads as an extension of the T96 bar, never a replacement.
 
 /// The leg's signature phrase: "resume" + the one-attempt cap language in
 /// one contiguous run. Must occur EXACTLY once in LOOP-SPEC.md.
@@ -393,5 +407,132 @@ fn measure_clause_resolution_needle_exactly_once_inside_step_2() {
         "the resolution must FOLLOW the measure clause it resolves — \
          `Measure: if >1 of` first ({measure}), then the filing-time \
          ~500-line estimate ceiling remedy ({resolution})"
+    );
+}
+
+// ---- T114 — the spec-quality bar's BREAK-side rule ----
+//
+// The T96 ADD-side rule ("broad enough to run every test the change adds")
+// says nothing about the tests a change can BREAK without adding — the
+// `tests/` integration pins over the files the change touches. The T111
+// arc is the escape: a spec's own `check: cargo test --bin chug` ran the
+// bin unit tests only, so its goal gate never executed the
+// `tests/readme_layout.rs` pin (T95) the spec's README edit broke — the
+// REAL RED was caught by the ORCHESTRATOR's review gates instead. The bar
+// now carries the BREAK-side rule; these legs pin it in place, extending —
+// never replacing — the T96 bar and the T110 estimate-ceiling sentence.
+
+fn meta_meta_spec() -> String {
+    let root = std::env::current_dir().expect("cargo sets the test cwd to the package root");
+    std::fs::read_to_string(root.join("META-META-SPEC.md"))
+        .unwrap_or_else(|e| panic!("reading META-META-SPEC.md from the runtime checkout: {e}"))
+}
+
+/// The BREAK-side rule's commitment needle — the rule's core claim, in one
+/// contiguous run, verbatim per the spec's check: grep (line-wise, so the
+/// bar's wrapping must keep it on a single line). Must occur EXACTLY once
+/// in META-META-SPEC.md.
+const BREAK_NEEDLE: &str = "every test the change can BREAK";
+
+/// The BREAK-side rule's mechanics needle — the bin-only blindness that
+/// makes a README/doctrine-touching spec's `--bin chug` check blind to
+/// exactly the pins most likely to break, in one contiguous run, verbatim
+/// per the spec's check: grep. Must occur EXACTLY once in
+/// META-META-SPEC.md.
+const BIN_ONLY_NEEDLE: &str = "never the `tests/` integration binaries";
+
+/// The ADD-side sentence (T96) the BREAK-side rule anchors AFTER — the
+/// insertion extends it, never replaces or precedes it (req 2: this is an
+/// insertion, not a rewrite).
+const ADD_SIDE_RULE: &str = "every test the change adds";
+
+/// The estimate-ceiling sentence (T110) the BREAK-side rule sits BEFORE —
+/// the bar keeps its history: ADD-side, then BREAK-side, then the ceiling.
+const ESTIMATE_SENTENCE: &str =
+    "Every spec carries an `estimate: ~N changed lines` line";
+
+/// The spec-quality-bar section's opening heading (loose, the T64 pattern)
+/// and the next heading that closes the window — the rule must live inside
+/// the "Extend `TODO.md`" section's spec-quality-bar paragraph, not drift
+/// into another section of META-META-SPEC.
+const EXTEND_TODO_HEADING: &str = "## Extend `TODO.md`";
+const HANDOFF_HEADING: &str = "## Handoff section in EVALUATION.md";
+
+/// (i) T114 — both BREAK-side check: needles occur EXACTLY once in
+/// META-META-SPEC.md. Delete the rule and both go red (count 0, which also
+/// breaks the spec's own line-wise grep); rewrap either needle across a
+/// line break and it goes red the same way; a duplicate statement of
+/// either needle elsewhere also goes red (count 2).
+#[test]
+fn break_side_rule_needles_occur_exactly_once() {
+    // Needle self-check (T48 idiom): a mangled needle must not let this
+    // pin pass silently.
+    assert!(
+        BREAK_NEEDLE.starts_with("every test")
+            && BREAK_NEEDLE.contains("the change can")
+            && BREAK_NEEDLE.ends_with("BREAK"),
+        "the BREAK needle must carry the can-BREAK language verbatim \
+         (per the spec's case-sensitive, line-wise check:)"
+    );
+    assert!(
+        BIN_ONLY_NEEDLE.starts_with("never the `tests/`")
+            && BIN_ONLY_NEEDLE.ends_with("integration binaries"),
+        "the bin-only needle must carry the `tests/` integration-binaries \
+         language verbatim, backticks included (per the spec's check:)"
+    );
+    let spec = meta_meta_spec();
+    for (needle, what) in [
+        (BREAK_NEEDLE, "the can-BREAK rule"),
+        (
+            BIN_ONLY_NEEDLE,
+            "the bin-only-runs-no-`tests/`-binaries clause",
+        ),
+    ] {
+        assert_eq!(
+            spec.matches(needle).count(),
+            1,
+            "META-META-SPEC must state {what} exactly once — zero means the \
+             BREAK-side rule was deleted (or rewrapped across a line break, \
+             which also breaks the spec's own line-wise grep), more than one \
+             means it is stated twice"
+        );
+    }
+}
+
+/// (j) T114 — the insertion sits INSIDE the spec-quality-bar window (the
+/// T64 loose-heading scope pattern: the "## Extend `TODO.md`" heading
+/// through the next "## Handoff" heading), AFTER the ADD-side sentence it
+/// extends (T96's `every test the change adds`) and BEFORE the
+/// estimate-ceiling sentence (T110) — ordering pinned: the BREAK-side rule
+/// reads as an extension of the T96 bar, never a replacement, a promotion
+/// above the bar, or a move out of the section.
+#[test]
+fn break_side_rule_sits_after_add_side_rule_and_before_estimate_sentence() {
+    let spec = meta_meta_spec();
+    let start = spec
+        .find(EXTEND_TODO_HEADING)
+        .expect("the Extend-TODO heading present");
+    let end = start
+        + spec[start..]
+            .find(HANDOFF_HEADING)
+            .expect("the Handoff heading present after the Extend-TODO heading");
+    let window = &spec[start..end];
+    let add = window
+        .find(ADD_SIDE_RULE)
+        .expect("the spec-quality-bar window must carry the ADD-side rule (T96)");
+    let break_rule = window
+        .find(BREAK_NEEDLE)
+        .expect("the spec-quality-bar window must carry the BREAK-side rule \
+                 (deleted, or moved out of the Extend-TODO section?)");
+    let estimate = window
+        .find(ESTIMATE_SENTENCE)
+        .expect("the spec-quality-bar window must carry the estimate-ceiling \
+                 sentence (T110)");
+    assert!(
+        add < break_rule && break_rule < estimate,
+        "the BREAK-side rule must sit INSIDE the spec-quality-bar window, \
+         after the ADD-side rule it extends ({add}) and BEFORE the \
+         estimate-ceiling sentence ({estimate}) — the rule was found at \
+         offset {break_rule}"
     );
 }
