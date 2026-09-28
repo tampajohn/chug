@@ -307,6 +307,24 @@ accurate. **One docs row filed (T127); no structural debt.**
 
 ### Cycle 64 (2026-09-28) — fresh eval (kimi, loopd-routed: queue empty) — T124–T127 filed — IN PROGRESS
 
+**T126** (META-SPEC §6 validator /tmp-heredoc doctrine, pri 4):
+landed eef7a29 (fast-forward) — §6's validator goal template gains
+the cross-tree WRITE half immediately after the byte-identical READ
+sentence: "Write /tmp helper scripts (the mutant apply/run legs) with
+bash heredocs — write_file and edit_file are cwd-confined the same way
+and refuse /tmp paths with `path escapes cwd`." The first META-SPEC
+pin: `meta_spec()` loader + leg (o) (needles exactly-once, windowed
+inside §6, read-sentence byte-identical guard + adjacency guard, T48
+self-checks). glm impl 35/80 first-try, RED-proven. kimi REQUIRED
+**PASS** 16/50: independent gates (build/clippy/nextest 996/996,
+loop_spec_recovery 15/15) + 5 parallel mutants ALL killed on distinct
+assert paths — M1's RED-proof failed ONLY leg (o) of 15 (specificity),
+M2 duplicate-count, M3 read-sentence guard, M4 relocation window, M5
+adjacency break. Zero blocking findings. Estimate ~25 → actual +192
+(7.7x — the pin-density pattern; validator logged it as T125
+calibration data). Review + post-merge nextest 996/996. Both streams
++ validator ledger harvested.
+
 **T124** (F10 phase 1 — `chug mcp-serve` + `chug_status`, feature,
 pri 2, THE ROADMAP PULL): landed d6264be (rebased a4e1bea onto main
 post-T125, fast-forward) — the fleet primitive's first leg. A stdio
