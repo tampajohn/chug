@@ -4,7 +4,7 @@
 // T109 req 4 count-pin anchor (see mod.rs's pin): this family's
 // #[test] fn count — a dropped `mod schema;` line fails the pin's
 // reference to this const to compile.
-pub(super) const TEST_COUNT: usize = 8;
+pub(super) const TEST_COUNT: usize = 9;
     use super::*; // the shared harness (delegate::tests) + delegate's own imports
 
     /// T29 test 5 (schema pins): the live delegate schema gains optional
@@ -337,4 +337,46 @@ pub(super) const TEST_COUNT: usize = 8;
             .filter_map(Value::as_str)
             .collect();
         assert_eq!(required, vec!["action", "cwd"], "required list must be unchanged");
+    }
+
+    /// T115: the delegate schema surface is UNCHANGED — the launch
+    /// goal-integrity echoes (`goal_bytes`/`goal_sha256`/`goal_tail`) are a
+    /// result-text-only change, so no input property was added and the
+    /// required list is untouched. Pinning the exact property list means a
+    /// future edit that silently widens the schema trips here instead of
+    /// shipping (T104's mutant lesson, applied to the schema surface).
+    #[test]
+    fn delegate_schema_property_surface_is_unchanged() {
+        let schemas = tool_schemas();
+        let schema = schemas
+            .iter()
+            .find(|s| s.get("name").and_then(Value::as_str) == Some("delegate"))
+            .expect("exactly one delegate schema (pinned elsewhere)");
+        let mut props: Vec<&str> = schema["input_schema"]["properties"]
+            .as_object()
+            .expect("properties object")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        props.sort_unstable();
+        assert_eq!(
+            props,
+            vec![
+                "action", "base", "cwd", "goal", "max_iters", "max_minutes", "max_tokens",
+                "model", "pid", "resume", "spec", "terminal", "wait_secs",
+            ],
+            "delegate schema properties drifted — T115 was result-text-only; a new \
+             property needs its own spec and its own pin update"
+        );
+        let required: Vec<&str> = schema["input_schema"]["required"]
+            .as_array()
+            .expect("required list")
+            .iter()
+            .filter_map(Value::as_str)
+            .collect();
+        assert_eq!(
+            required,
+            vec!["action", "cwd"],
+            "required list must be unchanged"
+        );
     }

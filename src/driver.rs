@@ -338,8 +338,10 @@ fn run_loop(
         plan_out: None,
     };
     // T10: first line of the run's events log (model/spec/cwd/mode), plus
-    // the configured budget ceilings (T17) and the cwd's checkout HEAD
-    // (T20, best-effort: a non-repo cwd just leaves both fields null).
+    // the configured budget ceilings (T17), the cwd's checkout HEAD (T20,
+    // best-effort: a non-repo cwd just leaves both fields null), and the
+    // goal's SHA-256 (T115, the child-side half of the delegate integrity
+    // comparison).
     let head = crate::build_info::resolve_head(&cfg.cwd);
     eventlog::run_start(
         &cfg.cwd,
@@ -350,6 +352,7 @@ fn run_loop(
         cfg.max_minutes,
         cfg.max_tokens,
         crate::build_info::as_pair(&head),
+        Some(&cfg.goal),
     );
     match drive_loop(
         &ctx,
@@ -470,6 +473,7 @@ fn run_plan_loop(
         cfg.max_minutes,
         cfg.max_tokens,
         crate::build_info::as_pair(&head),
+        Some(&cfg.goal),
     );
     let trace = obs.trace_started(
         &cfg.goal,
