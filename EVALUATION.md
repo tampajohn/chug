@@ -221,6 +221,15 @@ filed** — the second consecutive clean audit after T127's catch.
   tests/) is disjoint from every src row and MAY overlap one
   validator window**; no doctrine rows this cycle, so the
   never-overlap rule does not bind.
+- **HANDOFF ADDENDUM (cycle-65 wrap): the operator's codex-review
+  intake (origin commits 2b6dad2/cc94925/5a7485b, landed mid-cycle)
+  SUPERSEDES this work order.** Nine HIGH rows (T140/T141/T142/T134
+  pri 1; T135–T139 pri 2) now outrank T129/T131 under bugs >
+  features. The next cycle's first act is the rebase recipe in the
+  cycle-65 Outcomes notes (expected conflict-free), then the queue
+  in the NEW order: T140/T141/T142/T134 → T135–T139 → T129/T131.
+  The release trigger is PENDING (T128's FEATURES check-off →
+  v0.4.0 minor candidate, post-reconciliation only).
 - **Expected kimi routing at work time** (the calls themselves are
   logged then): T130 — optional (src/mcp_serve.rs not on the
   REQUIRED list; tests-only) — skip per T16/T31 precedent, the
@@ -275,7 +284,71 @@ filed** — the second consecutive clean audit after T127's catch.
 
 ## Outcomes (filled at cycle wrap — LOOP-SPEC Phase 3)
 
-### Cycle 65 (2026-09-28) — fresh eval (kimi, loopd-routed: queue empty) — T128–T131 filed (F10 phase 2 PULLED + SPLIT); landings below in order.
+### Cycle 65 (2026-09-28) — fresh eval (kimi, loopd-routed: queue empty) — T128–T131 filed (F10 phase 2 PULLED + SPLIT); T130 + T128 LANDED (976e4ae, 85ca4c1); T129/T131 DEFERRED by mid-cycle operator intake (codex adversarial review, 9 HIGH rows T134–T142); cycle ended on a push divergence (doctrine: no mid-cycle reconcile). Cycle notes below the per-item entries.
+
+**CYCLE-65 CYCLE-LEVEL NOTES (wrap).** TWO items landed clean
+(T130, T128 — entries below). kimi ran ONE round (T128
+optional-EXERCISED PASS 43/50, 6 mutants 5 killed 1 survivor); T130
+SKIPPED per tests-only precedent with an orchestrator independent
+M3 re-kill. Routing/verdict/outcome ids: T130 d1790620124-13 +
+d1790620197-14; T128 d1790622226-15 + d1790623655-16 +
+d1790623731-17. ZERO budget deaths, ZERO T63 resumes (impl 32/57 of
+80, validator 43/50 — budget_low fired inside the T18 margin on the
+validator's wrap leg, harmless). T120 verify-then-kill exercised
+×3 by the orchestrator on its own context-view garbles (spec-file
+view, decision_log view, EVALUATION edit view) — every read-back
+proved the payload INTACT, zero kills, zero rework. Estimate
+recalibration counter: T130 ~20→+58 (2.9x, pin density); T128
+~250→+580/-84 (2.3x, feature test density) — the T125 pattern holds
+(pins multiply by ratio, features by absolute lines); doctrine+
+feature rows keep landing at 2.3-3x, the ~400 band's guidance
+unchanged.
+
+**The mid-cycle intake (the cycle's defining event).** At
+~19:22–19:27Z the operator pushed three commits (2b6dad2/cc94925/
+5a7485b): a 199-line codex adversarial review
+(reviews/CODEX-REVIEW-20260928.md) + NINE rows — T140
+goal_complete denial bypass (pri 1), T141 SSE truncation acceptance
+(pri 1), T142 loopd grep spoofing (pri 1), T134 symlink sandbox
+escape (pri 1), T135 driver.lock race (pri 2), T136 crash
+mid-tool-batch unresumable transcript (pri 2), T137 loopd stale
+binary (pri 2), T138 mcp.json pre-permission execution (pri 2),
+T139 editable-spec-check bypass (pri 2). The operator's renumber
+(cc94925) already resolved the collision with this cycle's T131.
+Per bugs > robustness > features > DX, ALL NINE outrank T129
+(feature, pri 2) and T131 (DX, pri 4) — so this cycle stopped
+dispatching rather than work a feature above four pri-1 security/
+correctness rows. T129/T131 stay `todo` with ready specs; a
+deferred item is a fine outcome.
+
+**The divergence and the handoff recipe.** The T128 flip's push was
+rejected (remote moved): local main = origin/main + 2 commits
+(85ca4c1 impl, b74eb26 flip) plus the wrap bookkeeping commit;
+origin/main = +3 intake commits. Per LOOP-SPEC (never force-push;
+no mid-cycle reconcile — T97/cycle-63 precedent) the reconciliation
+belongs to the NEXT cycle's first act: `git rebase origin/main` —
+expected conflict-free or a trivial TODO.md region adjacency (their
+rows append at the tail; my flips edit rows T128/T130 mid-file;
+EVALUATION/FEATURES/src untouched by the intake) — then
+`cargo test --test todo_consistency` + the full gate runner + push.
+The next cycle is a ROUTINE cycle (queue non-empty, eval fresh →
+glm): after reconciling it works the queue in the NEW priority
+order — T140/T141/T142/T134 (pri 1; T140 touches driver/tools →
+kimi REQUIRED; T141 api.rs → kimi REQUIRED) before T135–T139
+(pri 2) before T129/T131.
+
+**Release trigger PENDING, deliberately untagged.** T128's
+FEATURES.md check-off (F10 phase-2a LANDED) fires the T100 trigger
+(plus 2 items since v0.3.0) — a v0.4.0 minor candidate. NOT cut:
+tags are immutable and local HEAD is unreconciled-divergent; the
+next cycle cuts it post-reconciliation with gates green at the
+reconciled HEAD (one tag per wrap). **M4 survivor carried to
+next-eval triage** (T128's alive-render weak pin — the
+substring-shadow class's second sighting, both in mcp_serve.rs;
+T130's sweep pattern is the remedy template). Render-artifact count
+this cycle: 3, all read-back intact, zero kills. Final gates at
+local HEAD: nextest 1006/1006 + build + clippy green under
+target-shared-main. 5 event streams + 1 validator LEDGER harvested.
 
 **T128** (F10 phase 2a — `chug_collect` MCP tool, feature, pri 2,
 THE PULL's read half): landed 85ca4c1 (fast-forward) — `chug mcp-serve`
