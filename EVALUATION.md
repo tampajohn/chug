@@ -1,307 +1,277 @@
-# EVALUATION — chug, assessed by chug-loop (2026-09-28, cycle 64)
+# EVALUATION — chug, assessed by chug-loop (2026-09-28, cycle 65)
 
-**MANDATORY fresh eval** — the queue is EMPTY again (T1–T123 all done
-with refs; cycle 63 landed the last row), so the freshness predicate's
-queue half fails and loopd routed an eval cycle (`todo_rows=0
-eval_fresh=yes -> eval cycle on kimi-k3`, loopd.log 15:51:30Z). The
-cycle-63 carry executed first, per its own wrap addendum: origin's
-operator commit (06d23d1 install.sh banner) rebased under the three
-local commits conflict-free (disjoint file sets — install.sh vs
-site-sync/TODO/EVALUATION), targeted nextest 31/31 green
-(install_sh + site_sync) on the combined tree, pushed
-(06d23d1..0300cb4). The headline of this eval: **the release pipeline
-went live operator-side between evals (v0.2.1 published green with
-all six assets), and the README still says no release exists** —
-front-door staleness (T127) — while the era's one real child death
-(T117 mid-impl at 80/80) traces to ESTIMATE undershoot, not the T110
-ceiling value (T125).
+**MANDATORY fresh eval** — the queue is EMPTY again (cycle 64 landed
+all four of its rows, T124–T127, and cut v0.3.0 at wrap), so the
+freshness predicate's queue half fails and loopd routed an eval cycle
+(`todo_rows=0 eval_fresh=yes -> eval cycle on kimi-k3`, loopd.log
+17:48:11Z). The delta corpus since the cycle-64 eval text
+(~15:5xZ) is cycle 64's own working phase: eight child streams
+(t127/t125/t124/t126 impl+validate), the 135-iteration cycle-64
+orchestrator stream, and the v0.3.0 release evidence. The headline:
+**the loop's first self-cut tag went green end-to-end** (release run
+36460136826, six assets, `gh release list` shows v0.3.0 Latest), and
+the era's only validator survivor (T124's M3 weak pin) gets its
+carried triage → **T130**. The mandatory roadmap pull is **F10
+phase 2, SPLIT per T125 → T128 (chug_collect) + T129 (chug_launch)**.
+Four rows filed: T128/T129/T130/T131.
 
 ## 1. What chug does well — be brief
 
-- **T121's raise is already boring** (the good kind): cycle 63 ran
-  49/200 iterations, goal accepted first try, 51 min wall — routine
-  cycles sit far from the new ceiling; this cycle is the first
-  eval-shaped test of 200 (the cycle-61/62 shape — eval + items —
-  died at 160 twice).
-- **FOUR consecutive all-PASS validation cycles** (58, 61, 62, 63):
-  cycle 63's kimi round on T122 PASSed 33/50 with 4/4 mutants killed,
-  zero blocking findings — adversarial validation as a gate is calm,
-  and the T79 parallel-mutant batches are routine validator practice.
-- **glm orchestrated a full routine cycle cleanly** (cycle 63): the
-  T122 arc end-to-end — launch, terminal long-polls, review,
-  EXERCISED optional validation, harvest, row flip with refs,
-  Outcomes entry, five decision records, goal accepted. The T81
-  two-model routing works in both directions.
-- **The release pipeline is LIVE**: operator bootstrap
-  v0.1.0 → v0.2.0 → v0.2.1 in one afternoon; two workflow failures
-  (aarch64 cross libc, `--locked` Cargo.lock desync) diagnosed and
-  fixed operator-side in minutes (3cd7b7e, 9ce7565+1e84357); run
-  36438268858 green, six assets published. T100's wrap-time tag
-  doctrine is wired (80b365c) — this is the first wrap operating
-  under an active tag trigger.
-- **T122's pure-awk Fliegel–Van Flandern JDN** day-key is
-  TZ-independent with zero new dependencies; the kimi validator
-  independently re-derived it against Python including leap/century
-  edges. Craft-level work from both families.
+- **T100's wrap-time tag doctrine worked on its first firing**:
+  v0.3.0 cut at cycle-64 wrap (4 items since v0.2.1, feature → minor
+  bump), tag message = generated notes, check-tag-version pairing
+  verified, release workflow green in 2m18s, six assets published.
+  The loop now ships its own releases.
+- **Fourth all-PASS validation cycle** (58/61/62/64): 3 kimi rounds,
+  15 mutants, ONE survivor (triaged this eval), zero blocking
+  findings. Adversarial validation is a calm gate.
+- **T124's 78/80 first-try feature landing** (+1106 lines): the
+  biggest single-row diff of the era; budget_low fired INSIDE the
+  T18 margin at remaining_iters=8 and the child still wrapped and
+  committed — the margin did its job under maximum load.
+- **T120's verify-then-kill is fully internalized**: exercised ×3 in
+  cycle 64 (all render artifacts, read-backs intact, zero kills) and
+  once already this eval (a mangled spec-file view in the
+  orchestrator's own context — read-back proved the payload intact,
+  no action). The rule costs one read and saves children.
+- **T121's 200-cap sized right**: cycle 64 ran eval + 4 items +
+  release in 135/200 iterations; cycle 63's routine cycle was 49/200.
+- **T81 two-model routing boring in both directions**: glm
+  orchestrated cycle 63 cleanly, kimi cycle 64 cleanly, routing
+  decisions logged every cycle by loopd, not by model judgment.
 
 ## 2. Incidents worth fixing
 
-### I1 — estimate undershoot killed a child mid-impl (T117 280→603) → T125
+### I1 — T124's M3 survivor: the missing-`.chug/` pin is substring-shadowed → T130 (FILED)
 
-The T110 filing-time ceiling (~500 lines) only works when estimates
-are honest, and the era's landed actuals show SYSTEMATIC undershoot
-on feature rows, where test+doc density multiplies the src diff
-(cycle-61/62 Outcomes records): T113 ~455→+583 (1.3x), T115
-~130→+398 (3.0x), T116 ~30→+116 (3.9x), **T117 ~280→+603 (2.2x) —
-whose glm impl child DIED mid-impl at 80/80** (uncommitted, t1 of 6
-done; events-t117-impl-20260928-132236.jsonl), costing T63 resume
-#25. The true size was over the ceiling the estimate claimed to be
-under; an accurate filing estimate would have split the row.
-Cycle-62's eval absorbed the overshoots as "calibration, not a
-defect" — the t117 death converts it: a mid-impl budget death is
-exactly the cost the ceiling exists to prevent, and the T110 measure
-clause's premise (deaths at ≤500 estimates = ceiling failure) has
-now fired with the ceiling itself innocent. Filed as **T125**
-(doctrine, pri 3): estimates count ALL changed lines with the four
-named data points; a novel-logic row estimated over ~400 SHOULD
-split (the hard ceiling stays ~500; the band absorbs the observed
-undershoot); each eval re-calibrates against landed actuals in the
-eval text, never by editing the threshold in passing; pin legs
-beside T114's i-j / T120's k-l in tests/loop_spec_recovery.rs
-(~45 lines; runs ALONE; kimi REQUIRED — loop doctrine).
+The one carrying defect of the era. T124's kimi verdict
+(d1790615724-24): deleting the `.chug/`-existence check
+(src/mcp_serve.rs:228-234) goes undetected because
+`chug_status_missing_chug_dir_names_received_path`
+(src/mcp_serve.rs:605) asserts only `is_error` +
+`contains(<tmp path>)` + `contains(".chug")` — and the downstream
+"events file unreadable: `<tmp>/.chug/events.jsonl`" message the
+mutant falls through to satisfies ALL THREE (the path embeds both
+substrings). Production behavior is correct; the PIN is broken — the
+T119 weak-test class, explicitly carried from the cycle-64 wrap.
+Filed as **T130** (robustness, pri 2): distinctive-phrase assertion +
+negative shadow guard + sibling-leg sweep, every touched leg
+RED-proven against its mutant; production untouched; ~20 lines.
 
-### I2 — validators keep rediscovering the /tmp write sandbox (10 fires) → T126
+### I2 — eval-digest staleness check trips on the evaluator's own stream → T131 (FILED)
 
-TEN `path escapes cwd … cross-tree paths go through bash` tool errors
-across three cycle-61/62 validators, every one the same shape —
-writing the mutation helper script to /tmp with write_file/edit_file:
-t112-validate ×7 (`/tmp/t112-mutate-*.py`, `/tmp/t112-leg.sh`),
-t113-validate ×2 (`/tmp/chug-mut-apply.py`,
-`/tmp/chug-mut-t113-run.sh`), t115-validate ×1
-(`/tmp/t115-mut-leg.sh`). T79's parallel-mutant legs — routine since
-cycle 61 — multiply exactly this write (3 legs ≈ 3 apply/run script
-pairs per validator), so the class is structurally growing. The
-cycle-62 eval weighed it at 6 fires and rejected ("working as
-designed; the error names the remedy") — the T79-routinization datum
-postdates that rejection and supersedes it (not ignores it). Each
-fire still costs only ~1 validator iteration, and the fix is one
-sentence in the META-SPEC §6 goal template every validator already
-reads, adjacent to the existing cross-tree-READS sentence (which
-covers reads only). Filed as **T126** (doctrine, pri 4): the write
-half — /tmp helper scripts go through bash heredocs — plus the first
-META-SPEC pin leg (new `meta_spec()` loader in
-tests/loop_spec_recovery.rs) (~25 lines; runs ALONE; kimi REQUIRED).
+Observed live at this eval's first minute: the digest's rendered
+reader check (`find .chug … -newer .chug/eval-digest.md … && echo
+STALE`) flagged STALE because loopd regenerated the digest at
+17:47:52Z and this cycle's own driver rotated `.chug/events.jsonl`
+at 17:48:12Z — the newest events file at any eval is ALWAYS the
+evaluating cycle's own live stream, so the check is guaranteed to
+trip and META-META-SPEC's remedy ("regenerate it") cannot help (the
+stream keeps appending). The question the check should answer is
+"does corpus OTHER than your own stream postdate the digest?"
+Filed as **T131** (DX, pri 4): exclude the newest file from the
+`-newer` test, render definite STALE/FRESH verdicts + one
+explanatory sentence, one shape-pinned `tests/eval_digest.rs` leg
+RED-proven against the old render; ~30 lines.
 
-### I3 — README Install: "no release published yet" is now FALSE → T127
+### I3 — decision_log schema fumbles: +2 (era count ~20) — weighed, REJECTED again
 
-README.md:16-17 still warns "Until the first tag is cut there is **no
-release published yet** — the one-liner and tarball links below 404
-until then". True through the cycle-62 audit (tags landed 14:38Z,
-after that eval's filing); FALSE since the operator's bootstrap:
-**v0.2.1 published green** (run 36438268858, six assets —
-macos-arm64/linux-x86_64/linux-aarch64 tarballs + sha256s) and
-`https://chug.sh/install.sh` serves (verified this eval: redirect
-stub to the canonical installer). The worst seat in the README for a
-stale claim — §6(c)'s superseded-behavior class, at the front door,
-steering new users away from the working path. Filed as **T127**
-(docs, pri 2): delete the stale sentence pair, versionless durable
-phrasing (no version literal to re-stale), Gatekeeper + from-source
-byte-identical; docs-only T80-floor gates; ~8 lines. (v0.1.1 note:
-`gh run list` shows a 22s failed run on a v0.1.1 tag push that left
-no release and no remote tag — an unpublished operator tag outside
-T100's immutability scope; recorded here so the next eval doesn't
-chase it.)
+t127-impl ×1 and t125-impl ×1 (`options must be a string, got
+missing`), both self-corrected within one iteration, zero lost
+records (360+ landed records era-wide). Same fresh-context-schema
+class as the ~18 counted at cycle 64; the per-fumble cost stays ≤1
+iteration, below the filing bar. Rejection stands with the updated
+count; eval-triage record filed.
 
-### I4 — cycle 62's goal rejection was the operator's ungated v0.2.0 bump (assessed, REJECTED)
+### I4 — 120s bash-cap timeouts: 4 fires across t124/t125 streams — watch, no row
 
-Cycle 62's goal gate failed `cargo test` at 14:43:55Z and the cycle
-died at 160/160 before re-attempting. The failure was NOT cycle-62
-work: the operator's v0.2.0 release bump (aa5ed2e, pushed ungated —
-wrap gates ran pre-bump) broke three hard-coded `0.1.0` build_info
-banner expectations (9ce7565's commit message names the class). The
-structural fixes landed operator-side within the hour: 9ce7565
-(banner pins now DERIVE from the VERSION const — self-healing across
-bumps), 1e84357 (lock-sync doctrine + v0.2.1), 3cd7b7e (CI cross
-libc). The T123-carried "post-bump targeted gate" candidate is
-**weighed and REJECTED**: both failure legs got structural fixes
-(self-healing pins + lock-sync doctrine + `check-tag-version.sh`
-pairing); the residual — a FUTURE version-coupled test added without
-the self-healing pattern — is speculative; a third bump-failure class
-re-files it. eval-triage record filed.
+`timed out after Ns (process group killed)`: t125-impl ×2,
+t124-impl ×1, t124-validate ×1 — unbounded cargo invocations against
+the shared cache, all self-corrected with bounded retries. Baseline
+rate; the T22-era tool-description remedy stands; the
+perl-alarm idiom is in every template that needs it. Watch only.
 
-### I5 — validator ceiling zone: seventh consecutive zone-free cycle (watch)
+### I5 — t125-validate's 3 /tmp-sandbox fires PREDATE the T126 fix — the fix's measure starts now
 
-Cycle-62/63 validators: t117 44/50 (budget_low fired INSIDE the T18
-margin), t118 42/50, t120 38/50, t121 14/50, t122 33/50 — zero
-deaths, zero resumes. The T32 sizing (50) holds; the 50→65 raise
-stays rejected for the sixth+seventh cycles.
+t125-validate hit `path escapes cwd: /tmp/tN-slotN.sh` ×3 at
+16:37–16:44Z writing mutant helper scripts — BEFORE T126 merged
+(17:39Z). These are the old baseline, not evidence against the fix.
+T126's measure: validators launched with the heredoc sentence in
+their goal template should produce ZERO /tmp write-sandbox fires;
+the next eval counts them.
 
-### I6 — post-commit death class: silent (fourth assessment, rejection stands)
+### I6 — validator ceiling zone: eighth consecutive zone-free cycle (watch)
 
-Cycle 62–63: one mid-impl death (t117 — the I1 estimate class, a
-different mechanism) and zero post-commit deaths. T63's resume
-remains the answer when the class fires; the rejection stands.
+Cycle-64 validators: 21/37/16 of 50 — zero deaths, zero resumes,
+budget_low never fired validator-side. The T32 sizing (50) holds;
+the 50→65 raise stays rejected for the eighth cycle.
+
+### I7 — post-commit death class: silent (fifth assessment, rejection stands)
+
+Cycle 64: ZERO budget deaths, ZERO T63 resumes — impl children
+13/37/78/35 of 80, all first-try goal-accepted. T63's resume remains
+the answer when the class fires; no row.
 
 ## 3. Friction hot spots — fix assessment
 
-- **decision_log schema fumbles (T88)**: ~18 events files era-wide
-  now carry `invalid decision_log call` (the cycle-62 count of 12
-  plus t115 `options`, t116 `options`, t119 `choice`, t120-validate
-  `confidence`-as-string, cycle-63 orchestrator `options`,
-  t100-fixup `options`). All self-corrected within one iteration,
-  zero lost records (356 landed). REJECTED again with the updated
-  count — the confidence-as-string leg is the same
-  fresh-context-schema class; the per-fumble cost stays ≤1 iteration,
-  below the filing bar.
-- **120s bash-cap kills**: ~7 fires across the t112–t118
-  impl/validate streams (unbounded cargo invocations against the
-  shared cache; all self-corrected with bounded retries). Baseline
-  rate; the T22-era tool-description remedy stands; watch only.
-- **digest render nuance (assessed, NOT filed)**: eval-digest.sh
-  renders budget_low fires as "first at remaining_iters=N" even when
-  the MINUTES side tripped (t113-impl: remaining_iters=22,
-  remaining_secs=177 — WARN_REMAINING_SECS=300 fired). The event
-  carries both fields; the render is a cosmetic mislabel that could
-  send a future evaluator chasing a phantom latch bug. Below bar;
-  named here as the correction.
-- **edit_file `old` not found**: baseline (orchestrators ×3,
-  children ×5 era-wide across TODO.md/spec/src targets) — the T5
-  disambiguation surface exists; no new class.
-- **stream_fallback organic fires**: ZERO event-typed fires era-wide
-  (`"type":"stream_fallback"` over all events files; the 14 raw
-  string hits are payload quotes inside goals/specs). The endpoint
-  serves SSE; watch stands.
-- **Anti-sprint-burn guard**: cycle-62/63 orchestrators carried all
-  waits as terminal long-polls (35 and 9 delegate calls; no
-  idle-iteration runs). Working.
-- **T122's five non-blocking validator findings** (carried from the
-  cycle-63 verdict): impossible-date rollover in day_key (cosmetic
-  ordering on a 2026-02-30-class input — no user surface), no
-  absolute-epoch unit pin (test hygiene — the child verified vs
-  `date -u` incl leap/century and kimi re-derived independently), one
-  comment overreach (nit), in-day placement rationale (design note —
-  the day-claim-vs-second-claim ordering is deliberate and pinned),
-  redundant seq tiebreak (harmless belt-and-braces). ALL rejected
-  individually; eval-triage records filed.
-- **T113's mid-turn queue-vs-steering asymmetry** (carried watch):
-  zero new evidence in the delta corpus; the watch stands.
+- **edit_file `old` not found**: +2 impl-side (t124, t125) +1
+  orchestrator-side (cycle-64 EVALUATION.md edit) — baseline rate;
+  the T5 disambiguation surface exists; no new class.
+- **web_fetch refusing `application/x-sh`** (t127-impl + cycle-64
+  orchestrator): working as designed — binaries/scripts are refused,
+  children fall back to `curl` via bash (the correct division of
+  labor for a text-only tool). No row.
+- **Orchestrator-side /tmp write fire ×1** (cycle-64,
+  `/tmp/eval-new-body.md`): the class's 11th fire, first
+  orchestrator-side; the error names the remedy and the T126
+  sentence covers validators (the class's structural center). One
+  fire is below the bar; noted so the next eval has the count.
+- **stream_fallback organic fires**: ZERO (jq `"type":"stream_fallback"`
+  over today's streams; watch stands).
+- **T113 mid-turn queue-vs-steering asymmetry**: zero new evidence
+  in the delta corpus; the watch stands.
+- **Anti-sprint-burn guard**: cycle-64 orchestrator made 25 delegate
+  calls (terminal long-polls), zero idle-iteration runs; this eval
+  has launched nothing yet by design. Working.
+- **digest budget_low render nuance** (carried rejection): t124-impl's
+  budget_low fired at remaining_iters=8 — verified genuinely
+  iters-side (iter 72 at ~1230s of 2100s wall ⇒ remaining ~870s >
+  300s), so no NEW mislabel evidence; the cycle-64 rejection
+  (cosmetic, below bar) stands.
 
-## 4. Capability gaps — ROADMAP PULL: F10 phase 1 → T124, SPLIT
+## 4. Capability gaps — ROADMAP PULL: F10 phase 2 → T128 + T129 (SPLIT)
 
-Tier 1's deferrals stand (F13/F2/F3/F4/F5 — layad endpoint re-verified
-ABSENT this eval: `curl http://127.0.0.1:8420/` → 000). Tier 2's
-stand (F6/F7/F8 phase 2s — F8-p1 adoption is now the children's
-default step-tracker, zero organic demand for p2's remove/deps/
-chat-command scope; the gate stays closed on evidence). F9 CLOSED
-cycle 62 (phases 1/2a/2b landed). The top unworked roadmap item is
-therefore **F10 — chug as MCP server** (Tier 3 head). SPLIT per the
-working-rules shrink clause (combined phase-1+2 estimate ~750+, over
-the T110 ceiling): **phase 1 → T124** (feature, pri 2): `chug
-mcp-serve` — the stdio JSON-RPC 2.0 server skeleton (ndjson framing
-matching the client's own shape, initialize/ping/tools-list/
-tools-call, the -32700/-32600/-32601/-32602 taxonomy, stdout purity,
-EOF lifecycle) plus ONE read-only tool `chug_status` (events summary
-of any chug cwd, built on delegate.rs's `read_events`/
-`summarize_events` seams with a compact additive renderer —
-`render_status` byte-identical). Read-only by design: no spawning, no
-writes. **Phase 2 deferred** (`chug_collect` + `chug_launch`, the
-write leg — the permissions/hooks interaction of a remote-spawned run
-must be thought through, and the leg rides phase 1's skeleton:
-dependency, the written reason), **phase 3 deferred** (server log
-file, listChanged notifications, cancellation, resources). ~485
-lines, under the ceiling BY the split; kimi routing decision at work
-time (not on the REQUIRED list — new module + main.rs + delegate.rs
-visibility, no driver/api/tools/events core).
+Tier 1 deferrals stand (F13/F2/F3/F4/F5 — layad endpoint re-verified
+ABSENT this eval: `curl http://127.0.0.1:8420/` → 000). Tier 2
+deferrals stand (F6/F7/F8 phase 2s — zero organic-demand evidence in
+the delta corpus). F9 closed (cycle 62). F10 phase 1 LANDED
+(cycle 64, d6264be) and the cycle-64 eval marked phase 2 READY.
 
-Beyond the pull: **no new roadmap appends this eval.** The delta
-corpus surfaced no credible new capability gap; F11 (MCP
-resources+prompts consume) and F12 (web search) stand as ordered —
-F11 gains adjacency value once F10's server side exists (chug will
-then speak both MCP directions), noted for the next eval's ordering
-consideration, not filed.
+**PULLED: F10 phase 2, SPLIT per the T125 calibration rule** — the
+combined collect+launch estimate (~650 all-in) sits over the ~400
+should-split band, and the collect/launch boundary is the natural
+cleavage:
+
+- **T128** (feature, pri 2): `chug_collect` — the read half. The
+  delegate collect machinery (CollectSummary/summarize_collect/
+  collect_git_commits, all private today) exposed as a read-only MCP
+  tool with visibility-only lifts and its own compact renderer
+  (render_collect byte-identical). Est ~250.
+- **T129** (feature, pri 2): `chug_launch` — the write half,
+  flag-gated by `chug mcp-serve --allow-launch` (default OFF). The
+  permissions/hooks interaction the cycle-64 deferral demanded,
+  resolved at filing in two moves: (1) the server flag IS the policy
+  boundary — a flagless server is byte-identical read-only,
+  `chug_launch` unadvertised and `-32602` if called; (2) the spawned
+  child runs its OWN cwd's full policy chain (permissions/hooks/risk
+  gate) — the server adds no bypass, and the child's driver.lock
+  keeps the single-driver invariant. Budget ceilings 200/240,
+  reject-above. Spawns through the delegate launch seams
+  (CHUG_DELEGATE_BIN reuse — no second spawner). Est ~400, the band
+  named in the spec with a descope boundary (the e2e wire leg).
+
+**Phase 3 stays deferred** (notifications/cancellation/resources/
+server log — no consumer until phase 2 proves the fleet shape).
+**Beyond the pull: no new roadmap appends.** F11's adjacency note
+stands (after phase 2, chug speaks MCP in both directions — F11
+remains queued behind F10 phase 3, not filed).
 
 ## 5. Top 3 priorities
 
-1. **T127** (docs, pri 2) — a falsehood at the front door while the
-   release is live and green; ~8 lines, clears in one short arc;
-   bug-class staleness (docs correctness at the install path).
-2. **T125** (doctrine, pri 3) — the mid-impl-death preventive; tiny,
-   runs alone, and every future eval's filing quality depends on it.
-3. **T124** (feature, pri 2) — the mandatory roadmap pull and the
-   fleet primitive's first leg; the biggest row, sized under the
-   ceiling by the split.
+1. **T130** (robustness, pri 2) — the era's only validator survivor;
+   ~20 lines; closes the weak-pin class in chug's newest module
+   before T128/T129 build on that same file.
+2. **T128** (feature, pri 2) — the pull's read half; proven seams,
+   moderate size; makes the fleet observable.
+3. **T129** (feature, pri 2) — the pull's write half; the fleet
+   primitive's verb; the cycle's largest row, band-named.
 
-(T126 pri 4 fills the tail — cheap doctrine; an unworked carry is a
-fine outcome this cycle.)
+(T131 pri 4 is the declared-deferrable tail — cheap tooling truth,
+overlap-eligible during any validator window.)
 
 ## 6. README audit (usability)
 
-(a) **Reading order**: correct — Install → Quickstart → chat (+
-packs) → run → forks → plan → TUI → Tools → risk gate → hooks →
-permissions → MCP → Langfuse → specs → loopd → Development; the
-newcomer path reads top-down. (b) **Redundancy**: the delegate
-launch/status/collect bullets are dense but single-sourced (checked
-against the tool schemas); no drift. (c) **Staleness**: FOUND →
-**T127** (§2 I3 — the first non-clean audit after five consecutive
-clean ones; the audit's value is precisely catching the environment
-moving under a true claim). (d) **Balance**: fine — hooks and
-permissions carry reference-grade detail that IS the config docs for
-those surfaces; the MCP section correctly scopes client-side only
-(T124 adds the server subsection at merge). (e) **Quickstart truth**:
-`chug.sh/install.sh` serves the redirect stub (curl-verified); the
-run/chat/plan commands work as written; the plan-mode "Not yet" list
-(`/plan` chat command, `--approve`, web_fetch-in-plan) remains
-accurate. **One docs row filed (T127); no structural debt.**
+(a) **Reading order**: correct — Install → Quickstart → chat → run →
+forks → plan → TUI → Tools → risk gate → hooks → permissions → MCP →
+Langfuse → specs → loopd → Development; the new "chug as MCP server"
+subsection sits INSIDE the MCP section (README.md:580-606) —
+integrated, not appended. (b) **Redundancy**: the mcp-serve
+subsection's wire-protocol detail does not duplicate the Tools
+section (checked — Tools covers the in-loop delegate surface, the
+subsection covers the server surface; no drift). (c) **Staleness**:
+none found — T127's Install rewrite reads true against `gh release
+list` (v0.3.0 Latest, six assets) and carries no version literal.
+(d) **Balance**: fine — the subsection's taxonomy/framing detail IS
+the config doc for that surface. (e) **Quickstart truth**: install
+one-liner serves (curl-verified at cycle-64 filing; it now resolves
+v0.3.0); run/chat commands work as written. 721 lines. **No docs row
+filed** — the second consecutive clean audit after T127's catch.
 
 ## Handoff
 
-- **Work order** (with reasons): **T127** (docs-staleness, pri 2 —
-  smallest, front-door) → **T125** (doctrine, pri 3 — runs ALONE) →
-  **T124** (feature, pri 2 — the mandatory pull) → **T126**
-  (doctrine, pri 4 — runs ALONE; the declared deferrable tail).
-  Bundle check (T45 conjunctive): T125's ~45 estimate EXCEEDS (a)'s
-  ≤30 → no doctrine bundle; T124 is a feature (never bundled); T127
-  is alone in its file area — NO bundles. Overlap check (T44): T125
-  and T126 are doctrine — NEVER overlap, each runs alone; T127
-  (README.md) and T124 (src + tests + README.md) SHARE README.md →
-  serial; effectively a strictly serial queue this cycle.
+- **Work order** (with reasons): **T130** (robustness, pri 2 —
+  smallest, clears the mcp_serve.rs file first) → **T128** (feature,
+  pri 2) → **T129** (feature, pri 2 — shares src/mcp_serve.rs with
+  T128, strictly serial) → **T131** (DX, pri 4 — tail).
+  Bundle check (T45 conjunctive): T130 (~20) + T131 (~30) both pass
+  (a) ≤30, but (b) FAILS (src/mcp_serve.rs vs
+  scripts/eval-digest.sh + tests/eval_digest.rs — different areas) →
+  NO bundle. Overlap check (T44): T130/T128/T129 all share
+  src/mcp_serve.rs → serial with each other; **T131 (scripts/ +
+  tests/) is disjoint from every src row and MAY overlap one
+  validator window**; no doctrine rows this cycle, so the
+  never-overlap rule does not bind.
+- **Expected kimi routing at work time** (the calls themselves are
+  logged then): T130 — optional (src/mcp_serve.rs not on the
+  REQUIRED list; tests-only) — skip per T16/T31 precedent, the
+  RED-proofs are the evidence; T128 — exercise (T124
+  optional-EXERCISED precedent; young MCP wire surface); T129 —
+  exercise (spawn safety surface — the flag-gate and budget ceilings
+  are mutation-worthy); T131 — skip (tooling script + pin leg).
 - **SELF-SPEC**: none. **Human items**: (1) `gh auth refresh -s
   workflow` remains the proper fix for the workflow-scope class
-  (carried; the SSH pushurl workaround held again this era). (2)
+  (carried; the SSH pushurl workaround held again). (2)
   `com.tampajohn.chug-loopd.plist` stays untracked — operator's
-  launchd unit (carried).
-- **Watch items carried**: loopd cap (T121 landed and boring — watch
-  resets to: a ≥180-iteration cycle or another iteration-death
-  re-opens); validator ceiling zone (I5 — seventh zone-free cycle);
-  display-artifact watch (ZERO payload-level garbles this era
-  post-T115/T120 — the verify-then-kill SEQUENTIAL rule was not
-  exercised, which is the outcome it wants); compressed-verdict
-  harvest fidelity (zero new losses; the re-file trigger is a SECOND
-  loss); module sizes (api.rs 2,921 = 65% of the ~4,500 trip line,
-  mcp_http.rs 2,793 = 62%, tgrep.rs 2,531, tui.rs 2,527 — watch
-  only); stream_fallback organic-fire watch (zero, jq-verified);
-  T113 mid-turn queue-vs-steering asymmetry (zero new evidence);
-  T110 ceiling measure (SUPERSEDED by T125 — the measure fired with
-  the ceiling innocent; the remedy moves from ceiling-value to
-  estimate-calibration); F13/F2/F3/F4/F5/F6/F7/F8 phase-2 deferrals
-  (layad absent re-verified; F10 phases 2–3 join the deferred set
-  with the phase-1 dependency named).
+  launchd unit (carried since cycle 61).
+- **Watch items carried**: loopd cap (cycle 64 at 135/200
+  eval-shaped — healthy; re-open on a ≥180-iteration cycle or an
+  iteration death); validator ceiling zone (eighth zone-free cycle);
+  display-artifact watch (cycle 64 ×3 + this eval ×1, all
+  render-side, payloads intact, zero kills post-T120);
+  compressed-verdict harvest fidelity (cycle-64 rotation lesson
+  recorded; zero losses); module sizes (api.rs 2,921, mcp_http.rs
+  2,793, tgrep.rs 2,531, tui.rs 2,527 — all UNCHANGED from the
+  cycle-64 census; mcp_serve.rs new at 783; watch only);
+  stream_fallback (zero organic, jq-verified); T113 asymmetry (zero
+  new evidence); /tmp-sandbox fires in validators (I5 — T126's
+  measure: next eval counts post-fix fires, target zero);
+  decision_log fumbles (I3 — ~20, rejected); digest budget_low
+  render mislabel (§3 — no new evidence, rejection stands).
+- **T125 recalibration counter** (the calibration rule's running
+  record): cycle-64 actuals — T127 +8/-8 bullseye; T125 ~45→+159
+  (3.5x, all pins); T124 ~485→+1106 (2.3x, tests ≈65% of diff);
+  T126 ~25→+192 (7.7x, pin density). Pattern: pin/test density is
+  THE multiplier; doctrine+pin rows undershoot hardest in ratio,
+  feature rows in absolute lines. This eval's filings apply it:
+  T128 ~250 (density-adjusted from ~120 src lines), T129 ~400 (the
+  band named in the spec instead of pretended under), T130 ~20 and
+  T131 ~30 (pin-class ratio risk acknowledged — even 3x lands ≤90,
+  trivially safe).
 - **Weighed and REJECTED this eval** (eval-triage records in
-  `.chug/decisions.jsonl`): post-bump targeted release gate (I4 —
-  structural fixes landed: self-healing pins 9ce7565 + lock-sync
-  doctrine 1e84357 + check-tag-version.sh pairing; a third
-  bump-failure class re-files); decision_log schema-fumble row
-  (§3 — ~18 files, ≤1-iteration self-corrections, zero lost
-  records); validator budget 50→65 (I5 — seventh zone-free cycle);
-  post-commit-death-class row (I6 — silent; T63 covers); T122's five
-  non-blockings (§3 — each rejected individually with reasons);
-  digest budget_low render mislabel (§3 — cosmetic, named as the
-  correction); /tmp sandbox move (I2 — the boundary stays; T126
-  teaches the remedy instead); F10 filed as ONE row (~750+ estimate —
-  split per the working-rules shrink clause; the split IS the
-  resolution); new roadmap appends beyond the F10 pull (§4 — none
-  credible in the delta corpus; F11 adjacency noted, not filed).
-
+  `.chug/decisions.jsonl`): decision_log schema-fumble row (I3 —
+  ~20 fires era-wide, ≤1-iteration self-corrections, zero lost
+  records); 120s bash-cap row (I4 — 4 fires, all self-corrected,
+  baseline); validator budget 50→65 (I6 — eighth zone-free cycle);
+  post-commit-death-class row (I7 — silent; T63 covers); /tmp
+  sandbox move (I5's class — the boundary stays; T126 teaches the
+  remedy and its measure is now running); orchestrator /tmp fire row
+  (§3 — one fire, below bar); web_fetch script-refusal change (§3 —
+  working as designed); module-split rows (§6 watch — sizes
+  unchanged); new roadmap appends beyond the F10-p2 pull (§4 — none
+  credible; F11 adjacency noted, not filed); F10 phase 3
+  (deferred — no consumer until phase 2 proves the fleet shape);
+  F10 phase 2 filed as ONE row (~650 estimate — split per T125; the
+  split IS the resolution).
 
 ## Outcomes (filled at cycle wrap — LOOP-SPEC Phase 3)
 
