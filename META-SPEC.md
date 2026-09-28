@@ -101,7 +101,10 @@ check: cd /Users/jadams/workspace/chug && cargo test
              spec requirements, weak tests. Read worktree files via bash —
              read_file/grep/glob/list_dir/edit_file are cwd-confined and
              refuse cross-tree paths with `path escapes cwd`; cross-tree
-             reads go through bash. Run cargo build + clippy + the
+             reads go through bash. Write /tmp helper scripts (the
+             mutant apply/run legs) with bash heredocs — write_file and
+             edit_file are cwd-confined the same way and refuse /tmp
+             paths with `path escapes cwd`. Run cargo build + clippy + the
              T82 gate runner yourself — cargo nextest run --release when
              cargo nextest is on PATH, else the fallback
              cargo test --release -- --test-threads=4 (nextest-first gates,

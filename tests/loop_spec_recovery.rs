@@ -98,6 +98,27 @@
 //! after the estimate-ceiling sentence and before the Priority doctrine
 //! sentence — the same paragraph region evaluators read top-to-bottom at
 //! filing time.
+//!
+//! T126 doctrine: META-SPEC §6's validator goal template taught the
+//! cross-tree READ rule but said nothing about WRITES — validators kept
+//! discovering the write half live. The cycle-61/62 streams carry TEN
+//! `path escapes cwd … cross-tree paths go through bash` tool errors
+//! across three validators, all the same shape: writing the mutation
+//! helper script to /tmp with write_file/edit_file (t112-validate ×7,
+//! t113-validate ×2, t115-validate ×1). T79's parallel-mutant legs
+//! (routine since cycle 61) multiply exactly this write — one apply/run
+//! script pair per leg, cap 3 — so the class is growing, not shrinking,
+//! and each fire costs a validator iteration. The template now carries the
+//! write half: /tmp helper scripts (the mutant apply/run legs) go through
+//! bash heredocs, because write_file and edit_file are cwd-confined the
+//! same way. Leg (o) pins it — this file's FIRST META-SPEC needle, with
+//! the loader and pattern taken from `meta_meta_spec()`: both
+//! load-bearing tokens exactly-once in META-SPEC.md, inside §6's
+//! Validate-step window, the write sentence immediately after the
+//! byte-identical cross-tree-READ sentence it extends. LOOP-SPEC's
+//! §6-override paragraph is launch mechanics only and is NOT edited; §6's
+//! budgets, model, verdict shape, and T79 parallel-mutant mandate stay
+//! byte-identical.
 
 /// The leg's signature phrase: "resume" + the one-attempt cap language in
 /// one contiguous run. Must occur EXACTLY once in LOOP-SPEC.md.
@@ -844,5 +865,172 @@ fn estimate_calibration_rule_sits_after_ceiling_sentence_inside_quality_bar() {
          sentence — ceiling ({ceiling}), density claim ({density}), \
          evidence token ({evidence}), remedy band ({band}), priority \
          doctrine ({priority})"
+    );
+}
+
+// ---- T126 — §6's validator template gains the cross-tree WRITE rule ----
+//
+// META-SPEC §6's validator goal template taught the cross-tree READ rule
+// ("Read worktree files via bash — ... refuse cross-tree paths with `path
+// escapes cwd`; cross-tree reads go through bash") but said nothing about
+// WRITES. Validators kept discovering the write half live: the cycle-61/62
+// streams carry TEN `path escapes cwd ... cross-tree paths go through
+// bash` tool errors across three validators, all the same shape — writing
+// the mutation helper script to /tmp with write_file/edit_file (t112 ×7,
+// t113 ×2, t115 ×1). T79's parallel-mutant legs (routine since cycle 61)
+// multiply exactly this write — one apply/run script pair per leg, cap 3 —
+// so the class is growing, not shrinking. The remedy is one sentence in
+// the template every validator already reads: /tmp helper scripts go
+// through bash heredocs, because write_file and edit_file are cwd-confined
+// the same way. This is the file's FIRST META-SPEC pin (the loader below
+// is the `meta_meta_spec()` pattern); LOOP-SPEC's §6-override paragraph is
+// launch mechanics only and is NOT edited — the template text lives in
+// META-SPEC.
+
+/// The cross-tree READ sentence the write rule extends, byte-identical
+/// INCLUDING its wrapped line breaks (the non-ASCII byte is spelled as an
+/// escape so an editor normalization cannot silently unpin it:
+/// \u{2014} = em dash). The write sentence is inserted immediately after
+/// it; these bytes must survive untouched (req: the existing read sentence
+/// stays byte-identical).
+const CROSS_TREE_READ_SENTENCE: &str = concat!(
+    "Read worktree files via bash \u{2014}\n",
+    "             read_file/grep/glob/list_dir/edit_file are cwd-confined and\n",
+    "             refuse cross-tree paths with `path escapes cwd`; cross-tree\n",
+    "             reads go through bash."
+);
+
+/// The write rule's verb needle — the /tmp helper-scripts clause as
+/// written. Must occur EXACTLY once in META-SPEC.md.
+const TMP_HELPER_SCRIPTS: &str = "Write /tmp helper scripts";
+
+/// The write rule's mechanism needle — the bash heredoc remedy, the tool
+/// pair's working alternative for cross-tree writes. Must occur EXACTLY
+/// once in META-SPEC.md.
+const HEREDOC_NEEDLE: &str = "heredoc";
+
+/// The sentence that FOLLOWS the insertion point in §6's goal text — the
+/// write sentence must sit BEFORE it (the insertion is additive; the read
+/// sentence's successor must not be displaced or reordered).
+const RUN_GATES_SENTENCE: &str = "Run cargo build + clippy";
+
+/// §6's Validate step opens the window and step 7 closes it — the write
+/// rule must live inside the validator goal template (the T64
+/// loose-heading scope pattern), not drift into another step of META-SPEC.
+const STEP6_VALIDATE_HEADING: &str = "6. **Validate";
+const STEP7_HEADING: &str = "7. **";
+
+/// META-SPEC.md loader — the `meta_meta_spec()` pattern, reading the file
+/// from the checkout the binary RUNS against (`std::env::current_dir()`;
+/// cargo runs test binaries with cwd = the package root), never via the
+/// compile-time manifest-dir macro (the T48 doctrine).
+fn meta_spec() -> String {
+    let root = std::env::current_dir().expect("cargo sets the test cwd to the package root");
+    std::fs::read_to_string(root.join("META-SPEC.md"))
+        .unwrap_or_else(|e| panic!("reading META-SPEC.md from the runtime checkout: {e}"))
+}
+
+/// (o) T126 — the §6 validator template's cross-tree WRITE rule: both
+/// load-bearing tokens occur EXACTLY once in META-SPEC.md, inside the
+/// Validate-step window, and the write sentence sits IMMEDIATELY after the
+/// byte-identical cross-tree READ sentence it extends (whitespace-only
+/// gap, before the Run-cargo-gates sentence). Delete the write sentence
+/// and both needles go red (count 0, which also breaks the pin's own
+/// reads); a duplicate statement elsewhere goes red (count 2); moving the
+/// rule out of §6 dies on the window find; rewriting the read sentence the
+/// rule extends dies on the byte-identical guard.
+#[test]
+fn cross_tree_write_rule_needles_occur_exactly_once_after_read_sentence() {
+    // Needle self-check (T48 idiom): a mangled needle must not let this
+    // pin pass silently.
+    assert_eq!(
+        HEREDOC_NEEDLE, "heredoc",
+        "the mechanism needle must be the bare heredoc token verbatim"
+    );
+    assert!(
+        TMP_HELPER_SCRIPTS.starts_with("Write /tmp helper")
+            && TMP_HELPER_SCRIPTS.ends_with("scripts"),
+        "the /tmp helper-scripts needle must carry the write-verb clause \
+         verbatim"
+    );
+    assert!(
+        RUN_GATES_SENTENCE.starts_with("Run cargo build"),
+        "the successor anchor must be the Run-cargo-gates sentence"
+    );
+    let spec = meta_spec();
+    for (needle, what) in [
+        (TMP_HELPER_SCRIPTS, "the write-/tmp-helper-scripts clause"),
+        (HEREDOC_NEEDLE, "the bash-heredoc remedy"),
+    ] {
+        assert_eq!(
+            spec.matches(needle).count(),
+            1,
+            "META-SPEC must state {what} exactly once — zero means the \
+             write rule was deleted (or the needle was rewrapped across a \
+             line break), more than one means it is stated twice"
+        );
+    }
+    // The read sentence the write rule extends must be byte-identical —
+    // the insertion is additive, never a rewrite.
+    let read_pos = spec.find(CROSS_TREE_READ_SENTENCE).unwrap_or_else(|| {
+        panic!(
+            "the cross-tree READ sentence must survive byte-identical — the \
+             write rule EXTENDS it, never rewrites it"
+        )
+    });
+    let read_end = read_pos + CROSS_TREE_READ_SENTENCE.len();
+    // Window: §6's Validate step through step 7 — the rule must live in
+    // the validator goal template (T64 loose-heading scope pattern).
+    let start = spec
+        .find(STEP6_VALIDATE_HEADING)
+        .expect("step-6 Validate heading present");
+    let end = start
+        + spec[start..]
+            .find(STEP7_HEADING)
+            .expect("step-7 heading present after step 6's");
+    let write = start
+        + spec[start..end]
+            .find(TMP_HELPER_SCRIPTS)
+            .unwrap_or_else(|| {
+                panic!(
+                    "the Validate-step window must carry \
+                     {TMP_HELPER_SCRIPTS:?} (write rule deleted, or moved \
+                     out of §6?)"
+                )
+            });
+    let heredoc = start
+        + spec[start..end].find(HEREDOC_NEEDLE).unwrap_or_else(|| {
+            panic!(
+                "the Validate-step window must carry {HEREDOC_NEEDLE:?} \
+                 (heredoc remedy deleted, or moved out of §6?)"
+            )
+        });
+    let run_gates = start
+        + spec[start..end]
+            .find(RUN_GATES_SENTENCE)
+            .expect("the Validate-step window must carry the Run-cargo-gates \
+                     sentence (§6 template reordered?)");
+    assert!(
+        write < heredoc && heredoc < run_gates,
+        "the write rule must read as one sentence — the /tmp helper-scripts \
+         clause ({write}) before its heredoc remedy ({heredoc}) — and sit \
+         before the Run-cargo-gates sentence ({run_gates})"
+    );
+    // Adjacency: the read sentence lives in the same window, and the write
+    // sentence IMMEDIATELY follows it (whitespace-only gap) — the write
+    // rule extends the read rule in the same breath, where the validator
+    // reads it, not a bolt-on elsewhere in the template.
+    assert!(
+        read_pos >= start && read_end <= end && read_end < write,
+        "the read sentence must sit inside the Validate-step window, before \
+         the write rule (read {read_pos}..{read_end}, write {write}, window \
+         {start}..{end})"
+    );
+    let between = &spec[read_end..write];
+    assert!(
+        between.chars().all(char::is_whitespace),
+        "the write sentence must sit IMMEDIATELY after the cross-tree read \
+         sentence (whitespace-only gap) — found in between: {:?}",
+        between.trim()
     );
 }
