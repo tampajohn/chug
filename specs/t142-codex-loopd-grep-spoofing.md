@@ -1,4 +1,4 @@
-# T133 — loopd grep spoofing (codex adversarial review)
+# T142 — loopd grep spoofing (codex adversarial review)
 
 check: cargo test
 
