@@ -184,6 +184,8 @@ fn run_chat_with(
     // per-turn budget ceilings (T17) and the cwd's checkout HEAD (T20,
     // best-effort: unresolvable → null fields). T115: `goal_sha256` is null
     // here — chat sessions open goal-less (objectives arrive turn by turn).
+    // T117: `goal_pack` is null too — chat-side pack expansion is per-turn
+    // (T113), so a session never opens with a pack-expanded goal.
     let head = crate::build_info::resolve_head(&cfg.cwd);
     eventlog::run_start(
         &cfg.cwd,
@@ -194,6 +196,7 @@ fn run_chat_with(
         cfg.max_minutes,
         cfg.max_tokens,
         crate::build_info::as_pair(&head),
+        None,
         None,
     );
     // No goal text at session start (objectives arrive turn by turn); the
@@ -644,6 +647,38 @@ mod tests {
         // too; a tempdir cwd is not a repo, so both stay null.
         assert!(first["head_branch"].is_null(), "{first}");
         assert!(first["head_commit"].is_null(), "{first}");
+    }
+
+    /// T117 wiring leg: chat opens its session pack-less — `goal_pack` is
+    /// null but the field is always present (chat-side pack expansion is
+    /// per-turn, T113; a session never opens with an expanded goal).
+    #[test]
+    fn chat_run_start_goal_pack_null_but_always_present() {
+        let tmp = tempfile::tempdir().unwrap();
+        let h = harness(&tmp, vec![text_response("hi")]);
+        let (code, _, _, cwd) = run_session(h, |objective_tx, _| {
+            objective_tx.send("hello".into()).unwrap();
+        });
+        assert_eq!(code, 0);
+        let first: serde_json::Value = serde_json::from_str(
+            std::fs::read_to_string(cwd.join(".chug/events.jsonl"))
+                .expect("events.jsonl written")
+                .lines()
+                .next()
+                .expect("run_start line"),
+        )
+        .expect("first line parses");
+        assert!(
+            first["goal_pack"].is_null(),
+            "chat never expands a session goal → null: {first}"
+        );
+        assert!(
+            first
+                .as_object()
+                .expect("run_start is an object")
+                .contains_key("goal_pack"),
+            "the field must be PRESENT even when null: {first}"
+        );
     }
 
     /// T17: a chat session with configured budgets (token budget set) opens

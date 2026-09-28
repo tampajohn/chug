@@ -172,6 +172,8 @@
             max_minutes: 20,
             max_tokens: 0,
             out_path: out,
+            // T117: a literal test goal — no pack expansion.
+            goal_pack: None,
         }
     }
 
@@ -215,6 +217,57 @@
             lines[0]["mode"], "plan",
             "the loop's own run_start must name mode \"plan\""
         );
+    }
+
+    /// T117 wiring leg (the Some↔None survivor class applied at the PLAN call
+    /// site): the plan loop records `goal_pack` from the config on its own
+    /// `run_start` line — `Some` names the pack (and `goal_sha256` hashes the
+    /// expanded goal text), `None` stays null with the field present.
+    #[test]
+    fn plan_loop_run_start_carries_goal_pack_from_config_both_ways() {
+        for (goal_pack, goal) in [
+            (Some("review".to_string()), "Review the diff. Focus: bugs.".to_string()),
+            (None, "draft a plan".to_string()),
+        ] {
+            let tmp = tempfile::tempdir().unwrap();
+            let mut llm = ScriptedLlm::new(vec![tool_use_response(
+                "submit_plan",
+                json!({"plan": "# Plan\n\ngoal_pack leg\n"}),
+            )]);
+            let mut sink = RecordingSink::default();
+            let mut cfg = plan_cfg(&tmp, None, 5);
+            cfg.goal = goal.clone();
+            cfg.goal_pack = goal_pack.clone();
+            let code = run_plan_loop(
+                cfg,
+                &mut llm,
+                &mut sink,
+                &observ::Sink::Noop,
+                empty_plan_registry(&tmp),
+            )
+            .unwrap();
+            assert_eq!(code, 0);
+            let first = &events_lines(tmp.path())[0];
+            let obj = first.as_object().expect("run_start is an object");
+            match goal_pack {
+                Some(pack) => assert_eq!(first["goal_pack"], pack, "{first}"),
+                None => {
+                    assert!(
+                        first["goal_pack"].is_null(),
+                        "a literal goal stays null: {first}"
+                    );
+                    assert!(
+                        obj.contains_key("goal_pack"),
+                        "the field must be PRESENT even when null: {first}"
+                    );
+                }
+            }
+            assert_eq!(
+                first["goal_sha256"],
+                crate::eventlog::goal_sha256(&goal),
+                "{first}"
+            );
+        }
     }
 
     /// (b, ensure_seeded mutant) A plan loop run in a cwd with NO ledger

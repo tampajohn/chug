@@ -74,6 +74,16 @@ pub(crate) fn goal_sha256(goal: &str) -> String {
 /// child-side half of the delegate integrity comparison: equal to the
 /// parent's launch-result `goal_sha256` iff the goal arrived byte-intact.
 ///
+/// T117: `goal_pack` names the `.chug/commands/` pack the goal was expanded
+/// from (F9 phase 2a — the CLI boundary replaced `--goal "/name args"` with
+/// the pack body), `null` when the goal is literal. The field is always
+/// present (same pattern as `goal_sha256`). `goal_sha256` hashes the
+/// EXPANDED text — what the model actually received — so when `goal_pack`
+/// is non-null the child's hash will NOT match a parent's delegate-launch
+/// echo of the literal argv: that difference is the expansion, not a
+/// transmission garble (the parent's `goal_tail` remains its garble
+/// surface). Chat passes `null` (chat-side expansion is per-turn, T113).
+///
 /// T20: `head_branch`/`head_commit` carry the **cwd's** checkout identity
 /// (see [`crate::build_info::resolve_head`]) so a harvested child stream
 /// names the worktree it ran in, not just the binary's build commit. Both
@@ -90,6 +100,7 @@ pub fn run_start(
     max_tokens: u64,
     head: Option<(&str, &str)>,
     goal: Option<&str>,
+    goal_pack: Option<&str>,
 ) {
     append_line(
         cwd,
@@ -108,6 +119,7 @@ pub fn run_start(
             "max_minutes": max_minutes,
             "max_tokens": (max_tokens > 0).then_some(max_tokens),
             "goal_sha256": goal.map(goal_sha256),
+            "goal_pack": goal_pack,
         }),
     );
 }
@@ -379,6 +391,8 @@ mod tests {
             None,
             // T115: the base-shape pin keeps the goal-less leg (null), so the
             // other fields' byte-identical representation is pinned both ways.
+            // T117: a literal goal means no pack expansion (goal_pack null).
+            None,
             None,
         );
         let lines = read_lines(tmp.path());
@@ -416,7 +430,7 @@ mod tests {
     #[test]
     fn run_start_records_token_budget_when_set() {
         let tmp = tempfile::tempdir().unwrap();
-        run_start(tmp.path(), "run", None, "m", 8, 35, 250_000, None, None);
+        run_start(tmp.path(), "run", None, "m", 8, 35, 250_000, None, None, None);
         let lines = read_lines(tmp.path());
         assert_eq!(lines[0]["max_iters"], 8);
         assert_eq!(lines[0]["max_minutes"], 35);
@@ -438,6 +452,7 @@ mod tests {
             120,
             0,
             Some(("loop-t20", "9056c78")),
+            None,
             None,
         );
         let lines = read_lines(tmp.path());
@@ -479,6 +494,7 @@ mod tests {
             0,
             None,
             Some("hello world"),
+            None,
         );
         let lines = read_lines(tmp.path());
         assert_eq!(
@@ -494,7 +510,7 @@ mod tests {
     #[test]
     fn run_start_goal_sha256_null_but_always_present_without_goal() {
         let tmp = tempfile::tempdir().unwrap();
-        run_start(tmp.path(), "chat", None, "m", 8, 35, 0, None, None);
+        run_start(tmp.path(), "chat", None, "m", 8, 35, 0, None, None, None);
         let lines = read_lines(tmp.path());
         assert!(
             lines[0]["goal_sha256"].is_null(),
@@ -504,6 +520,91 @@ mod tests {
         assert!(
             obj.contains_key("goal_sha256"),
             "the field must be PRESENT even when null: {lines:?}"
+        );
+    }
+
+    /// T117: when the goal was expanded from a pack, `goal_pack` names it on
+    /// the opening line — the provenance of the goal transformation.
+    #[test]
+    fn run_start_records_goal_pack_when_goal_was_expanded() {
+        let tmp = tempfile::tempdir().unwrap();
+        run_start(
+            tmp.path(),
+            "run",
+            None,
+            "m",
+            8,
+            35,
+            0,
+            None,
+            Some("the expanded body"),
+            Some("smoke"),
+        );
+        let lines = read_lines(tmp.path());
+        assert_eq!(lines[0]["goal_pack"], "smoke", "{lines:?}");
+    }
+
+    /// T117: a literal goal records null — but the FIELD is always present
+    /// (the T115 always-present pattern applied to the new field), so jq can
+    /// distinguish "no pack expansion" from a truncated line.
+    #[test]
+    fn run_start_goal_pack_null_but_always_present_on_a_plain_goal() {
+        let tmp = tempfile::tempdir().unwrap();
+        run_start(tmp.path(), "run", None, "m", 8, 35, 0, None, Some("plain"), None);
+        let lines = read_lines(tmp.path());
+        assert!(
+            lines[0]["goal_pack"].is_null(),
+            "no expansion → null, never a phantom name: {lines:?}"
+        );
+        let obj = lines[0].as_object().expect("run_start is an object");
+        assert!(
+            obj.contains_key("goal_pack"),
+            "the field must be PRESENT even when null: {lines:?}"
+        );
+    }
+
+    /// T117 known vector: `goal_sha256` hashes the EXPANDED text — what the
+    /// model actually received (transmission truth) — so the recorded hash
+    /// matches the expanded body's SHA-256 and does NOT match the literal
+    /// `"/name args"` invocation the parent echoes. This is the designed
+    /// parent/child hash difference when a pack fired (the expansion, not a
+    /// transmission garble).
+    #[test]
+    fn run_start_goal_sha256_hashes_the_expanded_body_not_the_invocation() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = crate::commands::commands_dir(tmp.path());
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("smoke.md"), "Say hello to $ARGUMENTS.").unwrap();
+        let crate::commands::Expansion::Body(expanded) =
+            crate::commands::expand(tmp.path(), "smoke", Some("hello"))
+        else {
+            panic!("the smoke pack must expand");
+        };
+        assert_eq!(expanded, "Say hello to hello.");
+
+        run_start(
+            tmp.path(),
+            "run",
+            None,
+            "m",
+            8,
+            35,
+            0,
+            None,
+            Some(&expanded),
+            Some("smoke"),
+        );
+        let lines = read_lines(tmp.path());
+        assert_eq!(lines[0]["goal_pack"], "smoke");
+        assert_eq!(
+            lines[0]["goal_sha256"],
+            goal_sha256("Say hello to hello."),
+            "the hash is over the EXPANDED body: {lines:?}"
+        );
+        assert_ne!(
+            lines[0]["goal_sha256"],
+            goal_sha256("/smoke hello"),
+            "the literal invocation's hash must NOT appear — the expansion rewrote the goal"
         );
     }
 
@@ -572,7 +673,7 @@ mod tests {
     #[test]
     fn rotate_fresh_archives_non_empty_events_log() {
         let tmp = tempfile::tempdir().unwrap();
-        run_start(tmp.path(), "run", None, "m", 5, 120, 0, None, None);
+        run_start(tmp.path(), "run", None, "m", 5, 120, 0, None, None, None);
 
         let out = rotate_fresh(tmp.path());
         let Outcome::Archived(dst) = out else {
@@ -828,7 +929,7 @@ mod tests {
             model: "m".into(),
             budget: None,
         });
-        run_start(tmp.path(), "run", None, "m", 5, 120, 0, None, None);
+        run_start(tmp.path(), "run", None, "m", 5, 120, 0, None, None, None);
     }
 
     /// T91: an ImageDegraded event serializes as one jq-mineable
