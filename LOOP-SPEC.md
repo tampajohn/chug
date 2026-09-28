@@ -111,7 +111,12 @@ impl, never 2 impls):
    never binding, t90 used 8m24s of 35 for 60 iterations. Measure: if >1 of
    the next 6 impl children still dies at 80/80 with the work done, the
    next eval considers a spec-size cap (a ~500-line estimate ceiling that
-   forces a split) instead of further iteration raises.)
+   forces a split) instead of further iteration raises. Measure clause
+   RESOLVED at the cycle-60 eval (T110): the census tripped (2 of the
+   last 4 impl children died 80/80 — t108-impl mid-impl at 141 total
+   iterations, t108-fixup post-commit); the remedy is the
+   filing-time ~500-line estimate ceiling in META-META-SPEC's spec
+   quality bar, not further iteration raises.)
    The goal carries the T47 export because delegate cannot pass env — a child
    that skips it just builds cold into its own worktree's target dir
    (harmless, slow).

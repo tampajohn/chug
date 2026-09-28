@@ -91,7 +91,15 @@ module stem over a narrower substring; verify by running the filter and
 confirming the new tests are in the run set (t90: the `permissions`
 filter missed the driver-integration legs the `permission` stem caught,
 and a mutant survived under the spec's own check while dying under the
-broader stem). Priority doctrine: bugs > robustness > features > DX
+broader stem). Every spec carries an `estimate: ~N changed lines` line in
+its repo-context section, and a row estimated above
+~500 lines of new/modified logic MUST be split into 2–3 rows at filing
+time — mechanical byte-identical move rows (the T104/T109 class) are
+exempt — the estimate line says so (the T104/T109 lesson: a 3,100-line
+byte-identical test move lands first-try at 75/80 — moved lines are not
+novel-logic lines; the T108 lesson: a ~700–900-line row is too big for
+any single-child budget, and filing time is where that must be decided).
+Priority doctrine: bugs > robustness > features > DX
 friction > performance — features are first-class (LOOP-SPEC §2): at
 equal pri, a credible feature row is worked before a DX-friction row.
 **Verify T1/T2/T4/T5 actually worked before filing

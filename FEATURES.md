@@ -51,4 +51,7 @@ retired: driver already batches (cycle-11 eval).
 - Every roadmap row is a FEATURE-class spec: repo context, requirements,
   tests, acceptance, out-of-scope — same bar as incident specs.
 - Items can shrink: the evaluator may split a roadmap item into 2-3 rows
-  when the full scope blows a 50-iter child budget.
+  when the full scope blows the filing-time ~500-line estimate ceiling
+  (META-META-SPEC's spec quality bar; mechanical byte-identical move rows
+  are exempt — the old 50-iter child budget predated the T21/T92/T102
+  raises to 80).

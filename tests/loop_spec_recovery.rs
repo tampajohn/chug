@@ -34,6 +34,18 @@
 //! BEFORE the polling paragraph legs (b)/(d) anchor on), extending — never
 //! replacing — the pre-existing `Commit your work here.` sentence, with the
 //! template's untouched sentences byte-identical.
+//!
+//! T110 doctrine: step 2's `(80, not 65: ...)` parenthetical carried a
+//! written measure clause (T102) — "if >1 of the next 6 impl children
+//! still dies at 80/80 with the work done, the next eval considers a
+//! spec-size cap instead of further iteration raises." The census TRIPPED
+//! in cycle 59: 2 of the last 4 impl children died 80/80 (t108-impl
+//! mid-impl at 141 total iterations, t108-fixup post-commit), both on the
+//! one row the cycle-59 eval sized at ~700–900 lines — a sizing that lived
+//! in EVALUATION.md prose, not in the spec, with no doctrine forcing a
+//! split. Leg (h) pins the resolution now recorded in the parenthetical:
+//! the remedy is the filing-time ~500-line estimate ceiling in
+//! META-META-SPEC's spec quality bar, not further iteration raises.
 
 /// The leg's signature phrase: "resume" + the one-attempt cap language in
 /// one contiguous run. Must occur EXACTLY once in LOOP-SPEC.md.
@@ -313,5 +325,73 @@ fn goal_template_untouched_sentences_survive_byte_identical() {
         "the goal template's DO-NOT sentence must survive byte-identical \
          (wrapping and the goal string's closing quote included) exactly \
          once — the discipline clause is inserted before it, never after it"
+    );
+}
+
+// ---- T110 — the measure clause's resolution: the filing-time ceiling ----
+//
+// The `(80, not 65: ...)` parenthetical's Measure sentence (T102) named the
+// remedy it would consider if the census tripped; the census DID trip in
+// cycle 59, and the parenthetical now carries the resolution — the remedy
+// chosen is the filing-time ~500-line estimate ceiling in META-META-SPEC's
+// spec quality bar, NOT further iteration raises. These bytes must survive
+// so an orchestrator reading step 2 sees both the history and how it
+// resolved.
+
+/// The resolution's needle — the remedy phrase the spec check greps, in one
+/// contiguous run (the check's grep is line-wise, so the LOOP-SPEC text
+/// must keep it on a single line). Must occur EXACTLY once in LOOP-SPEC.md.
+const ESTIMATE_CEILING: &str = "filing-time ~500-line estimate ceiling";
+
+/// The Measure sentence the resolution FOLLOWS — the parenthetical keeps
+/// its history and gains the resolution, never replaces it.
+const MEASURE_CENSUS: &str = "Measure: if >1 of";
+
+/// (h) T110 — the resolution needle occurs EXACTLY once in LOOP-SPEC.md,
+/// inside step 2's window (the T64 loose-heading scope pattern) and AFTER
+/// the `Measure: if >1 of` census sentence it resolves. Delete the
+/// resolution and this goes red at count 0 (the RED leg recorded in the
+/// T110 commit); a duplicate statement of the remedy elsewhere also goes
+/// red; moving it out of step 2 dies on the window find.
+#[test]
+fn measure_clause_resolution_needle_exactly_once_inside_step_2() {
+    // Needle self-check (T48 idiom): a mangled needle must not let this
+    // pin pass silently.
+    assert!(
+        ESTIMATE_CEILING.starts_with("filing-time")
+            && ESTIMATE_CEILING.contains("~500-line")
+            && ESTIMATE_CEILING.ends_with("estimate ceiling"),
+        "the needle must carry the filing-time ~500-line estimate ceiling \
+         language verbatim (per the spec's case-sensitive, line-wise check:)"
+    );
+    let spec = loop_spec();
+    assert_eq!(
+        spec.matches(ESTIMATE_CEILING).count(),
+        1,
+        "LOOP-SPEC must state the filing-time ~500-line estimate ceiling \
+         exactly once — zero means the measure clause's resolution was \
+         deleted (or rewrapped across a line break, which also breaks the \
+         spec check's line-wise grep), more than one means it is stated \
+         twice"
+    );
+    let start = spec
+        .find(STEP2_HEADING_LOOSE)
+        .expect("step-2 heading (`2. **`) present");
+    let end = start
+        + spec[start..]
+            .find(STEP3_HEADING)
+            .expect("step-3 heading present after step 2's");
+    let window = &spec[start..end];
+    let measure = window
+        .find(MEASURE_CENSUS)
+        .expect("step-2 window must carry the `Measure: if >1 of` census sentence");
+    let resolution = window
+        .find(ESTIMATE_CEILING)
+        .expect("step-2 window must carry the resolution needle (deleted or moved out of step 2?)");
+    assert!(
+        measure < resolution,
+        "the resolution must FOLLOW the measure clause it resolves — \
+         `Measure: if >1 of` first ({measure}), then the filing-time \
+         ~500-line estimate ceiling remedy ({resolution})"
     );
 }
