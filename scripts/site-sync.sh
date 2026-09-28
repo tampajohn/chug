@@ -170,13 +170,26 @@ cycle_count() { # -> "<n>\t<source text>"
     return
   fi
   if [ -d "$CHUG/.chug/loopd" ]; then
-    # T142: count the supervisor's own rc-based verdict stamps, never raw
-    # child bytes — model text reaches a cycle log verbatim, so a spoofed
-    # `chug: goal complete` line in a failed cycle must not inflate the
-    # public cycle count (loopd.sh stamps `verdict: ...` from the child's
-    # exit status; logs older than that stamp carry none and count 0).
-    n=$(grep -l 'verdict: goal complete (rc=0)' "$CHUG"/.chug/loopd/cycle-*.log 2>/dev/null | wc -l | tr -d ' ')
-    printf '%s\tcycle logs that reached goal complete (.chug/loopd/cycle-*.log)' "${n:-0}"
+    # T142 fix-up F1: count a cycle only on its LAST verdict line — never on
+    # any matching line. Model text reaches a cycle log verbatim (stderr
+    # deltas; the abort path puts model-written ledger text on stdout), so a
+    # failed cycle whose bytes contain a forged `verdict: goal complete
+    # (rc=0)` line made the old `grep -l` rename-count it: the marker was
+    # renamed, not made unforgeable (validator probe published "cycles 2"
+    # for one real OK cycle). The supervisor appends its stamp AFTER the
+    # child is fully dead — both pipes closed — and writes nothing to the
+    # log after it, so the last `verdict:` line of a stamp-supervised cycle
+    # log is always the supervisor's and a forged one is necessarily
+    # followed by the real stamp. Logs older than the stamp carry none and
+    # count 0.
+    n=0
+    for f in "$CHUG"/.chug/loopd/cycle-*.log; do
+      [ -f "$f" ] || continue
+      case "$(grep 'verdict:' "$f" 2>/dev/null | tail -n 1)" in
+        *'verdict: goal complete (rc=0)') n=$((n + 1)) ;;
+      esac
+    done
+    printf '%s\tcycle logs whose final verdict stamp reached goal complete (.chug/loopd/cycle-*.log)' "$n"
     return
   fi
   printf '0\tno .chug/loopd logs found in the chug repo'
