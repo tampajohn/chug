@@ -342,6 +342,9 @@ fn cmd_run(
 ) -> anyhow::Result<i32> {
     let cwd = resolve_cwd(cwd)?;
     let bash_timeout = resolve_bash_timeout(bash_timeout)?;
+    // T117: pack expansion happens first — before the spec resolution and
+    // every `.chug/` write, so a bad `/name` exits clean.
+    let (goal, goal_pack) = expand_goal(&cwd, goal)?;
     let spec = spec
         .canonicalize()
         .with_context(|| format!("spec file {} not found", spec.display()))?;
@@ -359,8 +362,8 @@ fn cmd_run(
 
     if tui {
         run_with_tui(
-            spec, goal, cwd, model, max_iters, max_minutes, max_tokens, resume, risk_gate,
-            bash_timeout, mcp_config, mcp_off,
+            spec, goal, goal_pack, cwd, model, max_iters, max_minutes, max_tokens, resume,
+            risk_gate, bash_timeout, mcp_config, mcp_off,
         )
     } else {
         let cfg = driver::RunConfig {
@@ -377,6 +380,7 @@ fn cmd_run(
             bash_timeout,
             mcp_config,
             mcp_off,
+            goal_pack,
         };
         let mut sink = events::ConsoleSink::new(cfg.cwd.clone());
         driver::run(cfg, &mut sink)
@@ -388,6 +392,7 @@ fn cmd_run(
 fn run_with_tui(
     spec: PathBuf,
     goal: String,
+    goal_pack: Option<String>,
     cwd: PathBuf,
     model: String,
     max_iters: u32,
@@ -417,6 +422,7 @@ fn run_with_tui(
         bash_timeout,
         mcp_config,
         mcp_off,
+        goal_pack,
         controls: driver::Controls {
             abort: Arc::clone(&abort),
             steering_rx: steer_rx,
@@ -581,6 +587,8 @@ fn cmd_plan(
     max_tokens: u64,
 ) -> anyhow::Result<i32> {
     let cwd = resolve_cwd(cwd)?;
+    // T117: same CLI-boundary expansion as run — before anything writes.
+    let (goal, goal_pack) = expand_goal(&cwd, goal)?;
     let spec = match spec {
         Some(path) => Some(
             path.canonicalize()
@@ -605,9 +613,34 @@ fn cmd_plan(
         max_minutes,
         max_tokens,
         out_path: out,
+        goal_pack,
     };
     let mut sink = events::ConsoleSink::new(cfg.cwd.clone());
     driver::run_plan(cfg, &mut sink)
+}
+
+/// F9 phase 2a (T117): resolve a run/plan `--goal` through the slash-command
+/// packs at the CLI boundary — before the driver (or plan loop) starts, so a
+/// failed resolution never triggers a `.chug/` write and the driver never
+/// sees the `/name` literal.
+///
+/// - Not an invocation → the goal passes through byte-identical, `goal_pack`
+///   `None`.
+/// - A pack hit → the goal is REPLACED with the expanded body (one stderr
+///   note names the pack) and the pack name rides `run_start` as
+///   `goal_pack`.
+/// - Unknown `/name` or an empty expansion → a hard error (non-zero exit)
+///   naming the remedy; a typo'd pack name is never silently run as a
+///   literal goal.
+fn expand_goal(cwd: &std::path::Path, goal: String) -> anyhow::Result<(String, Option<String>)> {
+    match commands::resolve_goal(cwd, &goal) {
+        Ok(commands::GoalResolution::Passthrough) => Ok((goal, None)),
+        Ok(commands::GoalResolution::Expanded { body, pack }) => {
+            eprintln!("chug: goal expanded from pack '{pack}'");
+            Ok((body, Some(pack)))
+        }
+        Err(message) => Err(anyhow!(message)),
+    }
 }
 
 fn resolve_cwd(cwd: Option<PathBuf>) -> anyhow::Result<PathBuf> {
@@ -652,6 +685,44 @@ mod tests {
     #[test]
     fn resolve_bash_timeout_wraps_secs_in_duration() {
         assert_eq!(resolve_bash_timeout(Some(1)).unwrap(), Duration::from_secs(1));
+    }
+
+    /// T117: the CLI-boundary seam both `run` and `plan` go through. Hit →
+    /// expanded body + `Some(pack)`; unknown/empty → the error legs; a
+    /// non-invocation goal → byte-identical passthrough with `None`.
+    #[test]
+    fn expand_goal_resolves_packs_at_the_cli_boundary() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = commands::commands_dir(tmp.path());
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("smoke.md"), "Say hello to $ARGUMENTS.").unwrap();
+        std::fs::write(dir.join("note.md"), "").unwrap();
+
+        // Hit: the goal is replaced with the expanded body; the pack is named.
+        let (goal, pack) = expand_goal(tmp.path(), "/smoke hello".into()).unwrap();
+        assert_eq!(goal, "Say hello to hello.");
+        assert_eq!(pack.as_deref(), Some("smoke"));
+
+        // Non-invocation: byte-identical passthrough, no pack.
+        let (goal, pack) = expand_goal(tmp.path(), "fix the login bug".into()).unwrap();
+        assert_eq!(goal, "fix the login bug");
+        assert_eq!(pack, None);
+
+        // Unknown pack: a hard error naming the remedy (never a literal run).
+        let err = expand_goal(tmp.path(), "/nosuch hello".into()).unwrap_err();
+        assert!(err.to_string().contains("'/nosuch'"), "{err}");
+        assert!(err.to_string().contains("smoke"), "{err}");
+
+        // Empty expansion: a hard error naming the pack.
+        let err = expand_goal(tmp.path(), "/note".into()).unwrap_err();
+        assert!(err.to_string().contains("'note'"), "{err}");
+
+        // `/` and `/ x` are not invocations (passthrough, zero-cost leg).
+        for goal in ["/", "/ smoke"] {
+            let (goal, pack) = expand_goal(tmp.path(), goal.to_string()).unwrap();
+            assert!(goal.starts_with('/'));
+            assert_eq!(pack, None);
+        }
     }
 
     /// T15: `--max-tokens` parses into the knob (u64) and defaults to 0

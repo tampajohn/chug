@@ -29,6 +29,8 @@
             mcp_config: None,
             // Tests must never pick up the developer's ~/.config/chug/mcp.json.
             mcp_off: true,
+            // T117: a literal test goal — no pack expansion (None wiring leg).
+            goal_pack: None,
         };
         let client = Client::new_without_credentials("test-model").unwrap();
         let mut sink = RecordingSink::default();
@@ -74,6 +76,79 @@
         // the failed resolution).
         assert!(first["head_branch"].is_null(), "{first}");
         assert!(first["head_commit"].is_null(), "{first}");
+    }
+
+    /// T117 wiring leg (the Some↔None survivor class applied at the RUN call
+    /// site): the loop records `goal_pack` from the config on its own
+    /// `run_start` line — `Some` names the pack, and `goal_sha256` hashes the
+    /// EXPANDED goal text the config carries (transmission truth); `None`
+    /// stays null but the field is present.
+    #[test]
+    fn run_loop_run_start_carries_goal_pack_from_config_both_ways() {
+        for (goal_pack, goal) in [
+            (Some("smoke".to_string()), "Say hello to hello.".to_string()),
+            (None, "a literal goal".to_string()),
+        ] {
+            let tmp = tempfile::tempdir().unwrap();
+            let spec = tmp.path().join("s.md");
+            std::fs::write(&spec, "spec text\ncheck: true\n").unwrap();
+            let (stx, srx) = mpsc::channel();
+            drop(stx);
+            let cfg = RunConfig {
+                cwd: tmp.path().to_path_buf(),
+                spec_path: spec,
+                goal: goal.clone(),
+                model: "test-model".to_string(),
+                max_iters: 5,
+                max_minutes: 10,
+                max_tokens: 0,
+                resume: false,
+                // Abort at the first boundary: the startup path (including
+                // run_start) runs, no LLM call is ever made.
+                controls: Controls {
+                    abort: Arc::new(AtomicBool::new(true)),
+                    steering_rx: srx,
+                },
+                risk_gate: false,
+                bash_timeout: Duration::from_secs(tools::BASH_TIMEOUT_SECS),
+                mcp_config: None,
+                mcp_off: true,
+                goal_pack: goal_pack.clone(),
+            };
+            let client = Client::new_without_credentials("test-model").unwrap();
+            let mut sink = RecordingSink::default();
+            run_loop(cfg, client, None, &mut sink, &observ::Sink::Noop).unwrap();
+
+            let first: Value = serde_json::from_str(
+                std::fs::read_to_string(tmp.path().join(".chug/events.jsonl"))
+                    .expect("events.jsonl written")
+                    .lines()
+                    .next()
+                    .expect("run_start line"),
+            )
+            .expect("first line parses");
+            let obj = first.as_object().expect("run_start is an object");
+            match goal_pack {
+                Some(pack) => assert_eq!(first["goal_pack"], pack, "{first}"),
+                None => {
+                    assert!(
+                        first["goal_pack"].is_null(),
+                        "a literal goal stays null: {first}"
+                    );
+                    assert!(
+                        obj.contains_key("goal_pack"),
+                        "the field must be PRESENT even when null: {first}"
+                    );
+                }
+            }
+            // The hash is over the goal text the loop was given (the expanded
+            // body when a pack fired) — never the pre-expansion invocation.
+            assert_eq!(
+                first["goal_sha256"],
+                crate::eventlog::goal_sha256(&goal),
+                "{first}"
+            );
+        }
     }
 
     // ---------- T10: .chug/events.jsonl ----------

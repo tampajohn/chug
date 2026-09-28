@@ -113,9 +113,26 @@ Focus: $ARGUMENTS
   as your objective (queued if a turn is already running); `@file` mentions
   inside a pack body expand like any submitted line.
 
-Phase 2 (deferred with a written reason in EVALUATION.md cycle-61 §4):
-run-side invocation (`chug run --goal "/triage …"`), Tab completion of pack
-names, and frontmatter (description/allowed-tools).
+- **Run goals (phase 2a)** — `chug run --goal "/review the login bug"` (and
+  the same on `chug plan`) resolves the goal through the packs at the CLI
+  boundary, before any `.chug/` write: the run starts with the EXPANDED body
+  as its goal, announced by one stderr line (`chug: goal expanded from pack
+  'review'`). A `/name` no pack provides is a hard error naming the available
+  packs (or "no packs discovered" plus the pack dir) — never a silent literal
+  run of a typo'd name; a pack that expands to empty is a hard error naming
+  the pack; a goal that is not `/name args` (plain text, `/` alone, leading
+  whitespace) passes through byte-identical.
+- **`goal_pack` + the hash-difference honesty line** — the run's opening
+  `run_start` line records `goal_pack` (the pack name when expansion fired,
+  `null` otherwise — the field is always present) while `goal_sha256` hashes
+  the EXPANDED text, what the model actually received. So when a pack fired,
+  the child's `goal_sha256` will NOT match a parent's delegate-launch echo
+  (the parent hashes the literal `"/name args"` argv, the child the expanded
+  body) — that difference is the expansion, not a transmission garble; the
+  parent's `goal_tail` composition check remains its garble surface.
+
+Phase 2b (T118, still pending): frontmatter (description/allowed-tools) and
+Tab completion of pack names.
 
 ## Autonomous mode (`chug run`)
 
@@ -197,7 +214,12 @@ names, and frontmatter (description/allowed-tools).
   runtime, `null` when it doesn't — the configured budget ceilings —
   `max_iters`, `max_minutes`, `max_tokens` as `null` when unset — and the
   goal's `goal_sha256`, SHA-256 hex when the mode has a goal, `null` when it
-  doesn't: the child-side half of the delegate integrity comparison), one line
+  doesn't: the child-side half of the delegate integrity comparison — plus
+  `goal_pack`, the pack name when the goal was expanded from a
+  `.chug/commands/` pack, `null` otherwise, field always present; when
+  `goal_pack` is non-null the hash is over the EXPANDED body, so it will not
+  match a parent's delegate-launch echo of the literal `/name args` argv —
+  the expansion, not a transmission garble), one line
   per iteration with cumulative tokens, tool results (ok/is_error/duration_ms, ≤200-char
   previews — error results keep a tail-anchored ≤2000-char window, so the
   failing test's name or error block at the end of the output is on record),
@@ -343,7 +365,10 @@ a git worktree). Three actions:
   child hashes the same garbled bytes — and only the `goal_tail` preview
   exposes it; a transmission garble (the argv/pipe corrupts) is what
   comparing `goal_sha256` against the child's `run_start` `goal_sha256`
-  detects. chug reports, it does not adjudicate — it never waits on the child
+  detects. One designed mismatch class is neither: a child whose `run_start`
+  shows a non-null `goal_pack` hashed the EXPANDED pack body, not the literal
+  `"/name args"` argv this echo carries — that is the goal expansion at work,
+  not a transmission garble. chug reports, it does not adjudicate — it never waits on the child
 - **`status`** — reports the child's liveness (when you pass the `pid`), a
   summary of its `.chug/events.jsonl` — the child's latest run segment
   (state, `last_iteration` + `max_iters`, budget-low / goal / abort flags

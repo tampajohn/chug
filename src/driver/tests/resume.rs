@@ -27,6 +27,8 @@
             bash_timeout: Duration::from_secs(tools::BASH_TIMEOUT_SECS),
             mcp_config: None,
             mcp_off: true,
+            // T117: a literal test goal — no pack expansion.
+            goal_pack: None,
         }
     }
 

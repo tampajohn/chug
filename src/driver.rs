@@ -92,6 +92,12 @@ pub struct RunConfig {
     pub mcp_config: Option<PathBuf>,
     /// Force MCP servers off even when a config exists.
     pub mcp_off: bool,
+    /// F9 phase 2a (T117): the `.chug/commands/` pack the goal was expanded
+    /// from — `Some` when the CLI boundary resolved `--goal "/name args"`
+    /// through a pack, `None` for a literal goal. Recorded on the run's
+    /// `run_start` line (`goal_pack`, always present) so a harvested stream
+    /// shows the goal's provenance alongside its hash.
+    pub goal_pack: Option<String>,
 }
 
 /// Operator controls the driver honors at each iteration boundary:
@@ -341,7 +347,9 @@ fn run_loop(
     // the configured budget ceilings (T17), the cwd's checkout HEAD (T20,
     // best-effort: a non-repo cwd just leaves both fields null), and the
     // goal's SHA-256 (T115, the child-side half of the delegate integrity
-    // comparison).
+    // comparison). T117: `goal_pack` names the pack the goal was expanded
+    // from (the CLI boundary rewrote `--goal "/name args"` into the pack
+    // body); `goal_sha256` above hashes that expanded text.
     let head = crate::build_info::resolve_head(&cfg.cwd);
     eventlog::run_start(
         &cfg.cwd,
@@ -353,6 +361,7 @@ fn run_loop(
         cfg.max_tokens,
         crate::build_info::as_pair(&head),
         Some(&cfg.goal),
+        cfg.goal_pack.as_deref(),
     );
     match drive_loop(
         &ctx,
@@ -385,6 +394,10 @@ pub struct PlanConfig {
     /// Where `submit_plan` writes the plan; `None` → the plan surfaces on
     /// stdout. Resolved through the cwd sandbox at write time.
     pub out_path: Option<PathBuf>,
+    /// F9 phase 2a (T117): the `.chug/commands/` pack the goal was expanded
+    /// from — same shape as [`RunConfig::goal_pack`], recorded on the plan
+    /// session's `run_start` line.
+    pub goal_pack: Option<String>,
 }
 
 /// Plan mode entry point: the same shape as `run`, with the plan-mode
@@ -474,6 +487,7 @@ fn run_plan_loop(
         cfg.max_tokens,
         crate::build_info::as_pair(&head),
         Some(&cfg.goal),
+        cfg.goal_pack.as_deref(),
     );
     let trace = obs.trace_started(
         &cfg.goal,
