@@ -376,6 +376,34 @@ clean audit — no docs row.**
   validator ledger, child decision records. Routing d1790593212-26
   verdict d1790593600-27 outcome landed-clean.
 
+- **T115 landed (ed6c96f, fast-forward)** — the goal-integrity surface:
+  `delegate` launch results gain `goal_bytes` / `goal_sha256` /
+  `goal_tail` (computed over the exact goal string passed to the child
+  argv; T25's chars()-based tail rule, <=120 chars, no ellipsis), and
+  the child's `run_start` events line gains `goal_sha256` (hex when the
+  mode has a goal — run + plan call sites pass `Some`; `null` in chat;
+  field always present). One new dependency (`sha2`, justified for
+  `shasum -a 256` cross-checkability); delegate tool schema frozen by a
+  new pin; the 83-to-86 delegate-test count pin. glm impl 63/80
+  first-try. Orchestrator review: diff +398/-17 across 10 files
+  (~130-line estimate — the test+doc-density overshoot class again,
+  3.0x this time), 922/922 + clippy first-hand. kimi REQUIRED
+  (driver.rs + events substrate): PASS 44/50, 8 mutants in isolated
+  worktrees cap-3 — 5 caught (map-none, sha-corrupt, tail-head,
+  drop-sha-line, schema-prop), 3 survived -> **2 non-blocking weak-test
+  findings carried**: (1) no multibyte-goal leg (a bytes-vs-chars
+  mutant is invisible to ASCII-only fixtures); (2) `run_start`
+  call-site wiring unpinned (driver `Some`->`None` and chat
+  `None`->`Some` mutants survive the full suite). The validator closed
+  the spec's live-acceptance leg itself: a real T115-binary delegate
+  child's `run_start.goal_sha256` == the external `shasum -a 256` of
+  the goal (transmission leg green). Post-merge 922/922. The surface
+  activates for the NEXT cycle's launches (loopd rebuilds the release
+  binary before each cycle — this cycle's own launches predate it).
+  Harvested: impl + validator streams, validator ledger, child
+  decision records. Routing d1790595612-31 verdict d1790596580-32
+  outcome landed-clean.
+
 ### Cycle 60 (2026-09-28) — fresh eval (kimi, loopd-routed: queue empty) — T110 + T111 filed (F8 SPLIT phase 1 → T111); BOTH landed (T110 5a16ce5, T111 d8fdea0+fc1d691)
 
 **T111 F8 phase 1 structured todo tool — LANDED, fast-forward.** The
