@@ -301,6 +301,32 @@ clean audit — no docs row.**
   corpus — 7 streams, all known-territory).
 ## Outcomes (filled at cycle wrap — LOOP-SPEC Phase 3)
 
+### Cycle 61 (2026-09-28) — IN PROGRESS — fresh eval (kimi, loopd-routed: queue empty) — T112–T116 filed (I1 streaming-usage bug, F9-p1 roadmap pull, artifact-watch criterion trip, check:-breadth doctrine, todo symmetry)
+
+- **T112 landed (0325a36, fast-forward)** — streaming path reported
+  `input_tokens: 0` on every run: the accumulator's `message_delta` leg
+  now merges the delta's `input_tokens` / cache fields over the
+  `message_start` skeleton when present (delta wins; a no-op on the
+  real-API shape, so all T108 parity pins pass unmodified). glm impl
+  26/80 first-try with RED-proven mutation claim (merge disabled → the
+  proxy-shape pin fails left:0 right:257); orchestrator review verified
+  the diff (+121/-11, src/api.rs only), nextest 894/894 + clippy
+  first-hand. kimi REQUIRED PASS 21/50: 6/6 mutants RED in two parallel
+  batches of 3 throwaway worktrees (drop-loop, drop-input-field,
+  drop-cache-read, drop-cache-creation, skeleton-wins,
+  output-only-when-null — M6 also killed by the untouched T108 parity
+  pin), 2 non-blocking observations (no dual-message_delta fixture; the
+  +121 diff vs the ~80 estimate — test density again). Post-merge gates
+  894/894 under target-shared-main. **Live smoke (the spec's acceptance
+  leg): a fresh run of the post-fix binary reports `input_tokens` 4232 →
+  4431 across iterations — the accounting is real again.** Incident of
+  the arc: the orchestrator SIGKILLed a HEALTHY first validator (35s in)
+  after misreading a RENDER-ONLY goal garble — transcript read-back
+  proved the 2166-byte payload intact; verify-then-kill must be
+  sequential (cycle notes). Harvested: 3 streams (impl, killed segment,
+  clean validator) + validator ledger + 2 child decision records.
+  Routing d1790589928-16 verdict d1790589928-17 outcome landed-clean.
+
 ### Cycle 60 (2026-09-28) — fresh eval (kimi, loopd-routed: queue empty) — T110 + T111 filed (F8 SPLIT phase 1 → T111); BOTH landed (T110 5a16ce5, T111 d8fdea0+fc1d691)
 
 **T111 F8 phase 1 structured todo tool — LANDED, fast-forward.** The
