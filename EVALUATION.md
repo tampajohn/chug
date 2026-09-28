@@ -390,6 +390,18 @@ next eval ("Commit your work here" proved ambiguous once a child cd's
 out). Routing d1790573602-21, verdict d1790574301-22, outcome
 landed-clean.
 
+**T106 README Install names the pending first release — LANDED (rebased
+ff).** The cycle's trivial row: one honesty sentence in the Install
+section's first paragraph ("Until the first tag is cut there is **no
+release published yet** — the one-liner and tarball links below 404
+until then; use the from-source install at the bottom of this
+section.") — conditional wording true both before and after the first
+tag lands, so no follow-up edit is needed when the operator cuts it.
+glm impl 10/80; docs-only classification (exit 1) → guard floor
+(todo_consistency 5/5) at review AND post-merge; kimi SKIPPED per the
+T16/T31/T97 README precedent (routing d1790574440-24). Outcome
+landed-clean.
+
 ### Cycle 57 (2026-09-28) — eval-routed kimi turned routine after reconciling cycle-56's origin divergence (T101 row appeared post-rebase, predicate held — cycle-56 precedent repeated); T101 LANDED (bcd0b66, fast-forward)
 
 **T101 site-sync timeline ordering + curation bugs — LANDED, fast-forward
