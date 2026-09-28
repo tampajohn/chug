@@ -693,6 +693,13 @@ times in Outcomes — the measurement that justifies keeping it;
 `loopd.sh` checks at startup and logs which runner cycles use to
 loopd.log). The first release build into a cold cache is slower to compile;
 the shared caches below amortize it.
+A cycle's success verdict is the child's EXIT STATUS (0 = accepted goal;
+budget/abort 1, stuck 2), never a log grep (T142: raw model text reaches the
+cycle log verbatim, so the supervisor captures the child's stdout apart from
+the stderr log, greps only that, and stamps its own rc-based `verdict:` line
+— `scripts/site-sync.sh` counts cycles by supervisor stamps only, so forged
+`chug: goal complete` text can neither record a failed cycle as OK nor
+inflate the published cycle count).
 Before each cycle the supervisor refreshes `.chug/eval-digest.md` via
 `scripts/eval-digest.sh` — a deterministic (jq/awk-only, sub-second) digest of
 the `.chug/events*.jsonl` corpus (per-file iterations, wall time, tool
