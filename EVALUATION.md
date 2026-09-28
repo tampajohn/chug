@@ -361,6 +361,35 @@ target-shared-main. FEATURES.md F6 carries the phase-1 check-off and
 the phase-2 deferral reason. Child decision record d1790571815-1
 harvested into main's decisions.jsonl. Outcome landed-clean.
 
+**T104 driver.rs test-module family split — LANDED, fast-forward.**
+The pre-declared trip line (~4,500) fired for the second time at 5,717
+and the T84-shaped extraction ran: driver.rs is now **1,457 lines**
+(production 1–1,452 + the `#[cfg(test)]` header + a one-line
+`pub(crate) mod tests;`) and the 4,259-line test body lives in
+`src/driver/tests/` as the shared harness (mod.rs, 236 lines) + 16
+family files. glm impl 75/80 — **the first child that would have DIED
+under the old 65 cap** (75 > 65 with the work done): T102's raise,
+landed three hours earlier, paid for itself on its very first big
+test. Orchestrator-verified byte-identity (production half + harness
+header diffed; moved-body multiset zero-loss with 92 accounted glue
+lines), 90/90 driver::tests, 710/710 bin, 842/842 + clippy,
+readme_layout green UNMODIFIED (the T95 non-recursive guard absorbed
+the submodule exactly as spec'd). kimi REQUIRED PASS 35/50:
+byte-identity independently re-proved THREE ways (multiset + in-order
+subsequence + count bijection), fn-token multiset 137==137 (no
+renames), and three PARALLEL T79 mutation legs all killed — M1
+mod-drop (842→837 count-pin), M2 assertion-flip RED from the new home,
+M3 `pub(crate)`-strip → E0603 at trim.rs:210 (the T84 seam is
+load-bearing). INCIDENT of the cycle: the impl child **committed its
+work to MAIN** (cd'd to the main repo for byte-identity checks, then
+committed from there — first worktree-discipline breach; ee3943e sat
+unpushed on local main). Recovery: branch created at the commit, main
+reset to the pushed state e2b7d1a, worktree re-pointed — the standard
+arc then ran untouched. Goal-text hardening candidate carried to the
+next eval ("Commit your work here" proved ambiguous once a child cd's
+out). Routing d1790573602-21, verdict d1790574301-22, outcome
+landed-clean.
+
 ### Cycle 57 (2026-09-28) — eval-routed kimi turned routine after reconciling cycle-56's origin divergence (T101 row appeared post-rebase, predicate held — cycle-56 precedent repeated); T101 LANDED (bcd0b66, fast-forward)
 
 **T101 site-sync timeline ordering + curation bugs — LANDED, fast-forward
