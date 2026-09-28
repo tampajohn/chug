@@ -351,6 +351,30 @@ runs (1 resume), 1 validator round + 1 orchestrator-caused relaunch,
 ~35 min wall. **F5 phase 1 closes the loop's last Claude-Code-class
 sensory gap: children can now READ screenshots and image fixtures.**
 
+**T94 `get_str` received-keys diagnosis — LANDED, fast-forward merge 06f3b9e.**
+glm impl (pid 44123) goal-accepted **17/65 in ~2.5 min** — the third
+first-try-clean small of the cycle. `src/tools.rs` ONLY (+178/−1): one
+shared `received_hint` helper (object → sorted keys capped at 12 +
+`, … (+N more)`; empty → `(received keys: none)`; non-object → JSON type
+per the T88 req-3 shape) behind `get_str`'s one-line `ok_or_else`; the
+exact t88 fumble now answers `missing or non-string field: old (received
+keys: new_string, old_string, path)` — one-iteration self-correction.
+Success path byte-identical (edit_file round-trip pin + every pre-existing
+tools.rs test green unmodified). RED proof: revert fails 6/7 new tests,
+success-path correctly stays green. Review: nextest **769/769** (762+7) +
+clippy + spec check 9/9 (7 new + 2 decisions.rs received-stemmed riding
+the filter) under target-shared. kimi REQUIRED validation (tools.rs; pid
+49446, 20/50) VERDICT: PASS 0 blocking — gates independently re-run,
+mutations serial (overlap declared), **5/6 killed** incl. the exact
+RED-claim reproduction; the sort-drop survivor is the vacuous-mutation
+class (BTreeMap iterates sorted — dropping the sort is unobservable, code-
+level explanation accepted). Routing d1790555093-21, verdict
+d1790555295-22. Post-merge: nextest 769/769 + clippy under
+target-shared-main. 3 artifacts harvested (impl + validate streams, child
+decisions — the impl stream landed under its raw rotated name mid-harvest
+and was renamed to convention by hand). Arc: 1 impl, 1 validator round,
+~7 min wall.
+
 ### Cycle 52 (2026-09-27) — routine glm freshness-skip; T90 LANDED (e9afed9, fast-forward merge) — F4 permissions phase 1: the deny-only fail-closed policy layer
 
 - **T90 LANDED** (e9afed9): `.chug/permissions.json` deny-list — new `src/permissions.rs` (363 prod lines, at the ~350 guard's edge) holds all policy logic: absent/empty config = zero rules + zero cost; malformed config fails OPEN (one stderr warn + one `permission_error` line, T83 parity); per-rule malformed legs (unknown key, two matchers, non-string value, missing tool, matcher-that-cannot-fit) are skipped in place with valid siblings still denying; deny rules are a tool glob + at most one `command`/`path`/`url` arg matcher, first-match-wins, missing/non-string arg under an arg rule fails toward execution; deny text `[permission denied] <rule summary>`. Driver gates dispatch FIRST (permissions → PreToolUse hooks → plan/MCP/risk gate) riding the T83 `blocked` flag in run+chat+plan, so a denied call fires no hooks and never executes. `hooks::glob_matches` made pub(crate), reused byte-identically. README Permissions section integrated after Hooks; FEATURES F4 row annotated at flip. 24 tests (17 unit + 7 driver integration incl. ZERO-hook-fires ordering pins + plan-mode leg + fail-open-exactly-once).
