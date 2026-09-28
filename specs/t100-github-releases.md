@@ -35,7 +35,17 @@ make release notes mechanical; the repo's own GH Actions may be edited
    Cargo.toml's version; a check step fails the release if they diverge.
 4. README: install section — one-line `curl -L <latest tarball> | tar xz`
    per platform + `chug` into PATH; source-build stays documented below.
-5. Cutting a release is an OPERATOR action (`git tag v0.2.0 && git push
+5. `install.sh` at the repo root (served as https://chug.sh/install.sh via
+   the site repo): warp.dev-style one-liner — `curl -fsSL
+   https://chug.sh/install.sh | sh`. Detects platform (uname -s/-m →
+   macos-arm64 / linux-x86_64 / linux-aarch64), downloads the LATEST
+   release tarball + sha256 from GitHub releases, VERIFIES the checksum,
+   installs to ~/.local/bin (PATH hint if missing), prints the chug banner
+   + quickstart pointer. POSIX sh, no bashisms, no sudo, failure messages
+   name the fix (no release yet → build-from-source line). The site's
+   get-started section gains the one-liner block (site-repo edit,
+   verify.sh checks the block and the install.sh link).
+6. Cutting a release is an OPERATOR action (`git tag v0.2.0 && git push
    origin v0.2.0`); the loop never self-tags (a loop that versions itself
    is a foot-gun — version bumps are human calls, like merges to prod).
 
@@ -51,4 +61,5 @@ make release notes mechanical; the repo's own GH Actions may be edited
 ## Out of scope
 
 - crates.io publish; homebrew tap; signing/notarization (macOS Gatekeeper
-  note in README instead); changelogs beyond the generated notes.
+  note in README instead); changelogs beyond the generated notes; brew
+  install support.
