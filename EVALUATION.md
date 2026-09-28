@@ -271,6 +271,38 @@ row this cycle — second consecutive clean audit.
 
 ### Cycle 59 (2026-09-28) — fresh eval (kimi, loopd-routed: queue empty) — T107–T109 filed (F7 SPLIT phase 1 → T108); wrap entry fills landed refs
 
+**T108 F7 phase 1 streaming + console text deltas — LANDED via
+FAIL→fix-up→PASS arc (the full T100 shape).** glm impl died 80/80
+mid-implementation (design settled, 5 files dirty, uncommitted) → T63
+resume accepted at 61/80 (141 total — the T91-class big arc; first
+post-raise 80/80 death). kimi REQUIRED round 1 (37/50): **FAIL** — 1
+blocking: the stream_fallback latch re-fired per downgraded response
+(the validator's own two-downgrade probe reproduced the req-4
+first-per-run violation on shipped code at api.rs:2587 — all 5 spec-named
+mutants died, yet the probe caught what the mutation menu missed: the
+adversarial gate earning its keep) + 4 non-blocking (hook-clear leak on
+the T91 `?` path, a vacuous cleared-hook test, cosmetic, observation);
+live smoke by the validator: the configured endpoint SERVES SSE (no
+fallback line, goal accepted — deltas live in delegate.log). glm fix-up
+(died 80/80 POST-COMMIT → T63 resume accepted 1/80 — the T100-run1
+shape; SECOND post-raise death → **the T102 >1-of-6 measure clause is
+TRIPPED: the next eval weighs a spec-size cap**): 3-state FallbackLatch
+(first-per-run, and unreachable on the CHUG_STREAM=0 leg), hook cleared
+on all three driver exit paths incl. T91's `?`, the vacuous test made
+live (arm→prove-live→clear→re-call), latch-cardinality sweep
+(fallback / accumulator-error / console-prefix each pinned, T91's
+images_degraded correctly out of scope). kimi round 2 (44/50):
+**PASS** — six verify mutants all die (M-LATCH-REVERT proves the shipped
+behavior goes RED; M-DRIVER-SKIP-CLEAR, M-HOOK-NO-CLEAR,
+M-TAKE-CONSUMES-ALWAYS, M-ACC-ERROR-GUARD, M-PREFIX-CLOSE), clean-tree
+gates 869/869, byte-clean. README gained the streaming bullet
+(integrated into the driver-loop behavior list). Routing
+d1790578544-15, verdicts d1790579546-16 (FAIL) / d1790581800-19 (PASS),
+recoveries d1790577666-14 / d1790581072-18, outcome **fixed-up**; 4
+streams + 3 ledgers + 3 child decision records harvested. One display
+artifact: the r2 ledger carries a real U+FFFD pair (first payload-level
+mangling sighting — cosmetic, no information loss; watch updated).
+
 **T107 LOOP-SPEC child-goal worktree-discipline clause — LANDED,
 fast-forward.** The cycle-58 I1 breach fix: the step-2 goal template's
 `Commit your work here.` gains the explicit clause — commit ONLY from
