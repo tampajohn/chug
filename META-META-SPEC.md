@@ -85,7 +85,13 @@ chug`) at the goal gate — write plain `cargo test` or
 anomaly), T26 (`1d6780d` pre-dispatch fix), and nine child streams
 (t22/t25/t26/t29/t39/t42/t58/t59/t64) whose otherwise-green
 `goal_complete` was rejected by a `--lib` gate — latest t64, which had
-already completed AND committed its work. Priority doctrine: bugs > robustness > features > DX
+already completed AND committed its work. A cargo-test `check:` filter
+MUST be broad enough to run every test the change adds — prefer the
+module stem over a narrower substring; verify by running the filter and
+confirming the new tests are in the run set (t90: the `permissions`
+filter missed the driver-integration legs the `permission` stem caught,
+and a mutant survived under the spec's own check while dying under the
+broader stem). Priority doctrine: bugs > robustness > features > DX
 friction > performance — features are first-class (LOOP-SPEC §2): at
 equal pri, a credible feature row is worked before a DX-friction row.
 **Verify T1/T2/T4/T5 actually worked before filing
