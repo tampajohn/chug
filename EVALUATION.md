@@ -306,6 +306,34 @@ target-shared-main nextest 1010/1010. Outcome landed-clean
 d1790626687-3. T44 overlap: T141 impl (api.rs, disjoint) flew during
 T140 validation.
 
+**T141 — SSE truncation acceptance (pri 1, landed 70ec4a7, rebased
+ff from impl 20fd96a).** The second codex-review item: a proxy
+returning HTTP 200 SSE that ends the body before
+`content_block_stop`/`message_stop` was accepted as success —
+`finish()` closed the open block, missing input became `{}`, and an
+executable `goal_complete` could be synthesized from a truncated
+stream. Fix in api.rs `finish()`: open block at EOF now errors
+"truncated SSE stream: body ended before content_block_stop" and
+`message_stop` is tracked; the error rides the retryable Connection
+class (a fresh accumulator per attempt — a real transport mid-body
+EOF surfaces identically). 5 new tests RED pre-fix, including the
+client-level test that reproduces the review's exact symptom
+(executable goal_complete synthesized from a truncated stream).
+First impl child died 13/80 stuck:repeated-error on its OWN malformed
+grep regex (no orchestrator fault); recovery routing d1790626727-4
+chose fresh relaunch over resume (13/80 with no committed work —
+resume's continuation value nil); glm impl 51/80 second-try. kimi
+REQUIRED PASS (routing d1790627696-5, verdict d1790628970-6): 6
+mutants, 5 killed on named tests, M1 open-block-check mutant SURVIVES
+masked by the message_stop guard — behavior-preserving under the
+T141 threat model, carried to the next eval alongside T128's M4;
+positive control proves legitimate closed zero-arg tools still
+synthesize `{}`; class-sweep claims (mcp_http SSE POST EOF→Failed,
+listen EOF→reconnect, non-streaming JSON bail) verified by code read.
+Post-merge target-shared-main nextest 1015/1015. T44 overlap: T142
+impl (loopd.sh+events.rs, disjoint from api.rs) flew during T141
+validation.
+
 ### Cycle 65 (2026-09-28) — fresh eval (kimi, loopd-routed: queue empty) — T128–T131 filed (F10 phase 2 PULLED + SPLIT); T130 + T128 LANDED (976e4ae, 85ca4c1); T129/T131 DEFERRED by mid-cycle operator intake (codex adversarial review, 9 HIGH rows T134–T142); cycle ended on a push divergence (doctrine: no mid-cycle reconcile). Cycle notes below the per-item entries.
 
 **CYCLE-65 CYCLE-LEVEL NOTES (wrap).** TWO items landed clean
