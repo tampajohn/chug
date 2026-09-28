@@ -254,11 +254,20 @@ features_rows() { # -> lines "<F-id>\t<status>\t<name>\t<what>"
 
 # card_chunks REGIONFILE — emit the region with card blocks delimited by
 # ^\036CARD / ^\036ENDCARD sentinel lines (depth-counted like tl_filter).
+# Every card chunk is emitted in full (T99 fix-up finding 1 sweep): this is
+# the ONLY region-walk leg that buffers whole items, and after the fix it
+# drops nothing — the same-shaped gate in tl_filter is deliberately KEPT
+# there (see its comment), because timeline machine entries are rebuilt.
 card_chunks() { # regionfile
   awk '
     function flush_card() {
       initem = 0
-      if (buf ~ /<p/) print buf
+      # print UNCONDITIONALLY (T99 fix-up finding 1): the old `if (buf ~ /<p/)`
+      # gate silently dropped any card with no <p> — h3-only cards, <ul>-body
+      # cards — contradicting "no card is ever dropped" below. Every card
+      # reaches the badge walk; cards without a matchable <span> name pass
+      # through it untouched.
+      print buf
       printf "\036ENDCARD\n"
       buf = ""
     }
@@ -311,7 +320,8 @@ badge_ensure() { # cardfile status
 # card keeps its position and markup (CSS classes/order preserved, req 2);
 # cards whose name matches an F-item get their badge ensured; F-items with no
 # card are appended as synthesized cards in FEATURES.md order. No card is
-# ever dropped, so nothing outside FEATURES.md is lost.
+# ever dropped (flush_card prints every chunk — fix-up finding 1), so nothing
+# outside FEATURES.md is lost.
 features_generate() { # regionfile outfile
   local region="$1" out="$2" rowstmp rows cardname cn fn short long line fid fstatus fname fwhat
   local matched="" sentinel match_id
@@ -533,10 +543,15 @@ timeline_generate() { # regionfile outfile
   rm -f "$kept" "$kept.refs" "$entries" "$entries.sorted"
 }
 
-# tl-items (a tl-item with no <p>: every hand-built entry narrates in <p>,
-# the machine entries are facts-only). Hand entries and all other lines are
-# preserved verbatim, in order. The machine block is rebuilt from scratch
-# after the kept lines, so re-runs can re-collapse (cap) without dupes.
+# tl_filter — the hand-vs-machine discriminator, and the ONE deliberate
+# silent-drop shape in this script (T99 fix-up finding 1 sweep): a tl-item
+# CONTAINING <p> is hand-authored prose and is kept verbatim; a tl-item with
+# NO <p> is machine-generated (timeline_generate emits facts-only entries,
+# never a <p>) and is dropped here so the machine block can be rebuilt from
+# scratch each run — re-collapsing under the cap without dupes. The
+# convention this costs, stated plainly: every hand-authored timeline entry
+# MUST carry a <p>; an h3-only hand entry is treated as machine and rebuilt
+# away. Hand entries and all other lines are preserved verbatim, in order.
 tl_filter() { # regionfile keptfile
   awk '
     /^[[:space:]]*<div class="tl-item/ {

@@ -296,8 +296,10 @@ fn new_inputs_regenerate_the_block_and_commit_again() {
 // --- T99 — timeline + feature-grid regions -----------------------------------
 
 /// A chug fixture with a done-row TODO.md whose notes cite real commits
-/// (hashes come back from `commit`), plus a FEATURES.md with one checked-off
-/// row, one TODO-referenced row and one queued row.
+/// (hashes come back from `commit`), plus a FEATURES.md whose landed rows are
+/// split so each landed-detection leg is pinned independently: F1 is checked
+/// off by STRIKETHROUGH only (~~, no LANDED text) and F4 by LANDED annotation
+/// only (no ~~); F2/F3 are queued/in-flight material.
 /// refs: [0] seed (hand-cited on the site), [1..=4] t5..t8, [5] t11.
 fn chug_fixture_t99(dir: &Path) -> Vec<String> {
     std::fs::write(dir.join("EVALUATION.md"), "# EVALUATION — fixture\n").unwrap();
@@ -345,9 +347,10 @@ fn chug_fixture_t99(dir: &Path) -> Vec<String> {
             "# FEATURES\n\n",
             "| # | Feature | What | Benchmark |\n",
             "|---|---------|------|-----------|\n",
-            "| F1 | ~~**delegate collect**~~ — LANDED T69 (cycle 33) | Structured child result: `goal_complete` summary + refs. | Claude Code Task |\n",
+            "| F1 | ~~**delegate collect**~~ (cycle 33) | Structured child result: `goal_complete` summary + refs. | Claude Code Task |\n",
             "| F2 | **Streaming UX** | Text deltas to `sinks` as they arrive (TUI live typing). | all benchmarks |\n",
-            "| F3 | **Web search** | Provider-pluggable search tool complementing web_fetch, with a deliberately long one-line what that runs well past the one hundred and sixty byte cap on purpose so the ellipsis lands. | Claude Code |\n"
+            "| F3 | **Web search** | Provider-pluggable search tool complementing web_fetch, with a deliberately long one-line what that runs well past the one hundred and sixty byte cap on purpose so the ellipsis lands. | Claude Code |\n",
+            "| F4 | **Gamma guard** — LANDED T44 | Compiled-in guard rails for the loop. | n/a |\n"
         ),
     )
     .unwrap();
@@ -388,6 +391,16 @@ fn site_fixture_t99(dir: &Path, seed_ref: &str) -> String {
             "    <div class=\"card\">\n",
             "      <h3><span>tools</span> ×13</h3>\n",
             "      <p>read_file etc.</p>\n",
+            "    </div>\n",
+            // T99 fix-up finding 1: a card with NO <p> (h3 + <ul> body) must
+            // survive regeneration byte-for-byte — the old flush_card gate
+            // silently dropped exactly this shape.
+            "    <div class=\"card\">\n",
+            "      <h3><span>misc</span> extras</h3>\n",
+            "      <ul>\n",
+            "        <li>read_file</li>\n",
+            "        <li>web_fetch</li>\n",
+            "      </ul>\n",
             "    </div>\n",
             "</div>\n",
             "<p>sentinel-after</p>\n",
@@ -448,6 +461,23 @@ fn t99_timeline_bootstrap_entries_dedupe_and_audit() {
     // req 4: markers bootstrapped around the existing blocks, own commits
     assert_eq!(count(&html, "<!-- TIMELINE:BEGIN -->"), 1);
     assert_eq!(count(&html, "<!-- TIMELINE:END -->"), 1);
+    // finding 2 (M6 mutant-killer): markers wrap the block's INNER content —
+    // TIMELINE:BEGIN sits AFTER the <div class="tl"> open (inside the styled
+    // container, so generated entries keep the rail) and TIMELINE:END before
+    // the container's column-0 close. An outer-wrap mutant puts both markers
+    // outside the container: its region content would contain the container
+    // open and the column-0 close, so both assertions die.
+    for (name, open) in [("TIMELINE", "<div class=\"tl\">"), ("FEATURES", "<div class=\"grid\">")] {
+        let reg = region(&html, name);
+        assert!(
+            !reg.contains(open),
+            "{name} markers must wrap the INNER content — the {open} container open must stay OUTSIDE (before BEGIN): {reg}"
+        );
+        assert!(
+            !reg.contains("\n</div>"),
+            "{name} markers must wrap the INNER content — the container's column-0 </div> close must stay OUTSIDE (after END): {reg}"
+        );
+    }
     let tl = region(&html, "TIMELINE");
     assert!(tl.contains("<h3>Day one <span class=\"hash\">f911488</span></h3>"));
     assert!(tl.contains("<p>Hand-written prose.</p>"));
@@ -560,8 +590,8 @@ fn t99_features_badges_cards_and_idempotence() {
     let html = page(&f);
     assert_eq!(count(&html, "<!-- FEATURES:BEGIN -->"), 1);
     let ft = region(&html, "FEATURES");
-    // landed badge (checked off in FEATURES.md) on the matched existing card,
-    // which keeps its position and prose
+    // landed badge (checked off in FEATURES.md — strikethrough-ONLY leg of
+    // finding 3) on the matched existing card, which keeps position and prose
     assert!(
         ft.contains("<h3><span>delegate</span> sub-agents<i class=\"q\">landed</i></h3>"),
         "matched card badge: {ft}"
@@ -569,6 +599,18 @@ fn t99_features_badges_cards_and_idempotence() {
     assert!(ft.contains("<p>Launch and collect child runs.</p>"));
     assert!(ft.contains("    <div class=\"card\">\n      <h3><span>tools</span> ×13</h3>\n      <p>read_file etc.</p>\n    </div>"),
         "non-F card verbatim: {ft}");
+    // finding 1 (RED-proven): a card with NO <p> (h3 + <ul> body) must survive
+    // regeneration byte-for-byte — the old flush_card `if (buf ~ /<p/)` gate
+    // silently dropped it, contradicting "no card is ever dropped"
+    let nop = "    <div class=\"card\">\n      <h3><span>misc</span> extras</h3>\n      <ul>\n        <li>read_file</li>\n        <li>web_fetch</li>\n      </ul>\n    </div>";
+    assert!(ft.contains(nop), "no-<p> card silently DROPPED (finding 1): {ft}");
+    // finding 3: the two landed legs pinned independently — F1 via
+    // strikethrough ONLY (the delegate card's landed badge above is F1's),
+    // F4 via the LANDED annotation ONLY (synthesized card)
+    assert!(
+        ft.contains("<h3><span>Gamma guard</span><i class=\"q\">landed</i></h3>"),
+        "F4 (LANDED-annotation-only) must read landed: {ft}"
+    );
     // in-flight: F2 referenced by the T12 TODO row (boundary: F2, not F21)
     let f2 = ft.find("Streaming UX").expect("F2 card");
     assert!(
@@ -589,6 +631,28 @@ fn t99_features_badges_cards_and_idempotence() {
     assert!(out2.status.success());
     assert_eq!(page(&f), before, "features second run byte-identical");
     assert_eq!(all_commit_subjects(&f).len(), n);
+}
+
+#[test]
+fn t99_f21_reference_must_not_make_f2_inflight() {
+    // finding 4: the F2-vs-F21 boundary (the in-flight grep's `[^0-9]` tail)
+    // was pinned only by a comment — here the ONLY F-reference in TODO.md is
+    // F21, and F2 must stay queued, not in-flight.
+    let (f, _refs, _orig) = fixture_t99();
+    let todo = std::fs::read_to_string(f.chug.join("TODO.md")).unwrap();
+    std::fs::write(
+        f.chug.join("TODO.md"),
+        todo.replace("references F2 phase 1", "references F21 phase 1"),
+    )
+    .unwrap();
+    let out = run_sync(&f, true);
+    assert!(out.status.success(), "run: {out:?}");
+    let ft = region(&page(&f), "FEATURES");
+    let f2 = ft.find("Streaming UX").expect("F2 card");
+    let ctx = &ft[f2..f2 + 240];
+    assert!(!ctx.contains("in-flight"), "F2 must NOT be in-flight when only F21 is referenced: {ctx}");
+    assert!(ctx.contains("<i class=\"q\">queued</i>"), "F2 stays queued: {ctx}");
+    assert!(!ft.contains("in-flight"), "no F-item may be in-flight off an F21 reference: {ft}");
 }
 
 #[test]
