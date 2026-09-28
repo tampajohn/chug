@@ -293,6 +293,25 @@ links fail today (no release — §2 I4) → T106.
 
 ## Outcomes (filled at cycle wrap — LOOP-SPEC Phase 3)
 
+### Cycle 58 (2026-09-28) — fresh eval (kimi, loopd-routed: queue empty) — T102–T106 filed (F6 SPLIT phase 1 → T105); T102 LANDED (ffebdaf)
+
+**T102 LOOP-SPEC impl-child template 65→80 — LANDED, fast-forward.** The
+T92 measure clause fired (3 of 12 post-T92 impl children died 65/65 with
+the work done — T91/T99/T100 run1s, totals 84/93/67; a rolling 6-window
+over children 5–10 holds two deaths) and the doctrine took its written
+next step: glm impl 20/65 first-try clean (three byte-exact LOOP-SPEC
+edits + the pin at tests/loop_spec_recovery.rs:141 RED-proven first),
+kimi REQUIRED PASS 18/50 zero blocking (M1 resume-budget revert KILLED
+by the pin, M5 full-spec revert KILLED; M2 check-grep-only and M3
+unpinned-prose survivors both by design). Review gates + post-merge
+nextest 820/820 + clippy under target-shared / target-shared-main.
+Every impl child from here launches at 80/35 (validators stay 50/30 —
+zero validator deaths era-wide). New measure clause: >1 of the next 6
+impl children dying at 80/80 with the work done → the next eval
+considers a spec-size cap (~500-line estimate ceiling forcing a split)
+instead of further iteration raises. Routing d1790570262-13, verdict
+d1790570426-14, outcome landed-clean.
+
 ### Cycle 57 (2026-09-28) — eval-routed kimi turned routine after reconciling cycle-56's origin divergence (T101 row appeared post-rebase, predicate held — cycle-56 precedent repeated); T101 LANDED (bcd0b66, fast-forward)
 
 **T101 site-sync timeline ordering + curation bugs — LANDED, fast-forward
