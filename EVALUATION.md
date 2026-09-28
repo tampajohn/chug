@@ -326,7 +326,9 @@ in order. **Fifth consecutive clean audit — no docs row.**
 
 ## Outcomes (filled at cycle wrap — LOOP-SPEC Phase 3)
 
-### Cycle 62 (2026-09-28) — fresh eval (kimi, loopd-routed: queue empty) — T117–T121 filed (F9-p2 SPLIT a/b → T117+T118; loopd-160 death → T121; SIGKILL/sed doctrine → T120; T115 weak-test carry → T119). Items in flight — per-item entries land with each row flip.
+### Cycle 62 (2026-09-28) — ALL FIVE landed clean (T121 cbc21e0 loopd 160→200, T117 3579d9d F9-p2a run-side expansion, T119 43f427d weak-test pins, T120 c173c2f kill/sed doctrine, T118 4c96414 F9-p2b frontmatter+completion — **F9 phase 2 CLOSED**) — the era's THIRD all-PASS cycle after 58/61. Cycle notes below.
+
+**Cycle-level notes (wrap).** (1) **Operator burst mid-wrap (14:36–14:38Z)**: T122 filed WITH ready spec (site timeline curated-sort, user report — stays `todo`; next cycle's predicate holds: queue non-empty + eval fresh today → loopd routes GLM routine, T122 dispatch-ready), the T100 release trigger wired into Phase 3 (80b365c — the rule was spec-only since cycle 57), and **the bootstrap tag v0.1.0 operator-cut → the tag doctrine is ACTIVE from this wrap**; a 30/30 site-layout `chug run` (pid 63474) observed co-active — single-driver invariant NOT tripped (its cwd can't be this repo: my driver.lock is held and it stayed alive; pushes reconciled by rebase 80b365c→9d891bd, no force-push, no mid-arc reconcile). (2) **Composition-artifact watch: 6 sightings in the ORCHESTRATOR's own invoke stream** (split/garbled parameters on delegate launches ×4, edit_file ×2) — every payload verified INTACT by read-back (transcript first-line probes, goal_sha256 comparison across resume, post-edit greps); zero kills, zero bad landings — the T120 sequential verify-then-kill rule was written THIS cycle and exercised 6 times in it (also 2 outcome-id typos caught by my own read-back + fixed pre-commit). Filed to next eval as a watch item, not a row: the tool layer reassembled correctly in all 6 cases, but the composition side is producing artifacts at a rising rate (1 in cycle 60 → ~11 render-only in 61 → 6 invoke-level in 62). (3) kimi ran 4 rounds (REQUIRED ×2: T117 44/50, T120 38/50; optional-EXERCISED ×2: T121 14/50, T118 42/50) — all inside the T18 margin, zero blocking findings, 29/29 mutants killed era-wide-third-cycle; T119 SKIPPED per tests-only precedent. (4) T44 overlap once clean (T121-val ‖ T117-impl, disjoint files, serial merges). (5) T63 resume #25 (T117 impl died 80/80 MID-IMPL uncommitted; resume accepted 23/80) — T110 census: 1-of-4 recent impls died mid-impl, census NOT tripped. (6) Estimate calibration: T117 ~280→+603 (2.2x), T118 ~260→+438 (1.7x), T121 ~25→+10/-4 (spot-on), T120 ~55→+184 (pins inflate), T119 ~70→+127 — test+doc density band holds; ceiling failure measure unmet. (7) Carried to next eval: T117's 1 non-blocking (expansion-order live-pinned not unit — no observable reorder mutant) + T120's 2 (leg-k ordering pin stronger than req; loose-anchor future-heading risk = accepted T64 pattern) + the artifact-rate watch. (8) **Release: v0.2.0 cut at this wrap** (trigger: 5 items + 2 FEATURES check-offs since v0.1.0; minor bump — F9 features; T100's own release.yml — landed cycle 56 — fires on it: the loop's first self-cut tag exercises the cycle-56 workflow). Final gates 962/962 + clippy + build at HEAD under target-shared-main.
 
 - **T118 LANDED 4c96414** (fast-forward) — **F9 phase 2 CLOSED** (2b, the deferrable remainder, worked anyway with budget to spare): lenient frontmatter (`---` first line only, strip-before-storage, unclosed fence → whole body + None, empty value → None, unknown keys ignored silently) + `/help` `/name — description` lines (bare-name fallback) + pack-name Tab completion via the pure `slash_candidates_with_packs` merge (built-ins first in `/help` order, packs sorted after, shadow-rule dedup, empty pack set byte-identical to built-ins-only) + README/FEATURES (`allowed-tools` semantics remain a later phase, noted in both). glm impl 68/80 first-try (self-recovered from a 120s bash-timeout on a duplicate test run); kimi optional-EXERCISED (T113 feature precedent) PASS 42/50 — 9/9 mutants RED serial in-tree with declared overlap judgment (mut-strip/unclosed/empty-desc/late-fence/shadow/unsorted/pack-prefix/help-fallback/tab-nopacks); the impl child's recorded spec-interpretation call (spec file over the goal summary's stale fallback phrasing, d1790605202-1) was ENDORSED — mut-help-fallback proves the rejected alternative goes RED — and the validator backfilled the child's own decision record (d1790606020-2). Review + post-merge nextest 962/962. Routing d1790605365-31, verdict d1790606202-32, outcome landed-clean (d1790606264-33/-34). Estimate ~260 → +438 (1.7x — inside the era's density band).
 
@@ -868,111 +870,7 @@ first tag now also exercises T100's release workflow end-to-end.
 — the next cycle verifies the live chug.sh timeline reads
 chronologically (site commit in the chug-site clone).
 
-### Cycle 56 (2026-09-28) — eval-routed kimi turned routine after reconciling cycle-55's origin divergence (T100 row appeared post-rebase, predicate held); T100 LANDED (9d1182a, fast-forward)
-
-**T100 GitHub releases: tag-triggered prebuilt binaries + generated notes —
-LANDED, fast-forward 9d1182a (impl 67b7702 + fix-up 9d1182a, +2008/-12
-across 12 files).** The operator directive ("start doing releases of chug
-in github") ships the whole release surface: `.github/workflows/release.yml`
-(v* tag push -> macos-14 arm64 + ubuntu-22.04 x86_64 + cross aarch64,
-`--release --locked`, per-platform tar.gz + sha256, GH Release via the
-preinstalled `gh --verify-tag` — no third-party release action — every
-`uses:` pinned by live-fetched 40-hex SHA, `contents: write` only),
-`scripts/check-tag-version.sh` (tag/Cargo.toml divergence fails the release
-before any build), `scripts/release-notes.sh` (mechanical feat/fix/docs/chore
-grouping of semantic commits since the previous tag, whole-history fallback
-for the first release), `install.sh` (POSIX, OS-aware platform detect,
-sha256-verify-before-install, ~/.local/bin, failures name the fix), a README
-Install section (one-liner + per-platform tarballs + Gatekeeper note), and
-the LOOP-SPEC Phase-3 tag-at-wrap doctrine (trigger >=3 items or a FEATURES
-check-off since last tag, immutable tags, one per wrap, gates green,
-BOOTSTRAP: first tag is operator-cut). Tests: workflow YAML-parse + SHA-pin
-grep leg (no actionlint on host), 12 fixture-repo script legs, 15 install.sh
-legs, 4 doctrine pins.
-
-Arc: glm impl run1 committed the complete 67b7702 then died 65/65 BEFORE
-goal_complete (census point 6 — the ceiling-death-after-commit pattern
-again); T63 resume #21 accepted 2/65 in 47s after auditing the spec (21/21
-all-time). Review gates independently green (nextest 811/811 release +
-clippy + sh -n x3). Kimi r1 (32/50) FAIL — and earned it: the BLOCKING
-finding was install.sh mapping arch before OS (`arm64|aarch64) arch=arm64`),
-so every linux-aarch64 host collapsed to the nonexistent `linux-arm64`
-asset and was rejected at the allowlist even though the workflow publishes
-`chug-linux-aarch64.tar.gz`; the second finding proved the uname-mapping
-had ZERO test coverage (tests only exercised the CHUG_INSTALL_PLATFORM
-override) via a surviving platform-map-flip mutant. Glm fix-up (41/65):
-joint `osname/mach` mapping (linux/aarch64 AND the linux/arm64 kernel alias
-both -> aarch64), CHUG_INSTALL_OS/MACH overrides making the uname path
-testable, 7 RED-proven killing tests sweeping every leg. Kimi r2 (35/50)
-PASS: r1's survivor class dead to 4 tests, a fresh osname-swap mutant dead
-to 6, live smokes on the real repo (tag-version match/diverge/shape, notes
-grouping, file:// end-to-end install, dash -n). One non-blocking survivor
-carried: amd64-alias-drop (a defensive alias no Linux host reports, outside
-req 5's mapping set). Review + post-merge nextest 818/818 under
-target-shared / target-shared-main. Validator finding 3 (site get-started
-block + chug.sh/install.sh serving + verify.sh legs) was orchestrator wrap
-scope by design — the impl children's goals excluded the live site repo
-(T98/T99 precedent); done at this cycle's wrap. Cycle notes, carry-overs,
-and the wrap-time record of the site edit land at wrap.
-
-**Cycle notes (wrap).**
-1. **Reconciliation at open (the cycle-55 carry)**: rebased the 4 unpushed
-   cycle-55 commits onto origin f930df7 — one TODO.md conflict (kept
-   T99-done + T100-todo; todo_consistency 5/5) — pushed f930df7..86e4982.
-   The freshness predicate then held on the post-rebase tree (todo_rows=1
-   + EVALUATION.md mtime today, verified with loopd's own functions), so
-   Phase 1 was skipped per the cycle-55 precedent; no eval-triage records
-   were owed. Launch routing (eval/kimi on the stale todo_rows=0) was the
-   same artifact class cycle 55 recorded.
-2. **THIRD mid-cycle origin divergence**: the operator's T101 (user report
-   — site-sync timeline ordering + curated-merge + cap enforcement;
-   8a5b958, row + ready spec) landed during the T100 arc and rejected the
-   per-item push. Per the no-reconcile-mid-cycle rule the local T100 arc
-   (67b7702, 9d1182a, 50189fd + this wrap) is UNPUSHED. NEXT CYCLE: rebase
-   onto origin (TODO.md-only overlap — T101 row append vs the T100 row
-   flip; resolve exactly as this cycle did: keep both), todo_consistency,
-   push, then work T101 (pri 2 user-reported bug — bugs outrank everything
-   in the priority order; ready spec on origin).
-3. **Site-repo edit landed at wrap (validator F3 — orchestrator scope by
-   design, the impl children's goals excluded the live site per the
-   T98/T99 precedent)**: chug-site 8eee10b pushed live — get-started gains
-   step 1 INSTALL (`curl -fsSL https://chug.sh/install.sh | sh`; existing
-   steps renumbered 2-5, content verbatim), install.sh served at the site
-   root (the post-fix 9d1182a content), verify.sh gains check 4 (one-liner
-   present, script linked, served + sh -n clean) and an /install.sh href
-   allow-leg mirroring /llms.txt; `bash verify.sh` all green. Untracked
-   runtime droppings in the site clone (.chug/, LEDGER.md,
-   scripts/gen_assets.py) left alone.
-4. **Tag doctrine active, bootstrap held**: T100's LOOP-SPEC Phase-3
-   tag-at-wrap bullet is live from this wrap, but no `v*` tag exists and
-   the first tag is operator-cut — this wrap tags nothing. The trigger
-   (>=3 items or a FEATURES check-off since the last tag) activates from
-   the wrap after the operator's first tag lands.
-5. **Display-artifact watch — 3 benign sightings this cycle**: the
-   orchestrator's own tool-call parameter rendering glitched mid-stream
-   (two delegate launches, two heredoc edits); in every case the
-   TRANSMITTED payload verified intact (child transcript carried the
-   complete goal; the decision record's subject field complete; the
-   site edits verified by rereading). Same surface class as cycle-55's
-   "goal/spec field corruption killed at spawn (3rd sighting, delegate
-   assertion candidate)" — the next eval should judge whether a delegate
-   argv-assertion row is due; this cycle's sightings were display-side
-   only, no child impact.
-6. **glm ceiling census, point 6**: the impl run1 died 65/65 AFTER
-   committing complete work (resume #21 accepted 2/65 in 47s; 21/21
-   all-time). The T92 measure rule: >1 of the next 6 impl children dying
-   at 65/65 with the work done -> the next eval considers 80 or a
-   work-splitting doctrine. This cycle: 1 of 2 impl-class children (the
-   fix-up finished 41/65).
-7. **Books**: decisions.jsonl — d1790563558-1 recovery, d1790563713-2
-   routing, d1790564470-3 + d1790566001-4 verdicts, d1790566100-5 outcome
-   fixed-up. 6 artifacts harvested pre-removal (4 event streams + 2
-   verdict ledgers); worktree removed, branch deleted. Queue at wrap:
-   T101 todo (on origin; joins local at the next cycle's rebase). Final
-   gates: build + clippy -D warnings + nextest 818/818 under
-   target-shared-main. Non-blocking carried: amd64-alias-drop mutant
-   survivor (defensive alias no Linux host reports, outside req-5's
-   mapping set).
+### Cycle 56 (2026-09-28) — T100 LANDED (9d1182a fast-forward: GitHub-releases surface — tag-triggered release.yml + install.sh + notes generator, +2008/-12 across 12 files) via FAIL→fix-up→PASS arc (kimi r1 caught the aarch64→linux-arm64 collapse); cycle-55 divergence reconciled; live chug-site edit 8eee10b; wrap 419afbc
 
 ### Cycle 55 (2026-09-28) — eval-routed kimi cycle turned routine (operator's T99 directive filled the empty queue at launch); T99 LANDED (d13a253, fast-forward)
 
