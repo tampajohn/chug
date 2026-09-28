@@ -245,6 +245,46 @@ section's commands also cover).
 
 ## Outcomes (filled at cycle wrap — LOOP-SPEC Phase 3)
 
+### Cycle 57 (2026-09-28) — eval-routed kimi turned routine after reconciling cycle-56's origin divergence (T101 row appeared post-rebase, predicate held — cycle-56 precedent repeated); T101 LANDED (bcd0b66, fast-forward)
+
+**T101 site-sync timeline ordering + curation bugs — LANDED, fast-forward
+bcd0b66 (scripts/site-sync.sh +205/-65, tests/site_sync.rs +104).** The
+2026-09-28 user report ("timeline looks out of order") named four bugs in
+T99's TIMELINE generation, all fixed: (a) entries sorted by row order /
+date-string desc — the page's day-one→latest design wants COMMIT TIME
+ascending, so T99 (d13a253) rendered before T98 (8721c83) and a 09-26
+entry after a wall of 09-27s; now every entry (curated + machine) sorts
+by `%ct` ascending via `git show -s --format=%ct`; (b) the newest-20 cap
++ collapse never fired — it now does, pinned N=5 with 25 rows (curated
+entries never collapse; the collapse line sits where the oldest collapsed
+row sat); (c) raw done-row titles dumped AFTER the 16 curated entries —
+now merged BY REF: a done row whose commit matches any curated hash span
+disappears into the curated entry (prose wins, one entry not two), so the
+"chug.sh — this site" crescendo anchors its commit-time slot instead of
+being buried; (d) same-day entries order by %ct, not row id. Undatable
+curated entries (site-side/foreign hashes like the launchd plist) sort
+AFTER dated neighbors, never before. The cat-file facts-only audit (req
+5) is unchanged; idempotence preserved (machine output carries no <p>, so
+the next run re-classifies and rebuilds byte-identically).
+
+Arc: glm impl 53/65 goal-accepted FIRST TRY (~13 min — no budget death,
+no resume; the T92 65-iter headroom never came into play). Orchestrator
+review gates: nextest 820/820 release + clippy + bash -n. Kimi validation
+(optional-TAKEN, routing d1790566862-2: scripts are outside the REQUIRED
+list but the user-reported live-site-visible bug plus T99's own
+FAIL→fix-up history in this region earned the adversarial round) VERDICT:
+PASS 30/50 (d1790568828-3) — all 5 reqs verified, clean-tree gates
+re-run, 6 T79 parallel mutants: cap-flip / merge-drop / undatable-key /
+sort-direction all KILLED by the round's tests; two survivors carried
+non-blocking: M5 collapse-PLACEMENT (position of the collapse line is
+unpinned by spec — cosmetic) and M6 %ct→%at (fixtures pin
+author==committer time so the swap is invisible to the suite; the code
+visibly uses %ct per spec — a fixture gap, not a code bug). Worktree
+byte-clean post-mutation. 4 artifacts harvested (impl+validate events,
+impl+validate LEDGERs). Acceptance leg (spec Tests §4): the live chug.sh
+timeline reads chronologically after the next wrap's site-sync run —
+recorded at wrap.
+
 ### Cycle 56 (2026-09-28) — eval-routed kimi turned routine after reconciling cycle-55's origin divergence (T100 row appeared post-rebase, predicate held); T100 LANDED (9d1182a, fast-forward)
 
 **T100 GitHub releases: tag-triggered prebuilt binaries + generated notes —
