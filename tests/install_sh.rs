@@ -10,6 +10,13 @@
 //! `file://` via CHUG_RELEASE_URL_BASE — no network, and the checksum sidecar
 //! is computed with the same tool precedence the script itself uses.
 //!
+//! The uname→platform mapping is swept leg by leg (validator FINDING 2): the
+//! original suite only exercised the CHUG_INSTALL_PLATFORM override, so the
+//! real detection path had ZERO coverage and a platform-map-flip mutant
+//! survived green. Every (os, mach) leg now has a killing test — driven via
+//! the CHUG_INSTALL_OS/CHUG_INSTALL_MACH overrides the script consults
+//! before `uname`, plus one wiring test with `uname` itself shimmed on PATH.
+//!
 //! T48 doctrine: the script under test is resolved from the RUNTIME checkout
 //! (`current_dir()`), never the compile-time manifest-dir macro.
 
@@ -84,19 +91,68 @@ impl Run {
     }
 
     fn run(&self, platform: &str, path_extra: Option<&Path>) -> Output {
+        self.base_cmd(path_extra)
+            .env("CHUG_INSTALL_PLATFORM", platform)
+            .output()
+            .expect("spawning sh install.sh")
+    }
+
+    /// Command every fixture run shares: file:// asset base, install dir under
+    /// the fixture, minimal PATH (no install dir).
+    fn base_cmd(&self, path_extra: Option<&Path>) -> Command {
         let mut path = "/usr/bin:/bin:/usr/sbin:/sbin".to_string();
         if let Some(extra) = path_extra {
             path = format!("{}:{}", extra.display(), path);
         }
-        Command::new("sh")
-            .arg(&self.script)
+        let mut cmd = Command::new("sh");
+        cmd.arg(&self.script)
             .env("CHUG_RELEASE_URL_BASE", format!("file://{}", self.release_dir.display()))
-            .env("CHUG_INSTALL_PLATFORM", platform)
             .env("CHUG_INSTALL_DIR", &self.install_dir)
             .env("HOME", &self.home)
-            .env("PATH", path)
+            .env("PATH", path);
+        cmd
+    }
+
+    /// Run the uname→platform mapping via the CHUG_INSTALL_OS/CHUG_INSTALL_MACH
+    /// overrides the script consults before `uname` (POSIX env, no PATH games).
+    /// The platform override is NOT set — the mapping under test is the only
+    /// thing standing between the (os, mach) pair and the asset name.
+    fn run_detect(&self, os: &str, mach: &str) -> Output {
+        self.base_cmd(None)
+            .env("CHUG_INSTALL_OS", os)
+            .env("CHUG_INSTALL_MACH", mach)
             .output()
             .expect("spawning sh install.sh")
+    }
+
+    /// Run with NO overrides at all: detection must come from `uname` itself.
+    /// `uname` is shimmed on PATH (reading FAKE_UNAME_OS/FAKE_UNAME_MACH) so
+    /// the fixture stays deterministic on any host.
+    fn run_uname_shimmed(&self, shim_dir: &Path, os: &str, mach: &str) -> Output {
+        self.base_cmd(Some(shim_dir))
+            .env("FAKE_UNAME_OS", os)
+            .env("FAKE_UNAME_MACH", mach)
+            .output()
+            .expect("spawning sh install.sh")
+    }
+
+    /// A PATH dir whose `uname` reports FAKE_UNAME_OS / FAKE_UNAME_MACH.
+    fn uname_shim(&self) -> PathBuf {
+        let dir = self.home.join("uname-shim");
+        std::fs::create_dir_all(&dir).unwrap();
+        // POSIX sh, exactly the two invocations install.sh makes.
+        std::fs::write(
+            dir.join("uname"),
+            "#!/bin/sh\ncase \"$1\" in\n  -s) printf '%s\\n' \"$FAKE_UNAME_OS\" ;;\n  -m) printf '%s\\n' \"$FAKE_UNAME_MACH\" ;;\n  *) printf 'shim-unexpected-arg\\n' ;;\nesac\n",
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(dir.join("uname"), std::fs::Permissions::from_mode(0o755))
+                .unwrap();
+        }
+        dir
     }
 
     fn installed(&self) -> PathBuf {
@@ -181,6 +237,8 @@ fn posix_sh_parse_and_no_bashisms() {
     // The documented env overrides exist (tests + mirrors depend on them).
     for needle in [
         "CHUG_INSTALL_REPO",
+        "CHUG_INSTALL_OS",
+        "CHUG_INSTALL_MACH",
         "CHUG_INSTALL_PLATFORM",
         "CHUG_INSTALL_DIR",
         "CHUG_RELEASE_URL_BASE",
@@ -334,4 +392,134 @@ fn unsupported_platform_fails_before_downloading() {
         err.contains("cargo install"),
         "the failure must name the build-from-source fix: {err}"
     );
+}
+
+// --- uname→platform mapping legs (validator FINDING-2 class sweep) --------------
+//
+// One killing test per leg of the OS-aware mapping. Each is RED-proven: with
+// that leg's output flipped in install.sh the leg's test fails (proofs in the
+// fix-up commit message), so a platform-map-flip mutant can no longer survive
+// green. The fixtures build ONLY the expected platform's asset — a mutant that
+// routes the leg to any other asset dies on the download, and the installed
+// stub's echo pins the artifact identity, not just the URL string.
+
+/// A successful mapping leg must install EXACTLY the published asset for its
+/// platform: exit 0, the tarball URL requested, and the binary that landed is
+/// that platform's artifact (the stub echoes its platform tag).
+fn assert_installs_exact_asset(r: &Run, out: &Output, platform: &str) {
+    assert_eq!(out.status.code(), Some(0), "{}", out_text(out));
+    assert!(
+        out_text(out).contains(&format!("chug-{platform}.tar.gz")),
+        "the leg must request the EXACT published asset chug-{platform}.tar.gz: {}",
+        out_text(out)
+    );
+    assert!(
+        r.installed().is_file(),
+        "the {platform} asset must install: {}",
+        out_text(out)
+    );
+    let echo = Command::new(r.installed()).output().expect("running the installed stub");
+    assert_eq!(
+        String::from_utf8_lossy(&echo.stdout).trim(),
+        format!("chug-fake-{platform}"),
+        "the installed binary must be the {platform} artifact — a swapped leg installs \
+         another platform's binary: {}",
+        out_text(out)
+    );
+}
+
+/// Darwin + arm64 → chug-macos-arm64.tar.gz (K7, the primary fleet box).
+#[test]
+fn detect_darwin_arm64_installs_the_macos_arm64_asset() {
+    let r = Run::new("leg-macos");
+    r.make_release("macos-arm64", "chug-fake-macos-arm64");
+    let out = r.run_detect("Darwin", "arm64");
+    assert_installs_exact_asset(&r, &out, "macos-arm64");
+}
+
+/// Linux + x86_64 → chug-linux-x86_64.tar.gz (ucraft/sparks).
+#[test]
+fn detect_linux_x86_64_installs_the_linux_x86_64_asset() {
+    let r = Run::new("leg-linx64");
+    r.make_release("linux-x86_64", "chug-fake-linux-x86_64");
+    let out = r.run_detect("Linux", "x86_64");
+    assert_installs_exact_asset(&r, &out, "linux-x86_64");
+}
+
+/// Linux + aarch64 → chug-linux-aarch64.tar.gz — THE FINDING-1 BUG: the old
+/// arch-first mapping (`arm64|aarch64) arch=arm64`) produced `linux-arm64`,
+/// which the allowlist rejected, turning every Linux ARM64 user away even
+/// though the workflow publishes exactly this asset.
+#[test]
+fn detect_linux_aarch64_installs_the_linux_aarch64_asset() {
+    let r = Run::new("leg-lina64");
+    r.make_release("linux-aarch64", "chug-fake-linux-aarch64");
+    let out = r.run_detect("Linux", "aarch64");
+    assert_installs_exact_asset(&r, &out, "linux-aarch64");
+}
+
+/// Linux kernels that report `arm64` instead of `aarch64` alias onto the SAME
+/// chug-linux-aarch64.tar.gz asset — one published tarball, both spellings.
+#[test]
+fn detect_linux_arm64_alias_installs_the_linux_aarch64_asset() {
+    let r = Run::new("leg-linarm");
+    r.make_release("linux-aarch64", "chug-fake-linux-aarch64");
+    let out = r.run_detect("Linux", "arm64");
+    assert_installs_exact_asset(&r, &out, "linux-aarch64");
+}
+
+/// An unsupported OS (FreeBSD) is rejected BEFORE any download and names the
+/// detected OS plus the build-from-source fix. The release dir is empty: if a
+/// mutant routes this leg anywhere else, the download error (not this
+/// message) is what fails — the assertions below kill it.
+#[test]
+fn detect_unsupported_os_is_rejected_before_any_download() {
+    let r = Run::new("leg-bados");
+    let out = r.run_detect("FreeBSD", "arm64");
+    assert_ne!(out.status.code(), Some(0), "{}", out_text(&out));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("unsupported OS"), "must name the OS leg: {err}");
+    assert!(err.contains("FreeBSD"), "must echo the detected OS: {err}");
+    assert!(err.contains("cargo install"), "must name the fix: {err}");
+    assert!(!r.installed().exists(), "nothing installs on an unsupported OS");
+}
+
+/// Unsupported arch, both reject shapes: a junk arch on a supported OS
+/// (linux/sparc64) and a real arch with no published artifact on its OS
+/// (darwin/x86_64 — Intel macs have no artifact by design). Both must fail
+/// the ARCH leg's message, before any download.
+#[test]
+fn detect_unsupported_arch_is_rejected_before_any_download() {
+    for (name, os, mach) in [("linux", "Linux", "sparc64"), ("darwin", "Darwin", "x86_64")] {
+        let r = Run::new(&format!("leg-badarch-{name}"));
+        let out = r.run_detect(os, mach);
+        assert_ne!(out.status.code(), Some(0), "{os}/{mach}: {}", out_text(&out));
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            err.contains("unsupported architecture"),
+            "{os}/{mach} must fail the ARCH leg, not some later one: {err}"
+        );
+        assert!(
+            err.contains("cargo install"),
+            "{os}/{mach} must name the build-from-source fix: {err}"
+        );
+        assert!(!r.installed().exists(), "{os}/{mach}: nothing installs");
+    }
+}
+
+/// The mapping must be driven by `uname` ITSELF, not only by the test
+/// overrides: with `uname` shimmed on PATH and zero env overrides, the real
+/// detection path lands the right asset for a macos host and a linux-arm64
+/// host (the FINDING-1 leg, end to end).
+#[test]
+fn real_uname_path_drives_the_mapping() {
+    let r = Run::new("wire-macos");
+    r.make_release("macos-arm64", "chug-fake-macos-arm64");
+    let out = r.run_uname_shimmed(&r.uname_shim(), "Darwin", "arm64");
+    assert_installs_exact_asset(&r, &out, "macos-arm64");
+
+    let r = Run::new("wire-linux");
+    r.make_release("linux-aarch64", "chug-fake-linux-aarch64");
+    let out = r.run_uname_shimmed(&r.uname_shim(), "Linux", "aarch64");
+    assert_installs_exact_asset(&r, &out, "linux-aarch64");
 }

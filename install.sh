@@ -9,7 +9,9 @@
 #
 # Env overrides (CI/mirrors/tests):
 #   CHUG_INSTALL_REPO      GitHub slug        (default tampajohn/chug)
-#   CHUG_INSTALL_PLATFORM  force the platform token (default: uname -s/-m)
+#   CHUG_INSTALL_OS        force the OS leg   (default: `uname -s`)
+#   CHUG_INSTALL_MACH      force the arch leg (default: `uname -m`)
+#   CHUG_INSTALL_PLATFORM  force the platform token (skips the uname mapping)
 #   CHUG_INSTALL_DIR       install dir        (default $HOME/.local/bin)
 #   CHUG_RELEASE_URL_BASE  asset base URL     (default …/releases/latest/download)
 set -eu
@@ -31,17 +33,24 @@ banner() {
 }
 
 # --- platform detect ----------------------------------------------------------
-os=$(uname -s)
-mach=$(uname -m)
+# Both legs are overridable (tests/CI) and the arch mapping is OS-aware: the
+# same `uname -m` means different assets on different kernels — Linux reports
+# BOTH `aarch64` and `arm64` for 64-bit ARM (and the workflow publishes only
+# chug-linux-aarch64.tar.gz), while macOS reports `arm64`. Mapping arch before
+# OS turned Linux+aarch64 hosts into the nonexistent `linux-arm64` asset and
+# turned every one of them away at the gate (validator FINDING 1).
+os="${CHUG_INSTALL_OS:-$(uname -s)}"
+mach="${CHUG_INSTALL_MACH:-$(uname -m)}"
 case "$os" in
   Darwin) osname=macos ;;
   Linux)  osname=linux ;;
   *) fail "unsupported OS '$os' (uname -s) — chug publishes macos-arm64, linux-x86_64 and linux-aarch64; on other platforms build from source: git clone \"https://github.com/$REPO\" && cd chug && cargo install --path ." ;;
 esac
-case "$mach" in
-  arm64|aarch64) arch=arm64 ;;
-  x86_64|amd64)  arch=x86_64 ;;
-  *) fail "unsupported architecture '$mach' (uname -m) — chug publishes macos-arm64, linux-x86_64 and linux-aarch64; build from source: git clone \"https://github.com/$REPO\" && cd chug && cargo install --path ." ;;
+case "$osname/$mach" in
+  macos/arm64)               arch=arm64 ;;
+  linux/x86_64|linux/amd64)  arch=x86_64 ;;
+  linux/aarch64|linux/arm64) arch=aarch64 ;; # `arm64`: the alias some Linux kernels report
+  *) fail "unsupported architecture '$mach' (uname -m) for $osname — chug publishes macos-arm64, linux-x86_64 and linux-aarch64; build from source: git clone \"https://github.com/$REPO\" && cd chug && cargo install --path ." ;;
 esac
 platform="${CHUG_INSTALL_PLATFORM:-$osname-$arch}"
 case "$platform" in
