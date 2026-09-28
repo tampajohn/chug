@@ -244,7 +244,23 @@ section's commands also cover).
   tgrep.rs module-size splits now (no incident; watch item covers it).
 
 ## Outcomes (filled at cycle wrap — LOOP-SPEC Phase 3)
-## Outcomes (filled at cycle wrap — LOOP-SPEC Phase 3)
+
+### Cycle 54 (2026-09-28) — routine glm freshness-skip (queue carried T96 mid-arc + T97)
+
+**T96 META-META-SPEC check-filter-breadth — LANDED, merge 457720d (impl 962830d).**
+Cycle-53's mid-arc recovery executed per the row recipe: preserved worktree
+verified clean at 962830d, `delegate collect` first look (goal-accepted
+23/65), one-hunk +7/-1 diff reviewed — the check-filter-breadth sentence
+woven after the `--lib` sentence in the Extend-TODO quality bar, both
+needles carried (the t90 bite: `permissions` filter missed
+driver-integration legs the `permission` stem caught, mutant survived
+under the spec's own check). Docs-only classification exit 1 → guard
+floor (todo_consistency 5/5) + spec check verbatim green. kimi REQUIRED
+(doctrine) **VERDICT: PASS 16/50, zero findings** — gates re-run
+independently (build + clippy + nextest 777/777), check proven RED
+pre-edit, 3 parallel T79 mutants all killed (drop principle needle, drop
+t90 needle, corrupt the preserved `no library targets` token — pin proven
+live). 2 validate artifacts harvested pre-removal.
 
 ### Cycle 53 (2026-09-27) — fresh eval (kimi, loopd-routed: queue empty) — T91–T97 filed (F5 SPLIT phase 1 → T91); T92 LANDED (9db86bc) — impl children now get 65 iterations
 
