@@ -465,6 +465,36 @@ hex_spans() { # file -> one ref per line
     }'
 }
 
+# tl_date_of FILE — the first <div class="tl-date">…</div> date (YYYY-MM-DD)
+# inside a timeline entry, "" when absent. Every curated entry carries one
+# (site convention): it is the entry's own claimed day, parseable even when
+# the h3 has no hash span (T122's whole point).
+tl_date_of() { # file -> YYYY-MM-DD | ""
+  sed -n 's/^[[:space:]]*<div class="tl-date">[[:space:]]*\([0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]\)[[:space:]]*<\/div>.*/\1/p' "$1" 2>/dev/null | head -1
+}
+
+# day_key DATE — T122 day-precision sort key: the LAST second (23:59:59Z) of
+# that UTC day, via Fliegel–Van Flandern civil->Julian-day arithmetic (pure
+# awk: no date(1) dialects, no TZ dependence). An entry known only to its day
+# — curated prose whose hash spans resolve nowhere — sorts INSIDE its day:
+# after same-day %ct entries (whose exact second a day-precision tl-date
+# cannot claim) and before the next day's. The old T101 clause keyed these
+# +inf ("after dated neighbors, never before"), which pinned 09-27 curated
+# milestones below 09-28 generated ones — that bottom-pin dies. Unparseable
+# input prints nothing; only an entry with NEITHER a resolvable ref NOR a
+# parseable tl-date keeps the +inf sentinel (9999999999, retained for the
+# truly undatable).
+day_key() { # YYYY-MM-DD -> epoch seconds of that day's 23:59:59Z | ""
+  awk -v d="$1" 'BEGIN {
+    if (d !~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]$/) exit 1
+    y = substr(d, 1, 4) + 0; m = substr(d, 6, 2) + 0; day = substr(d, 9, 2) + 0
+    a = int((14 - m) / 12); yy = y + 4800 - a
+    j = day + int((153 * (m + 12 * a - 3) + 2) / 5) \
+        + yy * 365 + int(yy / 4) - int(yy / 100) + int(yy / 400) - 32045
+    print (j - 2440588) * 86400 + 86399
+  }'
+}
+
 # timeline_generate REGIONFILE OUTFILE — T101: ONE merged timeline. Every
 # entry (curated + machine) is sorted by COMMIT TIME ascending (%ct via
 # `git show -s --format=%ct`, reqs 1+4): T99's date-string/id-desc sort read
@@ -473,8 +503,13 @@ hex_spans() { # file -> one ref per line
 # their anchor commit's %ct places them — prose wins (req 2): a done row
 # whose verified commit matches ANY curated hash span merges away (one
 # entry, not two). A curated entry with no resolvable commit (site-side or
-# foreign hash, e.g. the live page's launchd plist) is undatable and sorts
-# AFTER its dated neighbors, never before (+inf, req 1). Machine entries
+# foreign hash, e.g. the live page's launchd plist) is dated by its OWN
+# tl-date at day precision — the last second of that UTC day — so it sorts
+# INTO its day, after same-day %ct entries, before the next day's (T122:
+# the old +inf bottom-pin, "after dated neighbors, never before", buried
+# 09-27 curated milestones under 09-28 generated ones; only an entry with
+# neither a resolvable ref nor a parseable tl-date stays +inf). Machine
+# entries
 # are rebuilt from verified done rows (cat-file audit unchanged, req 5) and
 # capped: the newest 20 render in full, older rows collapse into ONE
 # "…and N earlier milestones (T…)" line placed where the oldest collapsed
@@ -484,7 +519,7 @@ hex_spans() { # file -> one ref per line
 TL_CAP=20
 timeline_generate() { # regionfile outfile
   local region="$1" out="$2"
-  local items stray meta keys machs span ct file
+  local items stray meta keys machs span ct file key
   local ncur=0 nmach=0
   items="$(mktemp "${TMPDIR:-/tmp}/site-sync-tli.XXXXXX")"
   stray="$(mktemp "${TMPDIR:-/tmp}/site-sync-stray.XXXXXX")"
@@ -509,8 +544,14 @@ timeline_generate() { # regionfile outfile
               if [ -n "$ct" ]; then break; fi
             fi
           done
-          # +inf for undatable: after every dated neighbor, never before
-          printf '%s\t0\t%s\t%s\n' "${ct:-9999999999}" "$ncur" "$file" >> "$meta"
+          # T122: undatable by ref? date by the entry's own tl-date, day
+          # precision (day_key = that day's 23:59:59Z): it sorts INTO its
+          # day, after same-day %ct neighbors, before the next day's. The
+          # +inf bottom-pin survives ONLY for an entry with no resolvable
+          # ref AND no parseable tl-date (the truly undatable).
+          key="$ct"
+          if [ -z "$key" ]; then key="$(day_key "$(tl_date_of "$TMP_TLITEM")")"; fi
+          printf '%s\t0\t%s\t%s\n' "${key:-9999999999}" "$ncur" "$file" >> "$meta"
           hex_spans "$TMP_TLITEM" >> "$keys"
           ncur=$((ncur + 1))
         fi
