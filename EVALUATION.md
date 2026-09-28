@@ -323,6 +323,37 @@ transmitted payload — caught on send, killed at ~25s, relaunched clean);
 3 further splice sightings this cycle were render-only, all payloads
 verified intact by read-back.
 
+**Cycle-60 wrap notes.** Both filed rows landed, zero fix-up arcs (two
+first-try PASS validations — T110 16/50, T111 30/50; T111's is the
+era's fourth consecutive zone-free validator). What the gates caught:
+the cycle's one REAL RED was caught by the ORCHESTRATOR's review gates,
+not the validator — the readme_layout T95 pin the child's spec
+`check: cargo test --bin chug` could not see (bin-unit-tests-only never
+runs the tests/ integration binaries; the T90 filter-breadth class,
+filing-side — the next eval weighs whether src-touching specs' check:
+lines should name the full suite or a broad stem). kimi's contribution
+was 6/6 parallel-mutant rigor (T79's first era exercise) + 3
+non-blocking findings carried to the next eval (prompt_text
+corrupt-swallow by design; no deny_unknown_fields; todo_update/todo_add
+empty-title asymmetry). T63 resume #24 (post-commit class, 18s — the
+RED-prove tail consumed the child's last iterations; two of the last
+three impl children died post-commit, a class T63 covers near-free).
+Estimate calibration data point for the T110 ceiling: T111 was filed at
+~400 and landed +932 (validator: the delta is test density) — the
+ceiling watches ESTIMATES, so filing-time estimates must count tests
+honestly; zero mid-impl deaths at ≤500-line estimates so far (the
+ceiling's failure measure is unmet). Artifact watch: the cycle's one
+REAL payload garble was in MY OWN delegate goal composition (duplicated
+tail on the wire — caught on send, validator killed at ~25s, relaunched
+clean); 4 further sightings were render-only, all payloads verified
+intact by read-back (the T108-era discipline holds; the watch's
+payload-level criterion recorded its second-ever sighting — first in an
+ORCHESTRATOR-authored payload). Final state: queue EMPTY → next cycle
+eval-routed kimi (loopd freshness rule); tag bootstrap holds (no v*
+tag — with F7-p1 AND F8-p1 landed the operator's first tag is doubly
+feature-worthy); final gates 891/891 + clippy at HEAD under
+target-shared-main.
+
 **T110 filing-time spec-size estimate ceiling — LANDED, fast-forward.**
 The T102 measure clause RESOLVED: the census tripped in cycle 59 (2 of
 the last 4 impl children died 80/80 — t108-impl mid-impl at 141 total
@@ -862,56 +893,7 @@ optional→RUN routing call (against the T98-skip precedent) caught a real
 spec violation — the idle-queue weighing is recorded at d1790558329-1
 for the future classifier.
 
-### Cycle 54 (2026-09-28) — routine glm freshness-skip (queue carried T96 mid-arc + T97)
-
-**T96 META-META-SPEC check-filter-breadth — LANDED, merge 457720d (impl 962830d).**
-Cycle-53's mid-arc recovery executed per the row recipe: preserved worktree
-verified clean at 962830d, `delegate collect` first look (goal-accepted
-23/65), one-hunk +7/-1 diff reviewed — the check-filter-breadth sentence
-woven after the `--lib` sentence in the Extend-TODO quality bar, both
-needles carried (the t90 bite: `permissions` filter missed
-driver-integration legs the `permission` stem caught, mutant survived
-under the spec's own check). Docs-only classification exit 1 → guard
-floor (todo_consistency 5/5) + spec check verbatim green. kimi REQUIRED
-(doctrine) **VERDICT: PASS 16/50, zero findings** — gates re-run
-independently (build + clippy + nextest 777/777), check proven RED
-pre-edit, 3 parallel T79 mutants all killed (drop principle needle, drop
-t90 needle, corrupt the preserved `no library targets` token — pin proven
-live). 2 validate artifacts harvested pre-removal.
-
-**T97 README delegate paragraph → per-action sub-bullets — LANDED,
-fast-forward b0c6041.** glm impl (pid 394) goal-accepted **37/65
-first-try (~4 min)**: the ~24-line `delegate` paragraph split into a
-lead-in + four ` — ` sub-bullets (`launch`, `status` with wait_secs +
-terminal folded in, `collect`, `Sandbox/cwd`) — zero behavior-text
-change, token-multiset-verified, neighbors byte-identical. The
-spec-anticipated pin sweep found exactly one delegate-paragraph pin
-outside tests/: tools::tests::readme_and_loop_spec_name_collect (T69) —
-needle updated minimally (gains the ` — ` label separator) and PROVEN RED
-both directions (against pre-edit README and pre-update needle).
-Classification consequence: the pin update puts src/tools.rs in the diff
-→ md-only predicate fails → FULL gates at review and post-merge (nextest
-release 777/777 both, spec check + nextest_gate_runner 7/7 +
-shared_target_dir 22/22). kimi SKIPPED per routing (docs-only restructure
-+ orchestrator claim-for-claim diff review, T16/T31/T95 precedent). 1
-artifact harvested pre-removal.
-
-**Cycle-level notes (wrap).** Phase 1 skipped per the freshness predicate
-(2 todo rows + EVALUATION.md same-UTC-day) — routine glm cycle, zero
-eval-triage records by design. Both carried rows landed; validators 1/1
-REQUIRED round PASS (zero findings, 3/3 mutants). **INCIDENT: push
-divergence at wrap.** The operator pushed ed4476e (T99 site-sync v2
-directive: row + specs/t99-site-sync-content.md, TODO.md's T97 row still
-`todo` in that tree) to origin/main while this cycle ran; local main
-advanced to 89952ba/b0c6041 (T97 done + Outcomes). Push of 89952ba was
-rejected — per the hard rule NO force-push and NO mid-cycle
-reconciliation: local commits b0c6041 + 89952ba (+ this wrap commit) are
-LANDED LOCALLY, UNPUSHED. Next cycle's first act: reconcile with
-origin/main (merge — expect a small TODO.md conflict: origin adds the T99
-row after T97's now-done row), then work T99 (pri 3, operator directive,
-ready spec) with the T96/T97 pattern. T96's lesson held: the cycle-53
-mid-arc recipe executed end-to-end with zero re-work — resume-from-row
-notes are worth their tokens.
+### Cycle 54 (2026-09-28) — routine glm freshness-skip: T96 META-META-SPEC check-filter-breadth (merge 457720d, mid-arc recovery per row recipe, kimi REQUIRED PASS zero findings) + T97 README delegate sub-bullets (b0c6041 fast-forward, flip eca240a, kimi SKIPPED per T16/T31) landed; T97 push-divergence incident (operator moved origin mid-cycle, reconciled next cycle per no-force-push rule) — full narrative in git: `git log --grep "T9[67]"`.
 
 ### Cycle 53 (2026-09-27) — six landed: T92 9db86bc (impl 50→65), T91 ae7ff5f (F5-p1 images), T93 aeb12ea (mcp__ canary), T94 06f3b9e (get_str diag), T95 e80b3c5 (readme_layout), T98 8721c83 (site-sync); T96 mid-arc→c54, T97→c54 — one-line compaction; full narrative in git (row-flip commits + TODO done rows)
 ### Cycle 52 (2026-09-27) — routine glm freshness-skip; T90 LANDED (e9afed9, fast-forward merge) — F4 permissions phase 1: the deny-only fail-closed policy layer
