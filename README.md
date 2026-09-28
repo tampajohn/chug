@@ -302,7 +302,10 @@ a git worktree). Three actions:
   a note, never an error) — pass the launch `pid` to add the same liveness
   line `status` renders; it never blocks or waits, so long-poll with
   `status` first
-- **Sandbox/cwd** — `cwd` and `spec` must be absolute and may target child
+- **Sandbox/cwd** — `cwd` and `spec` must be absolute and must EXIST (launch
+  refuses a missing/unreadable `spec` or a missing `cwd` with an error
+  naming the received path verbatim — a corrupted field fails fast at the
+  call site instead of spawning a doomed child); they may target child
   worktrees outside your own `--cwd`; worktree creation, building,
   harvest/merge, and killing the child stay with your `bash`
 

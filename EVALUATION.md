@@ -293,7 +293,7 @@ links fail today (no release — §2 I4) → T106.
 
 ## Outcomes (filled at cycle wrap — LOOP-SPEC Phase 3)
 
-### Cycle 58 (2026-09-28) — fresh eval (kimi, loopd-routed: queue empty) — T102–T106 filed (F6 SPLIT phase 1 → T105); T102 LANDED (ffebdaf)
+### Cycle 58 (2026-09-28) — fresh eval (kimi, loopd-routed: queue empty) — T102–T106 filed (F6 SPLIT phase 1 → T105); ALL FIVE landed clean (T102 ffebdaf, T103 80d4a14, T105 dc29137, T104 ee3943e, T106 e5cdebd)
 
 **T102 LOOP-SPEC impl-child template 65→80 — LANDED, fast-forward.** The
 T92 measure clause fired (3 of 12 post-T92 impl children died 65/65 with
@@ -401,6 +401,40 @@ glm impl 10/80; docs-only classification (exit 1) → guard floor
 (todo_consistency 5/5) at review AND post-merge; kimi SKIPPED per the
 T16/T31/T97 README precedent (routing d1790574440-24). Outcome
 landed-clean.
+
+**Cycle notes (wrap).** The full queue drained — 5/5 landed, every item
+pushed at landing, ZERO fix-up arcs (the era's first all-PASS cycle:
+kimi verdicts 18/31/35 of 50, all PASS; glm impls all first-try clean:
+20, 61, 43, 75, 10 of 80). **T102's raise paid for itself the same
+cycle**: T104's impl finished at 75/80 — a fourth 65/65 death avoided.
+**T44 pipeline overlap ran twice, clean**: T103-validator‖T105-impl and
+T104-validator‖T106-impl, both disjoint-file pairs, both merges
+rebased fast-forward (conflict-free). INCIDENT (first sighting):
+**T104's impl committed its work to MAIN** after cd'ing to the main
+repo for byte-identity checks — recovered by branching the commit,
+resetting local main to the pushed state (ee3943e never pushed), and
+re-pointing the worktree; the next eval weighs a goal-text hardening
+("commit ONLY in your worktree cwd" — "Commit your work here" proved
+ambiguous). Display-artifact watch: FOUR render-garble sightings this
+cycle (two validator-goal assemblies, two edit_file parameter renders)
+— every transmitted payload verified INTACT in the transcript/file;
+the read-back habit is the whole game and it held. T81 acceptance:
+eval-kimi leg = THIS cycle, ~1h33m wall, ~150/160 projected at
+goal_complete (consistent with the I6 closure — the 160 cap holds at
+5 items + eval; no re-measure alarm). SSH pushurl held all cycle (six
+pushes, zero auth friction); the gh-workflow-scope class is retired at
+host level. Wrap gates: nextest 842/842 + build + clippy under
+target-shared-main; README gate: T105's fork section + T106's Install
+sentence (child-integrated) + a Sandbox/cwd clause for T103's launch
+refusal (orchestrator-integrated at wrap). Tag doctrine: `git tag -l
+'v*'` still EMPTY — bootstrap holds, the first tag stays the
+operator's (cutting it also exercises T100's release workflow
+end-to-end). Next cycle: queue EMPTY → eval-routed kimi; candidates
+already queued: worktree-discipline goal hardening, T102 measure
+clause census (4 children at 80, zero deaths — window forming),
+validator 50/50 watch, T91 survivors, F13/F2/F3/F4 deferrals, module
+sizes (driver.rs now 1,457 — watch closed), delegate.rs 4,255 (+257
+this cycle — the split conversation moves closer).
 
 ### Cycle 57 (2026-09-28) — eval-routed kimi turned routine after reconciling cycle-56's origin divergence (T101 row appeared post-rebase, predicate held — cycle-56 precedent repeated); T101 LANDED (bcd0b66, fast-forward)
 
