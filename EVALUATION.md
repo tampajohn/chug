@@ -288,7 +288,40 @@ consecutive clean audit — no docs row.
 
 ## Outcomes (filled at cycle wrap — LOOP-SPEC Phase 3)
 
-### Cycle 60 (2026-09-28) — fresh eval (kimi, loopd-routed: queue empty) — T110 + T111 filed (F8 SPLIT phase 1 → T111); T110 LANDED (5a16ce5), T111 in flight
+### Cycle 60 (2026-09-28) — fresh eval (kimi, loopd-routed: queue empty) — T110 + T111 filed (F8 SPLIT phase 1 → T111); BOTH landed (T110 5a16ce5, T111 d8fdea0+fc1d691)
+
+**T111 F8 phase 1 structured todo tool — LANDED, fast-forward.** The
+mandatory roadmap pull: `.chug/todos.json` (lazy creation, missing/empty
+= empty list, corrupt = tool error naming file+remedy, never panic) +
+`todo_add`/`todo_update`/`todo_list` (statuses enforced — invalid status
+names the valid set, unknown id names the existing ids) + `## Todos`
+system-prompt section after `## Ledger` in run+chat (absent when empty;
+plan mode renders nothing, exclusion sweep legs 8→11 with file-existence
+asserts) + README Tools integration beside `update_ledger`. glm impl
+died 80/80 POST-COMMIT (the spec-mandated RED-prove legs consumed the
+tail — both required legs RED-proven: status-enforcement and unknown-id)
+→ T63 resume accepted 1/80 in 18s. **Review gates caught a REAL RED the
+child's check: line could not see**: the readme_layout T95 pin
+(`todos` missing from the Development layout line) — the spec's
+`check: cargo test --bin chug` runs only bin unit tests, never the
+tests/ integration binaries (the T90 filter-breadth class, filing-side);
+orchestrator trivial fix fc1d691, suite 891/891 first-hand. kimi
+REQUIRED validation PASS 30/50 first-try: 6/6 mutants RED in PARALLEL
+throwaway worktrees (T79's first exercise this era — cap 3, role-keyed
+target dirs, overlap declared safe): status-accept-any,
+unknown-id-matches-any, corrupt-swallow, heading-always, id-off-by-one,
+neither-field-accepted; gates + commit claims verified exact; 3
+non-blocking findings carried to the next eval (prompt_text
+corrupt-swallow is by design; no deny_unknown_fields; todo_update
+accepts empty-string title while todo_add rejects). Validator logged
+its own record (d1790586305-1). Routing d1790585650-14, verdict
+d1790586370-15, recovery d1790585385-13, outcome landed-clean; 3 streams
+(impl both segments + killed-validator + clean validator) + validator
+ledger + 6 child decision records harvested. Orchestrator note: the
+first validator launch carried a garbled goal (duplicated tail in the
+transmitted payload — caught on send, killed at ~25s, relaunched clean);
+3 further splice sightings this cycle were render-only, all payloads
+verified intact by read-back.
 
 **T110 filing-time spec-size estimate ceiling — LANDED, fast-forward.**
 The T102 measure clause RESOLVED: the census tripped in cycle 59 (2 of
