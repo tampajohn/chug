@@ -4,7 +4,7 @@
 // T109 req 4 count-pin anchor (see mod.rs's pin): this family's
 // #[test] fn count — a dropped `mod launch;` line fails the pin's
 // reference to this const to compile.
-pub(super) const TEST_COUNT: usize = 13;
+pub(super) const TEST_COUNT: usize = 14;
     use super::*; // the shared harness (delegate::tests) + delegate's own imports
 
     /// End-to-end with a stub binary: `CHUG_DELEGATE_BIN` points at a script
@@ -709,6 +709,94 @@ pub(super) const TEST_COUNT: usize = 13;
             launch.content.contains("goal_tail: t115 short goal\n"),
             "short goal's tail must be the whole goal verbatim: {}",
             launch.content
+        );
+        let pid = spawn_pid_of(&launch);
+        kill_pid_group(pid);
+        // SAFETY: serialized by DELEGATE_ENV_LOCK; no other test reads this var.
+        unsafe { std::env::remove_var("CHUG_DELEGATE_BIN") };
+    }
+
+    /// T119 multibyte leg (the cycle-61 surviving byte-slicing mutant):
+    /// every pre-T119 fixture is ASCII, so a mutant swapping
+    /// `tail_preview`'s chars()-based window for a byte slice
+    /// (`&goal[goal.len()-120..]`) was invisible to the suite. This
+    /// fixture crosses a multibyte boundary past the 120-char cut: the
+    /// last 120 CHARS hold 2-byte (`é`, U+00E9) and 4-byte (`🌍`, U+1F30D)
+    /// scalars, and byte offset `len-120` = 81 lands MID-`é` (bytes
+    /// 80..82), so the byte-slicing mutant PANICS instead of rendering.
+    /// Bytes-vs-chars is pinned in BOTH directions on this one fixture:
+    /// `goal_tail` is exactly the last ≤120 CHARS (equality against an
+    /// independently chars()-computed window — no panic, no replacement
+    /// char, no split sequence) while `goal_bytes` stays the UTF-8 BYTE
+    /// length (201 ≠ 191 chars), and `goal_sha256` is the external
+    /// `shasum -a 256` vector over the fixture's UTF-8 bytes (a
+    /// chars-hashed mutant renders a different digest).
+    #[cfg(unix)]
+    #[test]
+    fn delegate_launch_multibyte_goal_tail_stays_on_char_boundaries() {
+        let _guard = DELEGATE_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let child_dir = tempfile::tempdir().unwrap();
+        let ctx_cwd = tempfile::tempdir().unwrap();
+        // SAFETY: serialized by DELEGATE_ENV_LOCK; no other test reads this var.
+        unsafe { std::env::set_var("CHUG_DELEGATE_BIN", write_argv_stub(ctx_cwd.path())) };
+        ensure_spec_file("/tmp/chug-stub-spec.md");
+        let goal = format!("{}é{}{}", "x".repeat(80), "🌍".repeat(3), "y".repeat(107));
+        // The fixture self-pins both counts: 191 chars ≠ 201 UTF-8 bytes,
+        // so a bytes-vs-chars swap breaks one assert or the other.
+        assert_eq!(goal.chars().count(), 191);
+        assert_eq!(goal.len(), 201);
+        // The byte cut (len-120 = 81) is NOT a char boundary — it sits
+        // inside the é (bytes 80..82) — the byte-slicing mutant's slice
+        // panics on exactly this fixture.
+        assert!(!goal.is_char_boundary(81), "fixture must split a char at the byte cut");
+        let launch = dispatch(
+            &delegate_ctx(ctx_cwd.path()),
+            "delegate",
+            &json!({
+                "action": "launch",
+                "cwd": child_dir.path(),
+                "spec": "/tmp/chug-stub-spec.md",
+                "goal": goal,
+                "model": "m",
+            }),
+        );
+        assert!(!launch.is_error, "{}", launch.content);
+        // Bytes direction: `goal_bytes` is the UTF-8 BYTE length (201),
+        // never the chars count (191).
+        assert!(
+            launch.content.contains("goal_bytes: 201"),
+            "{}",
+            launch.content
+        );
+        // The sha is over the fixture's UTF-8 bytes — the external
+        // `shasum -a 256` vector for the identical byte string.
+        assert!(
+            launch.content.contains(
+                "goal_sha256: b6e9b17b107090b84e0f83b36cae73aac95b9eb56b5d5f3d920d088bb9f07c91"
+            ),
+            "{}",
+            launch.content
+        );
+        assert_eq!(
+            crate::eventlog::goal_sha256(&goal),
+            "b6e9b17b107090b84e0f83b36cae73aac95b9eb56b5d5f3d920d088bb9f07c91"
+        );
+        // Chars direction: the tail is EXACTLY the last 120 CHARS — the
+        // independently computed window (x…é🌍🌍🌍y…), char-boundary-safe.
+        // Byte slicing panics on this fixture (the cut is mid-é); any
+        // boundary-safe byte window renders fewer than 120 chars and fails
+        // this equality.
+        let expected_tail: String = goal.chars().skip(goal.chars().count() - 120).collect();
+        assert_eq!(expected_tail.chars().count(), 120);
+        let actual_tail = launch
+            .content
+            .lines()
+            .find_map(|l| l.strip_prefix("goal_tail: "))
+            .expect("goal_tail line");
+        assert_eq!(actual_tail, expected_tail, "{}", launch.content);
+        assert!(
+            !actual_tail.contains('\u{FFFD}'),
+            "char-boundary-safe: no replacement char: {actual_tail}"
         );
         let pid = spawn_pid_of(&launch);
         kill_pid_group(pid);
