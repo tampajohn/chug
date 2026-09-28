@@ -369,6 +369,38 @@ exactly this while the T134 fix-up flew; retried clean); (2) T142
 re-validator hit the same class. Both are check-harness findings for
 the next eval, not row blockers.
 
+**T134 — symlink sandbox escape + doctrine drift (pri 1, landed
+d5d9c28 + fix-up bfd316a, rebased ff).** The fourth codex-review item:
+resolve_safe was lexical-only, so an in-tree symlink to an external
+path made every file tool follow it on disk — no race needed. Fix
+(8785a2a, glm impl 48/80): two-stage resolve_safe — stage 1 the
+unchanged lexical pass, stage 2 walks every component against the real
+filesystem (lstat sees dangling links), expands symlinks under a hop
+budget (loops fail closed), refuses when resolution escapes the
+canonical sandbox root (macOS /tmp→/private/tmp handled), nonexistent
+tails stay legal, returned path stays lexical; one fix point sweeps
+all 9 call sites (get_path read/write/edit/image, grep, glob, list_dir,
+tgrep, @attach, submit_plan --out); the false README/SPEC claims
+replaced with the accurate contract. kimi round 1 VERDICT FAIL
+(d1790632841-11): F1 MEDIUM — glob-metachar paths bypass stage 2
+(resolve_safe treated `*`/`**` as inert-missing, the glob crate follows
+symlinked dirs in expansion, tgrep's corpus arm read external
+CONTENTS; /etc/passwd exfiltrated end-to-end via `path="**/passwd"`
+through an in-tree etcdir→/etc link; external names leaked via the
+glob tool); F2 LOW — SPEC's corrected claim had no pin test. Fix-up
+(f28f38c→bfd316a after T63 resume d1790634951-13 — the first fix-up
+child died 80/80 mid-gates with +456/-18 uncommitted): metachar
+components refused fail-closed in the model-supplied relative part +
+resolve_glob_pattern confines the literal prefix of both glob-expanding
+surfaces + confine_glob_match re-passes EVERY concrete match through
+the full two-stage check before its name is reported or bytes read;
+SPEC.md pin added, stale "resolved lexically" line corrected. kimi
+re-validation PASS (d1790636105-14): all three layers verified wired
+at every call site, M1–M5 all killed (round 2 finished the fix-up
+child's expired M4/M5 legs), the round-1 attack re-proven dead
+byte-exact with glob 0.3.4. 8 RED proofs; post-merge
+target-shared-main nextest 1043/1043.
+
 ### Cycle 65 (2026-09-28) — fresh eval (kimi, loopd-routed: queue empty) — T128–T131 filed (F10 phase 2 PULLED + SPLIT); T130 + T128 LANDED (976e4ae, 85ca4c1); T129/T131 DEFERRED by mid-cycle operator intake (codex adversarial review, 9 HIGH rows T134–T142); cycle ended on a push divergence (doctrine: no mid-cycle reconcile). Cycle notes below the per-item entries.
 
 **CYCLE-65 CYCLE-LEVEL NOTES (wrap).** TWO items landed clean
