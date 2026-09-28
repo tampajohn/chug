@@ -170,7 +170,11 @@ panic-safe terminal restore.
 
 ## Tools
 
-`read_file` (`offset`/`limit` page past the 2000-line cap), `write_file`,
+`read_file` (`offset`/`limit` page past the 2000-line cap; image extensions —
+`png`, `jpg`/`jpeg`, `gif`, `webp` — come back as base64 image blocks with a
+short text note instead of mojibake, capped at 5 MiB per image, and
+downgraded to a placeholder when the endpoint rejects image content),
+`write_file`,
 `edit_file` (+`replace_all`), `bash`, `grep`,
 `tgrep`, `glob`, `list_dir`, `update_ledger`, `goal_complete`, `delegate`, `web_fetch`,
 `decision_log`.

@@ -363,6 +363,9 @@ impl App {
             // T83: hook vetoes/notes reach the model inside the tool result;
             // the fire/error lines are telemetry for events.jsonl.
             Event::HookFired { .. } | Event::HookError { .. } => {}
+            // T91: the degrade placeholder already reached the model inside
+            // the retried request; the events line is telemetry.
+            Event::ImageDegraded => {}
             // T90: the deny text reaches the model inside the tool result;
             // deny/config-error lines are telemetry for events.jsonl.
             Event::PermissionDenied { .. } | Event::PermissionError { .. } => {}

@@ -65,6 +65,13 @@ pub enum Event {
     /// records that it fired — one line per injected advisory, no latch, so a
     /// later `jq` pass can count truncations per run.
     OutputTruncated,
+    /// T91 telemetry: the endpoint rejected a request carrying image blocks
+    /// (400 + image/content in the body), so the driver retried once with
+    /// every image replaced by a placeholder text block and latched for the
+    /// rest of the run — later image results are downgraded at wrap time and
+    /// never sent. The placeholder text already reached the model; this event
+    /// records that the run is image-free from here on.
+    ImageDegraded,
     SteeringQueued(String),
     /// One risk-gate judgment on a bash command (only when --risk-gate is on).
     RiskVerdict {
@@ -286,6 +293,9 @@ impl EventSink for ConsoleSink {
             // T38: telemetry only — the advisory already reached the model as
             // a transcript message; no console output.
             Event::OutputTruncated => {}
+            // T91: telemetry only — the placeholder text already reached the
+            // model inside the retried request; no console output.
+            Event::ImageDegraded => {}
             Event::SteeringQueued(_) => {}
             Event::RiskVerdict {
                 blocked,

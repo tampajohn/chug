@@ -305,6 +305,7 @@ fn delegate_launch(input: &Value) -> anyhow::Result<ToolResult> {
             chug_dir.join("events.jsonl").display(),
         ),
         is_error: false,
+        images: Vec::new(),
     })
 }
 
@@ -385,6 +386,7 @@ fn delegate_status_now(cwd: &Path, pid: Option<u64>) -> anyhow::Result<ToolResul
     Ok(ToolResult {
         content: render_status(&summary, alive, &log_tail, events_note.as_deref()),
         is_error: false,
+        images: Vec::new(),
     })
 }
 
@@ -490,6 +492,7 @@ fn delegate_status_wait(
             return Ok(ToolResult {
                 content: render(&final_summary, final_alive, final_note.as_deref()),
                 is_error: false,
+                images: Vec::new(),
             });
         }
 
@@ -504,6 +507,7 @@ fn delegate_status_wait(
             return Ok(ToolResult {
                 content: render(&now_summary, now_alive, now_note.as_deref()),
                 is_error: false,
+                images: Vec::new(),
             });
         }
         // Req 2(a) + T68: a SIGNIFICANT summary-field diff (an iteration
@@ -531,6 +535,7 @@ fn delegate_status_wait(
             return Ok(ToolResult {
                 content: render(&now_summary, now_alive, now_note.as_deref()),
                 is_error: false,
+                images: Vec::new(),
             });
         }
 
@@ -1020,6 +1025,7 @@ fn delegate_collect(input: &Value) -> anyhow::Result<ToolResult> {
             events_note.as_deref(),
         ),
         is_error: false,
+        images: Vec::new(),
     })
 }
 

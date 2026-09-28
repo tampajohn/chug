@@ -75,6 +75,33 @@ pub enum KnownBlock {
         #[serde(default)]
         is_error: bool,
     },
+    /// T91: an image content block — `{"type":"image","source":{"type":
+    /// "base64","media_type":…,"data":…}}` — as produced by `read_file`'s
+    /// image leg and accepted by vision endpoints inside user messages (and
+    /// tool_result content arrays).
+    #[serde(rename = "image")]
+    Image { source: ImageSource },
+}
+
+/// The `source` object of a [`KnownBlock::Image`]. Only the base64 source
+/// shape is produced/consumed today; a URL source stays round-tripped through
+/// [`ContentBlock::Other`] until needed.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ImageSource {
+    Base64 {
+        media_type: String,
+        data: String,
+    },
+}
+
+/// T91: an image payload riding a tool result — media type plus base64 data.
+/// Built by `tools::read_file`'s image leg; serialized into the tool_result
+/// content array by [`ContentBlock::tool_result_block_with_images`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ImageBlock {
+    pub media_type: String,
+    pub data: String,
 }
 
 impl ContentBlock {
@@ -110,6 +137,106 @@ impl ContentBlock {
             is_error,
         })
     }
+
+    /// T91: tool_result constructor for results carrying images. The
+    /// `content` becomes an ARRAY — one image block per payload (first),
+    /// then the text note — per the Messages API's array-content shape.
+    /// String-content results stay byte-identical: with no images this
+    /// delegates to [`Self::tool_result_block`] (`Value::String`, never a
+    /// one-element array).
+    pub fn tool_result_block_with_images(
+        tool_use_id: &str,
+        content: String,
+        is_error: bool,
+        images: &[ImageBlock],
+    ) -> Self {
+        if images.is_empty() {
+            return Self::tool_result_block(tool_use_id, content, is_error);
+        }
+        let mut blocks: Vec<Value> = images
+            .iter()
+            .map(|img| {
+                json!({
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": img.media_type,
+                        "data": img.data,
+                    },
+                })
+            })
+            .collect();
+        blocks.push(json!({ "type": "text", "text": content }));
+        ContentBlock::Known(KnownBlock::ToolResult {
+            tool_use_id: tool_use_id.to_string(),
+            content: Value::Array(blocks),
+            is_error,
+        })
+    }
+}
+
+/// T91 degrade: the text that replaces an image block when the endpoint has
+/// rejected image content.
+pub const IMAGE_REMOVED_PLACEHOLDER: &str = "[image removed: endpoint rejected image content]";
+
+/// T91 degrade leg: rebuild `messages` with EVERY image block replaced by the
+/// placeholder text — both standalone image blocks and image entries inside a
+/// tool_result's array content. Used (a) once, when the endpoint rejects a
+/// request containing images, so the immediate retry can succeed, and (b) to
+/// keep already-sent images out of every later request. Everything else —
+/// text, thinking, tool_use, unknown blocks — is preserved verbatim.
+pub fn replace_images_with_placeholder(messages: &[Message]) -> Vec<Message> {
+    messages
+        .iter()
+        .map(|m| Message {
+            role: m.role.clone(),
+            content: m.content.iter().map(replace_block_images).collect(),
+        })
+        .collect()
+}
+
+fn replace_block_images(block: &ContentBlock) -> ContentBlock {
+    match block {
+        ContentBlock::Known(KnownBlock::Image { .. }) => {
+            ContentBlock::text_block(IMAGE_REMOVED_PLACEHOLDER)
+        }
+        ContentBlock::Known(KnownBlock::ToolResult {
+            tool_use_id,
+            content: Value::Array(items),
+            is_error,
+        }) => {
+            let items = items
+                .iter()
+                .map(|item| {
+                    if item.get("type").and_then(Value::as_str) == Some("image") {
+                        json!({ "type": "text", "text": IMAGE_REMOVED_PLACEHOLDER })
+                    } else {
+                        item.clone()
+                    }
+                })
+                .collect();
+            ContentBlock::Known(KnownBlock::ToolResult {
+                tool_use_id: tool_use_id.clone(),
+                content: Value::Array(items),
+                is_error: *is_error,
+            })
+        }
+        other => other.clone(),
+    }
+}
+
+/// T91 degrade detection: does this `complete` failure look like the endpoint
+/// rejecting image content? Narrow on purpose — HTTP 400 whose body mentions
+/// image or content — so unrelated 400s (auth, malformed request) keep
+/// today's fail-fast behavior. The client's error text embeds the status and
+/// a bounded body preview (`LLM request failed: HTTP 400: <body>`).
+pub fn is_image_rejection(err: &anyhow::Error) -> bool {
+    let msg = err.to_string();
+    let Some(body) = msg.strip_prefix("LLM request failed: HTTP 400: ") else {
+        return false;
+    };
+    let body = body.to_ascii_lowercase();
+    body.contains("image") || body.contains("content")
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1202,5 +1329,173 @@ mod tests {
         }
         let err = read_body_with_watchdog(DeniedReader, Duration::from_secs(1)).unwrap_err();
         assert_eq!(err, TransportError::Fatal("denied".to_string()));
+    }
+
+    // ---- T91: image blocks ----
+
+    /// KnownBlock::Image round-trips the base64 source shape: `type: "image"`
+    /// with `source: {type: "base64", media_type, data}`, in both directions.
+    #[test]
+    fn image_known_block_round_trips_base64_source() {
+        let block = ContentBlock::Known(KnownBlock::Image {
+            source: ImageSource::Base64 {
+                media_type: "image/png".to_string(),
+                data: "aGk=".to_string(),
+            },
+        });
+        let text = serde_json::to_string(&block).unwrap();
+        assert_eq!(
+            text,
+            r#"{"type":"image","source":{"type":"base64","media_type":"image/png","data":"aGk="}}"#
+        );
+        let back: ContentBlock = serde_json::from_str(&text).unwrap();
+        assert_eq!(back, block, "serialization round-trips");
+        // An endpoint's image block parses into the known variant, not Other.
+        let parsed: ContentBlock =
+            serde_json::from_str(r#"{"type":"image","source":{"type":"base64","media_type":"image/jpeg","data":"Zg=="}}"#).unwrap();
+        match parsed {
+            ContentBlock::Known(KnownBlock::Image {
+                source: ImageSource::Base64 { media_type, data },
+            }) => {
+                assert_eq!(media_type, "image/jpeg");
+                assert_eq!(data, "Zg==");
+            }
+            other => panic!("expected known image block, got {other:?}"),
+        }
+    }
+
+    /// A tool result carrying images serializes with content as an ARRAY:
+    /// image block(s) first, then the text note.
+    #[test]
+    fn image_tool_result_serializes_content_array_image_first_then_text() {
+        let block = ContentBlock::tool_result_block_with_images(
+            "tu_1",
+            "[image: a.png (12 bytes, image/png)]".to_string(),
+            false,
+            &[ImageBlock {
+                media_type: "image/png".to_string(),
+                data: "aGk=".to_string(),
+            }],
+        );
+        let text = serde_json::to_string(&block).unwrap();
+        let v: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(v["type"], "tool_result");
+        assert_eq!(v["tool_use_id"], "tu_1");
+        assert!(v["content"].is_array(), "image results use array content");
+        let items = v["content"].as_array().unwrap();
+        assert_eq!(items.len(), 2, "image block first, then the text note");
+        assert_eq!(items[0]["type"], "image");
+        assert_eq!(items[0]["source"]["type"], "base64");
+        assert_eq!(items[0]["source"]["media_type"], "image/png");
+        assert_eq!(items[0]["source"]["data"], "aGk=");
+        assert_eq!(items[1]["type"], "text");
+        assert_eq!(items[1]["text"], "[image: a.png (12 bytes, image/png)]");
+        // The serialized form round-trips back through the block parser.
+        let parsed: ContentBlock = serde_json::from_str(&text).unwrap();
+        assert_eq!(parsed, block);
+    }
+
+    /// Non-regression pin: a result with NO images stays byte-identical to
+    /// the pre-T91 shape — string content via the plain constructor, never a
+    /// one-element array.
+    #[test]
+    fn image_plain_tool_result_stays_string_content_byte_identical() {
+        let with_empty = ContentBlock::tool_result_block_with_images(
+            "tu_1",
+            "output".to_string(),
+            true,
+            &[],
+        );
+        let plain = ContentBlock::tool_result_block("tu_1", "output".to_string(), true);
+        assert_eq!(with_empty, plain, "empty images delegates to the plain shape");
+        let text = serde_json::to_string(&with_empty).unwrap();
+        assert_eq!(
+            text,
+            r#"{"type":"tool_result","tool_use_id":"tu_1","content":"output","is_error":true}"#,
+            "byte-identical pre-T91 serialization"
+        );
+    }
+
+    /// The degrade rewrite: standalone image blocks AND image entries inside
+    /// tool_result array content become the placeholder text; everything else
+    /// is preserved verbatim.
+    #[test]
+    fn image_replacement_swaps_blocks_and_array_entries_for_placeholder() {
+        let messages = vec![
+            Message::user(vec![
+                ContentBlock::text_block("kick"),
+                ContentBlock::Known(KnownBlock::Image {
+                    source: ImageSource::Base64 {
+                        media_type: "image/png".to_string(),
+                        data: "aGk=".to_string(),
+                    },
+                }),
+                ContentBlock::tool_result_block_with_images(
+                    "tu_1",
+                    "[image: a.png (2 bytes, image/png)]".to_string(),
+                    false,
+                    &[ImageBlock {
+                        media_type: "image/png".to_string(),
+                        data: "aGk=".to_string(),
+                    }],
+                ),
+            ]),
+        ];
+        let replaced = replace_images_with_placeholder(&messages);
+        assert_eq!(replaced.len(), 1);
+        let blocks = &replaced[0].content;
+        assert_eq!(blocks.len(), 3);
+        assert_eq!(blocks[0], ContentBlock::text_block("kick"));
+        assert_eq!(
+            blocks[1],
+            ContentBlock::text_block(IMAGE_REMOVED_PLACEHOLDER),
+            "standalone image block becomes placeholder text"
+        );
+        match &blocks[2] {
+            ContentBlock::Known(KnownBlock::ToolResult { content, is_error, .. }) => {
+                assert!(!is_error);
+                let items = content.as_array().expect("array content preserved");
+                assert_eq!(items.len(), 2);
+                assert_eq!(
+                    items[0],
+                    json!({ "type": "text", "text": IMAGE_REMOVED_PLACEHOLDER }),
+                    "image entry in the array becomes placeholder text"
+                );
+                assert_eq!(items[1]["type"], "text");
+            }
+            other => panic!("expected tool_result block, got {other:?}"),
+        }
+        // No images anywhere in the rewrite.
+        let text = serde_json::to_string(&replaced).unwrap();
+        assert!(!text.contains(r#""type":"image""#), "{text}");
+    }
+
+    /// Degrade detection is narrow: a 400 whose body mentions image/content
+    /// matches; unrelated 400s, other statuses and other errors do not.
+    #[test]
+    fn image_rejection_detection_is_narrow_to_400_image_content_bodies() {
+        let image_err = anyhow::anyhow!(
+            "LLM request failed: HTTP 400: {{\"type\":\"error\",\"error\":{{\"type\":\"invalid_request_error\",\"message\":\"Requests must not contain image content blocks\"}}}}"
+        );
+        assert!(is_image_rejection(&image_err));
+
+        let content_err = anyhow::anyhow!(
+            "LLM request failed: HTTP 400: {{\"error\":{{\"message\":\"messages: content field required\"}}}}"
+        );
+        assert!(is_image_rejection(&content_err));
+
+        // Unrelated 400: no image/content in the body.
+        let auth_err = anyhow::anyhow!(
+            "LLM request failed: HTTP 400: {{\"error\":{{\"message\":\"max_tokens: field required\"}}}}"
+        );
+        assert!(!is_image_rejection(&auth_err));
+
+        // Wrong status class.
+        let five_xx = anyhow::anyhow!("LLM request failed: HTTP 500: server image trouble");
+        assert!(!is_image_rejection(&five_xx));
+
+        // Not an HTTP error at all.
+        let conn = anyhow::anyhow!("LLM request failed after 3 attempts; last error: connection error: reset");
+        assert!(!is_image_rejection(&conn));
     }
 }

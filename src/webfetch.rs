@@ -115,6 +115,7 @@ pub fn web_fetch(input: &Value) -> anyhow::Result<ToolResult> {
     Ok(ToolResult {
         content,
         is_error: false,
+        images: Vec::new(),
     })
 }
 
