@@ -433,7 +433,9 @@ hosted (impl and validator alike) has been harvested.
   shipped nine routing/verdict decisions with none recorded).
 - **Release trigger (T100): the loop cuts tags.** If ≥3 items landed
   since the newest `v*` tag OR any FEATURES.md check-off landed: bump
-  Cargo.toml (minor for a feature, patch otherwise), `chore: release
+  Cargo.toml AND Cargo.lock (minor for a feature, patch otherwise;
+  `cargo check` regenerates the lock — a manifest-only bump fails
+  `--locked` builds, the v0.2.0 lesson), `chore: release
   vX.Y.Z` commit, `git tag vX.Y.Z`, push commit + tag. HARD RULES: tags
   are immutable — never re-tag, never move, never force-push; tag only
   with gates green at HEAD; ONE tag per wrap; tag message = generated
