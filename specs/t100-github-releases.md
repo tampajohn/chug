@@ -45,9 +45,16 @@ make release notes mechanical; the repo's own GH Actions may be edited
    name the fix (no release yet → build-from-source line). The site's
    get-started section gains the one-liner block (site-repo edit,
    verify.sh checks the block and the install.sh link).
-6. Cutting a release is an OPERATOR action (`git tag v0.2.0 && git push
-   origin v0.2.0`); the loop never self-tags (a loop that versions itself
-   is a foot-gun — version bumps are human calls, like merges to prod).
+6. **The loop cuts tags** (operator override 2026-09-28, reversing the
+   earlier never-self-tag guardrail): at wrap, if ≥3 items landed since
+   the last tag OR any FEATURES.md check-off landed, the orchestrator bumps
+   Cargo.toml (minor for a feature, patch otherwise), commits
+   `chore: release vX.Y.Z`, tags `vX.Y.Z`, pushes tag+commit. HARD
+   RULES: never re-tag or move a tag, never force-push tags, tag only with
+   gates green at HEAD, one tag per wrap max, tag message = generated
+   notes since previous tag. If the release workflow fails on a pushed
+   tag, the loop files a row (never deletes the tag — a published tag is
+   immutable history).
 
 ## Tests
 
