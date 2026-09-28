@@ -307,6 +307,46 @@ accurate. **One docs row filed (T127); no structural debt.**
 
 ### Cycle 64 (2026-09-28) — fresh eval (kimi, loopd-routed: queue empty) — T124–T127 filed — IN PROGRESS
 
+**T124** (F10 phase 1 — `chug mcp-serve` + `chug_status`, feature,
+pri 2, THE ROADMAP PULL): landed d6264be (rebased a4e1bea onto main
+post-T125, fast-forward) — the fleet primitive's first leg. A stdio
+JSON-RPC 2.0 server: newline framing matching the client's own shape,
+initialize (PROTOCOL_VERSION `2025-06-18` reused `pub(crate)` from
+mcp.rs, capabilities.tools, serverInfo), ping, tools/list, tools/call,
+notifications never answered, the -32700/-32600/-32601/-32602
+taxonomy with errors that never kill the loop, EOF exit 0, and stdout
+purity BY CONSTRUCTION (single `writeln!` protocol writer, grep-pinned
+by the `stdout_purity_module_has_no_stdout_writers` leg). One
+read-only tool `chug_status`: fail-fast cwd validation (absolute /
+exists / has `.chug/`, each naming the received path verbatim) over
+the delegate `read_events`/`summarize_events` seams (visibility-only
+`pub(crate)`; `render_status` byte-identical) with a compact additive
+renderer. 28 bin-internal legs + 2 deadline-bounded e2e spawn legs
+(full client conversation with a notification-silence probe; errors
+keep the loop alive over the real wire). glm impl 78/80 first-try
+(budget_low inside the T18 margin). kimi optional-EXERCISED **PASS**
+37/50: static review clean (delegate.rs line-by-line visibility-only;
+dispatch bypasses banner/ledger/lock/events), independent gates
+(build/clippy/nextest 993/993), manual wire smoke, and 6 mutants in 2
+T79 parallel batches — M1/M2/M4/M5/M6 caught by exactly their targeted
+tests; **M3 survived**: the `.chug/`-existence check can be deleted
+undetected because the missing-.chug-dir leg's assertions are
+substring-satisfied by the downstream events-unreadable message (one
+low-severity weak-test finding, carried to next-eval triage — the
+T119-class pin-strengthening pattern). Review + post-merge nextest
+995/995. Estimate ~485 → actual +1106 (2.3x, tests ≈ 65% of the diff)
+— **the T125 ~400 band's first proving case, landed hours after the
+band did**: under the new rule this row (est ~485 > ~400) would have
+been split at filing; its true size was over even the 500 ceiling.
+T125's recalibration counter: T127 bullseye (+8/-8), T125 itself 3.5x
+(+159, all pins), T124 2.3x. FEATURES.md F10 annotated phase-1 LANDED;
+phases 2–3 deferred (phase 2 now READY to file next eval). Both
+streams + validator ledger harvested. Orchestrator note: the T120
+verify-then-kill rule was exercised twice this arc on suspected
+goal/edit garbles — both read-backs proved the payloads INTACT
+(render artifacts in the orchestrator's own context view), no kills,
+no rework — the rule paying for itself.
+
 **T127** (README Install staleness, docs, pri 2): landed 5dbab0d
 (fast-forward) — the pre-release honesty pair deleted, replaced with
 versionless durable claims (releases cut on `v*` tags and published;
