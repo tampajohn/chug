@@ -1,295 +1,271 @@
-# EVALUATION — chug, assessed by chug-loop (2026-09-28, cycle 58)
+# EVALUATION — chug, assessed by chug-loop (2026-09-28, cycle 59)
 
-**MANDATORY fresh eval** — the queue is EMPTY (T1–T101 all done with
-refs; cycle 57's flip landed the last row), so the freshness predicate's
+**MANDATORY fresh eval** — the queue is EMPTY (T1–T106 all done with
+refs; cycle 58's wrap landed the last row), so the freshness predicate's
 queue half fails and loopd routed an eval cycle (`todo_rows=0 → eval
-cycle on kimi-k3`, loopd.log 04:19:25Z). The roadmap pull is **F6
-(Session fork) → T105, SPLIT**: phase 1 (named fork slots) filed now;
-phase 2 (`--session` concurrency + fork-at-iteration-N) deferred with a
-written reason (§4). This is a DELTA eval over cycle 53's eval: the new
-corpus is the T91–T101 arcs (ELEVEN landed items — the F5-p1 image
-feature, the T100 release surface, the T98/T99/T101 site-sync trio, five
-smalls) plus the cycle-53–57 orchestrator streams, so findings
-concentrate on the T92 measure clause (FIRED → T102), the
-delegate-launch field-corruption class (4th sighting → T103), the
-driver.rs trip line (crossed again → T104), and the watch items the
-cycle-53 eval owed a judgment (all closed, §3).
+cycle on kimi-k3`, loopd.log 05:54:36Z). The roadmap pull is **F7
+(Streaming UX) → T108, SPLIT**: phase 1 (transport streaming +
+accumulation + console/headless text deltas) filed now; phase 2 (TUI
+live typing) deferred with a written reason (§4). This is a DELTA eval
+over cycle 58's eval: the new corpus is the T102–T106 arcs (FIVE landed
+items — the 80-iter doctrine step, the delegate launch existence probes,
+the driver.rs test-module split, the F6 fork-slot feature, the README
+Install honesty sentence) plus the cycle-58 orchestrator stream, so
+findings concentrate on the T104 worktree-discipline breach (→ T107),
+the delegate.rs module-size trajectory (→ T109), and the watch items
+cycle 58 owed a judgment (all assessed, §3).
 
 Corpus: `.chug/eval-digest.md` FIRST (FRESH at eval start — regenerated
-04:19:11Z, 81 s after the newest pre-cycle stream; the only
-post-generation events are THIS eval's own appends), then the cycle-53
-eval stream (`events-20260928-005946.jsonl`, kimi 158/160 goal-accepted
-— §2 I6), cycle 54's glm stream (`...-011405.jsonl`, 42/160), cycle 55
-(`...-022538.jsonl`, 75/160), cycle 56 (`...-033614.jsonl`, 82/160),
-cycle 57 (`...-041925.jsonl`, 70/160), the 20+ t91–t101 child streams
-(impls, validators, resumes, fix-ups, two killed misfires),
-`.chug/loopd/loopd.log` (routing + site-sync lines 23:34Z–04:19Z),
-`TODO.md` (T1–T101 all done), `.chug/decisions.jsonl` (199 records —
-was 155 at the cycle-53 eval), `src/` (35,221 lines; driver.rs 5,717 —
-§2 I3; delegate.rs 3,998; permissions.rs 766), `README.md` (full cold
-read, §6 — ONE finding: §6(e) Install names an unborn release surface),
-`FEATURES.md` (Tier 1 exhausted; §4), the live chug.sh clone (T101
-acceptance verified — timeline reads chronologically at 627c2f9).
+05:54:20Z, 80s after the newest pre-cycle stream; the only
+post-generation events are THIS eval's own appends to the live
+events.jsonl), the cycle-58 orchestrator stream
+(`events-20260928-055436.jsonl`, kimi 148/160 goal-accepted, 1h33m,
+1.3M in / 112.1k out — §2 I3), the eight t102–t106 child streams
+(impls 20/61/75/43/10 + validators 18/31/35, ALL goal-accepted, zero
+deaths), `.chug/loopd/loopd.log` (routing + site-sync lines
+04:19Z–05:54Z), `TODO.md` (T1–T106 all done), `.chug/decisions.jsonl`
+(227 records — was 199 at the cycle-58 eval), `src/` (driver.rs
+**1,457** post-T104 + `src/driver/tests/` 17 files; delegate.rs
+**4,255** — §2 I2; tree ≈36.2k lines), `README.md` (full cold read,
+§6 — NO new findings), `FEATURES.md` (Tier 1 exhausted; F6-p1 landed;
+§4), a live `chug fork save/list` smoke (T105 verified working — slot
+created and removed), and the T104 breach record in the cycle-58
+Outcomes entry.
 
 ## 1. What chug does well — be brief
 
-- **T63 resume is the loop's load-bearing wall: 21/21 all-time.** All
-  three 65/65 ceiling deaths this era (T91 +1012 lines, T99 +816, T100
-  +2008) were recovered in-worktree in 2–28 iterations and minutes —
-  the death of a big feature is now a ~4-minute tax, never a loss.
-- **Post-T92, the small-row class is right-sized.** Seven of eight
-  small/medium impl children finished first-try clean (T93 23/65, T94
-  17/65, T95 26/65, T96 23/65, T97 37/65, T98 38/65, T101 53/65) —
-  T92's own arc was 19/50 in 96 s.
-- **The corrective-error era pays rent every cycle.** T88's decision_log
-  corrective caught two live fumbles in-cycle (t97-impl, t100-fixup —
-  one-iteration self-corrections); T94's `get_str` received-keys shipped
-  the same shape to every tool; T41/T85's sandbox candor caught t99's
-  live-site read attempt and named the bash escape hatch (one-iteration
-  recovery, zero friction); T38's truncation advisory fired 6× across
-  the t98/t99 big-feature children and both chunked to completion.
-- **Adversarial validation caught two REAL blocking bugs on the
-  operator's own feature directives**: T99 r1 FAIL (flush_card silently
-  dropped no-`<p>` cards — a spec violation the fixture proved) and T100
-  r1 FAIL (install.sh collapsed every linux-aarch64 host to a
-  nonexistent asset — the workflow publishes aarch64, the script
-  rejected it). Both fixed pre-merge, both re-validated PASS. This is
-  the loop working exactly as designed on its highest-visibility work.
-- **Site-sync closed its own loop**: T98 stats + T99 TIMELINE/FEATURES
-  bootstraps + T101 ordering fixes are live on chug.sh (627c2f9); all
-  three acceptance legs verified in THIS eval (§3).
-- **decision_log is structural**: 199 records (+44 in five cycles), and
-  the cycle-53–57 wraps all shipped complete routing/verdict/outcome
-  chains.
+- **Cycle 58 was the era's first ALL-PASS cycle**: 5/5 items landed
+  clean, zero fix-up arcs, glm impls all first-try (20/61/75/43/10 of
+  80), kimi verdicts 18/31/35 of 50 all PASS, every item pushed at
+  landing. The pipeline has never run cleaner.
+- **T102's raise paid for itself in THREE HOURS**: T104's impl finished
+  at 75/80 — a fourth 65/65 death avoided on the first big test of the
+  new budget. Doctrine amending itself on written measure clauses is
+  the loop working as designed.
+- **T44 pipeline overlap ran twice clean** (T103-validator‖T105-impl,
+  T104-validator‖T106-impl), both disjoint-file pairs, both merges
+  conflict-free rebase-ff. Serial-merge discipline held.
+- **The corrective-error era keeps paying rent**: t105-impl's
+  decision_log fumble (`options must be a string, got missing`) was
+  caught by T88's corrective and self-corrected in one iteration;
+  t103-impl's `/tmp` path-escapes refusal named the bash escape hatch
+  (T41/T85) — one-iteration recovery, zero friction.
+- **The T18 margin did its job on the cycle's biggest child**:
+  t104-impl's budget_low fired at 8 remaining; it wrapped at 75/80 with
+  the work committed.
+- **Incident recovery was by the book**: the T104 main-commit breach
+  (§2 I1) was recovered with branch-preserve + main-reset-to-pushed,
+  never force-pushed, and the standard arc ran untouched.
+- **T105's fork slots work live** — verified in THIS eval
+  (`fork save` → slot with transcript+LEDGER sizes and goal preview;
+  `fork list` correct; slot removed after).
 
 ## 2. Incidents worth fixing
 
-### I1 — T92's measure clause FIRED: 3 of 12 impl children died at 65/65 with the work done → T102
+### I1 — T104 impl child committed its work to MAIN → T107
 
-Post-T92 impl-class census (digest-verified, launch order): T93 23/65,
-T91-run1 **65/65 DIED** (84 total), T94 17/65, T98 38/65, T95 26/65,
-T96 23/65, T97 37/65, T99-run1 **65/65 DIED** (93 total), T99-fixup
-28/65, T100-run1 **65/65 DIED** (67 total), T100-fixup 41/65, T101
-53/65. The clause's trigger — ">1 of the next 6 impl children still
-dies at 65/65" — fires under any rolling 6-window over children 5–10
-(T95…T100-run1 holds two deaths). All three deaths are the 800+-line
-big-feature class, all with the work complete, all resume-recovered
-(21/21). The doctrine's own next step is written into the clause: "the
-next eval considers 80 or a work-splitting doctrine instead." Considered:
-work-splitting loses — T99/T100 were already minimal coherent units
-(operator directives), and two arcs cost more overhead than one resume;
-resume loses nothing but leaves the 65–80 band paying a death per big
-feature. The T21-proportional step (+23%, 65→80) buys that band
-(T100's 67 finishes first-try) at near-zero cost — ceilings don't tax
-early finishers, and the 35-minute + token ceilings stay the wedge
-guards. Honest sizing: 84 and 93 exceed 80 too — the >80 band stays
-resume-served, and the NEW measure clause points at a spec-size cap
-(~500-line estimate ceiling → mandatory split) instead of a third
-iteration raise. Doctrine → runs ALONE, kimi REQUIRED. Pin surface:
-`tests/loop_spec_recovery.rs:141` (`"65/35 impl, 50/30 validate"`).
+First worktree-discipline breach in 58 cycles. The T104 impl child
+(glm, 75/80, goal-accepted) cd'd from its worktree to the main checkout
+to run byte-identity checks against main's tree, then ran
+`git add` + `git commit` FROM THERE — `ee3943e` sat unpushed on local
+main (cycle-58 Outcomes, T104 entry). Recovery: branch-at-commit, main
+reset to the pushed state, worktree re-pointed; never pushed, never
+force-pushed. Root cause is the step-2 goal template's commitment
+clause — `Commit your work here.` (LOOP-SPEC.md:96) — which is
+unambiguous only while the child STAYS in its worktree; a child that
+cd's to main for legitimate read-only checks can resolve "here" to its
+current directory, and nothing in the template re-anchors it. Fix: the
+template gains the explicit clause — commit ONLY from the worktree cwd;
+cd back before committing; never run git add/commit with the main repo
+as cwd — plus a pin (tests/loop_spec_recovery.rs, the step-2-template
+carrier). Doctrine → runs ALONE, kimi REQUIRED. Filed as **T107**;
+landing it FIRST gives T108/T109's children the hardened template.
 
-### I2 — delegate launch field-corruption, 4th sighting → T103
+### I2 — delegate.rs is the largest module at 4,255 lines, 74% tests → T109
 
-Cycle 57's near-miss: a validator launch carried a DUPLICATE `spec` key;
-last-key-wins resolved to the correct path and the full goal arrived
-intact (transcript-verified) — silently. Prior legs: cycle 53's
-goal-text-duplicated validator launch (killed pre-work), cycle 55's
-spec-field goal-bleed (pid 60756, killed at iteration 3), cycle 53's T95
-wrong-slug hallucination (loud spawn failure). `src/delegate.rs:~137`
-validates SHAPE (`spec.is_absolute()`) but never EXISTENCE: a
-corrupted-but-absolute spec spawns a doomed child. Fix: launch refuses a
-spec that is not an existing readable file and a cwd that is not an
-existing directory, with tool errors naming the received path verbatim —
-the T94 thesis (name the fumble at the call site, self-correct in one
-iteration) applied to the launch surface. delegate.rs only → kimi
-optional.
+delegate.rs: 4,255 lines (+257 this cycle — T103's probes + tests),
+production half 1,125 lines, test module 3,129 lines / 83 `#[test]`
+fns (delegate.rs:1126→EOF). The T104 shape exactly: healthy production,
+accreting test module (T23/T28/T29/T39/T58/T68/T69/T89/T103 families).
+The ~4,500 trip-line convention (T84/T104) has NOT fired (94.6%), but
++257/cycle growth crosses within 1–2 cycles and every delegate-touching
+row already pages the file three reads deep (t103-impl, 61/80). The
+cycle-58 wrap queued it: "the split conversation moves closer." Weighed:
+waiting for the trip line respects the convention but buys nothing —
+the split is provably safe (T104 landed the playbook 3 hours ago:
+byte-identical moves, count pins, harness-in-mod.rs), it gets bigger
+with every delegate row, and it fills this cycle's T44 overlap slot
+against T108's validator (disjoint files). Filed PRE-EMPTIVELY as
+**T109** (pri 3, kimi optional — delegate.rs is not on the REQUIRED
+list); the defer-to-trip-line alternative is rejection-logged.
 
-### I3 — driver.rs crossed the pre-declared ~4500 trip line AGAIN → T104
+### I3 — cycle-58 orchestrator at 148/160: the I6 closure holds (assessed, NOT filed)
 
-5,717 lines (+1,208 since T84's extraction landed at 4,509). The
-cycle-36 mandate ("a future crossing carries a T71-class extraction
-mandate") fires — but this crossing's shape is new: the PRODUCTION half
-is healthy (1,452 lines, 28 fns); the growth is the TEST MODULE
-(driver.rs:1453→EOF = 4,264 lines, 139 of 167 `fn` tokens — the
-T83/T89/T90/T91 driver-integration families). Children editing driver.rs
-tests page a 5,717-line file three reads deep. The T84 rules apply with
-a new cut: `mod tests` becomes `src/driver/tests/mod.rs` (harness stays
-`pub(crate)`-reachable for trim.rs's reuse — driver.rs:1453's own
-comment) + one file per test family, byte-identical moves, count
-equality pinned. The T95 layout guard walks `src/` non-recursively
-(verified: `std::fs::read_dir` one level) — subdirectory test modules
-don't disturb it, no guard edit. kimi REQUIRED (driver.rs core).
+Cycle 58 ran 148/160 with FIVE item arcs + eval aboard (T36's designed
+load was eval + 3). I6's closure criterion — "re-file 160→200 if a
+cycle scrapes ≥150 with recovery pressure" — is NOT tripped (148 < 150,
+zero recovery arcs, goal-accepted with the wrap complete). Second
+consecutive post-closure data point that the cap holds. No row; the
+watch stands (a ≥150 scrape re-opens it).
 
-### I4 — README Install names a release surface that doesn't exist yet → T106
+### I4 — orchestrator `git add .chug/…` refusal (assessed, NOT filed)
 
-§6(e) quickstart-truth bite: `git tag -l 'v*'` is EMPTY (T100's
-bootstrap deliberately holds the first tag for the operator), so the
-Install one-liner and tarball links 404 as written TODAY. The bootstrap
-timing is correct and stays the operator's; the docs must be honest in
-the meantime — one conditionally-worded sentence, true both before and
-after the first tag lands. Docs-only floor, pri 4.
+Cycle 58's orchestrator tried to `git add` a harvested `.chug/` path;
+gitignore refused (exit 1, stderr hint shown); self-corrected same
+iteration (harvests are local-only by design — `.chug/` is gitignored
+runtime state). One sighting, benign, self-corrected. Baseline fumble
+rate — no row (rejection logged).
 
-### I5 — validator ceiling zone: assessed, NOT filed (watch)
+### I5 — validator ceiling zone: zero readings this cycle (watch)
 
-t99-validate-r1 ran 46/50 (budget_low fired at 8 remaining, finished);
-t99-r2 42/50; t100-r2 35/50; era-wide validators finish 16–48/50 with
-ZERO deaths. The T32 sizing (50) holds. Watch: a validator 50/50 death
-with the verdict unwritten re-files this as the T21-class validator step.
+Validators ran 18/50, 31/50, 35/50 — the whole cycle nowhere near the
+zone (previous era: 16–48 with zero deaths). The T32 sizing (50) holds.
+Watch stands: a validator 50/50 death with the verdict unwritten
+re-files this as the T21-class validator step.
 
-### I6 — cycle-53 eval scraped 158/160: the T89 re-measure question CLOSED
+## 3. Friction hot spots — fix assessment
 
-The cycle-51 eval's I4 watch: "re-file a 160→200 row if either of the
-next two eval cycles scrapes ≥150 without a recovery arc." Cycle 53
-scraped 158/160 — with SIX item arcs aboard (eval + T92/T93/T91/T94/
-T98/T95 + T96 mid-arc), goal-accepted, zero recovery arcs: the cap held
-under TWICE its T36 designed load (eval ≈45–55 + 3 items + wrap ≈10).
-Post-T89 terminal waits collapsed item arcs to ~12–18 orchestrator
-iterations each, exactly as predicted. The guarded failure (cap-induced
-death) did not occur — this is the cap working, not straining. NO
-160→200 row (weighed-rejected, record logged); the watch closes with
-this eval as the second data point.
-
-## 3. Friction hot spots — fix assessment (all cycle-53 watches judged)
-
-- **path-escapes-cwd (T85/T41)**: CLOSED. One refusal in four cycles
-  (t99-impl's live-site read) — the error named the bash escape hatch
-  and the child recovered in one iteration. The machinery working is not
-  friction. (t94-impl's grep hit is a code COMMENT quoting the error
-  shape, not a refusal.)
-- **decision_log schema fumbles (T88)**: CLOSED — the corrective caught
-  both live instances (t97-impl, t100-fixup: `options must be a string,
-  got missing`), each self-corrected in one iteration.
-- **macOS `timeout` mirage (T22)**: zero sightings in the era's streams
-  (scan: mirage / illegal-line-count / CONFLICT classes all absent).
+- **path-escapes-cwd (T41/T85)**: one fire (t103-impl's `/tmp`
+  commit-msg write) — the error named the bash escape hatch, child
+  self-corrected in one iteration. Machinery working, not friction.
+- **decision_log schema fumbles (T88)**: one fire (t105-impl
+  `options must be a string, got missing`) — the corrective named the
+  fumble, self-corrected in one iteration. Working.
+- **output_truncated advisory (T38)**: 2 fires (t103-impl, t105-impl) —
+  both chunked their writes and completed first-try. Working.
+- **macOS `timeout` mirage (T22)**: zero sightings in the era's streams.
 - **driver.lock CONFLICT**: zero sightings — single-driver discipline
-  held through five cycles incl. four mid-cycle origin divergences.
-- **cargo-nextest absence**: CLOSED — reinstalled by the operator before
-  cycle 53's post-merge gates (`~/.cargo/bin/cargo-nextest`); every gate
-  since is nextest-release (745→820 tests, ~9–10 s).
-- **T80 md-only floor**: JUDGED WORKING, watch stands down — first true
-  exercise (T96: exit-1 classification → guard floor, correct) plus the
-  correct boundary refusal (T97: a `.rs` pin in the diff → full gates).
-- **output_truncated (T38)**: 6 fires across t98/t99 big-feature
-  children; both chunked their writes and completed. The advisory works.
-- **edit_file old-not-found**: scattered singles (t99 ×2, one each in
-  cycles 54/57) — baseline model-fumble rate, all self-corrected. No row.
-- **Site acceptance legs (T98/T99/T101)**: ALL VERIFIED LIVE — loopd.log
-  shows post-cycle syncs 1d5c991/21e0d65/627c2f9 with both marker
-  bootstraps (b34a1e1, 605b02a); the live timeline reads chronologically
-  (dates ascending 09-20 → 09-28 at 627c2f9). T101's spec Tests §4 leg
-  closes.
-- **T81 acceptance (one routine-glm + one eval-kimi cycle with wall
-  times)**: SATISFIED — routine-glm = cycle 54 (42/160, 12m51s, T96+T97
-  landed, zero fumbles beyond two self-corrected edits); eval-kimi =
-  THIS cycle (wall time + outcome recorded in cycle-58 Outcomes).
+  held (loopd.log routing lines confirm clean handoffs all era).
+- **T102 measure-clause census**: 4 post-raise impl children at 80
+  (61/75/43/10) + t102 itself at 20/65 — ZERO deaths. The window is
+  forming: >1 of the next 6 dying at 80/80 with the work done re-opens
+  the spec-size-cap consideration written into the clause.
+- **T80 docs-only floor**: T106 exercised it correctly (exit-1
+  classification → guard floor at review AND post-merge, full suite
+  skipped) — the shrink works on a true md-only diff.
+- **Display-artifact watch**: 4 sightings cycle 58 (two validator-goal
+  assemblies, two edit_file renders) — every transmitted payload
+  verified INTACT in the transcript/file. The read-back habit is the
+  whole game and it held. Watch stands.
+- **T91 survivors (retry-once, 5 MiB boundary, case-fold)**: zero
+  organic image reads this era (the image leg is landed-but-unused in
+  anger) — re-weighed: no new evidence, rejection stands; the first
+  organic image read re-opens the weighing.
+- **Site-sync acceptance**: post-cycle syncs green all era (627c2f9 →
+  edfb609; items 103/103, tests 842, cycles 40 — loopd.log). The
+  T98/T99/T101 trio is done-done.
+- **SSH pushurl**: held all cycle (six pushes, zero auth friction); the
+  gh-workflow-scope class stays retired at host level.
+- **edit_file old-not-found**: one sighting in the cycle-58
+  orchestrator stream (TODO.md) — self-corrected baseline rate. No row.
 
-## 4. Capability gaps — ROADMAP PULL: F6 (Session fork) → T105, SPLIT
+## 4. Capability gaps — ROADMAP PULL: F7 (Streaming UX) → T108, SPLIT
 
-Tier 1 is EXHAUSTED (F1, F13-p1, F2-p1, F3-p1, F4-p1, F5-p1 all landed);
-Tier 2's top unworked item is **F6 (Session fork)** — "Clone
-transcript+ledger at iteration N into a new session id; explore two
-approaches from one state" (benchmark: unreal-agent forking). SPLIT per
-the working rules (full scope blows one child budget): **phase 1 → T105:
-named fork slots** — `chug fork save/list/restore` over
-`.chug/sessions/<name>/` (transcript + LEDGER snapshot; restore rotates
-the live session aside with the existing T7/T3 archive machinery so
-nothing is lost; T55 driver-lock interlock; serial exploration: explore
-A, restore, explore B). **Phase 2 DEFERRED with written reason**:
-`--session <name>` concurrent path plumbing (threading a session-keyed
-transcript path through transcript.rs/driver.rs/chat.rs) plus
-fork-at-iteration-N transcript surgery (T77 trim adjacency) — the serial
-slot already covers the benchmark's explore-two-approaches shape, and
-concurrent same-cwd forks are structurally barred by the T55 driver
-lock; the loop's concurrency primitive is the worktree+delegate pair it
-already has. Demand honest: zero organic fork requests in the corpus
-(the operator's directives were site-sync, releases, timeline fixes) —
-filed on capability-gap doctrine per the T37 precedent (web_fetch filed
-with zero organic attempts; the value is the bounded, audited surface).
-The loop consumer (fork-snapshot before a risky resume) is available but
-unproven; the chat consumer is primary. FEATURES.md F6 gains the SPLIT
-annotation from this eval; the phase-1 check-off lands in T105's
-row-flip commit.
+Tier 1 is exhausted (F1, F13-p1, F2-p1, F3-p1, F4-p1, F5-p1 landed);
+F6-p1 landed cycle 58 (dc29137) — Tier 2's top unworked item is **F7
+(Streaming UX)**: "Text deltas to sinks as they arrive (TUI live
+typing, headless progress); watchdog gets byte-level liveness for
+free." SPLIT per the working rules: **phase 1 → T108** — `stream:true`
+transport leg + SSE accumulation to an identical Response (usage
+equality pinned — T15 budget enforcement depends on it) +
+`Event::ModelTextDelta` console surface + `CHUG_STREAM=0` kill switch +
+non-SSE fallback with bounded telemetry. The enablers are all in-repo:
+`src/sse.rs`'s chunk-boundary-safe `SseParser` (mcp_http uses it
+today), the T2 watchdog's caller-thread receive loop (the chunk hook
+needs no cross-thread machinery), and the `Event::ModelText`
+console-only precedent (events.jsonl stays clean). **Phase 2 DEFERRED
+with written reason**: TUI live typing / progressive tool-input
+rendering rides the tui.rs redraw architecture — a chat-only surface
+with no loop consumer; the loop's liveness need (headless children) is
+fully met by phase 1's console surface on `delegate.log`. Demand
+honest: zero organic streaming requests in the corpus — filed on
+capability-gap doctrine per the T37 precedent, but the loop consumer is
+concrete and measured: t104-impl's run emitted 74.7k output tokens
+across generations that each leave `.chug/delegate.log` silent for
+minutes; the T98/T99 big-feature era hit the 8,192 output-token
+ceiling 6× (T38 fires) on single generations. With phase 1, the
+orchestrator's `delegate status` log tail becomes liveness evidence.
+FEATURES.md F7 gains the SPLIT annotation from this eval; the phase-1
+check-off lands in T108's row-flip commit.
 
-Beyond the pull: **no new roadmap appends this eval.** F7–F12 stand; the
-F13/F2/F3/F4 phase-2 deferrals stand (layad endpoint absent; written
-reasons carried) — reaffirmed, not re-litigated.
+Beyond the pull: **no new roadmap appends this eval.** F8–F12 stand;
+the F13/F2/F3/F4 phase-2 deferrals stand (layad endpoint absent;
+written reasons carried) — reaffirmed, not re-litigated.
 
 ## 5. Top 3 priorities
 
-1. **T102** (impl-child 65→80) — the measure clause fired; doctrine
-   row, runs ALONE, and landing it FIRST gives every later child this
-   cycle the wider budget (T104's split is the next big-feature-shaped
-   row).
-2. **T103** (delegate spec/cwd existence) — the field-corruption class
-   has four sightings and one silent near-miss; the fix is small,
-   mechanical, RED-provable, and converts every future leg into a
-   one-iteration self-correction.
-3. **T105** (F6 phase 1 fork slots) — the mandatory roadmap pull;
-   biggest row of the queue, sized for the post-T102 budget.
+1. **T107** (goal-template worktree discipline) — the era's only
+   discipline breach; doctrine row, runs ALONE, and landing it FIRST
+   gives T108/T109's impl children the hardened template.
+2. **T108** (F7 phase 1 streaming) — the mandatory roadmap pull;
+   biggest row of the queue, sized for the 80-iter budget (T91-class:
+   ~700–900 lines with tests); kimi REQUIRED (api.rs + driver.rs +
+   events.rs).
+3. **T109** (delegate.rs test split) — mechanical, T104-shaped,
+   pre-emptive; fills the T44 overlap slot against T108's validator
+   (disjoint files).
 
 ## 6. README audit (usability)
 
-(a) **Reading order**: correct — Install (T100's section correctly at
-the TOP for a cold reader) → quickstart → chat → run → plan → TUI →
-tools → risk gate → hooks → permissions → MCP → Langfuse → specs →
-loopd → development. (b) **Redundancy**: none with drift — the
+(a) **Reading order**: correct — Install → Quickstart → chat → run →
+Session forks (T105's section, correctly placed) → plan → TUI → Tools →
+Risk gate → Hooks → Permissions → MCP → Langfuse → specs → loopd →
+Development. (b) **Redundancy**: none with drift — the
 `cargo install --path .` line appears in Install's from-source block AND
-Quickstart, but both copies are identical and correct (signposting, not
-duplication); the T97 delegate sub-bullets read clean. (c)
-**Staleness**: no bite — the Development layout line is guard-pinned
-(T95's set-equality test green at 28 modules; the automation holds, no
-manual counting needed since). (d) **Balance**: fine — the loopd block
-is dense but reference-grade; config detail sits in Hooks/Permissions
-where it belongs. (e) **Quickstart truth**: the build/run/chat commands
-work as written in the order given; the INSTALL one-liner and tarball
-links fail today (no release — §2 I4) → T106.
+Quickstart; both copies verified identical this read (signposting, not
+duplication). (c) **Staleness**: no bite — the Development layout line
+is guard-pinned (T95 set-equality green; `sse`/`fork`/`trim` all
+present); T106's Install honesty sentence names the pending first
+release with wording that stays true after the tag lands. (d)
+**Balance**: fine — the run-mode bullets are dense but reference-grade;
+config detail sits in Hooks/Permissions; the delegate sub-bullets
+(T97) read clean. (e) **Quickstart truth**: the build/run/chat/fork
+commands work as written — the fork legs verified live in THIS eval;
+the Install one-liner 404s today BY DESIGN and says so (T106). No docs
+row this cycle — second consecutive clean audit.
 
 ## Handoff
 
-- **Work order** (bugs > robustness > features > DX > docs): **T102**
-  (doctrine — runs ALONE, kimi REQUIRED; first so later children get 80)
-  → **T103** (delegate.rs; kimi OPTIONAL per T16/T31 — take the round on
-  an idle queue per the cycle-55 T99 precedent) → **T105** (feature —
-  main.rs + new fork.rs; kimi optional, destructive leg safe-by-
-  construction via restore-rotates-first) → **T104** (driver.rs test
-  split — kimi REQUIRED, T84-shaped byte-identity validation) →
-  **T106** (README one sentence — docs-only floor, kimi skipped).
-  Bundle check (T45 conjunctive): no two rows share both the ≤30-line
-  estimate and the same 1–2 files — T106 is the only trivial row and
-  stands alone. Overlap check (T44): T102 is doctrine → alone; T103
-  (delegate.rs) is disjoint from T105 (main.rs + fork.rs) and from T104
-  (driver.rs + src/driver/tests/) — adjacent pairs MAY overlap per the
-  disjoint-file rule, merges strictly serial in queue order.
-- **SELF-SPEC**: none. **Human items**: (1) `gh auth refresh -s
-  workflow` — the https OAuth token still lacks the workflow scope for
-  pushes touching .github/workflows (cycle-57 incident); THIS cycle sets
-  the SSH pushurl (`git config remote.origin.pushurl
-  git@github.com:tampajohn/chug.git` — the cycle-57 wrap's named
-  permanent fix, the SSH key proven all of cycle 57) as the host-level
-  workaround and records it in Outcomes; the auth refresh remains the
-  operator's call. (2) The FIRST `v*` tag is the operator's — cutting it
-  also exercises T100's release workflow end-to-end and activates the
-  wrap-time tag doctrine. (3) `com.tampajohn.chug-loopd.plist` stays
-  untracked — operator's launchd unit (carried).
+- **Work order** (bugs > robustness > features > DX > docs): **T107**
+  (doctrine — runs ALONE, kimi REQUIRED; first so later children get
+  the hardened template) → **T108** (feature — api.rs + driver.rs +
+  events.rs + sinks; kimi REQUIRED) → **T109** (delegate.rs test split
+  — kimi OPTIONAL per T16/T31; orchestrator byte-identity +
+  count-equality review substitutes on a non-idle queue). Bundle check
+  (T45 conjunctive): T107 is doctrine (never bundled), T108 is a
+  feature (never bundled), T109 alone is bundle-eligible but solitary —
+  no bundles. Overlap check (T44): T107 doctrine → alone; T108
+  (api.rs/driver.rs/events.rs/eventlog.rs/tui.rs) is DISJOINT from
+  T109 (delegate.rs only) → T109's impl MAY overlap T108's validator;
+  merges strictly serial in queue order (T108 before T109).
+- **SELF-SPEC**: none. **Human items**: (1) the FIRST `v*` tag stays
+  the operator's — cutting it exercises T100's release workflow
+  end-to-end and activates the wrap-time tag doctrine (bootstrap
+  holds: `git tag -l 'v*'` empty at filing). (2) `gh auth refresh -s
+  workflow` remains the proper fix for the workflow-scope class; the
+  SSH pushurl workaround held all era (retired at host level, operator
+  informed). (3) `com.tampajohn.chug-loopd.plist` stays untracked —
+  operator's launchd unit (carried).
 - **Watch items carried**: validator ceiling zone (I5 — re-file on a
-  50/50 validator death); display-artifact watch (transmitted payloads
-  verified intact in every sighting so far — the verify-the-payload
-  habit stands); T91's 3 informational survivors (retry-once, 5 MiB
-  boundary, case-fold unpinned — re-weighed: no new evidence, the image
-  leg is landed-but-unused in anger; the first organic image read
-  re-opens the weighing); F13/F2/F3/F4 phase-2 deferrals (layad endpoint
-  absent); delegate.rs 3,998 / tgrep.rs 2,531 / permissions.rs 766
-  module sizes (rejection stands — no growth since cycle 53).
+  50/50 validator death); T102 measure-clause census (4 of ~6 window
+  readings, zero deaths); display-artifact watch (payloads intact every
+  sighting — the read-back habit stands); T91's 3 informational
+  survivors (no new evidence); F13/F2/F3/F4 phase-2 deferrals (layad
+  endpoint absent); module sizes (driver.rs CLOSED at 1,457;
+  delegate.rs → T109 filed; tgrep.rs 2,531 / mcp_http.rs 2,793 /
+  permissions.rs 766 stable — rejection stands); loopd 160 cap (I3 —
+  second consecutive sub-150 reading, closure holds).
 - **Weighed and REJECTED this eval** (eval-triage records in
-  `.chug/decisions.jsonl`): loopd cap 160→200 (I6 — cap held at 158/160
-  under 2× designed load); validator budget 50→65 (I5 — zero deaths, one
-  46/50 zone reading); T91 survivor pins now (no new evidence); a
-  codified SSH-push fallback row for the gh workflow-scope class (host
-  auth is operator scope — the pushurl one-liner fixes it, no repo row);
-  F7-before-F6 reorder (no dependency or measured incident — F6 is
-  top-of-tier); permissions.rs split (766 total / ~400 prod — the
-  cycle-53 soft-convention rejection stands); delegate.rs/tgrep.rs
-  splits (+6/+4 lines since cycle 53 — rejection stands).
+  `.chug/decisions.jsonl`): validator budget 50→65 (I5 — zero deaths,
+  zone-free cycle); loopd cap 160→200 (I3 — 148/160 trips neither the
+  ≥150 trigger nor recovery pressure); defer-T109-to-trip-line
+  (recorded with the filed row — the convention's mandate attaches at
+  crossing, but the growth rate + fresh playbook + overlap-slot fit
+  outweigh one cycle of earliness); a `git add .chug` guard row (I4 —
+  baseline self-corrected fumble); F8-before-F7 reorder (no dependency
+  or measured incident — F7 is top-of-tier); TUI-first F7 phase
+  ordering (the loop consumer is the console surface — phase order
+  stands); new roadmap appends (none credible in the delta corpus).
 
 ## Outcomes (filled at cycle wrap — LOOP-SPEC Phase 3)
 
