@@ -277,6 +277,32 @@ filed** — the second consecutive clean audit after T127's catch.
 
 ### Cycle 65 (2026-09-28) — fresh eval (kimi, loopd-routed: queue empty) — T128–T131 filed (F10 phase 2 PULLED + SPLIT); landings below in order.
 
+**T128** (F10 phase 2a — `chug_collect` MCP tool, feature, pri 2,
+THE PULL's read half): landed 85ca4c1 (fast-forward) — `chug mcp-serve`
+now serves two read-only tools. `chug_collect` answers the fleet
+observer's structured-result question for any chug cwd: latest
+segment verdict, accepted-goal summary, check cmd, pid-gated
+liveness, bounded/`base`-scoped commit refs — built on
+visibility-only `pub(crate)` lifts of delegate's T69 collect seams
+(every delegate.rs hunk a signature line with a T128 doc note;
+`render_collect` byte-untouched; the shared `validate_chug_cwd` keeps
+`chug_status`'s error texts byte-identical so the T130 pins pass
+unchanged). `base` honors the T69 no-silent-default rule. 9 new bin
+legs + one wire e2e. glm impl 57/80 first-try. kimi EXERCISED
+**PASS** 43/50 (routing d1790622226-15, verdict d1790623655-16):
+independent gates (build, clippy -D warnings, nextest 1006/1006), 6
+mutants in 2 T79 parallel batches — M1/M2/M3/M5/M6 killed; **M4
+survived**: an `alive:true`→render flip on the liveness arm goes
+unguarded (weak pin, low severity — the SAME substring-shadow class
+T130 just swept on `chug_status`; **carried to next-eval triage** —
+the class now has two sightings, both in mcp_serve.rs). Review +
+post-merge nextest 1006/1006. Estimate ~250 → actual +580/-84 (2.3x
+— feature-row test density, T125 calibration confirmed again).
+FEATURES.md F10 annotated phase-2a LANDED. Outcome landed-clean.
+Both streams + validator LEDGER harvested (the rotation lesson
+recurred: the validator's fresh launch rotated the impl stream —
+identified by goal_sha256 prefix, both kept).
+
 **T130** (chug_status weak-pin strengthening, robustness, pri 2):
 landed 976e4ae (fast-forward) — the era's only validator survivor
 closed. All six `chug_status` fail-fast legs now assert their
