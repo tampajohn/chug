@@ -163,6 +163,20 @@ impl, never 2 impls):
    recovery routing (resume / orchestrator-finish / next-cycle) AND any
    glm→kimi model fallback are each logged via `decision_log` (classes
    `recovery-routing` / `model-fallback`).
+   **Kill rule (cycle-61): verify-then-kill is SEQUENTIAL — read first,
+   kill after.** Before killing any child over a suspected payload garble
+   (a delegate goal echo, a log tail, a status render that LOOKS
+   corrupt), read the payload back from the child's on-disk artifacts
+   (transcript / events / files via bash) in a SEPARATE completed step,
+   and kill only when the read-back proves the payload itself corrupt.
+   **Never kill in the same breath** as the check: render-only garbles
+   (terminal/preview artifacts) are the common case and kill nothing.
+   The evidence is the cycle-61 T112-validator SIGKILL — a
+   duplicated-tail rendering artifact in the orchestrator's own console
+   view read as a corrupt launch goal, the kill landed 35s in, and
+   transcript read-back only AFTER the kill proved the 2166-byte payload
+   intact (a full validator spin-up burned on the relaunch, ~11 min
+   wall).
 3. **Review.** After the child exits, the review's first look is one
    `delegate{action:"collect", cwd, pid}` call — it returns the latest run
    segment's verdict, the accepted goal's summary, the check cmd, and the
@@ -328,6 +342,14 @@ impl, never 2 impls):
    `goal_complete` at ~118/120 and the run aborted 120/120) — and the
    orchestrator runs `cargo test --test todo_consistency` (seconds)
    after every TODO.md edit, before committing.
+   When editing repo files with `sed` or other in-place bash edits
+   (bookkeeping, harvest, gates scripting), grep-verify the intended
+   needle in the same command line or the immediately following one —
+   sed exits 0 on no-match, so a typo'd anchor is a SILENT no-op (the
+   cycle-61 anchor-typo incident: a `sed -i` bookkeeping edit exited 0
+   changing nothing; only a later read-back caught it). Prefer
+   `edit_file` (which errors on no-match) for repo files, and when sed
+   is necessary, assert.
    Update README.md in the
    merge commit when the item is user-visible. **Outcomes are per-item
    too**: in the same commit as the row flip (or an immediately following
