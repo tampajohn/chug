@@ -24,11 +24,11 @@ fail() { printf 'install.sh: %s\n' "$1" >&2; exit 1; }
 
 banner() {
   printf '\n'
-  printf '   ____ _   _  ___  _   _\n'
-  printf '  / ___| | | |/ _ \\| | | |\n'
-  printf ' | |   | |_| | | | | | | |\n'
-  printf ' | |___|  _  | |_| | |_| |\n'
-  printf '  \\____|_| |_|\\___/ \\___/\n'
+  printf '   ____ _   _  ___   __ _ \n'
+  printf '  / ___| | | |/ _ \\ / _\\` |\n'
+  printf ' | |   | |_| | | | | (_| |\n'
+  printf ' | |___|  _  | |_| |\\__, |\n'
+  printf '  \\____|_| |_|\\___/ |___/ \n'
   printf '\n'
 }
 
