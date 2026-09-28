@@ -353,6 +353,29 @@ clean audit — no docs row.**
   impl + validator streams, both ledgers (impl's rotated), child
   decision records. Verdict d1790591988-22 outcome landed-clean.
 
+- **T114 landed (63119e6, fast-forward)** — the cycle-60 wrap's
+  handed-over check:-breadth weighing resolved filing-side:
+  META-META-SPEC's spec bar gains the BREAK-side rule as a pure
+  insertion between T96's ADD-side sentence and T110's
+  estimate-ceiling sentence (both needles verbatim; the T111
+  readme_layout escape + fc1d691 named as evidence; all pre-existing
+  bar text byte-intact), with pin legs (i) exactly-once + (j)
+  window/ordering beside T110's leg h in tests/loop_spec_recovery.rs.
+  glm impl 44/80 first-try, RED-proven via three temporary mutations.
+  Orchestrator review: insertion exact, 916/916 + greps + clippy
+  first-hand. kimi REQUIRED (doctrine): PASS 19/50, five mutants
+  correctly SERIAL (overlap declared — all touch META-META-SPEC.md):
+  M1 delete → both greps + both legs RED, M2 duplicate → leg (i) only,
+  M3 reorder past the estimate sentence → leg (j) only, M4 rewrap →
+  check-line grep + legs RED, M5 out-of-window move → leg (j) only; 8
+  pre-existing legs green through every mutant; 1 non-blocking
+  (needle-pin idiom leaves the remedy/evidence prose unpinned —
+  as-specced per req 3). Post-merge 916/916. The rule binds NEW
+  filings from this point — the retro-sweep alternative was rejected
+  at eval (d1790587936-7). Harvested: impl + validator streams,
+  validator ledger, child decision records. Routing d1790593212-26
+  verdict d1790593600-27 outcome landed-clean.
+
 ### Cycle 60 (2026-09-28) — fresh eval (kimi, loopd-routed: queue empty) — T110 + T111 filed (F8 SPLIT phase 1 → T111); BOTH landed (T110 5a16ce5, T111 d8fdea0+fc1d691)
 
 **T111 F8 phase 1 structured todo tool — LANDED, fast-forward.** The
