@@ -250,14 +250,28 @@ fn require_str(input: &Value, key: &str) -> anyhow::Result<String> {
     }
 }
 
+/// The one title rule (T116): a title being SET — at `todo_add` or at
+/// `todo_update` — must be non-empty after trimming. The trim-then-check
+/// and the error shape (`{tool}: \`title\` must not be empty — {remedy}`)
+/// live in this single helper so the two paths cannot drift again (T111's
+/// finding: update accepted what add rejected). Only the remedy wording
+/// differs per caller: `todo_add`'s is pinned byte-identical, and
+/// `todo_update`'s names the rule.
+fn ensure_title_non_empty(tool: &str, remedy: &str, title: &str) -> anyhow::Result<()> {
+    if title.trim().is_empty() {
+        bail!("{tool}: `title` must not be empty — {remedy}");
+    }
+    Ok(())
+}
+
 /// `todo_add` `{title}`: append with status `pending`, allocate
 /// `t<length+1>`, return the id. Lazy-creates `.chug/todos.json` on the
 /// first add (a fresh worktree never gets a store it did not ask for).
+/// The non-empty-title rule is shared with `todo_update` via
+/// `ensure_title_non_empty` (T116).
 pub fn todo_add(cwd: &Path, input: &Value) -> anyhow::Result<ToolResult> {
     let title = require_str(input, "title")?;
-    if title.trim().is_empty() {
-        bail!("todo_add: `title` must not be empty — say what the step is");
-    }
+    ensure_title_non_empty("todo_add", "say what the step is", &title)?;
     let mut todos = load(cwd)?;
     let id = format!("t{}", todos.len() + 1);
     todos.push(Todo {
@@ -276,9 +290,9 @@ pub fn todo_add(cwd: &Path, input: &Value) -> anyhow::Result<ToolResult> {
 
 /// `todo_update` `{id, status?, title?}`: the enforced-status mutation.
 /// Validation diagnoses the whole call in one error (id shape, the
-/// at-least-one-field rule, the status set) BEFORE the id lookup, so a
-/// second retry does not whack-a-mole through one-leg-per-call errors; an
-/// unknown id names the existing ids.
+/// at-least-one-field rule, the status set, the non-empty-title rule)
+/// BEFORE the id lookup, so a second retry does not whack-a-mole through
+/// one-leg-per-call errors; an unknown id names the existing ids.
 pub fn todo_update(cwd: &Path, input: &Value) -> anyhow::Result<ToolResult> {
     let obj = input
         .as_object()
@@ -301,6 +315,13 @@ pub fn todo_update(cwd: &Path, input: &Value) -> anyhow::Result<ToolResult> {
             "todo_update: nothing to update — pass `status` (one of {}) and/or `title`",
             STATUSES.join(", ")
         );
+    }
+    if let Some(title) = &new_title {
+        ensure_title_non_empty(
+            "todo_update",
+            "titles must be non-empty, say what the step is",
+            title,
+        )?;
     }
 
     let mut todos = load(cwd)?;
@@ -637,6 +658,54 @@ mod tests {
         assert_eq!(load(tmp.path()).unwrap()[0].status, Status::Done);
     }
 
+    #[test]
+    fn todo_update_rejects_empty_and_whitespace_only_titles() {
+        let tmp = TempDir::new().unwrap();
+        dispatch(&ctx(tmp.path()), "todo_add", &json!({"title": "a"}));
+        for title in ["", "   "] {
+            let r = dispatch(
+                &ctx(tmp.path()),
+                "todo_update",
+                &json!({"id": "t1", "title": title}),
+            );
+            assert!(r.is_error, "{title:?}: {}", r.content);
+            assert!(
+                r.content.contains("titles must be non-empty"),
+                "rule named: {}",
+                r.content
+            );
+        }
+        // The failed updates never wrote: title and status are untouched.
+        let stored = load(tmp.path()).unwrap();
+        assert_eq!(stored[0].title, "a");
+        assert_eq!(stored[0].status, Status::Pending);
+
+        // An empty title is rejected even alongside a status change, and
+        // the whole call is refused before any mutation (validation
+        // precedes the id lookup and the save).
+        let r = dispatch(
+            &ctx(tmp.path()),
+            "todo_update",
+            &json!({"id": "t1", "status": "done", "title": ""}),
+        );
+        assert!(r.is_error, "{}", r.content);
+        assert_eq!(
+            load(tmp.path()).unwrap()[0].status,
+            Status::Pending,
+            "failed update never writes"
+        );
+
+        // Trim-then-CHECK, not trim-then-store: a title with surrounding
+        // whitespace passes the rule and is stored as-is.
+        let r = dispatch(
+            &ctx(tmp.path()),
+            "todo_update",
+            &json!({"id": "t1", "title": "  spaced  "}),
+        );
+        assert!(!r.is_error, "{}", r.content);
+        assert_eq!(load(tmp.path()).unwrap()[0].title, "  spaced  ");
+    }
+
     // ---------- unit: add validation ----------
 
     #[test]
@@ -649,6 +718,47 @@ mod tests {
         assert!(r.is_error, "{}", r.content);
         assert!(r.content.contains("empty"), "{}", r.content);
         assert!(!todos_path(tmp.path()).exists(), "failed adds never write");
+    }
+
+    /// T116 symmetry leg: the same two offending titles against BOTH
+    /// title-setting paths produce the same error shape —
+    /// `{tool}: \`title\` must not be empty — {remedy}` — with
+    /// `todo_add`'s bytes pinned byte-identical so future drift is
+    /// visible in one diff.
+    #[test]
+    fn empty_title_errors_have_the_same_shape_on_both_paths() {
+        let tmp = TempDir::new().unwrap();
+        for title in ["", "   "] {
+            let add = dispatch(&ctx(tmp.path()), "todo_add", &json!({"title": title}));
+            assert!(add.is_error, "{title:?}: {}", add.content);
+            assert_eq!(
+                add.content,
+                "tool error: todo_add: `title` must not be empty — say what the step is",
+                "add's wording is pinned byte-identical (dispatch adds its constant `tool error: ` prefix)"
+            );
+
+            // Validation precedes the id lookup: the title rule fires even
+            // against an id that does not exist (no todo seeded here).
+            let upd = dispatch(
+                &ctx(tmp.path()),
+                "todo_update",
+                &json!({"id": "t9", "title": title}),
+            );
+            assert!(upd.is_error, "{title:?}: {}", upd.content);
+            assert_eq!(
+                upd.content,
+                "tool error: todo_update: `title` must not be empty — titles must be non-empty, say what the step is",
+                "update's wording names the rule"
+            );
+            assert!(
+                add.content.contains("`title` must not be empty")
+                    && upd.content.contains("`title` must not be empty"),
+                "shared shape segment: {} | {}",
+                add.content,
+                upd.content
+            );
+        }
+        assert!(!todos_path(tmp.path()).exists(), "failed calls never write");
     }
 
     // ---------- dispatch: list rendering ----------
