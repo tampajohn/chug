@@ -279,6 +279,23 @@ shared_target_dir 22/22). kimi SKIPPED per routing (docs-only restructure
 + orchestrator claim-for-claim diff review, T16/T31/T95 precedent). 1
 artifact harvested pre-removal.
 
+**Cycle-level notes (wrap).** Phase 1 skipped per the freshness predicate
+(2 todo rows + EVALUATION.md same-UTC-day) — routine glm cycle, zero
+eval-triage records by design. Both carried rows landed; validators 1/1
+REQUIRED round PASS (zero findings, 3/3 mutants). **INCIDENT: push
+divergence at wrap.** The operator pushed ed4476e (T99 site-sync v2
+directive: row + specs/t99-site-sync-content.md, TODO.md's T97 row still
+`todo` in that tree) to origin/main while this cycle ran; local main
+advanced to 89952ba/b0c6041 (T97 done + Outcomes). Push of 89952ba was
+rejected — per the hard rule NO force-push and NO mid-cycle
+reconciliation: local commits b0c6041 + 89952ba (+ this wrap commit) are
+LANDED LOCALLY, UNPUSHED. Next cycle's first act: reconcile with
+origin/main (merge — expect a small TODO.md conflict: origin adds the T99
+row after T97's now-done row), then work T99 (pri 3, operator directive,
+ready spec) with the T96/T97 pattern. T96's lesson held: the cycle-53
+mid-arc recipe executed end-to-end with zero re-work — resume-from-row
+notes are worth their tokens.
+
 ### Cycle 53 (2026-09-27) — fresh eval (kimi, loopd-routed: queue empty) — T91–T97 filed (F5 SPLIT phase 1 → T91); T92 LANDED (9db86bc) — impl children now get 65 iterations
 
 **T92 LOOP-SPEC impl-child template 50→65 — LANDED, fast-forward merge 9db86bc.**
