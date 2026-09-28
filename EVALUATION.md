@@ -285,6 +285,34 @@ impl+validate LEDGERs). Acceptance leg (spec Tests §4): the live chug.sh
 timeline reads chronologically after the next wrap's site-sync run —
 recorded at wrap.
 
+Cycle notes: (1) CYCLE ROUTING — eval-routed kimi turned routine exactly
+as cycle 56 did: launch saw todo_rows=0 (loopd → kimi), the open-time
+rebase onto origin 8a5b958 brought the operator's T101 row in, and the
+predicate on the reconciled files (todo_rows=1, EVALUATION.md mtime
+same-UTC-day) held → Phase 1 skipped, bugs-first per the cycle-56 wrap
+directive (routing d1790566862-1). (2) PUSH INCIDENT (operator action
+needed): the first push of the rebased T100 arc was REJECTED — the https
+OAuth token lacks the `workflow` scope and the arc creates
+.github/workflows/release.yml; the gh token lacks it too. Workaround used
+all cycle: `git push git@github.com:tampajohn/chug.git main` (operator's
+SSH key, unscoped). Permanent fix: `gh auth refresh -s workflow` or
+`git config remote.origin.pushurl git@github.com:tampajohn/chug.git`.
+Until then, any push touching .github/workflows fails over https.
+(3) NEAR-MISS (4th sighting of the goal/spec field-corruption class,
+first non-fatal): the validator's delegate launch carried a malformed
+duplicate `spec` key (goal text fragment); the spawn resolved
+last-key-wins to the correct spec path and the full goal arrived intact
+(verified in the child transcript: 2213 chars, head+tail+export line
+checked) — the delegate assertion candidate from cycle 55 stands.
+(4) glm impl 53/65 FIRST-TRY — no ceiling death, no resume (no new
+census point; the T92 65-iter headroom plus a genuinely scoped spec).
+(5) Queue EMPTY at wrap → next cycle routes eval (kimi) by the predicate.
+(6) Tag doctrine bootstrap still held: no v* tag exists — the operator's
+first tag now also exercises T100's release workflow end-to-end.
+(7) Acceptance: loopd runs site-sync.sh after this cycle's goal-complete
+— the next cycle verifies the live chug.sh timeline reads
+chronologically (site commit in the chug-site clone).
+
 ### Cycle 56 (2026-09-28) — eval-routed kimi turned routine after reconciling cycle-55's origin divergence (T100 row appeared post-rebase, predicate held); T100 LANDED (9d1182a, fast-forward)
 
 **T100 GitHub releases: tag-triggered prebuilt binaries + generated notes —
@@ -737,95 +765,7 @@ cycle's — acceptance leg still open).
 - **Validator's 4 non-blocking findings (carried for next eval)**: (1) the load-time matcher-fit `mcp__` canary over-rejects server-specific globs like `mcp__fs__*` + path (fail-open, operator-visible — a skipped-rule warn, never a silent dead deny; phase-2 candidate: canary should accept any `mcp__*`-prefixed tool glob); (2) the spec-check filter `cargo test --bin chug permissions` misses the 5 strongest driver-integration legs (a mutant survived under the plural filter, killed under `permission` — spec-authoring lesson: check filters should be the broader stem); (3) the stderr warn-once latch is not test-observable (events line is, stderr isn't); (4) size at the guard's edge (363 vs ~350).
 - Cycle notes: freshness-skip per predicate (1 todo row + same-day EVALUATION.md; loopd routed routine glm, d1790550858-1 era). Opened by landing cycle-51's wrap remainder (21a76a6: T90 not-started note + cycle-level notes + cycle-44 compaction) — the previous cycle died at goal_complete with its wrap uncommitted; the eval commit was durable but the final EVALUATION.md push wasn't. Queue is now EMPTY (T1–T90 all done): next cycle's freshness predicate will NOT hold on the queue half → eval cycle on kimi unless rows are filed. `com.tampajohn.chug-loopd.plist` remains untracked at repo root (operator's launchd unit — left alone, operator's call).
 
-### Cycle 51 (2026-09-27) — fresh eval (kimi, loopd-routed: queue empty) — T88 + T89 + T90 filed; T88 + T89 LANDED
-
-**T89 delegate terminal-wait + LOOP-SPEC adoption — LANDED, merge d2b402a.**
-glm impl run1 died 50/50 ceiling-zone (work done, gates+commit unfinished —
-the T15/T17/T20 shape); T63 **resume #18** (pid 49989) accepted 7/50
-(commit 6e95df9, +532/−23: delegate.rs `terminal` flag + 8 RED-proven
-tests incl. two named mutant RED runs, tools.rs schema property +
-description, LOOP-SPEC §2 step 2 default-posture adoption with the
-iteration-economics clause, README integrated clause; pin sweep verified
-loop_spec_recovery.rs STEP2_ANCHOR bytes intact). Review 721/721
-fallback-release + clippy (target-shared). **kimi REQUIRED** (doctrine +
-tools.rs; pid 53370) **VERDICT: PASS 0 blocking** at 48/50 — gates
-independently re-run under target-shared-validate (721/721 fallback +
-79/79 spec check), **8/8 mutants killed** in 2 parallel T79 waves with
-role-keyed mut dirs (passthrough, never-wake, file-creation-drop,
-rejection-==999, budget_low-wake, liveness-off, schema-rename,
-launch-rejection-removal), tree byte-clean; 3 non-blocking notes carried
-(presence-vs-flip semantics documented; `terminal: false` launch leg
-untested; the one-call shorthand is bounded by the 600s cap). Recovery
-routing d1790549083-14, verdict d1790549953-15. **Adoption note:** THIS
-cycle's own binary predates the merge, so its `terminal` field would be
-silently ignored (unknown-key tolerance) — the cycle used the paced
-sleep+instant-poll cadence instead (~90s spacing cut validator-arc poll
-cost to ~10 orchestrator iterations vs the measured ~40–60 wake-per-
-advance pattern); the next cycle's rebuilt binary gets the real terminal
-waits, and T89's re-measurement (does the 160-cap pressure lift?) lands
-next eval.
-
-**T88 decision_log corrective validation errors — LANDED, merge c5a4f9e.**
-glm impl (pid 39838) accepted 33/50 CLEAN first-try (commit e127d96):
-src/decisions.rs ONLY (+457/−27), all five reqs — one error lists every
-invalid field in schema order (req 1), received-keys + one-record reminder
-on unknown shapes (req 2 — trigger honestly widened to
-no-required-key-OR-unrecognized-key so the alias leg with 5/6 valid keys
-still diagnoses), JSON-type naming for non-object input (req 3), success
-path byte-identical (req 4 — 8 pre-existing pins green unmodified),
-confidence range message preserved (req 5); 9 new RED-proven legs. Review
-gates **713/713 fallback-release** (704 baseline + 9) + clippy under
-target-shared; post-merge 713/713 under target-shared-main. kimi SKIPPED
-per routing (d1790548521-11 — decisions.rs not REQUIRED; error-text-only
-failure legs; T16/T31 precedent). **T82 runner note:** cargo-nextest was
-uninstalled from the host at ~22:16Z (loopd re-exec probe at 22:16:48Z
-logged the fallback; cycles 48–50 genuinely ran nextest 0.9.146) — every
-gate this cycle runs the unconditional fallback, named in each commit.
-**Forensic bonus (filing-verified):** the glm impl hit `missing or
-non-string field: old` ×3 on edit_file and self-reported a tool bug in its
-own decision record — the harvested transcript proves it sent `old_string`
-(the Anthropic-canonical alias), NOT `old`: model fumble, tool contract
-correct, child's self-diagnosis FALSE (its bash-heredoc route-around cost 0
-iterations). Same alias class as T88's decision_log findings — generalized
-received-keys diagnosis for tools.rs `get_str` is a next-eval candidate
-(touches REQUIRED-listed tools.rs; pin sweep needed; out of T88's scope).
-Arc: 1 impl, 0 resumes, 0 fix-ups, 0 validator rounds — the T88-sized
-shape the queue wants.
-
-**T90 permissions deny-list — NOT STARTED (budget), ready for next cycle.**
-The orchestrator hit budget_low with 8 iterations left after the T89 wrap;
-the honest act under the anti-sprint-burn guard was wrap, not a third arc.
-The row stays `todo` with a complete spec (deny-only phase 1, policy order
-permissions → hooks → risk gate, fail-open config / fail-closed match,
-size guard per the T83 grinder lesson, REQUIRED kimi routing pre-named).
-
-**Cycle-level notes.** Two items landed of three filed (T88 clean arc;
-T89 one ceiling-zone resume + one clean validation). The eval itself ran
-~40 iterations; two full item arcs + wrap fit in ~110 — the 160 cap held
-THIS time, but only because the paced sleep+instant-poll cadence (~90 s
-spacing, the written 60–110 s cadence) cut the measured ~75%-poll share
-to ~15 poll iterations across three child arcs. **T81 acceptance leg,
-eval-kimi half (owed since cycle 47):** this fresh-eval cycle on kimi
-filed 3 well-formed rows with specs, landed 2, and wrapped truthful in one
-run with zero recovery — quality bar met; both halves of the T81
-acceptance are now on record (routine-glm: cycle 46; eval-kimi: this
-cycle). **Gate-runner environment:** cargo-nextest was uninstalled from
-the host at ~22:16Z (loopd re-exec probe logged the fallback at
-22:16:48Z); cycles 48–50 genuinely ran nextest 0.9.146 (their commit
-narratives stand); every gate this cycle ran the unconditional fallback
-(~2.4× slower wall, same coverage), named in each commit. **decision_log
-adoption this cycle:** 18 records (10 eval-triage incl. rejects, 1
-validation-routing, 1 validation-verdict, 1 recovery-routing, 5 outcomes).
-**Watch items carried:** T80 md-only telemetry (4th cycle unexercised);
-T85 cross-tree doctrine measurement (one data point: the T89 validator
-read META-SPEC §6's escape-hatch line and used bash cross-tree with zero
-path-escapes-cwd errors — early pass); T89 re-measurement (160-cap
-pressure vs terminal waits — next eval); delegate-paragraph density (7th
-eval — the T89 clause lands it at the split threshold, next eval judges);
-t89 validator's 3 non-blocking notes; t88-impl's FALSE self-diagnosis
-(its own `old_string` alias fumble recorded as a tool bug — F13 corpus
-will need label cleaning; generalized get_str received-keys diagnosis is
-a next-eval row candidate, REQUIRED-listed tools.rs).
+### Cycle 51 (2026-09-27) — fresh eval (kimi: queue empty) filed T88+T89+T90; T89 delegate terminal-wait + LOOP-SPEC adoption LANDED (merge d2b402a, impl 6e95df9 via T63 resume #18; kimi PASS) + T88 decision_log corrective validation errors LANDED (c5a4f9e). Verdict: 2/2 landed
 
 ### Cycle 50 (2026-09-27) — T85+T86+T87 docs bundle LANDED (merge 2440520: cross-tree bash escape-hatch doctrine on both review surfaces, README layout tgrep/plan/hooks, docs-only floor honest risk model + pin leg); cycle-49 mid-arc recovery executed via T63 resume #17; kimi PASS 0 blocking 18/50, 2/2 mutants RED. Verdict: 3/3 landed
 
