@@ -269,6 +269,25 @@ row this cycle — second consecutive clean audit.
 
 ## Outcomes (filled at cycle wrap — LOOP-SPEC Phase 3)
 
+### Cycle 59 (2026-09-28) — fresh eval (kimi, loopd-routed: queue empty) — T107–T109 filed (F7 SPLIT phase 1 → T108); wrap entry fills landed refs
+
+**T107 LOOP-SPEC child-goal worktree-discipline clause — LANDED,
+fast-forward.** The cycle-58 I1 breach fix: the step-2 goal template's
+`Commit your work here.` gains the explicit clause — commit ONLY from
+the worktree cwd, cd back before committing, never run git add/commit
+with the main repo as cwd — so every child from T108 on launches under
+the hardened template. glm impl 31/80 first-try clean (clause after the
+intact sentence, both check: needles verbatim, three pin legs in
+tests/loop_spec_recovery.rs RED-proven pins-first 5-pass/2-FAIL). kimi
+REQUIRED PASS 16/50: 6/6 mutants killed (M1 = the commit's own RED
+proof independently reproduced; M4 proved the T64 loose-heading step-2
+scope leg independently load-bearing), zero blocking findings, zero
+survivors, tree byte-clean, serial overlap declared. Review gates +
+post-merge nextest 845/845 + clippy under target-shared /
+target-shared-main. Routing d1790576171-11, verdict d1790576657-12,
+outcome landed-clean; 2 streams + validator ledger + 3 child decision
+records harvested.
+
 ### Cycle 58 (2026-09-28) — fresh eval (kimi, loopd-routed: queue empty) — T102–T106 filed (F6 SPLIT phase 1 → T105); ALL FIVE landed clean (T102 ffebdaf, T103 80d4a14, T105 dc29137, T104 ee3943e, T106 e5cdebd)
 
 **T102 LOOP-SPEC impl-child template 65→80 — LANDED, fast-forward.** The
