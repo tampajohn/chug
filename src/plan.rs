@@ -17,9 +17,10 @@
 //! - **`submit_plan`** is the single deliberate write/exit path: input
 //!   `{ "plan": string }` (required, min length 1). With `--out`, the plan
 //!   string is written VERBATIM to that path (parent dirs created; a path
-//!   escaping the cwd sandbox is a tool error — the same lexical rule
-//!   `write_file` enforces, stated in plan-mode words); without `--out` the
-//!   plan surfaces on stdout. Either way the session then ends successfully.
+//!   escaping the cwd sandbox is a tool error — the same rule `write_file`
+//!   enforces via `resolve_safe`, lexical and symlink, stated in plan-mode
+//!   words); without `--out` the plan surfaces on stdout. Either way the
+//!   session then ends successfully.
 //! - **Defense in depth**: schema filtering alone is not trusted. Dispatch
 //!   rejects EVERY other registered tool name with a tool error naming the
 //!   allowed set — it never executes, and the loop continues so the model
@@ -135,7 +136,9 @@ fn submit_plan(ctx: &ToolCtx, input: &Value, out: Option<&Path>) -> anyhow::Resu
             images: Vec::new(),
         });
     };
-    // Sandbox: the same lexical rule write_file enforces via resolve_safe,
+    // Sandbox: the same resolve_safe rule write_file enforces — lexical
+    // `..`/prefix checks plus T134 symlink confinement (the review's
+    // `submit_plan --out outside/plan.md` escape rode an in-tree symlink),
     // stated in plan-mode words (there is no bash here to escape with, so
     // the stock refusal's bash suffix would be a lie).
     let resolved = match tools::resolve_safe(&ctx.cwd, &out.to_string_lossy()) {
@@ -411,6 +414,29 @@ mod tests {
         assert!(result.content.contains("sandbox"), "{}", result.content);
         assert!(
             !tmp.path().parent().unwrap().join("x.md").exists(),
+            "the plan must never land outside cwd"
+        );
+    }
+
+    /// T134 (codex review 20260928 §2 HIGH): the same lexical-only gap the
+    /// file tools had — an in-tree symlink to an external directory turned
+    /// `submit_plan --out outside/plan.md` into an out-of-sandbox write.
+    #[cfg(unix)]
+    #[test]
+    fn submit_plan_rejects_symlink_out_escape() {
+        let tmp = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink(outside.path(), tmp.path().join("outside")).unwrap();
+        let result = dispatch(
+            &ctx(tmp.path()),
+            "submit_plan",
+            &json!({"plan": PLAN}),
+            Some(&tmp.path().join("outside/plan.md")),
+        );
+        assert!(result.is_error, "{}", result.content);
+        assert!(result.content.contains("sandbox"), "{}", result.content);
+        assert!(
+            !outside.path().join("plan.md").exists(),
             "the plan must never land outside cwd"
         );
     }

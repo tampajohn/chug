@@ -629,8 +629,9 @@ fn glob_tool(ctx: &ToolCtx, input: &Value) -> anyhow::Result<ToolResult> {
         None => ctx.cwd.clone(),
     };
     let joined = base.join(pattern);
-    // Same path-safety rules as the other file tools: rejects `..` traversal
-    // and absolute paths outside cwd, lexically, before any globbing happens.
+    // Same path-safety rules as the other file tools: rejects `..` traversal,
+    // absolute paths outside cwd, and symlinks resolving outside cwd
+    // (T134), before any globbing happens.
     resolve_safe(&ctx.cwd, &joined.to_string_lossy()).map_err(|e| anyhow!("{e}"))?;
     let matched = glob::glob(&joined.to_string_lossy())
         .map_err(|e| anyhow!("invalid glob pattern: {e}"))?
@@ -746,17 +747,50 @@ fn update_ledger(ctx: &ToolCtx, input: &Value) -> anyhow::Result<ToolResult> {
     })
 }
 
+/// Symlink expansions allowed per `resolve_safe` call (T134): deep chains
+/// must hit a bounded refusal, not spin — fail closed.
+const MAX_SYMLINK_HOPS: usize = 40;
+
 /// Both refusal messages of `resolve_safe` carry a suffix naming the `bash`
 /// escape hatch (T61): the tool descriptions are read once at turn 0, but
 /// the error string is what the model sees at the moment of need — it
 /// must name the fallback.
 const PATH_ESCAPES_CWD_SUFFIX: &str = " — cross-tree paths go through bash";
 
-/// Resolve `path` lexically against `cwd`, rejecting anything that escapes it
-/// (`..` traversal, absolute paths outside cwd). No filesystem access, no
-/// symlink resolution: purely lexical, per spec. Both refusal messages carry
-/// the T61 `bash` suffix above.
+/// Resolve `path` against `cwd`, rejecting anything that escapes it. Stage 1
+/// (`lexical_normalize`) is the original lexical pass: `..` traversal and
+/// absolute paths outside cwd. Stage 2 (`confine_symlinks`, T134 — codex
+/// review 20260928 §2 HIGH) walks the real filesystem: a purely lexical
+/// check was bypassable with an in-tree `outside -> /etc` symlink, which
+/// read_file/write_file/edit_file then followed on disk. Stage 2 resolves
+/// every component (lstat, so dangling links are seen too), expands
+/// symlinks with a hop budget, and refuses when the resolved path escapes
+/// the sandbox root's real location (an alias like macOS `/tmp` →
+/// `/private/tmp` for the cwd itself is handled by comparing against the
+/// canonical root). Nonexistent tails stay legal — write_file creates
+/// those — and the returned path stays lexical: this is a verification
+/// pass, not a rewrite; callers keep the path they asked for. Both refusal
+/// messages carry the T61 `bash` suffix above.
+///
+/// Race note: this closes the no-race escape the review describes; an
+/// attacker swapping a link between the walk and the actual read/write
+/// would need openat(2)-style handling, which std does not offer.
 pub fn resolve_safe(cwd: &Path, path: &str) -> Result<PathBuf, String> {
+    let normalized = lexical_normalize(cwd, path)
+        .map_err(|_| format!("path escapes cwd: {path}{PATH_ESCAPES_CWD_SUFFIX}"))?;
+    if !normalized.starts_with(cwd) {
+        return Err(format!("path escapes cwd: {path}{PATH_ESCAPES_CWD_SUFFIX}"));
+    }
+    confine_symlinks(cwd, &normalized).map_err(|why| {
+        format!("path escapes cwd: {path}{PATH_ESCAPES_CWD_SUFFIX} ({why})")
+    })?;
+    Ok(normalized)
+}
+
+/// Stage 1 (pre-T134 behavior, kept verbatim): resolve `path` lexically
+/// against `cwd`, rejecting `..` traversal and absolute paths outside cwd.
+/// No filesystem access here.
+fn lexical_normalize(cwd: &Path, path: &str) -> Result<PathBuf, ()> {
     let given = Path::new(path);
     let combined = if given.is_absolute() {
         given.to_path_buf()
@@ -769,7 +803,7 @@ pub fn resolve_safe(cwd: &Path, path: &str) -> Result<PathBuf, String> {
             Component::CurDir => {}
             Component::ParentDir => {
                 if !normalized.pop() {
-                    return Err(format!("path escapes cwd: {path}{PATH_ESCAPES_CWD_SUFFIX}"));
+                    return Err(());
                 }
             }
             Component::RootDir => {
@@ -782,9 +816,84 @@ pub fn resolve_safe(cwd: &Path, path: &str) -> Result<PathBuf, String> {
         }
     }
     if !normalized.starts_with(cwd) {
-        return Err(format!("path escapes cwd: {path}{PATH_ESCAPES_CWD_SUFFIX}"));
+        return Err(());
     }
     Ok(normalized)
+}
+
+/// Stage 2 (T134): resolve every component of `resolved` — already proven
+/// lexically inside `cwd` — against the real filesystem and refuse if the
+/// resolution escapes `cwd`'s real location. The walk keeps `real` as the
+/// physical path built so far and a queue of remaining components; a
+/// symlink splices its target's components into the queue (absolute
+/// targets restart the walk from the filesystem root), the first missing
+/// component makes the rest inert (nothing below a missing directory can
+/// redirect the resolution, and a dangling link would still lstat as a
+/// symlink — this arm cannot hide one), and the containment check runs on
+/// the fully resolved path.
+fn confine_symlinks(cwd: &Path, resolved: &Path) -> Result<(), String> {
+    use std::collections::VecDeque;
+
+    let root = fs::canonicalize(cwd)
+        .map_err(|e| format!("sandbox root {} does not resolve: {e}", cwd.display()))?;
+    let rel = resolved.strip_prefix(cwd).unwrap_or(resolved);
+    let mut real = root.clone();
+    let mut queue: VecDeque<std::ffi::OsString> =
+        rel.components().map(|c| c.as_os_str().to_os_string()).collect();
+    let mut hops = 0usize;
+    while let Some(part) = queue.pop_front() {
+        if part == "." {
+            continue;
+        }
+        if part == ".." {
+            real.pop();
+            continue;
+        }
+        real.push(&part);
+        match fs::symlink_metadata(&real) {
+            Ok(md) if md.file_type().is_symlink() => {
+                hops += 1;
+                if hops > MAX_SYMLINK_HOPS {
+                    return Err("symlink expansion exceeded the hop limit".to_string());
+                }
+                let target =
+                    fs::read_link(&real).map_err(|e| format!("unreadable symlink: {e}"))?;
+                real.pop(); // the link itself is replaced by its target
+                if target.is_absolute() {
+                    real = PathBuf::new();
+                }
+                for comp in target.components().rev() {
+                    queue.push_front(comp.as_os_str().to_os_string());
+                }
+            }
+            Ok(_) => {}
+            Err(_) => {
+                // Missing from here down: finish the walk lexically.
+                while let Some(next) = queue.pop_front() {
+                    if next == "." {
+                        continue;
+                    }
+                    if next == ".." {
+                        real.pop();
+                    } else {
+                        real.push(next);
+                    }
+                }
+            }
+        }
+    }
+    if real.starts_with(&root) {
+        Ok(())
+    } else {
+        Err(format!(
+            "resolves to {} via a symlink",
+            if real.as_os_str().is_empty() {
+                "<above the filesystem root>".to_string()
+            } else {
+                real.display().to_string()
+            }
+        ))
+    }
 }
 
 pub struct ShellOutcome {
@@ -1042,6 +1151,140 @@ mod tests {
     fn path_safety_rejects_dotdot_only() {
         let tmp = tempfile::tempdir().unwrap();
         assert!(resolve_safe(tmp.path(), "..").is_err());
+    }
+
+    // ---- T134: symlink confinement (codex review 20260928 §2 HIGH) ----
+    //
+    // `resolve_safe` was lexical-only: an in-tree symlink pointing outside
+    // cwd passed the `..`/prefix checks and read_file/write_file/edit_file
+    // followed it on disk. The review trigger needs no race — a checkout
+    // containing `outside -> /some/external/dir` plus a call on
+    // `outside/file` escapes. These tests pin the filesystem-level refusal
+    // at the resolve_safe core and at the file-tool surfaces, plus the
+    // no-false-positive inverse (a link resolving INSIDE cwd keeps working).
+
+    /// In-tree symlink to an external directory: the lexical checks pass,
+    /// the real resolution escapes. RED pre-T134.
+    #[cfg(unix)]
+    #[test]
+    fn t134_resolve_safe_rejects_symlink_to_external_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        fs::write(outside.path().join("secret.txt"), "top secret").unwrap();
+        std::os::unix::fs::symlink(outside.path(), tmp.path().join("outside")).unwrap();
+        // Relative form — the review's trigger.
+        assert!(
+            resolve_safe(tmp.path(), "outside/secret.txt").is_err(),
+            "in-tree symlink to an external dir must be refused"
+        );
+        // The same escape spelled as an absolute path inside cwd is still a
+        // symlink escape, not a lexical one.
+        let abs = tmp.path().join("outside/secret.txt");
+        assert!(resolve_safe(tmp.path(), abs.to_str().unwrap()).is_err());
+        // The refusal happened before any filesystem access.
+        assert_eq!(
+            fs::read_to_string(outside.path().join("secret.txt")).unwrap(),
+            "top secret"
+        );
+    }
+
+    /// Dangling in-tree symlink pointing outside: a write_file through it
+    /// would CREATE the external file (std follows the link on write), so
+    /// the refusal cannot wait for the target to exist. RED pre-T134.
+    #[cfg(unix)]
+    #[test]
+    fn t134_resolve_safe_rejects_dangling_symlink_escape() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink("../t134-elsewhere/deep", tmp.path().join("link")).unwrap();
+        assert!(resolve_safe(tmp.path(), "link").is_err());
+        assert!(resolve_safe(tmp.path(), "link/created.txt").is_err());
+    }
+
+    /// A chain of in-tree symlinks (hop1 -> hop2 -> external) must resolve
+    /// every hop, not just the first. RED pre-T134.
+    #[cfg(unix)]
+    #[test]
+    fn t134_resolve_safe_rejects_symlink_chain_escape() {
+        let tmp = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink(outside.path(), tmp.path().join("hop2")).unwrap();
+        std::os::unix::fs::symlink("hop2", tmp.path().join("hop1")).unwrap();
+        assert!(resolve_safe(tmp.path(), "hop1/f.txt").is_err());
+    }
+
+    /// A symlink loop must fail closed, not hang or panic.
+    #[cfg(unix)]
+    #[test]
+    fn t134_resolve_safe_rejects_symlink_loop_fail_closed() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink("loop", tmp.path().join("loop")).unwrap();
+        assert!(resolve_safe(tmp.path(), "loop/f.txt").is_err());
+    }
+
+    /// The inverse pin: links that resolve INSIDE the sandbox keep working —
+    /// relative and absolute link targets, and a dangling link whose target
+    /// write_file is allowed to create. Guards against over-blocking.
+    #[cfg(unix)]
+    #[test]
+    fn t134_symlink_inside_cwd_still_reads_and_writes() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::create_dir_all(tmp.path().join("real/nested")).unwrap();
+        fs::write(tmp.path().join("real/nested/f.txt"), "in-tree").unwrap();
+        std::os::unix::fs::symlink("real", tmp.path().join("alias")).unwrap();
+        std::os::unix::fs::symlink(tmp.path().join("real"), tmp.path().join("abslink")).unwrap();
+        std::os::unix::fs::symlink("real/new.txt", tmp.path().join("dangling-in")).unwrap();
+
+        for p in ["alias/nested/f.txt", "abslink/nested/f.txt"] {
+            let resolved = resolve_safe(tmp.path(), p).unwrap();
+            assert_eq!(resolved, tmp.path().join(p), "resolved path stays lexical");
+        }
+        let ctx = ToolCtx {
+            cwd: tmp.path().to_path_buf(),
+            bash_timeout: Duration::from_secs(BASH_TIMEOUT_SECS),
+        };
+        let r = dispatch(&ctx, "read_file", &json!({"path": "alias/nested/f.txt"}));
+        assert!(!r.is_error, "{}", r.content);
+        assert!(r.content.contains("in-tree"), "{}", r.content);
+        let r = dispatch(&ctx, "write_file", &json!({"path": "dangling-in", "content": "made"}));
+        assert!(!r.is_error, "{}", r.content);
+        assert_eq!(fs::read_to_string(tmp.path().join("real/new.txt")).unwrap(), "made");
+    }
+
+    /// The tool surfaces must refuse too, not just the core: write_file must
+    /// not create/clobber the external file, edit_file and read_file must
+    /// not touch it. This is the review's exact read/write/edit trigger.
+    #[cfg(unix)]
+    #[test]
+    fn t134_dispatch_file_tools_reject_symlink_escape() {
+        let tmp = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let secret = outside.path().join("secret.txt");
+        fs::write(&secret, "original").unwrap();
+        std::os::unix::fs::symlink(outside.path(), tmp.path().join("outside")).unwrap();
+        let ctx = ToolCtx {
+            cwd: tmp.path().to_path_buf(),
+            bash_timeout: Duration::from_secs(BASH_TIMEOUT_SECS),
+        };
+
+        let r = dispatch(
+            &ctx,
+            "write_file",
+            &json!({"path": "outside/secret.txt", "content": "pwned"}),
+        );
+        assert!(r.is_error, "write_file must refuse: {}", r.content);
+        assert_eq!(fs::read_to_string(&secret).unwrap(), "original", "external file untouched");
+
+        let r = dispatch(
+            &ctx,
+            "edit_file",
+            &json!({"path": "outside/secret.txt", "old": "original", "new": "pwned"}),
+        );
+        assert!(r.is_error, "edit_file must refuse: {}", r.content);
+        assert_eq!(fs::read_to_string(&secret).unwrap(), "original");
+
+        let r = dispatch(&ctx, "read_file", &json!({"path": "outside/secret.txt"}));
+        assert!(r.is_error, "read_file must refuse: {}", r.content);
+        assert!(!r.content.contains("top secret"), "{}", r.content);
     }
 
     #[test]
@@ -1909,8 +2152,13 @@ mod tests {
     /// `delegate` (absolute child-worktree paths) and `web_fetch` (network,
     /// not filesystem). It said `delegate` was "the one documented exception",
     /// stale the moment T37 landed `web_fetch` — a cold reader saw the intro
-    /// contradict the `web_fetch` paragraph one screen below. Whitespace is
-    /// normalized so the pin is independent of markdown line wrapping.
+    /// contradict the `web_fetch` paragraph one screen below. T134 (codex
+    /// review 20260928 drift §3): "All paths sandboxed" was FALSE — bash is
+    /// not filesystem-confined and symlinks bypassed the old lexical-only
+    /// check — so the intro must now name the symlink-confinement guarantee,
+    /// bash's honest limits, and both exceptions, and the old blanket claim
+    /// must be gone. Whitespace is normalized so the pin is independent of
+    /// markdown line wrapping.
     #[test]
     fn readme_tools_intro_names_both_sandbox_exceptions() {
         // T48: cargo runs test binaries with cwd = the package root; the compile-time env! path is wrong under the T47 shared cache (cycle-21) — resolve at runtime.
@@ -1921,22 +2169,35 @@ mod tests {
         )
         .expect("README.md readable from the crate root");
         let flat: String = readme.split_whitespace().collect::<Vec<_>>().join(" ");
+        // The corrected file-tool claim: sandboxing includes symlink
+        // resolution, and both exceptions stay named.
         assert!(
             flat.contains(
-                "All paths sandboxed to `--cwd` (`delegate` and `web_fetch` are the two documented exceptions"
+                "All file-tool paths are sandboxed to `--cwd` — `..` traversal, absolute paths outside it, AND symlinks resolving outside it are refused (T134:"
+            ),
+            "README Tools intro does not state the T134 symlink-confinement claim: {flat}"
+        );
+        assert!(
+            flat.contains(
+                "`delegate` and `web_fetch` remain the two documented exceptions"
             ),
             "README Tools intro does not name both exceptions: {flat}"
         );
         assert!(
             flat.contains(
-                "`web_fetch` is network, not filesystem). `bash` runs in its own process group"
+                "`web_fetch` is network, not filesystem). `bash` is NOT filesystem-confined: it starts in `--cwd`"
             ),
-            "README Tools intro lost the web_fetch wording or the byte-identical `bash` continuation: {flat}"
+            "README Tools intro lost the web_fetch wording or the honest bash limits: {flat}"
         );
         // The stale singular is gone.
         assert!(
             !flat.contains("is the one documented exception"),
             "README still calls delegate the one documented exception: {flat}"
+        );
+        // The pre-T134 blanket claim is gone — it was false.
+        assert!(
+            !flat.contains("All paths sandboxed to `--cwd`"),
+            "README still claims every path (bash included) is sandboxed: {flat}"
         );
     }
 
@@ -2096,8 +2357,9 @@ mod tests {
     /// `old`/`new`. The error must name the missing field AND list the
     /// received keys sorted, so one-iteration self-correction is possible
     /// instead of the model re-sending the same shape three times and
-    /// self-reporting a tool bug. Fires before any filesystem access
-    /// (`get_path`'s `resolve_safe` is lexical), so no fixture file needed.
+    /// self-reporting a tool bug. Fires before any file CONTENT is touched
+    /// (the missing-`old` check precedes the path resolution), so no fixture
+    /// file is needed.
     #[test]
     fn received_edit_file_alias_fumble_names_missing_key_and_sorted_received_keys() {
         let tmp = tempfile::tempdir().unwrap();
