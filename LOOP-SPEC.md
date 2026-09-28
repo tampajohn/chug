@@ -93,7 +93,12 @@ impl, never 2 impls):
              CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared before
              every cargo command (T47 shared build cache — delegate has no env
              parameter, so the goal carries the export). Keep cargo build +
-             clippy + test green. Commit your work here. DO NOT touch TODO.md
+             clippy + test green. Commit your work here. Always
+             commit ONLY from your worktree cwd (the /tmp/chug-loop-t<N>
+             you were launched in): if you cd to the main repo for
+             read-only checks, cd back before committing —
+             never run git add or git commit with the main repo as cwd.
+             DO NOT touch TODO.md
              or LEDGER.md — bookkeeping is the orchestrator's."
      model:       "anthropic-system.ai.glm-5-3-flash"
      max_iters:   80

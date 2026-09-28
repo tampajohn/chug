@@ -23,6 +23,17 @@
 //! with cwd = the package root), never via the compile-time manifest-dir
 //! macro — under the T47 shared cache a compile-time path can point at a
 //! since-removed worktree.
+//!
+//! T107 doctrine: the same step-2 template now also carries the
+//! worktree-discipline commitment clause (the cycle-58 INCIDENT — the T104
+//! impl child cd'd from its worktree to the main checkout for read-only
+//! checks and ran `git add` + `git commit` THERE, "here" having resolved to
+//! its CURRENT directory once it cd'd out). Legs (e)–(g) pin the clause's
+//! two check: needles exactly-once inside step 2's window (the T64
+//! loose-heading scope-leg pattern — the clause sits in the launch block,
+//! BEFORE the polling paragraph legs (b)/(d) anchor on), extending — never
+//! replacing — the pre-existing `Commit your work here.` sentence, with the
+//! template's untouched sentences byte-identical.
 
 /// The leg's signature phrase: "resume" + the one-attempt cap language in
 /// one contiguous run. Must occur EXACTLY once in LOOP-SPEC.md.
@@ -152,4 +163,155 @@ fn leg_names_mechanics_and_scope_guards_inside_step_2() {
              (fix-up children start fresh by design)"
         );
     }
+}
+
+// ---- T107 — the worktree-discipline commitment clause ----
+//
+// The step-2 goal template's `Commit your work here.` was ambiguous once a
+// child cd'd out of its worktree (the cycle-58 INCIDENT). The template now
+// carries an explicit clause re-anchoring "here" to the worktree cwd the
+// child was LAUNCHED in. These legs assert the clause exists, sits inside
+// step 2's launch block extending (never replacing) the pre-existing
+// commitment sentence, and that the template's untouched sentences survive
+// byte-identical.
+
+/// The clause's commitment needle — in one contiguous run, LOWERCASE
+/// `commit` exactly as the spec's check: greps it. The check: line is grep
+/// (line-wise, case-sensitive), so the goal template must be wrapped so
+/// the needle never crosses a line break. Must occur EXACTLY once in
+/// LOOP-SPEC.md.
+const WORKTREE_CWD_COMMIT: &str = "commit ONLY from your worktree cwd";
+
+/// The clause's enforcement needle — the main-repo-cwd prohibition in one
+/// contiguous run, verbatim per the spec's check:. Must occur EXACTLY once.
+const MAIN_REPO_CWD_BAN: &str =
+    "never run git add or git commit with the main repo as cwd";
+
+/// The pre-existing commitment sentence the clause EXTENDS, never replaces
+/// (a replacement mutant that drops it dies here).
+const COMMIT_HERE: &str = "Commit your work here.";
+
+/// Step 2's heading, matched LOOSELY — number + bold marker only (the T64
+/// heading-scope pattern; unique in the file today). The clause lives in
+/// step 2's delegate-launch block, BEFORE the polling paragraph the legs
+/// above anchor on, so the clause's scope leg must window from the step
+/// heading itself.
+const STEP2_HEADING_LOOSE: &str = "2. **";
+
+/// The goal template's T47 export prefix, byte-identical INCLUDING its
+/// wrapped line breaks (the em dash is spelled as an escape so an editor
+/// normalization cannot silently unpin it: \u{2014} = em dash). The
+/// discipline clause is inserted AFTER this prefix; these bytes must
+/// survive untouched.
+const T47_EXPORT_PREFIX: &str = concat!(
+    "Implement TODO item t<N> ONLY. export\n",
+    "             CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared before\n",
+    "             every cargo command (T47 shared build cache \u{2014} delegate has no env\n",
+    "             parameter, so the goal carries the export)."
+);
+
+/// The goal template's closing DO-NOT sentence, byte-identical INCLUDING
+/// its wrapped line break and the goal string's closing quote — the clause
+/// sits BEFORE it, so these bytes must survive untouched and still close
+/// the template.
+const DO_NOT_TOUCH_SENTENCE: &str = concat!(
+    "DO NOT touch TODO.md\n",
+    "             or LEDGER.md \u{2014} bookkeeping is the orchestrator's.\""
+);
+
+/// (e) T107 — the clause's two check: needles and the pre-existing
+/// commitment sentence each occur EXACTLY once in LOOP-SPEC.md. Delete the
+/// inserted clause and both clause needles go red (count 0, which also
+/// breaks the spec check's line-wise grep); a replacement mutant that swaps
+/// `Commit your work here.` for the clause dies on the third count.
+#[test]
+fn worktree_discipline_needles_occur_exactly_once() {
+    // Needle self-check (T48 idiom): a mangled needle must not let this
+    // pin pass silently.
+    assert!(
+        WORKTREE_CWD_COMMIT.starts_with("commit ONLY")
+            && WORKTREE_CWD_COMMIT.ends_with("worktree cwd"),
+        "the worktree-cwd needle must carry the clause's commitment language \
+         verbatim (lowercase `commit`, per the spec's case-sensitive check:)"
+    );
+    assert!(
+        MAIN_REPO_CWD_BAN.contains("git add") && MAIN_REPO_CWD_BAN.contains("main repo as cwd"),
+        "the main-repo-cwd needle must carry the prohibition language verbatim"
+    );
+    assert!(
+        COMMIT_HERE.starts_with("Commit your work") && COMMIT_HERE.ends_with("here."),
+        "the commitment needle must be the pre-existing sentence, period included"
+    );
+    let spec = loop_spec();
+    for (needle, what) in [
+        (WORKTREE_CWD_COMMIT, "the worktree-cwd commitment clause"),
+        (MAIN_REPO_CWD_BAN, "the main-repo-cwd prohibition"),
+        (COMMIT_HERE, "the pre-existing `Commit your work here.` sentence"),
+    ] {
+        assert_eq!(
+            spec.matches(needle).count(),
+            1,
+            "LOOP-SPEC must state {what} exactly once — zero means it was \
+             deleted (or rewrapped across a line break, which also breaks \
+             the spec check's line-wise grep), more than one means it is \
+             stated twice"
+        );
+    }
+}
+
+/// (f) T107 — the clause sits INSIDE step 2 (the T64 loose-heading window:
+/// step 2's heading through step 3's heading) and AFTER the sentence it
+/// extends: `Commit your work here.` first, then the worktree-cwd
+/// commitment, then the main-repo-cwd prohibition — the clause supplements
+/// the commitment sentence, never replaces or precedes it.
+#[test]
+fn worktree_discipline_clause_sits_inside_step_2_after_commit_here() {
+    let spec = loop_spec();
+    let start = spec
+        .find(STEP2_HEADING_LOOSE)
+        .expect("step-2 heading (`2. **`) present");
+    let end = start
+        + spec[start..]
+            .find(STEP3_HEADING)
+            .expect("step-3 heading present after step 2's");
+    let window = &spec[start..end];
+    let here = window.find(COMMIT_HERE).unwrap_or_else(|| {
+        panic!("step-2 window must carry {COMMIT_HERE:?} (clause replaced it?)")
+    });
+    let worktree = window.find(WORKTREE_CWD_COMMIT).unwrap_or_else(|| {
+        panic!("step-2 window must carry {WORKTREE_CWD_COMMIT:?} (clause deleted?)")
+    });
+    let ban = window.find(MAIN_REPO_CWD_BAN).unwrap_or_else(|| {
+        panic!("step-2 window must carry {MAIN_REPO_CWD_BAN:?} (clause deleted?)")
+    });
+    assert!(
+        here < worktree && worktree < ban,
+        "the clause must EXTEND the commitment sentence — `Commit your work \
+         here.` first ({here}), then the worktree-cwd commitment ({worktree}), \
+         then the main-repo-cwd prohibition ({ban})"
+    );
+}
+
+/// (g) T107 — the goal template's untouched sentences survive BYTE-IDENTICAL
+/// (wrapped line breaks and em dashes included): the T47 export prefix the
+/// clause is inserted after, and the DO-NOT sentence the clause is inserted
+/// before (still the template's last sentence, goal string's closing quote
+/// included) — req 2's byte-identity made load-bearing.
+#[test]
+fn goal_template_untouched_sentences_survive_byte_identical() {
+    let spec = loop_spec();
+    assert_eq!(
+        spec.matches(T47_EXPORT_PREFIX).count(),
+        1,
+        "the goal template's T47 export prefix must survive byte-identical \
+         (wrapping included) exactly once — the discipline clause is \
+         inserted after it, never rewraps it"
+    );
+    assert_eq!(
+        spec.matches(DO_NOT_TOUCH_SENTENCE).count(),
+        1,
+        "the goal template's DO-NOT sentence must survive byte-identical \
+         (wrapping and the goal string's closing quote included) exactly \
+         once — the discipline clause is inserted before it, never after it"
+    );
 }
