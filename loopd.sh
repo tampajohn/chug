@@ -220,6 +220,12 @@ while [ ! -f "$STOP" ]; do
   if grep -q "chug: goal complete" "$cycle_log"; then
     summary=$(grep "^summary:" "$cycle_log" | head -1 | cut -c1-200)
     echo "$(ts) cycle OK: $summary" >> "$LOG"
+    # T98: best-effort site stats sync — one line, failure-tolerant. The
+    # script itself never fails a cycle (missing clone / rejected push /
+    # marker-less page all warn and exit 0; a nonzero exit here is logged
+    # and ignored — site sync is observability, not a gate).
+    scripts/site-sync.sh >> "$LOG" 2>&1 \
+      || echo "$(ts) site-sync: nonzero exit (best-effort, ignored)" >> "$LOG"
     fails=0
     sleep 60
   else
