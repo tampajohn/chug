@@ -305,6 +305,21 @@ accurate. **One docs row filed (T127); no structural debt.**
 
 ## Outcomes (filled at cycle wrap — LOOP-SPEC Phase 3)
 
+### Cycle 64 (2026-09-28) — fresh eval (kimi, loopd-routed: queue empty) — T124–T127 filed — IN PROGRESS
+
+**T127** (README Install staleness, docs, pri 2): landed 5dbab0d
+(fast-forward) — the pre-release honesty pair deleted, replaced with
+versionless durable claims (releases cut on `v*` tags and published;
+three platform tarballs + sha256s `--release --locked` from the tagged
+commit; one-liner installs latest; tarball links ride GitHub's
+`releases/latest` redirect). glm impl 13/80 first-try green; the child
+live-verified chug.sh/install.sh + the latest-tarball 302→200 + its
+sha256 at edit time. kimi SKIPPED per docs-only precedent (routing
+d1790612463-18). Review + post-merge floor: todo_consistency 5/5 +
+readme_layout 1/1. Estimate ~8 → actual +8/-8 EXACT — the calibration
+era's first bullseye (T125's counter starts here). Impl stream
+harvested (7.7 KB).
+
 ### Cycle 63 (2026-09-28) — routine glm freshness-skip — T122 LANDED (93dae89 fast-forward)
 
 **T122** (site-sync timeline curated sort, pri 2, user report): T101's "+inf for undatable" clause pinned ref-less curated entries BELOW newer generated entries — the live 09-27 K7/chug.sh milestones rendered after 09-28 items. Fix: key precedence per entry = commit %ct (ref resolves, unchanged) → the entry's own `tl-date` parsed at day precision (`day_key` = that day's 23:59:59Z via Fliegel–Van Flandern civil→JDN arithmetic in pure awk, TZ-independent, no date(1) dialects) → +inf sentinel only when NEITHER a ref NOR a parseable tl-date exists; same-day ties keep original region position (SEQ). Day-precision entries sort INSIDE their day (after same-day exact-%ct entries — a day claim cannot beat a second claim — before the next day's); T101's guarantees untouched (%ct primary, curated-text-wins merge, 20+collapse cap, cat-file audit). glm impl 38/80 first-try RED-proven (both new fixture tests + the flipped T99 bootstrap leg). kimi EXERCISED PASS 33/50: 4/4 mutants killed zero survivors (fallback-drop / precedence-flip / start-of-day / sentinel-zero), serial declared overlap, day_key arithmetic independently re-verified vs Python incl leap/epoch, tree byte-clean sha-match, 5 non-blocking informational findings (impossible-date rollover in day_key, no absolute-epoch unit pin, one comment overreach, in-day placement rationale, redundant seq tiebreak) — carried to next eval, none blocking. Review + post-merge nextest 964/964 under target-shared-main. Routing d1790609328-1 (optional→exercised: SECOND ordering bug in timeline_generate, user-visible on the live site), verdict d1790610212-2, outcome landed-clean ×2. 2 streams harvested (impl + validate).
