@@ -24,6 +24,7 @@ mod trim;
 mod tui;
 mod mcp;
 mod mcp_http;
+mod mcp_serve;
 mod permissions;
 mod sse;
 mod tgrep;
@@ -136,6 +137,11 @@ enum CliCommand {
         #[arg(long)]
         cwd: Option<PathBuf>,
     },
+    /// F10 phase 1 (T124): serve chug TO other agents as a stdio MCP server
+    /// (one read-only tool, `chug_status`) until stdin EOF, then exit 0.
+    /// Stdout carries ONLY protocol messages — never run it expecting
+    /// chatty output (a stdio server's stdout IS the wire).
+    McpServe,
     /// Start an interactive chat session in the TUI: type a request, chug
     /// works it with tools, returns to idle, repeat.
     Chat {
@@ -213,6 +219,11 @@ fn main() -> ExitCode {
     // the queued events still flush before the process exits.
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match cli.command {
         CliCommand::Ledger { cwd } => cmd_ledger(cwd),
+        // Stdout purity by construction (T124): the mcp-serve subcommand
+        // dispatches STRAIGHT to the server loop — no banner, no ledger, no
+        // driver lock, no events write on this path; stdout carries only
+        // protocol messages.
+        CliCommand::McpServe => cmd_mcp_serve(),
         CliCommand::Fork { action } => cmd_fork(action),
         CliCommand::Plan {
             goal,
@@ -549,6 +560,12 @@ fn cmd_chat(
 fn cmd_ledger(cwd: Option<PathBuf>) -> anyhow::Result<i32> {
     let cwd = resolve_cwd(cwd)?;
     print!("{}", ledger::read(&cwd)?);
+    Ok(0)
+}
+
+/// F10 phase 1 (T124): run the stdio MCP server until stdin EOF, then exit 0.
+fn cmd_mcp_serve() -> anyhow::Result<i32> {
+    mcp_serve::serve()?;
     Ok(0)
 }
 

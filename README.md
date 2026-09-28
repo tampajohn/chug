@@ -577,6 +577,34 @@ the life of the run. Stdio servers spawn in their own process groups and are
 group-killed on every exit path. MCP tools bypass the laya risk gate (which
 judges bash only). No config anywhere = byte-identical behavior.
 
+### chug as MCP server (`chug mcp-serve`)
+
+chug also EXPOSES itself to other agents (F10): `chug mcp-serve` runs a
+newline-delimited JSON-RPC 2.0 stdio MCP server — the same protocol shape
+the client speaks (`2025-06-18`, `initialize` →
+`notifications/initialized` → `tools/list`, one JSON object per line) —
+until stdin EOF, then exits 0. Claude Code-compatible client config:
+
+```json
+{"mcpServers": {"chug": {"command": "chug", "args": ["mcp-serve"]}}}
+```
+
+Phase 1 ships ONE read-only tool, `chug_status`: input
+`{"cwd": "<absolute path>"}`, output a compact self-describing summary of
+that chug cwd's latest `.chug/events.jsonl` run segment (state,
+last_iteration vs max_iters, goal/abort/budget-low flags, abort reason).
+No process spawning, no writes anywhere. Phases 2–3 are deferred
+(`chug_collect`/`chug_launch` write leg, server log file, cancellation,
+resources).
+
+**stdout purity**: a stdio MCP server's stdout IS the wire — `chug
+mcp-serve` prints nothing but protocol messages (no banner, no log
+lines). Never run it in a terminal expecting chatty output; the wire is
+the stdout, diagnostics go to stderr. Errors never kill the server:
+unparseable lines get `-32700`, unknown methods `-32601`, unknown tools
+`-32602`, invalid requests `-32600`, and notifications never get a
+reply.
+
 ## Langfuse observability (optional)
 
 Traces to a self-hosted Langfuse v3 when configured — off with zero cost
@@ -689,5 +717,5 @@ cargo build && cargo clippy --all-targets -- -D warnings && cargo test
 ```
 
 All three must stay green. Layout: `src/{api,archive,driver,driver_lock,eventlog,events,fork,tools,todos,tgrep,tui,webfetch,chat,
-attach,complete,commands,decisions,delegate,permissions,plan,riskgate,hooks,mcp,mcp_http,sse,observ,auth,ledger,transcript,trim,build_info}.rs`
+attach,complete,commands,decisions,delegate,permissions,plan,riskgate,hooks,mcp,mcp_http,mcp_serve,sse,observ,auth,ledger,transcript,trim,build_info}.rs`
 (+ `main.rs`; `build.rs` only bakes the git commit into the startup banner).

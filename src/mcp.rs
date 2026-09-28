@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use crate::tools::{ToolResult, kill_process_group};
 
-const PROTOCOL_VERSION: &str = "2025-06-18";
+pub(crate) const PROTOCOL_VERSION: &str = "2025-06-18";
 const INIT_TIMEOUT: Duration = Duration::from_secs(10);
 const LIST_TIMEOUT: Duration = Duration::from_secs(10);
 const CALL_TIMEOUT: Duration = Duration::from_secs(60);
