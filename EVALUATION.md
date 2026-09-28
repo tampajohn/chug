@@ -336,6 +336,31 @@ unmodified" bullet was literally unsatisfiable, a spec-writing lesson
 carried. Routing d1790571195-16, verdict d1790571562-17, outcome
 landed-clean.
 
+**T105 F6 phase 1: session fork slots — LANDED (rebased ff).** The
+mandatory roadmap pull landed: `chug fork save/list/restore` — named
+slots over `.chug/transcript.jsonl` + `LEDGER.md` under
+`.chug/sessions/<name>/`, giving the serial explore-two-approaches
+shape (run A, save, keep going, restore, run B). The safety design is
+the point: restore refuses a live driver lock (naming the pid, T55
+interlock), rotates the live session aside with the EXISTING T7/T3
+archive machinery before copying (a Failed rotation aborts the restore
+— nothing is ever overwritten un-archived), and slots are copy-only
+(idempotent restores). glm impl 43/80 first-try clean: fork.rs (656
+lines) + main.rs CLI wiring + README `## Session forks` + the one-line
+archive.rs seam; 18 fork tests with both dangerous legs (overwrite
+refusal, lock check) RED-proven and the readme_layout guard RED-then-
+green as the spec required. kimi SKIPPED (routing d1790571949-19): the
+subcommand is isolated from the run loop (no driver/tools/dispatch
+interaction) and has no loop consumer yet — the orchestrator's deep
+review plus a live binary smoke of the full leg set (save → mutate →
+list → restore → idempotent restore → overwrite refusal, all exit
+codes correct) substituted for the optional round. Merge needed a
+rebase onto main (T44 overlap with T103's flip — disjoint files,
+conflict-free, dc29137). Post-merge 842/842 + clippy under
+target-shared-main. FEATURES.md F6 carries the phase-1 check-off and
+the phase-2 deferral reason. Child decision record d1790571815-1
+harvested into main's decisions.jsonl. Outcome landed-clean.
+
 ### Cycle 57 (2026-09-28) — eval-routed kimi turned routine after reconciling cycle-56's origin divergence (T101 row appeared post-rebase, predicate held — cycle-56 precedent repeated); T101 LANDED (bcd0b66, fast-forward)
 
 **T101 site-sync timeline ordering + curation bugs — LANDED, fast-forward

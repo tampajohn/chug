@@ -31,7 +31,7 @@ retired: driver already batches (cycle-11 eval).
 
 | # | Feature | What | Benchmark |
 |---|---------|------|-----------|
-| F6 | **Session fork** | Clone transcript+ledger at iteration N into a new session id; explore two approaches from one state. | unreal-agent forking |
+| F6 | **Session fork** — SPLIT: **phase 1 landed (T105, dc29137, cycle 58)** — `chug fork save/list/restore` named slots over transcript+ledger (serial explore-two-approaches; restore archives the live session first). Phase 2 DEFERRED: `--session <name>` concurrent path plumbing + fork-at-iteration-N surgery — the serial slot covers the benchmark shape; same-cwd concurrency is structurally barred by the driver lock and parallel exploration already has worktrees+delegate | Clone transcript+ledger at iteration N into a new session id; explore two approaches from one state. | unreal-agent forking |
 | F7 | **Streaming UX** | Text deltas to sinks as they arrive (TUI live typing, headless progress); watchdog gets byte-level liveness for free. | all benchmarks |
 | F8 | **Structured todo tool** | `todo_add/update/list` driver-visible tools (statuses enforced) as an alternative to freeform LEDGER edits — the orchestration ledger becomes queryable. | Claude Code tasks |
 | F9 | **Slash-command packs** | `.chug/commands/*.md` repo-local commands invocable from chat (`/review`, `/triage`) and as run goals. Community-extensible without code. | Claude Code skills |
