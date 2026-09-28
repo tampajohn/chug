@@ -304,6 +304,53 @@ under target-shared-main. 2 artifacts harvested pre-removal (impl stream,
 child decisions). Arc: 1 impl, 0 resumes, 0 fix-ups, 0 validator rounds,
 ~5 min wall — back-to-back clean smalls after T92.
 
+**T91 F5 phase 1: `read_file` image input — LANDED, merge ae7ff5f (the
+mandatory roadmap pull).** glm impl run1 (pid 22596) died **65/65** with the
+broad diff uncommitted (+1012 lines across 14 files — the ToolResult.images
+field rippled constructor sites in decisions/delegate/mcp/mcp_http/plan/
+tgrep/webfetch mechanically) — the FIRST death at the new cap, T92's
+measure clause now at 1-of-6 — and **T63 resume #20** (pid 25547) accepted
+**19/65 in ~2.7 min** (commit e39bbb5). What landed: extension map
+(png/jpg/jpeg/gif/webp, lowercased so X.PNG works) reads bytes; 5 MiB guard
+errors naming cap + actual size with zero base64; `ToolResult.images:
+Vec<ImageBlock>` default-empty channel with the text note
+`[image: <path> (<n> bytes, <media>)]` — previews/events ride text only
+(base64-can-never-leak pinned <100 chars); `KnownBlock::Image` serde
+round-trip + `tool_result_block_with_images` array content (image first,
+then text) with the string path byte-identical pinned; driver degrade leg —
+400 whose body mentions image/content (`api::is_image_rejection`) → ONE
+retry with every image block (standalone + inside tool_result arrays)
+replaced by placeholder text, one `image_degraded` events line, per-run
+latch downgrading later images at WRAP time; plan mode rides the shared
+wrap site (array-shape test); resolve_safe gates before any read;
+hand-rolled RFC-4648 base64 (vectors pinned, no new dep); README ## Tools
+image clause integrated. Review: nextest **762/762** (746+16) + clippy +
+spec check 16/16 under target-shared, four load-bearing hunks
+orchestrator-read (degrade condition, read_image guard, base64, wrap).
+**kimi REQUIRED validation** (FOUR REQUIRED-listed files; pid 31218,
+29/50, ~14 min) VERDICT: PASS 0 blocking — gates independently re-run,
+check-filter run list verified = exactly the 16 new tests (the T96 lesson
+practiced by a validator in the same cycle it was filed), 10 mutants in
+isolated T79 worktrees: **7 killed** incl. all 3 spec RED proofs +
+latch-drop + any-400-widening + base64-padding + placeholder-array-skip;
+**3 survived** = weak-test gaps on correct code, carried informational:
+(1) retry-ONCE double-rejection unpinned, (2) exactly-5MiB boundary
+unpinned, (3) rejection-body case-fold unpinned — weighed, NOT filed
+(informational; the legs they pin are spec-satisfying; a future eval can
+re-weigh). Routing d1790553963-19, verdict d1790554748-20. **Orchestrator
+incident, mine**: the first validator launch (pid 31078) carried a
+goal-text duplication corruption of MY making; I killed it pre-work
+(SIGKILL after SIGTERM lag, defunct-reaped), verified the worktree
+byte-clean, relaunched — the relaunch carried the same cosmetic
+duplication (content complete, no contradictions) and validated fine.
+4 artifacts harvested pre-removal (impl run1+resume stream, killed-attempt
+stream, validator stream, child decisions). Post-merge: nextest 762/762
+10.7s + clippy under target-shared-main. FEATURES.md F5 → **phase 1
+LANDED** annotation (phase 2 chat-paste deferral carried). Arc: 2 impl
+runs (1 resume), 1 validator round + 1 orchestrator-caused relaunch,
+~35 min wall. **F5 phase 1 closes the loop's last Claude-Code-class
+sensory gap: children can now READ screenshots and image fixtures.**
+
 ### Cycle 52 (2026-09-27) — routine glm freshness-skip; T90 LANDED (e9afed9, fast-forward merge) — F4 permissions phase 1: the deny-only fail-closed policy layer
 
 - **T90 LANDED** (e9afed9): `.chug/permissions.json` deny-list — new `src/permissions.rs` (363 prod lines, at the ~350 guard's edge) holds all policy logic: absent/empty config = zero rules + zero cost; malformed config fails OPEN (one stderr warn + one `permission_error` line, T83 parity); per-rule malformed legs (unknown key, two matchers, non-string value, missing tool, matcher-that-cannot-fit) are skipped in place with valid siblings still denying; deny rules are a tool glob + at most one `command`/`path`/`url` arg matcher, first-match-wins, missing/non-string arg under an arg rule fails toward execution; deny text `[permission denied] <rule summary>`. Driver gates dispatch FIRST (permissions → PreToolUse hooks → plan/MCP/risk gate) riding the T83 `blocked` flag in run+chat+plan, so a denied call fires no hooks and never executes. `hooks::glob_matches` made pub(crate), reused byte-identically. README Permissions section integrated after Hooks; FEATURES F4 row annotated at flip. 24 tests (17 unit + 7 driver integration incl. ZERO-hook-fires ordering pins + plan-mode leg + fail-open-exactly-once).
