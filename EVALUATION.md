@@ -245,6 +245,53 @@ section's commands also cover).
 
 ## Outcomes (filled at cycle wrap — LOOP-SPEC Phase 3)
 
+### Cycle 56 (2026-09-28) — eval-routed kimi turned routine after reconciling cycle-55's origin divergence (T100 row appeared post-rebase, predicate held); T100 LANDED (9d1182a, fast-forward)
+
+**T100 GitHub releases: tag-triggered prebuilt binaries + generated notes —
+LANDED, fast-forward 9d1182a (impl 67b7702 + fix-up 9d1182a, +2008/-12
+across 12 files).** The operator directive ("start doing releases of chug
+in github") ships the whole release surface: `.github/workflows/release.yml`
+(v* tag push -> macos-14 arm64 + ubuntu-22.04 x86_64 + cross aarch64,
+`--release --locked`, per-platform tar.gz + sha256, GH Release via the
+preinstalled `gh --verify-tag` — no third-party release action — every
+`uses:` pinned by live-fetched 40-hex SHA, `contents: write` only),
+`scripts/check-tag-version.sh` (tag/Cargo.toml divergence fails the release
+before any build), `scripts/release-notes.sh` (mechanical feat/fix/docs/chore
+grouping of semantic commits since the previous tag, whole-history fallback
+for the first release), `install.sh` (POSIX, OS-aware platform detect,
+sha256-verify-before-install, ~/.local/bin, failures name the fix), a README
+Install section (one-liner + per-platform tarballs + Gatekeeper note), and
+the LOOP-SPEC Phase-3 tag-at-wrap doctrine (trigger >=3 items or a FEATURES
+check-off since last tag, immutable tags, one per wrap, gates green,
+BOOTSTRAP: first tag is operator-cut). Tests: workflow YAML-parse + SHA-pin
+grep leg (no actionlint on host), 12 fixture-repo script legs, 15 install.sh
+legs, 4 doctrine pins.
+
+Arc: glm impl run1 committed the complete 67b7702 then died 65/65 BEFORE
+goal_complete (census point 6 — the ceiling-death-after-commit pattern
+again); T63 resume #21 accepted 2/65 in 47s after auditing the spec (21/21
+all-time). Review gates independently green (nextest 811/811 release +
+clippy + sh -n x3). Kimi r1 (32/50) FAIL — and earned it: the BLOCKING
+finding was install.sh mapping arch before OS (`arm64|aarch64) arch=arm64`),
+so every linux-aarch64 host collapsed to the nonexistent `linux-arm64`
+asset and was rejected at the allowlist even though the workflow publishes
+`chug-linux-aarch64.tar.gz`; the second finding proved the uname-mapping
+had ZERO test coverage (tests only exercised the CHUG_INSTALL_PLATFORM
+override) via a surviving platform-map-flip mutant. Glm fix-up (41/65):
+joint `osname/mach` mapping (linux/aarch64 AND the linux/arm64 kernel alias
+both -> aarch64), CHUG_INSTALL_OS/MACH overrides making the uname path
+testable, 7 RED-proven killing tests sweeping every leg. Kimi r2 (35/50)
+PASS: r1's survivor class dead to 4 tests, a fresh osname-swap mutant dead
+to 6, live smokes on the real repo (tag-version match/diverge/shape, notes
+grouping, file:// end-to-end install, dash -n). One non-blocking survivor
+carried: amd64-alias-drop (a defensive alias no Linux host reports, outside
+req 5's mapping set). Review + post-merge nextest 818/818 under
+target-shared / target-shared-main. Validator finding 3 (site get-started
+block + chug.sh/install.sh serving + verify.sh legs) was orchestrator wrap
+scope by design — the impl children's goals excluded the live site repo
+(T98/T99 precedent); done at this cycle's wrap. Cycle notes, carry-overs,
+and the wrap-time record of the site edit land at wrap.
+
 ### Cycle 55 (2026-09-28) — eval-routed kimi cycle turned routine (operator's T99 directive filled the empty queue at launch); T99 LANDED (d13a253, fast-forward)
 
 **T99 site-sync v2: TIMELINE + FEATURES deterministic regions — LANDED,
