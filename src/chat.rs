@@ -681,6 +681,43 @@ mod tests {
         );
     }
 
+    /// T119 wiring leg (the chat call-site `None→Some` mutant): chat
+    /// sessions open goal-less (objectives arrive turn by turn, T113), so
+    /// the session's `run_start` records `goal_sha256: null` — with the key
+    /// PRESENT (the T115 always-present pattern), so jq can distinguish
+    /// "no goal" from a truncated line. The T115 eventlog-level legs pin
+    /// the field's shape GIVEN `None`; this leg runs the REAL chat session
+    /// (the scripted-provider shape), so a call-site mutant that passes
+    /// `Some(...)` renders a phantom hash and fails the null assert.
+    #[test]
+    fn chat_session_run_start_goal_sha256_null_but_always_present() {
+        let tmp = tempfile::tempdir().unwrap();
+        let h = harness(&tmp, vec![text_response("hi")]);
+        let (code, _, _, cwd) = run_session(h, |objective_tx, _| {
+            objective_tx.send("hello".into()).unwrap();
+        });
+        assert_eq!(code, 0);
+        let first: serde_json::Value = serde_json::from_str(
+            std::fs::read_to_string(cwd.join(".chug/events.jsonl"))
+                .expect("events.jsonl written")
+                .lines()
+                .next()
+                .expect("run_start line"),
+        )
+        .expect("first line parses");
+        assert!(
+            first["goal_sha256"].is_null(),
+            "a goal-less chat session records null, never a phantom hash: {first}"
+        );
+        assert!(
+            first
+                .as_object()
+                .expect("run_start is an object")
+                .contains_key("goal_sha256"),
+            "the field must be PRESENT even when null: {first}"
+        );
+    }
+
     /// T17: a chat session with configured budgets (token budget set) opens
     /// its events log with those ceilings as numbers, so jq can distinguish
     /// unset from set.
