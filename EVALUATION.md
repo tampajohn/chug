@@ -286,6 +286,39 @@ filed** — the second consecutive clean audit after T127's catch.
 
 ### Cycle 66 (2026-09-28) — routine (reconciled cycle-65 divergence first) — codex-intake queue T134–T142
 
+**CYCLE-66 CYCLE-LEVEL NOTES (wrap).** FOUR items landed (T140,
+T141, T142, T134 — every pri-1 codex-review row), two of them through
+full FAIL→fix-up→re-validate arcs. kimi ran FOUR validator rounds (T140
+PASS 4/4 mutants; T141 PASS 5/6, M1 weak-pin carried; T142 round-1
+FAIL 2 findings → round-2 PASS 10/10 after fix-up; T134 round-1 FAIL
+2 findings → round-2 PASS M1–M5 all killed after fix-up) plus one
+round-1 re-run after a T63 resume (T134 validator died 50/50
+mid-battery, resume d1790631787-10 finished in 17 more iterations).
+Budget deaths: T141 impl #1 (13/80, stuck:repeated-error on its OWN
+malformed grep regex — recovery d1790626727-4 fresh relaunch), T134
+fix-up #1 (80/80 mid-gates with +456/-18 UNCOMMITTED — T63 resume
+d1790634951-13 finished the gates + committed in 13 iters), T134
+validator round-1 (50/50 mid-battery — resume). The T63 resume
+recipe (ONE relaunch, same worktree/spec/model/budgets) went 2-for-2
+this cycle — both resumed children finished their arcs. Routing ids:
+T140 d1790625539-1/d1790626612-2; T141 d1790627696-5/d1790628970-6;
+T142 d1790629235-7/d1790630340-8/d1790634233-12; T134
+d1790630798-9/d1790632841-11/d1790636105-14; recoveries
+d1790626727-4, d1790631787-10, d1790634951-13. INFRA finding for the
+next eval (d1790632587-1, logged by the T134 validator and
+independently re-hit by the T142 re-validator): the goal_complete
+check harness runs cargo test WITHOUT the T52 role-keyed target dir,
+so two loops sharing `target-shared` collide on same-named
+integration-test binaries — a foreign suite's failure gets reported
+against the wrong tree. Remedy candidate: role-key the check env
+(validate dir for validators) or serialize checks across loops.
+Carried survivors: T128 M4 (alive-render weak pin, cycle-65), T141 M1
+(open-block-check mutant masked by the message_stop guard —
+behavior-preserving). Release v0.4.0 cut at this wrap: 4 items + the
+T128 FEATURES check-off since v0.3.0, minor bump, tags immutable.
+T135–T139 (pri 2) + T129/T131 remain `todo` with specs ready — the
+next cycle's cold input needs zero human words.
+
 **T140 — goal_complete denial bypass (pri 1, landed 9b36a2e).** The
 cycle's first codex-review item: a permission-denied or hook-vetoed
 `goal_complete` still completed the run because `goal_summary` was
