@@ -13,6 +13,9 @@ LOOP-SPEC.md); each release publishes `chug-<platform>.tar.gz` +
 `.tar.gz.sha256` for **macos-arm64**, **linux-x86_64** and **linux-aarch64**,
 built `--release --locked` from the tagged commit (the binary is
 self-describing: `build.rs` bakes the git hash into the startup banner).
+Until the first tag is cut there is **no release published yet** — the
+one-liner and tarball links below 404 until then; use the from-source
+install at the bottom of this section.
 
 The one-liner — detects your platform, downloads the latest release tarball,
 **verifies the sha256**, installs to `~/.local/bin` (PATH hint if it is not on
