@@ -8,14 +8,14 @@ re-read every iteration, so context trimming can never kill the run.
 
 ## Install
 
-Releases are cut on `v*` tags (the repo's loop tags at wrap — see
-LOOP-SPEC.md); each release publishes `chug-<platform>.tar.gz` +
-`.tar.gz.sha256` for **macos-arm64**, **linux-x86_64** and **linux-aarch64**,
-built `--release --locked` from the tagged commit (the binary is
-self-describing: `build.rs` bakes the git hash into the startup banner).
-Until the first tag is cut there is **no release published yet** — the
-one-liner and tarball links below 404 until then; use the from-source
-install at the bottom of this section.
+Releases are cut on `v*` tags and published to GitHub Releases (the repo's
+loop tags at wrap — see LOOP-SPEC.md); each release publishes
+`chug-<platform>.tar.gz` + `.tar.gz.sha256` for **macos-arm64**,
+**linux-x86_64** and **linux-aarch64**, built `--release --locked` from the
+tagged commit (the binary is self-describing: `build.rs` bakes the git hash
+into the startup banner). The one-liner below installs the latest release,
+and the tarball links use GitHub's `releases/latest` redirect, so they track
+the newest tag automatically.
 
 The one-liner — detects your platform, downloads the latest release tarball,
 **verifies the sha256**, installs to `~/.local/bin` (PATH hint if it is not on
