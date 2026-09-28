@@ -205,6 +205,7 @@ pub fn decision_log(cwd: &Path, input: &Value) -> anyhow::Result<ToolResult> {
     Ok(ToolResult {
         content: format!("recorded {}", record.id),
         is_error: false,
+        images: Vec::new(),
     })
 }
 

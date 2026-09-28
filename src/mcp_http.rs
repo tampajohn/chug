@@ -276,6 +276,7 @@ impl HttpMcpServer {
             return Ok(ToolResult {
                 content: format!("mcp server {} is down", self.name),
                 is_error: true,
+                images: Vec::new(),
             });
         }
         let params = json!({ "name": tool_name, "arguments": arguments });
@@ -284,6 +285,7 @@ impl HttpMcpServer {
             Err(e) => Ok(ToolResult {
                 content: format!("mcp tool {tool_name} failed: {e:#}"),
                 is_error: true,
+                images: Vec::new(),
             }),
         }
     }
@@ -1060,10 +1062,12 @@ fn parse_call_response(resp: &Value) -> ToolResult {
         Some(err) => ToolResult {
             content: err,
             is_error: true,
+            images: Vec::new(),
         },
         None => ToolResult {
             content: text,
             is_error: is_error_flag,
+            images: Vec::new(),
         },
     }
 }

@@ -177,6 +177,12 @@ impl EventSink for EventLogSink<'_> {
                 "type": "output_truncated",
                 "ts": now_rfc3339(),
             })),
+            // T91: one line per degrade — the run is image-free from here on
+            // (latched, so this fires at most once per run).
+            Event::ImageDegraded => Some(json!({
+                "type": "image_degraded",
+                "ts": now_rfc3339(),
+            })),
             Event::ToolResult {
                 name,
                 ok,
@@ -700,5 +706,20 @@ mod tests {
             budget: None,
         });
         run_start(tmp.path(), "run", None, "m", 5, 120, 0, None);
+    }
+
+    /// T91: an ImageDegraded event serializes as one jq-mineable
+    /// `image_degraded` line (the driver latches, so at most one per run —
+    /// pinned at the driver level).
+    #[test]
+    fn sink_logs_image_degraded_as_one_line() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut inner = NullSink;
+        let mut sink = EventLogSink::new(tmp.path(), &mut inner);
+        sink.emit(Event::ImageDegraded);
+        let lines = read_lines(tmp.path());
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0]["type"], "image_degraded");
+        assert!(lines[0]["ts"].as_str().unwrap().ends_with('Z'));
     }
 }

@@ -602,6 +602,7 @@ fn search(
         return Ok(ToolResult {
             content: header,
             is_error: false,
+            images: Vec::new(),
         });
     }
 
@@ -645,6 +646,7 @@ fn search(
     Ok(ToolResult {
         content,
         is_error: false,
+        images: Vec::new(),
     })
 }
 
@@ -770,6 +772,7 @@ fn symbols_skeleton(
         return Ok(ToolResult {
             content: format!("symbols {rel}: no fn/struct/impl declarations found"),
             is_error: false,
+            images: Vec::new(),
         });
     }
 
@@ -813,6 +816,7 @@ fn symbols_skeleton(
     Ok(ToolResult {
         content,
         is_error: false,
+        images: Vec::new(),
     })
 }
 

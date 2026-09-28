@@ -32,6 +32,10 @@ pub struct ToolCtx {
 pub struct ToolResult {
     pub content: String,
     pub is_error: bool,
+    /// T91: image payloads riding a tool result (`read_file` on an image
+    /// file). Default-empty — every text-only result is unchanged. Previews
+    /// and events ride `content` only, never these.
+    pub images: Vec<crate::api::ImageBlock>,
 }
 
 /// JSON schemas for the tools, in registration order.
@@ -185,6 +189,7 @@ pub fn dispatch(ctx: &ToolCtx, name: &str, input: &Value) -> ToolResult {
         Err(e) => ToolResult {
             content: format!("tool error: {e:#}"),
             is_error: true,
+        images: Vec::new(),
         },
     }
 }
@@ -206,10 +211,12 @@ fn inner(ctx: &ToolCtx, name: &str, input: &Value) -> anyhow::Result<ToolResult>
         "goal_complete" => Ok(ToolResult {
             content: "goal_complete acknowledged. Verification will run; do not assume acceptance until the loop confirms it.".to_string(),
             is_error: false,
+        images: Vec::new(),
         }),
         other => Ok(ToolResult {
             content: format!("unknown tool: {other}"),
             is_error: true,
+        images: Vec::new(),
         }),
     }
 }
@@ -238,6 +245,9 @@ fn get_path(ctx: &ToolCtx, input: &Value) -> anyhow::Result<PathBuf> {
 /// returned so paging loops can stop cleanly.
 fn read_file(ctx: &ToolCtx, input: &Value) -> anyhow::Result<ToolResult> {
     let path = get_path(ctx, input)?;
+    if let Some(media_type) = image_media_type(&path) {
+        return read_image(&path, media_type);
+    }
     let data =
         fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
     let line_count = data.lines().count();
@@ -257,6 +267,7 @@ fn read_file(ctx: &ToolCtx, input: &Value) -> anyhow::Result<ToolResult> {
         return Ok(ToolResult {
             content,
             is_error: false,
+        images: Vec::new(),
         });
     }
 
@@ -295,6 +306,7 @@ fn read_file(ctx: &ToolCtx, input: &Value) -> anyhow::Result<ToolResult> {
                 "[offset {offset} is past the end of this file: it has {line_count} lines]"
             ),
             is_error: false,
+        images: Vec::new(),
         });
     }
     let end = offset.saturating_add(limit - 1).min(line_count);
@@ -312,7 +324,80 @@ fn read_file(ctx: &ToolCtx, input: &Value) -> anyhow::Result<ToolResult> {
     Ok(ToolResult {
         content,
         is_error: false,
+    images: Vec::new(),
     })
+}
+
+/// T91: the cap for an image read (`read_file` image leg) — 5 MiB of raw
+/// bytes. Bigger files are a tool error naming the cap and the actual size,
+/// with no partial read and no base64 anywhere in the error text.
+const IMAGE_MAX_BYTES: u64 = 5 * 1024 * 1024;
+
+/// T91: the image extensions `read_file` returns as images, mapped to their
+/// media types. Extension match is on the lowercased extension; every other
+/// extension — including unknown binary ones — keeps the text path exactly.
+fn image_media_type(path: &Path) -> Option<&'static str> {
+    let ext = path.extension()?.to_str()?.to_ascii_lowercase();
+    match ext.as_str() {
+        "png" => Some("image/png"),
+        "jpg" | "jpeg" => Some("image/jpeg"),
+        "gif" => Some("image/gif"),
+        "webp" => Some("image/webp"),
+        _ => None,
+    }
+}
+
+/// T91: the image leg of `read_file` — bytes, not text. The path has already
+/// been through `get_path` (resolve_safe) BEFORE any read happens here; this
+/// function only changes the response shape. The text content is a short
+/// note naming path, size and media type — previews and events ride it, the
+/// base64 rides the result's `images` only.
+fn read_image(path: &Path, media_type: &'static str) -> anyhow::Result<ToolResult> {
+    let bytes = fs::read(path).with_context(|| format!("reading {}", path.display()))?;
+    let size = bytes.len() as u64;
+    if size > IMAGE_MAX_BYTES {
+        bail!(
+            "read_file: image too large: {} is {size} bytes; the cap is {IMAGE_MAX_BYTES} bytes (5 MiB)",
+            path.display()
+        );
+    }
+    let data = base64_encode(&bytes);
+    let content = format!("[image: {} ({size} bytes, {media_type})]", path.display());
+    Ok(ToolResult {
+        content,
+        is_error: false,
+        images: vec![crate::api::ImageBlock {
+            media_type: media_type.to_string(),
+            data,
+        }],
+    })
+}
+
+/// Standard-alphabet base64 (RFC 4648, with padding), hand-rolled: one encode
+/// direction does not justify a crate dependency. Pinned against RFC test
+/// vectors by test.
+fn base64_encode(bytes: &[u8]) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let b0 = u32::from(chunk[0]);
+        let b1 = u32::from(chunk.get(1).copied().unwrap_or(0));
+        let b2 = u32::from(chunk.get(2).copied().unwrap_or(0));
+        let n = (b0 << 16) | (b1 << 8) | b2;
+        out.push(TABLE[(n >> 18 & 63) as usize] as char);
+        out.push(TABLE[(n >> 12 & 63) as usize] as char);
+        out.push(if chunk.len() > 1 {
+            TABLE[(n >> 6 & 63) as usize] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            TABLE[(n & 63) as usize] as char
+        } else {
+            '='
+        });
+    }
+    out
 }
 
 fn write_file(ctx: &ToolCtx, input: &Value) -> anyhow::Result<ToolResult> {
@@ -326,6 +411,7 @@ fn write_file(ctx: &ToolCtx, input: &Value) -> anyhow::Result<ToolResult> {
     Ok(ToolResult {
         content: format!("wrote {} bytes to {}", content.len(), path.display()),
         is_error: false,
+    images: Vec::new(),
     })
 }
 
@@ -350,6 +436,7 @@ fn edit_file(ctx: &ToolCtx, input: &Value) -> anyhow::Result<ToolResult> {
                 if count == 1 { "" } else { "s" }
             ),
             is_error: false,
+        images: Vec::new(),
         })
     } else {
         let updated = apply_edit(&data, old, new)
@@ -358,6 +445,7 @@ fn edit_file(ctx: &ToolCtx, input: &Value) -> anyhow::Result<ToolResult> {
         Ok(ToolResult {
             content: format!("edited {}", path.display()),
             is_error: false,
+        images: Vec::new(),
         })
     }
 }
@@ -439,6 +527,7 @@ fn bash(ctx: &ToolCtx, input: &Value) -> anyhow::Result<ToolResult> {
     Ok(ToolResult {
         content: format!("{body}\n[exit code: {exit_label}]"),
         is_error: outcome.timed_out || outcome.exit_code.is_some_and(|c| c != 0),
+    images: Vec::new(),
     })
 }
 
@@ -499,6 +588,7 @@ fn glob_tool(ctx: &ToolCtx, input: &Value) -> anyhow::Result<ToolResult> {
     Ok(ToolResult {
         content: format_sorted_capped(relative, GLOB_MAX, "matches"),
         is_error: false,
+    images: Vec::new(),
     })
 }
 
@@ -525,6 +615,7 @@ fn list_dir(ctx: &ToolCtx, input: &Value) -> anyhow::Result<ToolResult> {
     Ok(ToolResult {
         content: cap_lines(names, LIST_DIR_MAX),
         is_error: false,
+    images: Vec::new(),
     })
 }
 
@@ -579,6 +670,7 @@ fn grep_result(stdout: Vec<u8>, stderr: Vec<u8>, exit_code: Option<i32>) -> Tool
         content: truncate_middle(&text, OUTPUT_KEEP_HEAD, OUTPUT_KEEP_TAIL),
         // exit 1 means "no matches" for both rg and grep; >= 2 is a real failure
         is_error: exit_code.is_some_and(|c| c > 1),
+    images: Vec::new(),
     }
 }
 
@@ -589,6 +681,7 @@ fn update_ledger(ctx: &ToolCtx, input: &Value) -> anyhow::Result<ToolResult> {
     Ok(ToolResult {
         content: format!("ledger updated ({} bytes)", content.len()),
         is_error: false,
+    images: Vec::new(),
     })
 }
 
@@ -1782,5 +1875,154 @@ mod tests {
             !flat.contains("is the one documented exception"),
             "README still calls delegate the one documented exception: {flat}"
         );
+    }
+
+    // ---- T91: read_file image leg ----
+
+    /// RFC 4648 §10 test vectors — the hand-rolled encoder pinned before it
+    /// is trusted with real payloads.
+    #[test]
+    fn image_base64_encode_matches_rfc4648_vectors() {
+        assert_eq!(base64_encode(b""), "");
+        assert_eq!(base64_encode(b"f"), "Zg==");
+        assert_eq!(base64_encode(b"fo"), "Zm8=");
+        assert_eq!(base64_encode(b"foo"), "Zm9v");
+        assert_eq!(base64_encode(b"foob"), "Zm9vYg==");
+        assert_eq!(base64_encode(b"fooba"), "Zm9vYmE=");
+        assert_eq!(base64_encode(b"foobar"), "Zm9vYmFy");
+    }
+
+    /// The extension → media-type map, every supported extension, including
+    /// an uppercase one (`X.PNG`): the lowercased extension is what matches.
+    #[test]
+    fn image_extension_maps_to_media_type_including_uppercase() {
+        let tmp = tempfile::tempdir().unwrap();
+        for (name, media_type) in [
+            ("a.png", "image/png"),
+            ("a.jpg", "image/jpeg"),
+            ("a.jpeg", "image/jpeg"),
+            ("a.gif", "image/gif"),
+            ("a.webp", "image/webp"),
+            ("X.PNG", "image/png"),
+        ] {
+            let path = tmp.path().join(name);
+            fs::write(&path, b"\x89PNG\r\n\x1a\nfix").unwrap();
+            let result = read_dispatch(tmp.path(), json!({"path": name}));
+            assert!(!result.is_error, "{name}: {result:?}");
+            assert!(
+                result.content.contains(media_type),
+                "{name}: note must name {media_type}: {}",
+                result.content
+            );
+            assert_eq!(result.images.len(), 1, "{name}: exactly one image block");
+            assert_eq!(result.images[0].media_type, media_type, "{name}");
+        }
+    }
+
+    /// A hand-rolled minimal PNG (real signature + stub body) written by the
+    /// test: the image leg returns the short note naming path/bytes/media
+    /// type, exactly one image block whose base64 is the exact base64 of the
+    /// file's bytes, and no error.
+    #[test]
+    fn image_fixture_png_returns_note_and_exact_base64_block() {
+        let tmp = tempfile::tempdir().unwrap();
+        let png: &[u8] = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDRminimal";
+        fs::write(tmp.path().join("fixture.png"), png).unwrap();
+
+        let result = read_dispatch(tmp.path(), json!({"path": "fixture.png"}));
+        assert!(!result.is_error, "{result:?}");
+        assert_eq!(
+            result.content,
+            format!(
+                "[image: {} ({} bytes, image/png)]",
+                tmp.path().join("fixture.png").display(),
+                png.len()
+            )
+        );
+        assert_eq!(result.images.len(), 1, "exactly one image block");
+        assert_eq!(result.images[0].media_type, "image/png");
+        assert_eq!(
+            result.images[0].data,
+            base64_encode(png),
+            "the block carries the exact base64 of the file bytes"
+        );
+    }
+
+    /// A file with an unknown binary extension keeps the text path
+    /// byte-identical: same read_to_string output, zero image blocks. This
+    /// pin is the RED proof that widening image detection to non-image
+    /// extensions (e.g. treating any extension as an image) turns it red.
+    #[test]
+    fn image_unknown_binary_extension_keeps_text_path_byte_identical() {
+        let tmp = tempfile::tempdir().unwrap();
+        let body = "plain-ish binary \u{1}\u{2} but valid UTF-8\n";
+        fs::write(tmp.path().join("blob.bin"), body).unwrap();
+
+        let result = read_dispatch(tmp.path(), json!({"path": "blob.bin"}));
+        assert!(!result.is_error, "{result:?}");
+        assert_eq!(result.content, body, "text path byte-identical");
+        assert!(
+            result.images.is_empty(),
+            "an unknown extension never carries image blocks"
+        );
+    }
+
+    /// The size guard: an image larger than 5 MiB is a tool error naming the
+    /// cap (5242880) and the actual size, with zero base64 in the error text.
+    #[test]
+    fn image_oversize_file_is_tool_error_naming_cap_without_base64() {
+        let tmp = tempfile::tempdir().unwrap();
+        let oversized = vec![0u8; 5 * 1024 * 1024 + 1];
+        fs::write(tmp.path().join("big.png"), &oversized).unwrap();
+
+        let result = read_dispatch(tmp.path(), json!({"path": "big.png"}));
+        assert!(result.is_error, "{result:?}");
+        assert!(
+            result.content.contains("5 MiB"),
+            "error names the cap: {}",
+            result.content
+        );
+        assert!(
+            result.content.contains("5242880"),
+            "error names the cap in bytes: {}",
+            result.content
+        );
+        assert!(
+            result.content.contains("5242881"),
+            "error names the actual size: {}",
+            result.content
+        );
+        assert!(
+            result.content.len() < 300,
+            "error stays short — no base64 payload: {}",
+            result.content
+        );
+        assert!(result.images.is_empty(), "no image block on the error leg");
+    }
+
+    /// The sandbox gates the image leg too: an image path escaping cwd is
+    /// refused (`path escapes cwd` shape) BEFORE any read — the would-be image
+    /// outside cwd is never returned.
+    #[test]
+    fn image_path_escaping_cwd_is_refused_before_any_read() {
+        let tmp = tempfile::tempdir().unwrap();
+        // A valid image placed OUTSIDE the cwd, reachable only by traversal.
+        let outside = tmp.path().parent().unwrap().join("t91-outside.png");
+        fs::write(&outside, b"\x89PNG\r\n\x1a\noutside").unwrap();
+
+        let result = read_dispatch(tmp.path(), json!({"path": "../t91-outside.png"}));
+        assert!(result.is_error, "{result:?}");
+        assert!(
+            result.content.contains("path escapes cwd"),
+            "refusal shape unchanged: {}",
+            result.content
+        );
+        assert!(
+            !result.content.contains("[image:"),
+            "the outside image was never read: {}",
+            result.content
+        );
+        assert!(result.images.is_empty());
+        let _ = fs::remove_file(&outside);
     }
 }

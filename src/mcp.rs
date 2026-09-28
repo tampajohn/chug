@@ -79,6 +79,7 @@ fn server_down(name: &str) -> ToolResult {
     ToolResult {
         content: format!("mcp server {name} is down"),
         is_error: true,
+        images: Vec::new(),
     }
 }
 
@@ -112,6 +113,7 @@ impl McpServer {
                 Ok(ToolResult {
                     content: format!("mcp tool {tool_name} failed: {e:#}"),
                     is_error: true,
+                    images: Vec::new(),
                 })
             }
         }
@@ -153,10 +155,12 @@ impl McpServer {
             Some(err) => ToolResult {
                 content: err,
                 is_error: true,
+                images: Vec::new(),
             },
             None => ToolResult {
                 content: text,
                 is_error: is_error_flag,
+                images: Vec::new(),
             },
         }
     }
@@ -315,12 +319,14 @@ impl McpRegistry {
             return ToolResult {
                 content: format!("unknown tool: {name}"),
                 is_error: true,
+                images: Vec::new(),
             };
         };
         let Some(srv) = self.servers.iter_mut().find(|s| s.name() == srv_name) else {
             return ToolResult {
                 content: format!("mcp server {srv_name} not found"),
                 is_error: true,
+                images: Vec::new(),
             };
         };
         match srv.call(&tool_name, arguments) {
@@ -328,6 +334,7 @@ impl McpRegistry {
             Err(e) => ToolResult {
                 content: format!("mcp server {srv_name} is down: {e:#}"),
                 is_error: true,
+                images: Vec::new(),
             },
         }
     }

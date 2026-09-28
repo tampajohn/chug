@@ -89,6 +89,7 @@ pub fn dispatch(ctx: &ToolCtx, name: &str, input: &Value, out: Option<&Path>) ->
         Err(e) => ToolResult {
             content: format!("tool error: {e:#}"),
             is_error: true,
+            images: Vec::new(),
         },
     }
 }
@@ -130,6 +131,7 @@ fn submit_plan(ctx: &ToolCtx, input: &Value, out: Option<&Path>) -> anyhow::Resu
                 plan.len()
             ),
             is_error: false,
+            images: Vec::new(),
         });
     };
     // Sandbox: the same lexical rule write_file enforces via resolve_safe,
@@ -156,6 +158,7 @@ fn submit_plan(ctx: &ToolCtx, input: &Value, out: Option<&Path>) -> anyhow::Resu
             plan.len()
         ),
         is_error: false,
+        images: Vec::new(),
     })
 }
 
