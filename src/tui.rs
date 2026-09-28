@@ -603,8 +603,11 @@ impl App {
 
     /// Tab pressed with no strip open: complete the whitespace-delimited
     /// token ending at the cursor (the dock cursor is always at the end).
-    /// `/`-tokens complete against slash commands, `@`-tokens against the
-    /// cached file index; any other token is a no-op (SPEC-5 §3).
+    /// `/`-tokens complete against the built-in slash commands plus the
+    /// discovered pack names (built-ins win name collisions — the F9
+    /// shadow rule), `@`-tokens against the cached file index; any other
+    /// token is a no-op (SPEC-5 §3). A `read_dir` per Tab is trivially
+    /// cheap — the 30s `FileIndex` TTL covers the expensive tree walk.
     fn complete_tab(&mut self) {
         let (start, token) = complete::token_at_cursor(&self.input, self.input.len());
         let (typed, prefix, candidates) = if let Some(query) = token.strip_prefix('@') {
@@ -612,7 +615,16 @@ impl App {
             let candidates = chat.file_index.candidates(query);
             (query.to_string(), "@", candidates)
         } else if token.starts_with('/') {
-            (token.to_string(), "", complete::slash_candidates(token))
+            let packs = self
+                .chat
+                .as_ref()
+                .map(|chat| commands::names(&chat.cwd))
+                .unwrap_or_default();
+            (
+                token.to_string(),
+                "",
+                complete::slash_candidates_with_packs(token, &packs),
+            )
         } else {
             return;
         };
@@ -825,18 +837,25 @@ impl App {
     }
 
     /// `/help` output: the built-in command block plus one F9 pack line
-    /// naming the pack directory and how many packs were discovered (the
-    /// count from the same discovery call the dispatcher uses). Run mode
-    /// has no cwd-scoped packs (phase 2), so it shows the built-ins only.
+    /// naming the pack directory and how many packs were discovered, each
+    /// as `/name — description` when the pack carries a frontmatter
+    /// description, bare `/name` otherwise. Run mode has no cwd-scoped
+    /// packs, so it shows the built-ins only.
     fn help_text(&self) -> String {
         let Some(chat) = &self.chat else {
             return HELP_TEXT.to_string();
         };
-        let packs = commands::names(&chat.cwd);
+        let packs = commands::discover(&chat.cwd);
         let listing = if packs.is_empty() {
             String::new()
         } else {
-            let named: Vec<String> = packs.iter().map(|n| format!("/{n}")).collect();
+            let named: Vec<String> = packs
+                .iter()
+                .map(|p| match &p.description {
+                    Some(d) => format!("/{} — {d}", p.name),
+                    None => format!("/{}", p.name),
+                })
+                .collect();
             format!(" ({})", named.join(", "))
         };
         // HELP_TEXT's last row carries no trailing newline — one goes here
@@ -2025,6 +2044,38 @@ mod tests {
         );
     }
 
+    /// T118: a pack with frontmatter renders `/name — description` on the
+    /// pack line; a pack without one stays bare; zero packs renders the
+    /// count with no listing at all (unchanged from phase 1).
+    #[test]
+    fn chat_help_renders_pack_descriptions() {
+        let mut f = chat_app();
+        write_pack(
+            &f,
+            "review",
+            "---\ndescription: Review the current diff\n---\nReview: $ARGUMENTS",
+        );
+        write_pack(&f, "triage", "Triage: $ARGUMENTS");
+        let help = f.app.help_text();
+        assert_eq!(
+            help.lines().last().unwrap(),
+            "  packs          .chug/commands/*.md — 2 discovered \
+             (/review — Review the current diff, /triage)"
+        );
+        // The stripped body still drives expansion: the pack fires normally.
+        let abort = Arc::clone(&f.abort);
+        type_text(&mut f.app, "/review the login bug", &abort);
+        press(&mut f.app, KeyCode::Enter, &abort);
+        assert_eq!(f.objective_rx.try_recv().unwrap(), "Review: the login bug");
+
+        // Zero packs: no listing (the phase-1 rendering, unchanged).
+        let f = chat_app();
+        assert_eq!(
+            f.app.help_text().lines().last().unwrap(),
+            "  packs          .chug/commands/*.md — 0 discovered"
+        );
+    }
+
     // ---------- SPEC-5: Tab completion ----------
 
     fn strip_candidates(app: &App) -> Vec<String> {
@@ -2206,6 +2257,69 @@ mod tests {
         // Esc restores the bare "/".
         press(&mut f.app, KeyCode::Esc, &abort);
         assert_eq!(f.app.input, "/");
+    }
+
+    // ---------- F9 phase 2b: Tab completion of pack names ----------
+
+    /// `/`-Tab completes discovered pack names: prefix-filtered like the
+    /// built-ins, appended after them, and the strip cycle accepts one.
+    #[test]
+    fn tab_slash_completes_pack_names_builtins_first() {
+        let mut f = chat_app();
+        write_pack(&f, "review", "Review: $ARGUMENTS");
+        let abort = Arc::clone(&f.abort);
+        // A prefix that only a pack matches completes inline.
+        type_text(&mut f.app, "/rev", &abort);
+        press(&mut f.app, KeyCode::Tab, &abort);
+        assert_eq!(f.app.input, "/review");
+        assert!(!strip_is_open(&f.app));
+
+        // Bare "/": the strip is built-ins first, then the pack last.
+        let mut f = chat_app();
+        write_pack(&f, "review", "Review: $ARGUMENTS");
+        write_pack(&f, "triage", "Triage: $ARGUMENTS");
+        let abort = Arc::clone(&f.abort);
+        type_text(&mut f.app, "/", &abort);
+        press(&mut f.app, KeyCode::Tab, &abort);
+        assert!(strip_is_open(&f.app));
+        let candidates = strip_candidates(&f.app);
+        let builtins: Vec<String> = complete::SLASH_COMMANDS
+            .iter()
+            .map(|c| format!("/{c}"))
+            .collect();
+        assert!(candidates.starts_with(builtins.as_slice()));
+        assert_eq!(candidates.last(), Some(&"/triage".to_string()));
+        // Esc still restores the bare token with packs in play.
+        press(&mut f.app, KeyCode::Esc, &abort);
+        assert_eq!(f.app.input, "/");
+    }
+
+    /// The shadow rule, live: a pack named like a built-in (`goal.md`)
+    /// never appears as a second `/goal` candidate — built-ins always win,
+    /// and the untouched pack name still completes.
+    #[test]
+    fn tab_slash_pack_shadowing_a_builtin_is_never_a_candidate() {
+        let mut f = chat_app();
+        write_pack(&f, "goal", "A pack that wants /goal's name");
+        write_pack(&f, "review", "Review: $ARGUMENTS");
+        let abort = Arc::clone(&f.abort);
+        type_text(&mut f.app, "/", &abort);
+        press(&mut f.app, KeyCode::Tab, &abort);
+        assert!(strip_is_open(&f.app));
+        let candidates = strip_candidates(&f.app);
+        assert_eq!(
+            candidates.iter().filter(|c| *c == "/goal").count(),
+            1,
+            "exactly one /goal: {candidates:?}"
+        );
+        // And no candidate keeps the pack's stem alive.
+        assert!(!candidates.iter().any(|c| c == "/goal.md"));
+        // The unshadowed pack name still completes (prefix "/rev").
+        press(&mut f.app, KeyCode::Esc, &abort);
+        assert_eq!(f.app.input, "/");
+        type_text(&mut f.app, "rev", &abort);
+        press(&mut f.app, KeyCode::Tab, &abort);
+        assert_eq!(f.app.input, "/review");
     }
 
     #[test]
