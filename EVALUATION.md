@@ -271,6 +271,26 @@ row this cycle — second consecutive clean audit.
 
 ### Cycle 59 (2026-09-28) — fresh eval (kimi, loopd-routed: queue empty) — T107–T109 filed (F7 SPLIT phase 1 → T108); wrap entry fills landed refs
 
+**T109 delegate.rs test-module family split — LANDED, rebased
+fast-forward.** The pre-emptive T104-shaped split at 94.6% of the
+~4,500 trip line: delegate.rs 4,255 → 1,127 (production half
+byte-identical + the one-line `mod tests;` declaration — orchestrator
+diff-verified, not just child-claimed), the 3,127-line test module →
+`src/delegate/tests/` (201-line shared harness + 10 family files:
+summary 13, status 10, dispatch 4, wait 9, wait_terminal 7, schema 8,
+launch 11, argv 2, parse 2, collect 17 = 83 tests + the req-4 count pin
+whose mod-drop leg is RED-proven at compile time and whose
+`include_str!` legs cross-check each family's pinned count against real
+`#[test]` lines). glm impl 47/80 first-try — the first child launched
+under T107's hardened template, and it committed from the worktree cwd
+with main untouched: the clause's first live exercise held. kimi
+SKIPPED per routing d1790580571-17 (T16/T31 precedent — orchestrator
+byte-identity + count-equality review on a non-idle queue). Ran as the
+T44 overlap impl against T108's validator (disjoint files, 1 validator +
+1 impl cap); merges stayed serial — T108 landed first, T109 rebased
+onto it conflict-free. Review + post-merge nextest 870/870 + clippy.
+Outcome landed-clean; 1 stream + 1 child decision record harvested.
+
 **T108 F7 phase 1 streaming + console text deltas — LANDED via
 FAIL→fix-up→PASS arc (the full T100 shape).** glm impl died 80/80
 mid-implementation (design settled, 5 files dirty, uncommitted) → T63
