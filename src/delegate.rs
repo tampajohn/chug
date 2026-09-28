@@ -43,7 +43,10 @@ const DELEGATE_WAIT_POLL: Duration = Duration::from_millis(2500);
 /// T69: the commit-refs block of `collect` is a bounded `git log --oneline` —
 /// this is the hard line cap, for both the default range and a `<base>..HEAD`
 /// range, so a child worktree with a huge history can never flood the result.
-const DELEGATE_COLLECT_COMMIT_CAP: usize = 20;
+///
+/// T128: also named by the `chug mcp-serve` `chug_collect` compact renderer's
+/// commits header — visibility-only change.
+pub(crate) const DELEGATE_COLLECT_COMMIT_CAP: usize = 20;
 
 /// T115: the launch `goal_tail` preview window — the LAST ≤120 chars of the
 /// goal, T25's tail-anchoring rule. The observed composition-garble class
@@ -459,7 +462,12 @@ fn delegate_status_now(cwd: &Path, pid: Option<u64>) -> anyhow::Result<ToolResul
 /// One non-blocking bounded tail read of the child's events log — the shared
 /// source for both the `status` summary and the T69 `collect` parse, so
 /// neither can grow an unbounded read by accident.
-fn read_events_tail(events_path: &Path) -> anyhow::Result<Vec<String>> {
+///
+/// T128: also the read seam behind the `chug mcp-serve` `chug_collect` tool
+/// (which parses the raw lines with [`summarize_collect`] and maps a read
+/// failure to its `isError` result) — visibility-only change, behavior
+/// byte-identical.
+pub(crate) fn read_events_tail(events_path: &Path) -> anyhow::Result<Vec<String>> {
     read_tail_lines(events_path, DELEGATE_EVENTS_TAIL_BYTES)
 }
 
@@ -775,7 +783,11 @@ fn process_alive(pid: u64) -> Option<bool> {
 ///   plain probe, semantics UNCHANGED.
 ///
 /// No panic paths: every waitpid leg degrades to the plain probe.
-fn reap_and_alive(pid: u64) -> Option<bool> {
+///
+/// T128: also the liveness seam behind the `chug mcp-serve` `chug_collect`
+/// tool (mirroring `delegate collect`'s pid semantics exactly) —
+/// visibility-only change.
+pub(crate) fn reap_and_alive(pid: u64) -> Option<bool> {
     #[cfg(unix)]
     {
         // A pid of 0 (or one too big for i32) is not a child pid — and
@@ -894,32 +906,36 @@ fn render_status(
 /// T68 constraint: nothing here enters [`DelegateSummary`] or its pinned
 /// six-field `significant_ne` wake set — the `status` render and long-poll
 /// wake behavior stay byte-identical.
+///
+/// T128: `pub(crate)` (fields too, the T124 `DelegateSummary` precedent) so
+/// the `chug mcp-serve` `chug_collect` compact renderer can read the parsed
+/// fields — visibility-only change, behavior byte-identical.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-struct CollectSummary {
+pub(crate) struct CollectSummary {
     /// The latest segment's verdict latch, in stream order (a later verdict
     /// overwrites an earlier one — a rejected verdict followed by a later
     /// accepted one leaves the segment accepted). `Some` = a verdict line
     /// was seen in the segment.
-    verdict_latch: Option<&'static str>,
+    pub(crate) verdict_latch: Option<&'static str>,
     /// `summary` of the LATEST accepted `goal` line in the segment — the
     /// child's own account of what it did.
-    goal_summary: Option<String>,
+    pub(crate) goal_summary: Option<String>,
     /// `reason` of the latest-segment `abort` line (rendered with the
     /// `aborted` verdict).
-    abort_reason: Option<String>,
+    pub(crate) abort_reason: Option<String>,
     /// `cmd` of the LATEST `verifying` line in the segment — the check that
     /// gated the verdict.
-    check_cmd: Option<String>,
+    pub(crate) check_cmd: Option<String>,
     /// Any complete, parsable line was seen in the segment (the `running`
     /// signal — vs. `starting` when nothing was read).
-    saw_any: bool,
+    pub(crate) saw_any: bool,
 }
 
 impl CollectSummary {
     /// The LATEST segment's terminal state: the verdict latch when one was
     /// seen (`goal-accepted` / `goal-rejected` / `aborted`), `running` when
     /// events exist without a verdict, `starting` when nothing was read.
-    fn verdict(&self) -> &'static str {
+    pub(crate) fn verdict(&self) -> &'static str {
         match self.verdict_latch {
             Some(v) => v,
             None if self.saw_any => "running",
@@ -932,7 +948,10 @@ impl CollectSummary {
 /// (empty stream, torn last line, missing fields, segment reset) is
 /// unit-tested through here. Malformed lines are skipped, never fatal —
 /// collecting must be safe at ANY child lifecycle moment.
-fn summarize_collect(lines: &[&str]) -> CollectSummary {
+///
+/// T128: also the parse seam behind the `chug mcp-serve` `chug_collect`
+/// tool — visibility-only change, behavior byte-identical.
+pub(crate) fn summarize_collect(lines: &[&str]) -> CollectSummary {
     let mut c = CollectSummary::default();
     for line in lines {
         let line = line.trim();
@@ -1018,7 +1037,10 @@ fn delegate_base(input: &Value) -> anyhow::Result<Option<String>> {
 /// The `<base>..HEAD` (or bounded default `HEAD`) range string shared by the
 /// git spawn and the render header, so the rendered range always names what
 /// was actually queried.
-fn commit_range(base: Option<&str>) -> String {
+///
+/// T128: also the range seam behind the `chug mcp-serve` `chug_collect`
+/// compact renderer's commits header — visibility-only change.
+pub(crate) fn commit_range(base: Option<&str>) -> String {
     match base {
         Some(b) => format!("{b}..HEAD"),
         None => "HEAD".to_string(),
@@ -1032,7 +1054,11 @@ fn commit_range(base: Option<&str>) -> String {
 /// captured output (T20 `resolve_head` precedent): EVERY failure leg — no
 /// git binary, not a repo, bad ref, nonzero exit — degrades to an
 /// `Err(one-line note)`, never a panic, never a tool error, never blocking.
-fn collect_git_commits(cwd: &Path, base: Option<&str>) -> Result<Vec<String>, String> {
+///
+/// T128: also the git seam behind the `chug mcp-serve` `chug_collect` tool —
+/// visibility-only change, behavior byte-identical (the MCP renderer formats
+/// the same `Ok(refs) / Err(note)` shape its own way).
+pub(crate) fn collect_git_commits(cwd: &Path, base: Option<&str>) -> Result<Vec<String>, String> {
     let range = commit_range(base);
     let out = Command::new("git")
         .args([
