@@ -269,7 +269,7 @@ row this cycle — second consecutive clean audit.
 
 ## Outcomes (filled at cycle wrap — LOOP-SPEC Phase 3)
 
-### Cycle 59 (2026-09-28) — fresh eval (kimi, loopd-routed: queue empty) — T107–T109 filed (F7 SPLIT phase 1 → T108); wrap entry fills landed refs
+### Cycle 59 (2026-09-28) — fresh eval (kimi, loopd-routed: queue empty) — T107–T109 filed (F7 SPLIT phase 1 → T108); ALL THREE landed (T107 793a0fc, T108 53e4aed+2a51cc5, T109 75025c9)
 
 **T109 delegate.rs test-module family split — LANDED, rebased
 fast-forward.** The pre-emptive T104-shaped split at 94.6% of the
@@ -339,6 +339,43 @@ post-merge nextest 845/845 + clippy under target-shared /
 target-shared-main. Routing d1790576171-11, verdict d1790576657-12,
 outcome landed-clean; 2 streams + validator ledger + 3 child decision
 records harvested.
+
+Cycle notes: **T102's measure clause TRIPPED** — 2 of 4 post-raise
+impl children died at 80/80 with the work done (t108-impl
+mid-implementation at 141 total, t108-fixup post-commit; both recovered
+by T63 resumes, 61/80 and 1/80): the clause's window is >1 of the next
+6, and it fired inside 4 — **the next eval weighs the ~500-line
+spec-size cap** (the split-forcing estimate ceiling) per the clause's
+own text, no further iteration raises. **The validators earned their
+keep**: T108 round 1's SELF-ADDED two-downgrade probe caught the req-4
+latch violation that all 5 spec-named mutants missed — the adversarial
+gate's best moment this cycle; the fix-up's sweep closed the whole
+latch-cardinality family in one round (cycle-33 doctrine held).
+**T107's clause got its first live exercise same-cycle**: T109's impl —
+the first child launched under the hardened template — committed from
+its worktree cwd with main untouched (impl summary stated it
+explicitly). **T44 overlap ran clean again**: T108-validator ‖
+T109-impl (disjoint files), serial merges, conflict-free rebase-ff.
+**Display-artifact watch**: ~six render-garble sightings in
+orchestrator tool-call renders this cycle (delegate goals, edit_file
+parameters, a commit message, a delegate launch spec) — every
+transmitted payload verified INTACT on read-back; ONE real
+payload-level artifact: the T108-r2 validator's ledger carries a U+FFFD
+pair (cosmetic, no information loss) — the first payload sighting; the
+watch continues. Validator ceiling watch: r2 wrapped at 44/50 —
+budget_low fired, inside T18's margin, verdict delivered; no zone
+breach. T81: eval-kimi leg = THIS cycle's Phase 1 (~25 min eval, cycle
+wall ~2h at wrap — consistent with I6's closure). SSH pushurl held
+(five pushes, zero friction). Tag doctrine: `git tag -l 'v*'` still
+EMPTY — the bootstrap holds; the first tag stays the operator's (and
+F7-p1's landing makes the first minor bump feature-worthy). Wrap gates:
+nextest 870/870 + build + clippy under target-shared-main. Next cycle:
+queue EMPTY → eval-routed kimi; candidates already queued: **the
+T102-trip spec-size cap (MANDATORY weigh)**, F7 phase 2 TUI streaming
+(deferred, §4), F13/F2/F3/F4 phase-2 deferrals, display-artifact watch
+(payload sighting recorded), validator 50/50 watch, module sizes
+(mcp_http.rs 2,793 now the largest module; delegate.rs CLOSED at 1,127
+— T109).
 
 ### Cycle 58 (2026-09-28) — fresh eval (kimi, loopd-routed: queue empty) — T102–T106 filed (F6 SPLIT phase 1 → T105); ALL FIVE landed clean (T102 ffebdaf, T103 80d4a14, T105 dc29137, T104 ee3943e, T106 e5cdebd)
 
@@ -795,207 +832,7 @@ ready spec) with the T96/T97 pattern. T96's lesson held: the cycle-53
 mid-arc recipe executed end-to-end with zero re-work — resume-from-row
 notes are worth their tokens.
 
-### Cycle 53 (2026-09-27) — fresh eval (kimi, loopd-routed: queue empty) — T91–T97 filed (F5 SPLIT phase 1 → T91); T92 LANDED (9db86bc) — impl children now get 65 iterations
-
-**T92 LOOP-SPEC impl-child template 50→65 — LANDED, fast-forward merge 9db86bc.**
-glm impl (pid 2631) goal-accepted **19/50 in ~96 s** — the cleanest arc in
-the queue's history (one hunk per surface, zero fumbles): step-2 template
-`max_iters:   65` (three-space surface; validator 50/30 untouched),
-rationale parenthetical replaced with the new census (T83/T85/T89/T90 +
-T84 at 48/50) CARRYING the written measure clause (>1 of the next 6
-impl children dying at 65/65 → next eval considers 80 or work-splitting),
-T63 resume sentence → `65/35 impl, 50/30 validate`. Pin
-tests/loop_spec_recovery.rs:141 updated + RED-proven (pre-edit LOOP-SPEC →
-leg_names_mechanics_and_scope_guards_inside_step_2 FAILED, restored 4/4);
-sweep found no other casualty (eval_digest.rs `max_iters":50` are
-event-stream fixtures, untouched). Review: diff byte-exact vs the spec's
-named surface, 745/745 fallback-release + clippy under target-shared, spec
-check verbatim. kimi REQUIRED validation (doctrine; pid 8451, **16/50,
-~2.5 min**) VERDICT: PASS 0 blocking — gates independently re-run
-(745/745 + clippy + check-line verbatim), M-A resume-sentence-revert RED
-via the updated pin, M-B/M-C informational guard-boundary notes (template
-number check-line-guarded; measure clause review-enforced — per spec
-design), tree byte-clean. Routing d1790552895-13, verdict d1790552895-14.
-Post-merge: **nextest 745/745 in 10.4 s** + clippy under
-target-shared-main — **cargo-nextest is back on PATH**
-(`/Users/jadams/.cargo/bin/cargo-nextest`; uninstalled ~22:16Z during
-cycle 51, reinstalled by the operator before this cycle — the T82
-nextest-first runner rule is live again; this cycle's earlier review gate
-ran the fallback before the reinstall was noticed, 745/745 green both
-ways). 3 artifacts harvested pre-removal (impl + validate streams, child
-decisions). **Effect: every impl child launched after this merge gets 65
-iterations — T91's feature arc is the first beneficiary.** Arc shape: 1
-impl, 0 resumes, 0 fix-ups, 1 validator round, ~7 min wall end-to-end —
-the T88-class shape, now the template for what a well-specced small row
-costs post-T89 (terminal waits: 2 orchestrator iterations for two child
-runs).
-
-**T93 permissions `mcp__` canary prefix leg — LANDED, fast-forward merge aeb12ea.**
-glm impl (pid 15046) goal-accepted **23/65 in ~2.5 min** — the FIRST child
-launched at the post-T92 budget (not that it needed it). One-condition fix
-exactly per spec: `matcher_fits` gains `tool_glob.starts_with("mcp__") ||
-glob_matches(...)` so a server-scoped glob like `mcp__fs__*` + an arg
-matcher loads VALID (the canary string could never match it) and denies
-`mcp__fs__read prod.env` while allowing `ok.txt`; non-prefixed globs ride
-the canary leg unchanged, builtin fit-rejections (`command` on
-`read_file`, `bash`+`path`) byte-identical. **RED proven test-first**: the
-new test ran against UNFIXED code and failed with the exact skip line
-(`path matcher does not fit tool glob mcp__fs__*`, 22/22 others green),
-then passed post-fix — the child also filed its own decision records
-(d1790553165-1 test-first, d1790553167-2 accept). Review: diff is
-src/permissions.rs ONLY (+38/−2), nextest **746/746** (745+1) + clippy
-under target-shared, spec check `cargo test --bin chug permission` **23/23**
-— the broader stem catching the driver legs T90's plural filter missed
-(the T96 lesson practiced a cycle before its own doctrine lands). kimi
-SKIPPED per routing d1790553020-16 (permissions.rs not on the REQUIRED
-list; T16/T31 precedent). Post-merge: nextest 746/746 10.7s + clippy
-under target-shared-main. 2 artifacts harvested pre-removal (impl stream,
-child decisions). Arc: 1 impl, 0 resumes, 0 fix-ups, 0 validator rounds,
-~5 min wall — back-to-back clean smalls after T92.
-
-**T91 F5 phase 1: `read_file` image input — LANDED, merge ae7ff5f (the
-mandatory roadmap pull).** glm impl run1 (pid 22596) died **65/65** with the
-broad diff uncommitted (+1012 lines across 14 files — the ToolResult.images
-field rippled constructor sites in decisions/delegate/mcp/mcp_http/plan/
-tgrep/webfetch mechanically) — the FIRST death at the new cap, T92's
-measure clause now at 1-of-6 — and **T63 resume #20** (pid 25547) accepted
-**19/65 in ~2.7 min** (commit e39bbb5). What landed: extension map
-(png/jpg/jpeg/gif/webp, lowercased so X.PNG works) reads bytes; 5 MiB guard
-errors naming cap + actual size with zero base64; `ToolResult.images:
-Vec<ImageBlock>` default-empty channel with the text note
-`[image: <path> (<n> bytes, <media>)]` — previews/events ride text only
-(base64-can-never-leak pinned <100 chars); `KnownBlock::Image` serde
-round-trip + `tool_result_block_with_images` array content (image first,
-then text) with the string path byte-identical pinned; driver degrade leg —
-400 whose body mentions image/content (`api::is_image_rejection`) → ONE
-retry with every image block (standalone + inside tool_result arrays)
-replaced by placeholder text, one `image_degraded` events line, per-run
-latch downgrading later images at WRAP time; plan mode rides the shared
-wrap site (array-shape test); resolve_safe gates before any read;
-hand-rolled RFC-4648 base64 (vectors pinned, no new dep); README ## Tools
-image clause integrated. Review: nextest **762/762** (746+16) + clippy +
-spec check 16/16 under target-shared, four load-bearing hunks
-orchestrator-read (degrade condition, read_image guard, base64, wrap).
-**kimi REQUIRED validation** (FOUR REQUIRED-listed files; pid 31218,
-29/50, ~14 min) VERDICT: PASS 0 blocking — gates independently re-run,
-check-filter run list verified = exactly the 16 new tests (the T96 lesson
-practiced by a validator in the same cycle it was filed), 10 mutants in
-isolated T79 worktrees: **7 killed** incl. all 3 spec RED proofs +
-latch-drop + any-400-widening + base64-padding + placeholder-array-skip;
-**3 survived** = weak-test gaps on correct code, carried informational:
-(1) retry-ONCE double-rejection unpinned, (2) exactly-5MiB boundary
-unpinned, (3) rejection-body case-fold unpinned — weighed, NOT filed
-(informational; the legs they pin are spec-satisfying; a future eval can
-re-weigh). Routing d1790553963-19, verdict d1790554748-20. **Orchestrator
-incident, mine**: the first validator launch (pid 31078) carried a
-goal-text duplication corruption of MY making; I killed it pre-work
-(SIGKILL after SIGTERM lag, defunct-reaped), verified the worktree
-byte-clean, relaunched — the relaunch carried the same cosmetic
-duplication (content complete, no contradictions) and validated fine.
-4 artifacts harvested pre-removal (impl run1+resume stream, killed-attempt
-stream, validator stream, child decisions). Post-merge: nextest 762/762
-10.7s + clippy under target-shared-main. FEATURES.md F5 → **phase 1
-LANDED** annotation (phase 2 chat-paste deferral carried). Arc: 2 impl
-runs (1 resume), 1 validator round + 1 orchestrator-caused relaunch,
-~35 min wall. **F5 phase 1 closes the loop's last Claude-Code-class
-sensory gap: children can now READ screenshots and image fixtures.**
-
-**T94 `get_str` received-keys diagnosis — LANDED, fast-forward merge 06f3b9e.**
-glm impl (pid 44123) goal-accepted **17/65 in ~2.5 min** — the third
-first-try-clean small of the cycle. `src/tools.rs` ONLY (+178/−1): one
-shared `received_hint` helper (object → sorted keys capped at 12 +
-`, … (+N more)`; empty → `(received keys: none)`; non-object → JSON type
-per the T88 req-3 shape) behind `get_str`'s one-line `ok_or_else`; the
-exact t88 fumble now answers `missing or non-string field: old (received
-keys: new_string, old_string, path)` — one-iteration self-correction.
-Success path byte-identical (edit_file round-trip pin + every pre-existing
-tools.rs test green unmodified). RED proof: revert fails 6/7 new tests,
-success-path correctly stays green. Review: nextest **769/769** (762+7) +
-clippy + spec check 9/9 (7 new + 2 decisions.rs received-stemmed riding
-the filter) under target-shared. kimi REQUIRED validation (tools.rs; pid
-49446, 20/50) VERDICT: PASS 0 blocking — gates independently re-run,
-mutations serial (overlap declared), **5/6 killed** incl. the exact
-RED-claim reproduction; the sort-drop survivor is the vacuous-mutation
-class (BTreeMap iterates sorted — dropping the sort is unobservable, code-
-level explanation accepted). Routing d1790555093-21, verdict
-d1790555295-22. Post-merge: nextest 769/769 + clippy under
-target-shared-main. 3 artifacts harvested (impl + validate streams, child
-decisions — the impl stream landed under its raw rotated name mid-harvest
-and was renamed to convention by hand). Arc: 1 impl, 1 validator round,
-~7 min wall.
-
-**T98 site-sync (operator directive, filed mid-cycle b6787ed) — LANDED, merge 8721c83.**
-glm impl (pid 54557) goal-accepted **38/65 in ~7 min** under a goal-level
-CRITICAL CONSTRAINT (live clone never touched — fixture-only testing; the
-child verified the live HEAD 61a991d unchanged with 0 markers).
-`scripts/site-sync.sh` (+243): regenerates ONLY the `<!-- STATS:BEGIN/END
--->` region of the site's index.html from repo facts — TODO.md done-row
-count, newest full-suite gate count in git log (nextest > suite-unit >
-bare-unit priority; filtered runs like `16/16` match nothing BY DESIGN so
-the card cites a full-suite gate or walks back), loopd cycle-OK count,
-EVALUATION.md git date, last-5 landed `tNN:` items with refs+dates
-(HTML-escaped, non-item commits excluded). No clock in the block →
-unchanged inputs byte-identical, no commit (idempotence cmp-pinned;
-CHUG_SYNC_NOW for tests). Safety legs per req 2/5: missing clone / non-git
-/ failed commit / **rejected push** all warn + exit 0; plain `git push`
-only, never force; marker pair absent/malformed → exit 3 WITHOUT editing
-(the child resolved the spec's internal tension — req-1's "add markers if
-absent" parenthetical vs the Tests section's "absent markers → nonzero
-WITHOUT editing" — toward never-inject; site-side marker insertion is
-one-time setup). `loopd.sh` +6: one failure-tolerant invocation after each
-`cycle OK`. 7 fixture integration tests (tests/site_sync.rs): contents
-match sources, byte-identical rerun, marker legs, push rejection,
-regeneration on new inputs. Review: nextest **776/776** (769+7) + clippy +
-bash -n under target-shared; post-merge 776/776 under target-shared-main.
-kimi SKIPPED per routing d1790555816-24 (zero src/ files; trust boundary
-weighed — every safety leg is fixture-test-pinned incl. dead-remote
-rejection; failure mode bounded to the operator's own site, hand-fixable,
-never a cycle failure). 1 artifact harvested. **Bootstrap carried to
-wrap**: the live site has 0 markers — orchestrator inserts the one-time
-marker pair at cycle-53 wrap so the NEXT loopd cycle runs the first real
-sync (acceptance: a later cycle's Outcomes records the site commit).
-
-**T95 README layout + module set-equality guard — LANDED, fast-forward e80b3c5.**
-glm impl (pid 69319) goal-accepted **26/65 in ~2.5 min** — after an
-orchestrator misfire (I launched the first attempt with a hallucinated
-spec slug `t95-transcript-dir-pin.md`; the child failed at spawn with
-spec-not-found, I read the row, relaunched with the correct
-`t95-readme-layout-guard.md` — the spawn-failure-as-error-signal caught
-my own bookkeeping slip in one iteration, ironically the T94 thesis).
-README one-word insertion (`permissions` between delegate and plan — the
-list is historical-order not sorted, the child placed it where neighbors
-keep alpha order) + `tests/readme_layout.rs`: a std-only set-equality
-guard (newline-tolerant braces-list parse vs src/*.rs-minus-main walk,
-runtime `current_dir` per T48, non-vacuity pins BOTH sides, failure names
-both drift directions + the T86 class pointer) — the T86-class SECOND
-sighting earned automation per eval §6(c). RED proofs recorded both
-directions (revert → names ["permissions"]; phantom → names ["phantom"]).
-Review: nextest **777/777** (776+1) + clippy + guard 1/1 under
-target-shared; post-merge 777/777. kimi SKIPPED per routing
-d1790556692-25 (the guard is its own adversarial artifact). 1 artifact
-harvested. Arc: 1 misfired launch + 1 impl, ~5 min wall.
-
-**T96 META-META-SPEC check-filter-breadth — MID-ARC at wrap (impl committed, validation deferred).**
-glm impl (pid 78784) accepted 23/65, commit 962830d on branch loop-t96:
-ONE sentence woven into the spec-quality bar after the T67 `--lib`
-sentence (cargo-test check filter MUST run every test the change adds;
-t90 citation), +7/−1 with every other line cmp-proven byte-identical,
-todo_consistency 5/5. The merge is HELD: step-4 kimi validation is
-REQUIRED for loop/spec doctrine and the budget-low directive forbade new
-child launches. Worktree /tmp/chug-loop-t96 + branch PRESERVED; events
-harvested; full recovery recipe on the TODO row. **T97 carried** (docs-only,
-ready spec). Cycle-53 wrap: 5 items landed (T92/T93/T91/T94/T98/T95 — six
-counting the operator-filed T98), one mid-arc (T96), one carried (T97);
-T92 measure clause at 1-of-6 (T91's 65/65 death, resume-recovered);
-validators caught 0 blocking findings all cycle (T91: 7/10 mutants killed
-+ 3 informational survivors carried not filed; T94: 5/6 + expected
-BTreeMap survivor); decision_log adoption 25 records this cycle;
-orchestrator incidents (mine, both recovered in-iteration): killed
-goal-corrupted validator launch pid 31078; wrong-spec-slug T95 misfire
-caught by spawn failure. Site-marker bootstrap for T98 done at wrap
-(markers committed to chug-site; first real sync is the next loopd
-cycle's — acceptance leg still open).
-
+### Cycle 53 (2026-09-27) — six landed: T92 9db86bc (impl 50→65), T91 ae7ff5f (F5-p1 images), T93 aeb12ea (mcp__ canary), T94 06f3b9e (get_str diag), T95 e80b3c5 (readme_layout), T98 8721c83 (site-sync); T96 mid-arc→c54, T97→c54 — one-line compaction; full narrative in git (row-flip commits + TODO done rows)
 ### Cycle 52 (2026-09-27) — routine glm freshness-skip; T90 LANDED (e9afed9, fast-forward merge) — F4 permissions phase 1: the deny-only fail-closed policy layer
 
 - **T90 LANDED** (e9afed9): `.chug/permissions.json` deny-list — new `src/permissions.rs` (363 prod lines, at the ~350 guard's edge) holds all policy logic: absent/empty config = zero rules + zero cost; malformed config fails OPEN (one stderr warn + one `permission_error` line, T83 parity); per-rule malformed legs (unknown key, two matchers, non-string value, missing tool, matcher-that-cannot-fit) are skipped in place with valid siblings still denying; deny rules are a tool glob + at most one `command`/`path`/`url` arg matcher, first-match-wins, missing/non-string arg under an arg rule fails toward execution; deny text `[permission denied] <rule summary>`. Driver gates dispatch FIRST (permissions → PreToolUse hooks → plan/MCP/risk gate) riding the T83 `blocked` flag in run+chat+plan, so a denied call fires no hooks and never executes. `hooks::glob_matches` made pub(crate), reused byte-identically. README Permissions section integrated after Hooks; FEATURES F4 row annotated at flip. 24 tests (17 unit + 7 driver integration incl. ZERO-hook-fires ordering pins + plan-mode leg + fail-open-exactly-once).
