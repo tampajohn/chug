@@ -219,6 +219,7 @@ burning an implementation child.
 - **Read-only contract** — the tool list advertised to the API is EXACTLY five
   tools: `read_file`, `grep`, `glob`, `list_dir`, and `submit_plan`. No
   `write_file`, `edit_file`, `bash`, `delegate`, `web_fetch`, `update_ledger`,
+  `todo_add`/`todo_update`/`todo_list`,
   `goal_complete`, `decision_log`, and no MCP tools
 - **Defense in depth** — the schemas are filtered AND dispatch rejects every
   other registered tool name with a tool error naming the allowed set; the
@@ -261,19 +262,33 @@ short text note instead of mojibake, capped at 5 MiB per image, and
 downgraded to a placeholder when the endpoint rejects image content),
 `write_file`,
 `edit_file` (+`replace_all`), `bash`, `grep`,
-`tgrep`, `glob`, `list_dir`, `update_ledger`, `goal_complete`, `delegate`, `web_fetch`,
+`tgrep`, `glob`, `list_dir`, `update_ledger`, `todo_add`, `todo_update`,
+`todo_list`, `goal_complete`, `delegate`, `web_fetch`,
 `decision_log`.
 All paths sandboxed to `--cwd` (`delegate` and `web_fetch` are
 the two documented exceptions — `delegate`'s absolute `cwd`/`spec` target child
 worktrees by design; `web_fetch` is network, not filesystem). `bash` runs in its own process group —
 timeouts SIGKILL the whole group, so orphaned grandchildren can't wedge the
 driver (120s default; `--bash-timeout` / `CHUG_BASH_TIMEOUT` overrides).
-`chug plan` runs the same `read_file`/`grep`/`glob`/`list_dir` tools plus `submit_plan` (its only write and exit path) — plan mode advertises no other tool, so the registry surfaces below are run/chat surfaces.
+`chug plan` runs the same `read_file`/`grep`/`glob`/`list_dir` tools plus `submit_plan` (its only write and exit path) — plan mode advertises no other tool (the bookkeeping tools `update_ledger`, `decision_log`, and the todo tools included), so the registry surfaces below are run/chat surfaces.
 
 `decision_log` is the loop's bookkeeping surface next to `update_ledger`:
 structured decision records to `.chug/decisions.jsonl` (append-only,
 best-effort) feeding the F13 distillation corpus; like the file tools it is
 cwd-sandboxed, so the two documented sandbox exceptions stay exactly two.
+
+`todo_add` / `todo_update` / `todo_list` are the other bookkeeping surface
+beside `update_ledger`: a structured todo list stored as a JSON array at
+`.chug/todos.json` (ids `t1`, `t2`, …; statuses `pending`/`in_progress`/`done`
+enforced — an invalid status is an error naming the set, an unknown id names
+the existing ids, a corrupt store is an error naming the file). `todo_list`
+renders `t3 [in_progress] title` lines (or `no todos`), and whenever the list
+is non-empty the same rendering rides the system prompt as a `## Todos`
+section after `## Ledger` in run and chat mode. The store is cwd-confined
+like every `.chug/` surface: worktree children start with an empty list by
+construction, resumes inherit the file, and jq-able orchestrators can read a
+child's self-declared plan without transcript archaeology. Plan mode excludes
+all three (no write tools there).
 
 `delegate` — launch, observe, or collect a bounded child `chug run` (e.g. in
 a git worktree). Three actions:

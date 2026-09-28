@@ -807,16 +807,22 @@ pub(crate) fn drive_loop(
             spec_text = Some(text);
         }
         let ledger_text = ledger::read(ctx.cwd)?;
+        // T111: the todo store rides the prompt next to the ledger in run
+        // and chat modes (empty/corrupt store ⇒ empty text ⇒ no section).
+        // Plan mode renders nothing about todos (no todo tools there).
+        let todos_text = crate::todos::prompt_text(ctx.cwd);
         let system = match ctx.mode {
             Mode::Autonomous => build_system_prompt(
                 spec_text.as_deref().unwrap_or_default(),
                 knobs.goal.as_deref().unwrap_or_default(),
                 &ledger_text,
+                &todos_text,
             ),
             Mode::Chat => build_chat_system_prompt(
                 spec_text.as_deref(),
                 knobs.goal.as_deref(),
                 &ledger_text,
+                &todos_text,
             ),
             Mode::Plan => build_plan_system_prompt(
                 spec_text.as_deref(),
@@ -1415,8 +1421,23 @@ pub fn estimate_tokens(messages: &[Message]) -> usize {
     chars / 4
 }
 
-pub fn build_system_prompt(spec: &str, goal: &str, ledger_text: &str) -> String {
-    format!("{PREAMBLE}\n\n## Spec\n\n{spec}\n\n## Goal\n\n{goal}\n\n## Ledger\n\n{ledger_text}")
+/// T111: the `## Todos` section appended after `## Ledger` — ONLY when the
+/// todo list is non-empty (`todos_text` empty ⇒ no heading is emitted). The
+/// text is pre-rendered by `todos::prompt_text` (`t3 [in_progress] title`
+/// lines). Plan mode takes no todos parameter: it has no write tools, so it
+/// renders nothing about todos.
+fn append_todos_section(prompt: &mut String, todos_text: &str) {
+    if !todos_text.is_empty() {
+        prompt.push_str(&format!("\n\n## Todos\n\n{todos_text}"));
+    }
+}
+
+pub fn build_system_prompt(spec: &str, goal: &str, ledger_text: &str, todos_text: &str) -> String {
+    let mut prompt = format!(
+        "{PREAMBLE}\n\n## Spec\n\n{spec}\n\n## Goal\n\n{goal}\n\n## Ledger\n\n{ledger_text}"
+    );
+    append_todos_section(&mut prompt, todos_text);
+    prompt
 }
 
 /// T73 plan-mode system prompt: the read-only contract preamble, optional
@@ -1442,6 +1463,7 @@ pub fn build_chat_system_prompt(
     spec: Option<&str>,
     goal: Option<&str>,
     ledger_text: &str,
+    todos_text: &str,
 ) -> String {
     let mut prompt = CHAT_PREAMBLE.to_string();
     if let Some(spec) = spec {
@@ -1451,6 +1473,7 @@ pub fn build_chat_system_prompt(
         prompt.push_str(&format!("\n\n## Goal\n\n{goal}"));
     }
     prompt.push_str(&format!("\n\n## Ledger\n\n{ledger_text}"));
+    append_todos_section(&mut prompt, todos_text);
     prompt
 }
 

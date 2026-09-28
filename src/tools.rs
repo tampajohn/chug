@@ -40,7 +40,10 @@ pub struct ToolResult {
 
 /// JSON schemas for the tools, in registration order.
 pub fn tool_schemas() -> Vec<Value> {
-    vec![
+    // T111: the todo tool schemas (todos.rs) are spliced in here — directly
+    // after `update_ledger`, the bookkeeping group — so the vec below keeps
+    // its single-expression shape and the todo entries ride a extend.
+    let mut schemas = vec![
         json!({
             "name": "read_file",
             "description": "Read a text file. Paths are relative to the working directory. Output is capped at 2000 lines and truncation is noted. Use `offset`/`limit` to page beyond the cap. Paths outside the cwd are refused (`path escapes cwd`); cross-tree reads/writes (such as a child worktree in /tmp) go through `bash`.",
@@ -136,6 +139,13 @@ pub fn tool_schemas() -> Vec<Value> {
                 "required": ["content"]
             }
         }),
+        // T111: schemas live in todos.rs (single source of truth for the
+        // descriptions the model sees), registered here beside update_ledger
+        // — the bookkeeping group. Run+chat only; plan.rs filters by name,
+        // so the todo tools are structurally absent from plan mode.
+    ];
+    schemas.extend(crate::todos::schemas());
+    schemas.extend(vec![
         // T70: schema lives in decisions.rs (single source of truth for the
         // description the model sees), registered here alongside the builtins.
         crate::decisions::schema(),
@@ -178,7 +188,8 @@ pub fn tool_schemas() -> Vec<Value> {
                 "required": ["summary"]
             }
         }),
-    ]
+    ]);
+    schemas
 }
 
 /// Dispatch a tool call. Internal failures are converted into `is_error` results
@@ -208,6 +219,10 @@ fn inner(ctx: &ToolCtx, name: &str, input: &Value) -> anyhow::Result<ToolResult>
         "tgrep" => crate::tgrep::tgrep(ctx, input),
         "decision_log" => crate::decisions::decision_log(&ctx.cwd, input),
         "update_ledger" => update_ledger(ctx, input),
+        // T111: the todo tools (schemas + logic in todos.rs).
+        "todo_add" => crate::todos::todo_add(&ctx.cwd, input),
+        "todo_update" => crate::todos::todo_update(&ctx.cwd, input),
+        "todo_list" => crate::todos::todo_list(&ctx.cwd),
         "goal_complete" => Ok(ToolResult {
             content: "goal_complete acknowledged. Verification will run; do not assume acceptance until the loop confirms it.".to_string(),
             is_error: false,

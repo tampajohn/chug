@@ -26,6 +26,7 @@ mod mcp_http;
 mod permissions;
 mod sse;
 mod tgrep;
+mod todos;
 mod webfetch;
 
 use std::path::PathBuf;

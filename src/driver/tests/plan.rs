@@ -554,10 +554,11 @@
     }
 
     /// Regression pin: the run-mode advertised tool list equals the exact
-    /// pre-change set — thirteen tools today (T73 added plan mode's surface
+    /// pre-change set — sixteen tools today (T73 added plan mode's surface
     /// without touching this list; T76 added tgrep and updated this pin in
-    /// the same diff). If a rebase changes the set, update this pin in the
-    /// same diff and say so.
+    /// the same diff; T111 added the three todo tools beside update_ledger
+    /// and updated this pin in the same diff). If a rebase changes the set,
+    /// update this pin in the same diff and say so.
     #[test]
     fn run_mode_advertised_tool_list_is_exactly_the_pre_change_set() {
         let schemas = crate::tools::tool_schemas();
@@ -576,6 +577,9 @@
             "glob",
             "list_dir",
             "update_ledger",
+            "todo_add",
+            "todo_update",
+            "todo_list",
             "goal_complete",
             "delegate",
             "web_fetch",

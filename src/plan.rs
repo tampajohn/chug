@@ -12,7 +12,8 @@
 //! - **Tool contract**: EXACTLY five tools are advertised to the API —
 //!   `read_file`, `grep`, `glob`, `list_dir`, and the new `submit_plan`.
 //!   Nothing else: no write_file/edit_file/bash/delegate/web_fetch/
-//!   update_ledger/goal_complete/decision_log, and no MCP schemas.
+//!   update_ledger/goal_complete/decision_log, no todo tools
+//!   (todo_add/todo_update/todo_list — T111), and no MCP schemas.
 //! - **`submit_plan`** is the single deliberate write/exit path: input
 //!   `{ "plan": string }` (required, min length 1). With `--out`, the plan
 //!   string is written VERBATIM to that path (parent dirs created; a path
@@ -305,8 +306,33 @@ mod tests {
                     "decision_log must never write in plan mode"
                 )),
             ),
+            // T111: the todo tools are bookkeeping writes — excluded like
+            // update_ledger. todo_add/todo_update must never create or touch
+            // `.chug/todos.json`; todo_list must never execute (the gate
+            // wording below is its leg).
+            (
+                "todo_add",
+                json!({"title": "plan-mode write"}),
+                Box::new(|cwd: &Path| assert!(
+                    !cwd.join(".chug/todos.json").exists(),
+                    "todo_add must never write in plan mode"
+                )),
+            ),
+            (
+                "todo_update",
+                json!({"id": "t1", "status": "done"}),
+                Box::new(|cwd: &Path| assert!(
+                    !cwd.join(".chug/todos.json").exists(),
+                    "todo_update must never write in plan mode"
+                )),
+            ),
+            (
+                "todo_list",
+                json!({}),
+                Box::new(|_: &Path| {}),
+            ),
         ];
-        assert_eq!(legs.len(), 8, "one leg per excluded registered tool");
+        assert_eq!(legs.len(), 11, "one leg per excluded registered tool");
 
         for (name, input, check) in legs {
             let result = dispatch(&ctx(tmp.path()), name, &input, None);
