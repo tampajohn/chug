@@ -312,6 +312,30 @@ considers a spec-size cap (~500-line estimate ceiling forcing a split)
 instead of further iteration raises. Routing d1790570262-13, verdict
 d1790570426-14, outcome landed-clean.
 
+**T103 delegate launch asserts spec + cwd exist — LANDED, fast-forward.**
+The 4th field-corruption sighting filed the row and the fix is live:
+`delegate` launch now refuses a spec that is not an existing readable
+file and a cwd that is not an existing directory, errors naming the
+received path verbatim, no spawn, no `.chug/` created — the
+corrupted-launch class (cycle-53 goal bleed, cycle-55 pid 60756, T95
+wrong slug, cycle-57 duplicate key) now fails fast at the orchestrator's
+face in one iteration instead of spawning a doomed child. glm impl
+61/80 first-try clean (the first impl child on the post-T102 80 budget —
+61 would have been in the old 65 zone). kimi optional-TAKEN (cycle-55
+precedent — launch admission is loop-wide) PASS 31/50: 4/5 mutants
+killed independently re-proving the RED legs (probe-drop, is_file-drop,
+both message corruptions), M2 readability-leg survivor expected
+(chmod-000 fixtures are flaky under root); ONE non-blocking finding —
+an inverted rationale comment on the probe legs — fixed by the
+orchestrator as a trivial comment commit (80d4a14) per §7's
+fix-trivially prerogative. The child's disclosed spec-conflict
+resolution (7 pre-existing launch tests with fictional spec paths each
+gained one `ensure_spec_file` setup line, asserts byte-identical) was
+verified against the diff and accepted — the spec's "happy-path
+unmodified" bullet was literally unsatisfiable, a spec-writing lesson
+carried. Routing d1790571195-16, verdict d1790571562-17, outcome
+landed-clean.
+
 ### Cycle 57 (2026-09-28) — eval-routed kimi turned routine after reconciling cycle-56's origin divergence (T101 row appeared post-rebase, predicate held — cycle-56 precedent repeated); T101 LANDED (bcd0b66, fast-forward)
 
 **T101 site-sync timeline ordering + curation bugs — LANDED, fast-forward
