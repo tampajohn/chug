@@ -291,6 +291,47 @@ file's commits; hand-edit between syncs at your own risk). 8 artifacts
 harvested pre-removal (5 event streams incl. the killed misfire, 3
 LEDGERs).
 
+**Cycle-level notes (wrap).** Launch routing was an artifact: loopd saw
+`todo_rows=0` locally (cycle-54's divergence had left the T99 row
+unpushed on origin) and launched an eval cycle on kimi; this cycle's
+first act reconciled (clean rebase of the 3 local commits onto ed4476e,
+todo_consistency 5/5, pushed ee8a508/eca240a/53cdb4c), after which the
+freshness predicate HELD (queue=T99, eval same-day) so Phase 1 skipped
+per doctrine — kimi evaluated nothing, per the skip rule (the glm-never-
+evaluates clause never bound). **INCIDENT 1 (orchestrator):** the first
+re-validation launch went out with its spec field corrupted by goal text
+(pid 60756) — caught at spawn, killed at iteration 3 pre-work, relaunched
+clean (pid 60933); same class as cycle-53's goal-corrupted validator
+launch and T95's wrong-spec-slug misfire — three sightings now, all
+caught at spawn; a launch-time spec-path existence assertion in delegate
+would kill the class (candidate row for the next eval). **INCIDENT 2
+(divergence, second cycle running):** origin moved mid-cycle again — the
+operator pushed 7058143/bdb013e/3332873 (T100 GitHub releases: tag-
+triggered binaries + chug.sh/install.sh + wrap-time self-tagging
+override) while the T99 arc ran; the push of the row-flip commit was
+rejected, so per the hard rule (never force-push, never reconcile
+mid-cycle) local commits a284065 + d13a253 + d2207ea (+ this wrap) are
+LANDED LOCALLY, UNPUSHED. **Next cycle's first act:** reconcile
+(`git rebase origin/main` — overlap is TODO.md only: origin's T100-row
+addition vs local T99-row flip are adjacent lines, auto-resolvable or a
+one-hunk keep-both; run todo_consistency after, then push), then work
+**T100 (pri, operator directive, ready spec — note 3332873's operator
+override: the loop cuts its own immutable tags at wrap as the release
+trigger)**. T98/T99 site acceptance: the next wrap's site-sync run fires
+the FIRST live TIMELINE/FEATURES bootstrap (2 bootstrap commits + the
+sync commit on chug.sh) — record it in that cycle's Outcomes (T99's
+acceptance criterion), and remember the live clone's dirty WIP rides
+along (flagged to the operator above). T92 measure: 2-of-6 census points
+now (t91 + t99 run1 deaths at 65 with the work done — the impl-child
+iteration ceiling still binds the big-feature class; if >1 of the next
+4 impl children dies at 65/65, the next eval considers 80 or
+work-splitting). Validators this cycle: 2/2 rounds returned verdicts
+with full mutant evidence (1 FAIL with 1 blocking + 2 survivors → fix-up
+→ 1 PASS with zero survivors but the infinite-ladder carry); the
+optional→RUN routing call (against the T98-skip precedent) caught a real
+spec violation — the idle-queue weighing is recorded at d1790558329-1
+for the future classifier.
+
 ### Cycle 54 (2026-09-28) — routine glm freshness-skip (queue carried T96 mid-arc + T97)
 
 **T96 META-META-SPEC check-filter-breadth — LANDED, merge 457720d (impl 962830d).**
