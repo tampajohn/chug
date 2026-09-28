@@ -288,6 +288,35 @@ consecutive clean audit — no docs row.
 
 ## Outcomes (filled at cycle wrap — LOOP-SPEC Phase 3)
 
+### Cycle 60 (2026-09-28) — fresh eval (kimi, loopd-routed: queue empty) — T110 + T111 filed (F8 SPLIT phase 1 → T111); T110 LANDED (5a16ce5), T111 in flight
+
+**T110 filing-time spec-size estimate ceiling — LANDED, fast-forward.**
+The T102 measure clause RESOLVED: the census tripped in cycle 59 (2 of
+the last 4 impl children died 80/80 — t108-impl mid-impl at 141 total
+iterations, t108-fixup post-commit, both on the one ~700–900-line row
+whose sizing lived in eval prose, not the spec) and the remedy is
+filing-time, not runtime. META-META-SPEC's spec quality bar now REQUIRES
+an `estimate: ~N changed lines` line in every spec and splits any row
+estimated above ~500 lines of new/modified logic at filing time
+(mechanical byte-identical move rows — T104/T109 class — exempt, the
+estimate line says so); LOOP-SPEC's step-2 parenthetical keeps its T102
+history and carries the resolution needle; FEATURES.md's stale "50-iter
+child budget" shrink reference now names the ceiling. glm impl 31/80
+first-try; pin leg (h) in tests/loop_spec_recovery.rs pins the needle
+exactly-once inside step 2 AFTER the Measure census sentence (RED-proven
+count 0→1). kimi REQUIRED validation PASS 16/50: 6/6 mutants killed (M1
+delete re-proved the RED leg, M2 duplicate→count-2, M3
+moved-before-Measure→ordering, M4a–c check-line grep breaks on
+META-META/FEATURES), serial in-tree legs correctly declared
+(runtime-read markdown → no mutant binaries), tree byte-clean, two
+non-blocking observations. Orchestrator review + post-merge nextest
+871/871 + clippy clean under target-shared / target-shared-main.
+Routing d1790584043-10, verdict d1790584497-11, outcome landed-clean;
+2 streams + validator ledger + 2 child decision records harvested. The
+ceiling's own failure measure is written in the eval's watch list: if
+the next two post-T110 evals file rows that die 80/80 mid-impl at
+≤500-line estimates, the ceiling failed and sizing doctrine re-opens.
+
 ### Cycle 59 (2026-09-28) — fresh eval (kimi, loopd-routed: queue empty) — T107–T109 filed (F7 SPLIT phase 1 → T108); ALL THREE landed (T107 793a0fc, T108 53e4aed+2a51cc5, T109 75025c9)
 
 **T109 delegate.rs test-module family split — LANDED, rebased
