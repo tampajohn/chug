@@ -592,11 +592,15 @@ enum StreamError {
 /// Fed raw body chunks (via the transport's chunk hook when the transport
 /// supports it; once over the full body otherwise — both legs tested to
 /// identical results), it drives [`crate::sse::SseParser`] and at
-/// `message_stop`/end-of-body synthesizes the NON-STREAMING response body
-/// shape, so the existing `Response` parse path produces a Response whose
+/// `message_stop` synthesizes the NON-STREAMING response body shape, so the
+/// existing `Response` parse path produces a Response whose
 /// `content_blocks()` / `stop_reason()` / `usage()` equal the non-streaming
 /// values for the same exchange (usage equality pinned explicitly, incl.
 /// cache fields — T15 budget enforcement is untouched).
+/// T141: a body that ENDS before its terminal events (`content_block_stop`
+/// for every open block, then `message_stop`) is a TRUNCATED response, never
+/// a complete one — `finish()` rejects it instead of closing the open block
+/// into an executable `tool_use`.
 struct StreamAccumulator<'a> {
     parser: crate::sse::SseParser,
     /// Byte carry for UTF-8 boundary safety: a chunk may split a multi-byte
@@ -609,6 +613,10 @@ struct StreamAccumulator<'a> {
     blocks: Vec<Value>,
     /// The open block (between `content_block_start` and `content_block_stop`).
     open: Option<OpenBlock>,
+    /// T141: the terminal `message_stop` was seen. A well-formed Anthropic
+    /// SSE stream always ends with it; its absence at end-of-body means the
+    /// response was cut short (proxy truncation, clean EOF).
+    message_stop_seen: bool,
     /// `message_delta`'s stop_reason, passed through.
     stop_reason: Option<String>,
     /// `message_start`'s usage object, with `message_delta`'s usage merged
@@ -651,6 +659,7 @@ impl<'a> StreamAccumulator<'a> {
             model: None,
             blocks: Vec::new(),
             open: None,
+            message_stop_seen: false,
             stop_reason: None,
             usage: Value::Null,
             error: None,
@@ -818,6 +827,29 @@ impl<'a> StreamAccumulator<'a> {
         if let Some(e) = self.error.take() {
             return Err(e);
         }
+        // T141: a body that ends before its terminal events is a TRUNCATED
+        // response, not a complete one. Closing the open block here would
+        // synthesize a fully-formed `tool_use` out of a half-delivered call
+        // (`input: {}` when the stream died right after the block started) —
+        // and the driver would EXECUTE it; an unfinished `goal_complete`
+        // could end a run without a check. Classified T1-retryable: a real
+        // transport surfaces the same mid-body EOF as a connection error,
+        // and `message_stop`-less truncation is the same failure shape.
+        if let Some(open) = &self.open {
+            let (kind, index) = match open {
+                OpenBlock::Text { index, .. } => ("text", *index),
+                OpenBlock::ToolUse { index, .. } => ("tool_use", *index),
+                OpenBlock::Thinking { index, .. } => ("thinking", *index),
+            };
+            return Err(StreamError::Retryable(TransportError::Connection(
+                format!("truncated SSE stream: body ended before content_block_stop (open {kind} block at index {index})"),
+            )));
+        }
+        if !self.message_stop_seen {
+            return Err(StreamError::Retryable(TransportError::Connection(
+                "truncated SSE stream: body ended before message_stop".to_string(),
+            )));
+        }
         self.close_open_block()?;
         let mut body = serde_json::Map::new();
         if let Some(id) = &self.message_id {
@@ -973,7 +1005,12 @@ impl<'a> StreamAccumulator<'a> {
                 }
                 Ok(())
             }
-            "message_stop" => Ok(()),
+            "message_stop" => {
+                // T141: tracked — its absence at end-of-body means the
+                // response was cut short before the message completed.
+                self.message_stop_seen = true;
+                Ok(())
+            }
             "ping" => Ok(()),
             "error" => {
                 let err = data.get("error").cloned().unwrap_or(Value::Null);
@@ -2582,6 +2619,118 @@ mod tests {
             acc.feed_bytes(&bytes[split..]);
             assert_eq!(acc.finish().unwrap(), single, "split at byte {split}");
         }
+    }
+
+    /// T141 (codex review, HIGH — truncated SSE accepted): a clean HTTP EOF
+    /// BEFORE `content_block_stop` is a truncated response, not a complete
+    /// one. `finish()` used to close the open block for it — a stream cut
+    /// right after a tool block started synthesized a fully-formed
+    /// `tool_use` (`input: {}` when no deltas arrived), and the driver would
+    /// execute it; an unfinished `goal_complete` could end a run without a
+    /// check. The truncated stream must ERROR, never synthesize a body.
+    #[test]
+    fn accumulator_truncated_mid_tool_block_is_rejected() {
+        let mut acc = StreamAccumulator::new(None);
+        acc_feed_all(
+            &mut acc,
+            &[
+                &sse_stream(&[msg_start()]),
+                // The tool block opens and receives a SYNTACTICALLY COMPLETE
+                // input JSON — then the HTTP body ends. No content_block_stop.
+                "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"tu_1\",\"name\":\"goal_complete\",\"input\":{}}}\n\n",
+                "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"summary\\\":\\\"all checks green\\\"}\"}}\n\n",
+            ],
+        );
+        let err = acc.finish().unwrap_err();
+        assert!(
+            matches!(err, StreamError::Retryable(TransportError::Connection(ref m)) if m.contains("truncated")),
+            "{err:?}"
+        );
+    }
+
+    /// T141 (codex review, HIGH): `message_stop` is tracked, not ignored. A
+    /// stream that ended after every block closed — `message_delta` even
+    /// carried a stop_reason — but before the terminal `message_stop` is
+    /// still a truncated response and must not synthesize a success body.
+    #[test]
+    fn accumulator_truncated_before_message_stop_is_rejected() {
+        let mut acc = StreamAccumulator::new(None);
+        acc_feed_all(
+            &mut acc,
+            &[&sse_stream(&[
+                msg_start(),
+                json!({"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}}),
+                json!({"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "done"}}),
+                json!({"type": "content_block_stop", "index": 0}),
+                json!({"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 2}}),
+                // EOF here: message_stop never arrived.
+            ])],
+        );
+        let err = acc.finish().unwrap_err();
+        assert!(
+            matches!(err, StreamError::Retryable(TransportError::Connection(ref m)) if m.contains("truncated")),
+            "{err:?}"
+        );
+    }
+
+    /// T141: an SSE 2xx body with no events at all (or only `message_start`)
+    /// is truncated, not an empty-but-valid assistant message.
+    #[test]
+    fn accumulator_empty_sse_body_is_rejected() {
+        let mut acc = StreamAccumulator::new(None);
+        acc.feed_bytes(b"");
+        assert!(acc.finish().is_err());
+    }
+
+    // ---- T141: the review's trigger, end to end through the client ----
+
+    /// The review's exact trigger: a proxy answers HTTP 200 `text/event-stream`
+    /// carrying a tool block whose input JSON is syntactically complete, then
+    /// ends the HTTP body before `content_block_stop`/`message_stop`. The
+    /// client must return an ERROR — never a Response whose tool_use blocks
+    /// the driver would execute (an unfinished `goal_complete` must not
+    /// terminate a run without a check).
+    #[test]
+    fn truncated_sse_tool_block_is_rejected_not_executed() {
+        let _env = ENV_LOCK.lock().unwrap();
+        let body = sse_stream(&[
+            msg_start(),
+            json!({"type": "content_block_start", "index": 0, "content_block": {"type": "tool_use", "id": "tu_goal", "name": "goal_complete", "input": {}}}),
+            json!({"type": "content_block_delta", "index": 0, "delta": {"type": "input_json_delta", "partial_json": "{\"summary\":\"all checks green\"}"}}),
+            // The HTTP body ends here: no content_block_stop, no message_stop.
+        ]);
+        let ft = StreamingFake::sse(vec![body]);
+        let client = client_with(ft.clone(), &[]);
+        let err = run(&client).unwrap_err();
+        assert!(err.to_string().contains("truncated"), "{err}");
+    }
+
+    /// T141 + T1 parity: a mid-body EOF is the connection-failure class (a
+    /// real transport surfaces the same truncation as a connection error), so
+    /// it consumes the retry schedule instead of failing the iteration fast.
+    #[test]
+    fn truncated_sse_retries_like_a_connection_failure() {
+        let _env = ENV_LOCK.lock().unwrap();
+        let truncated = sse_stream(&[
+            msg_start(),
+            json!({"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}}),
+            json!({"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "partial"}}),
+            json!({"type": "content_block_stop", "index": 0}),
+            // EOF before message_stop — twice: the retry re-truncates.
+        ]);
+        let ft = Arc::new(StreamingFake {
+            responses: std::sync::Mutex::new(
+                vec![Ok(vec![truncated.clone()]), Ok(vec![truncated])].into(),
+            ),
+            content_type: "text/event-stream".to_string(),
+            content_type_overrides: std::sync::Mutex::new(Default::default()),
+            bodies: std::sync::Mutex::new(Vec::new()),
+            calls: std::sync::Mutex::new(0),
+        });
+        let client = client_with(ft.clone(), &[0]);
+        let err = run(&client).unwrap_err();
+        assert!(err.to_string().contains("truncated"), "{err}");
+        assert_eq!(ft.calls(), 2, "the truncation retried once, then gave up");
     }
 
     #[test]
