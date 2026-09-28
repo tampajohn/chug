@@ -327,6 +327,32 @@ clean audit — no docs row.**
   clean validator) + validator ledger + 2 child decision records.
   Routing d1790589928-16 verdict d1790589928-17 outcome landed-clean.
 
+- **T113 landed (55fe207, rebased-ff)** — F9 phase 1, slash-command
+  packs (the cycle's mandatory roadmap pull): `src/commands.rs`
+  discovers `.chug/commands/*.md` in the run cwd (fail-open, T83-hooks
+  precedent; per-checkout by construction) and expands `$ARGUMENTS`;
+  `chat.rs`'s `SlashCommand::Unknown` now carries `{name, args}`;
+  `tui.rs` tries the packs on unknown slash lines (a hit sends the
+  expanded body as a normal turn behind a one-line note; a miss names
+  the available packs) and `/help` gains the pack line; built-ins win
+  by construction (parser precedence — the goal.md shadow pin).
+  glm impl 62/80 first-try; orchestrator review verified the diff
+  (+583/−16 across 5 files) and re-ran gates first-hand (911/911 +
+  clippy). kimi validation optional-EXERCISED (routing d1790591375-21 —
+  feature on the message-flow path, none of the REQUIRED five): PASS
+  26/50, 12/12 mutants RED in batches of 3 with slot-exclusive target
+  dirs (sort-reversed, token-append-only, append-dropped, ext-filter,
+  unknown-empty, corrupt-kept, empty-guard, help-wrong-count,
+  note-format, unknown-suffix, args-dropped, goal-shadow), 7
+  non-blocking observations carried (silent dir-entry skip; append-leg
+  newline-collapse deviation; mid-turn queue-vs-steering asymmetry; one
+  self-referential legacy help assertion; ~455→+583 estimate overshoot
+  — the test-density class again; 2 more documented). Post-merge
+  914/914 under target-shared-main. FEATURES.md F9 phase-1 checked off;
+  phase 2 stays deferred per §4 (sequenced after T115). Harvested:
+  impl + validator streams, both ledgers (impl's rotated), child
+  decision records. Verdict d1790591988-22 outcome landed-clean.
+
 ### Cycle 60 (2026-09-28) — fresh eval (kimi, loopd-routed: queue empty) — T110 + T111 filed (F8 SPLIT phase 1 → T111); BOTH landed (T110 5a16ce5, T111 d8fdea0+fc1d691)
 
 **T111 F8 phase 1 structured todo tool — LANDED, fast-forward.** The
