@@ -160,8 +160,9 @@ fn delegate_spec(input: &Value) -> anyhow::Result<PathBuf> {
     if !spec.is_absolute() {
         bail!("delegate: spec must be an absolute path, got {raw:?}");
     }
-    // `is_file` alone would admit a directory (open(2) on a directory
-    // succeeds); the open() leg is what makes "readable file" honest.
+    // `File::open` alone would admit a directory (open(2) on a directory
+    // succeeds) — the is_file leg is what refuses directories here, and
+    // open() is the readability ground truth for this user.
     let readable = spec.is_file() && fs::File::open(&spec).is_ok();
     if !readable {
         bail!(
