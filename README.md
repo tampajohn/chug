@@ -334,9 +334,16 @@ downgraded to a placeholder when the endpoint rejects image content),
 `tgrep`, `glob`, `list_dir`, `update_ledger`, `todo_add`, `todo_update`,
 `todo_list`, `goal_complete`, `delegate`, `web_fetch`,
 `decision_log`.
-All paths sandboxed to `--cwd` (`delegate` and `web_fetch` are
-the two documented exceptions — `delegate`'s absolute `cwd`/`spec` target child
-worktrees by design; `web_fetch` is network, not filesystem). `bash` runs in its own process group —
+All file-tool paths are sandboxed to `--cwd` — `..` traversal, absolute
+paths outside it, AND symlinks resolving outside it are refused (T134:
+`resolve_safe` resolves the real filesystem, so an in-tree link to
+`/etc` cannot smuggle a read or write through). `delegate` and
+`web_fetch` remain the two documented exceptions — `delegate`'s absolute
+`cwd`/`spec` target child worktrees by design; `web_fetch` is network,
+not filesystem). `bash` is NOT filesystem-confined: it starts in `--cwd`
+but can touch absolute paths and inherits chug's environment (API
+credentials included) — treat model-issued bash as running with chug's
+own privileges. It runs in its own process group —
 timeouts SIGKILL the whole group, so orphaned grandchildren can't wedge the
 driver (120s default; `--bash-timeout` / `CHUG_BASH_TIMEOUT` overrides).
 `chug plan` runs the same `read_file`/`grep`/`glob`/`list_dir` tools plus `submit_plan` (its only write and exit path) — plan mode advertises no other tool (the bookkeeping tools `update_ledger`, `decision_log`, and the todo tools included), so the registry surfaces below are run/chat surfaces.

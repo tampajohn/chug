@@ -16,7 +16,14 @@ chug run --spec <path> --goal "<text>" [--cwd <dir>] [--model <id>]
 chug ledger [--cwd <dir>]     # print current LEDGER.md
 ```
 
-- `--cwd` defaults to `.`. All file/bash tools are sandboxed to this directory.
+- `--cwd` defaults to `.`. The file tools (`read_file`, `write_file`,
+  `edit_file`, `grep`, `tgrep`, `glob`, `list_dir`, `submit_plan --out`)
+  sandbox every path to this directory: `..` traversal, absolute paths
+  outside it, and symlinks resolving outside it are refused (T134 —
+  `resolve_safe` resolves the real filesystem, not just lexical
+  components). `bash` starts in this directory but is NOT
+  filesystem-confined: it can touch absolute paths and inherits chug's
+  environment (API credentials included).
 - `--resume` reloads `<cwd>/.chug/transcript.jsonl` and continues from it.
 - Model resolution order: `--model` flag → `CHUG_MODEL` env → default
   `claude-sonnet-4-6`.
