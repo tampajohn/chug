@@ -1,4 +1,4 @@
-# T131 — goal_complete denial bypass (codex adversarial review)
+# T140 — goal_complete denial bypass (codex adversarial review)
 
 check: cargo test
 

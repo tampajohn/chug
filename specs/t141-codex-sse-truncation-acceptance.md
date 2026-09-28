@@ -1,4 +1,4 @@
-# T132 — SSE truncation acceptance (codex adversarial review)
+# T141 — SSE truncation acceptance (codex adversarial review)
 
 check: cargo test
 
