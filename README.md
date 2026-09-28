@@ -6,6 +6,47 @@ Design rule #1: **the loop is code, not conversation.** The model never decides
 whether to continue — the driver does. Goal and progress live in files on disk,
 re-read every iteration, so context trimming can never kill the run.
 
+## Install
+
+Releases are cut on `v*` tags (the repo's loop tags at wrap — see
+LOOP-SPEC.md); each release publishes `chug-<platform>.tar.gz` +
+`.tar.gz.sha256` for **macos-arm64**, **linux-x86_64** and **linux-aarch64**,
+built `--release --locked` from the tagged commit (the binary is
+self-describing: `build.rs` bakes the git hash into the startup banner).
+
+The one-liner — detects your platform, downloads the latest release tarball,
+**verifies the sha256**, installs to `~/.local/bin` (PATH hint if it is not on
+your `PATH`; never uses sudo):
+
+```bash
+curl -fsSL https://chug.sh/install.sh | sh
+```
+
+Or install straight from the latest tarball for your platform:
+
+```bash
+# macOS (Apple silicon)
+curl -L https://github.com/tampajohn/chug/releases/latest/download/chug-macos-arm64.tar.gz | tar xz
+# Linux (x86_64)
+curl -L https://github.com/tampajohn/chug/releases/latest/download/chug-linux-x86_64.tar.gz | tar xz
+# Linux (arm64)
+curl -L https://github.com/tampajohn/chug/releases/latest/download/chug-linux-aarch64.tar.gz | tar xz
+mkdir -p ~/.local/bin && mv chug ~/.local/bin/   # then ensure ~/.local/bin is on PATH
+```
+
+macOS Gatekeeper: the binaries are unsigned (no signing/notarization); if
+macOS blocks the first run, right-click → Open once, or System Settings →
+Privacy & Security → Allow Anyway, or
+`xattr -d com.apple.quarantine ~/.local/bin/chug`.
+
+From source instead (any platform with a Rust toolchain) — see Quickstart
+and Development below:
+
+```bash
+git clone https://github.com/tampajohn/chug && cd chug
+cargo install --path .   # puts the chug binary on PATH (~/.cargo/bin)
+```
+
 ## Quickstart
 
 ```bash

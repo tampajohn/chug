@@ -1,0 +1,121 @@
+# T100 — tag-triggered release: prebuilt binaries + generated notes.
+#
+# Cutting a `vX.Y.Z` tag (LOOP-SPEC Phase 3 tag doctrine: gates green at
+# HEAD, one tag per wrap max, tags immutable) publishes:
+#   - chug-<platform>.tar.gz + .sha256 for macos-arm64 (macos-14, the
+#     primary), linux-x86_64 and linux-aarch64 (cross-compiled on
+#     ubuntu-22.04 — no native arm64 ubuntu-22.04 runner), built
+#     `--release --locked` against the tagged commit;
+#   - a GitHub Release whose body is scripts/release-notes.sh's mechanical
+#     grouping of the semantic commits since the previous tag.
+#
+# Supply-chain hygiene: every `uses:` is pinned by full 40-hex commit SHA
+# (never a moving tag/branch ref). The release is created by the preinstalled
+# `gh` CLI — no third-party release action — with `--verify-tag` so gh can
+# never implicitly create a tag. The version check fails the run before the
+# build when the tag disagrees with Cargo.toml (req 3).
+
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: never
+
+jobs:
+  build:
+    name: build ${{ matrix.target }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-14
+            target: aarch64-apple-darwin
+            platform: macos-arm64
+          - runner: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            platform: linux-x86_64
+          - runner: ubuntu-22.04
+            target: aarch64-unknown-linux-gnu
+            platform: linux-aarch64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: checkout (full history — notes need the previous tag)
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+
+      - name: rust toolchain (stable + this job's target)
+        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
+        with:
+          toolchain: stable
+          targets: ${{ matrix.target }}
+
+      - name: tag matches Cargo.toml version (fail before building)
+        run: scripts/check-tag-version.sh "${GITHUB_REF#refs/tags/}"
+
+      - name: aarch64 cross linker (ubuntu arm64 leg only)
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends gcc-aarch64-linux-gnu
+
+      - name: build (release, locked)
+        run: cargo build --release --locked --target ${{ matrix.target }}
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+
+      - name: package (tar.gz + sha256)
+        run: |
+          mkdir -p dist
+          cp "target/${{ matrix.target }}/release/chug" dist/chug
+          tar -czf "dist/chug-${{ matrix.platform }}.tar.gz" -C dist chug
+          rm dist/chug
+          if command -v sha256sum >/dev/null 2>&1; then SUM="sha256sum"; else SUM="shasum -a 256"; fi
+          (cd dist && $SUM "chug-${{ matrix.platform }}.tar.gz" > "chug-${{ matrix.platform }}.tar.gz.sha256")
+          cat "dist/chug-${{ matrix.platform }}.tar.gz.sha256"
+
+      - name: upload artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: chug-${{ matrix.platform }}
+          path: |
+            dist/chug-${{ matrix.platform }}.tar.gz
+            dist/chug-${{ matrix.platform }}.tar.gz.sha256
+          if-no-files-found: error
+
+  release:
+    name: publish the GitHub release
+    needs: build
+    runs-on: ubuntu-22.04
+    steps:
+      - name: checkout (full history — notes need the previous tag)
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+
+      - name: download all build artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: generate release notes (mechanical, since the previous tag)
+        run: |
+          scripts/release-notes.sh "${GITHUB_REF#refs/tags/}" > release-notes.md
+          cat release-notes.md
+
+      - name: create the GitHub release with the archives attached
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh release create "${GITHUB_REF#refs/tags/}" \
+            --verify-tag \
+            --title "chug ${GITHUB_REF#refs/tags/}" \
+            --notes-file release-notes.md \
+            dist/chug-*.tar.gz dist/chug-*.tar.gz.sha256

@@ -416,6 +416,27 @@ hosted (impl and validator alike) has been harvested.
   same ALWAYS rule as step 5's post-merge re-run. Never force-push; a
   rejected push means the remote moved — stop
   and note it, don't reconcile mid-cycle.
+- **Tag at wrap (T100 — operator override 2026-09-28, reversing the earlier
+  never-self-tag guardrail).** After final gates are green at HEAD, the
+  orchestrator cuts ONE release tag per wrap max: when ≥3 items landed
+  since the last `v*` tag OR any FEATURES.md check-off landed since it,
+  bump Cargo.toml's version (minor for a feature item, patch otherwise),
+  commit `chore: release vX.Y.Z`, verify the pairing
+  (`scripts/check-tag-version.sh vX.Y.Z` — req 3's divergence check), write
+  the generated notes to a temp file (`scripts/release-notes.sh` — grouped
+  feat/fix/chore/docs since the previous tag), tag `git tag -a vX.Y.Z -F
+  <notes-file>`, and push the commit + tag together with the wrap push
+  (the tag-triggered release workflow in `.github/workflows/release.yml`
+  picks it up). HARD RULES: never re-tag or move a tag; never force-push
+  tags; tag ONLY with gates green at HEAD (the wrap's final gates count);
+  one tag per wrap max; tag message = the generated notes since the
+  previous tag. If the release workflow later fails on a pushed tag, file
+  a TODO row naming the tag — a published tag is immutable history, never
+  deleted or moved. BOOTSTRAP: the FIRST tag is operator-cut — until a
+  `v*` tag exists, the loop never tags (the trigger counts "since the
+  last tag" against a tag that does not exist yet, so the loop must not
+  invent one); once the operator's first tag lands, this doctrine is
+  active from the next wrap on.
 - **Your wrap is the next cycle's input.** `loopd.sh` relaunches this spec
   back-to-back with no human in the loop — TODO.md, EVALUATION.md and
   specs/ are the handoff. Leave them such that a cold next cycle needs zero
