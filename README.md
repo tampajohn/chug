@@ -589,13 +589,18 @@ until stdin EOF, then exits 0. Claude Code-compatible client config:
 {"mcpServers": {"chug": {"command": "chug", "args": ["mcp-serve"]}}}
 ```
 
-Phase 1 ships ONE read-only tool, `chug_status`: input
+Two read-only tools ship. `chug_status`: input
 `{"cwd": "<absolute path>"}`, output a compact self-describing summary of
 that chug cwd's latest `.chug/events.jsonl` run segment (state,
 last_iteration vs max_iters, goal/abort/budget-low flags, abort reason).
-No process spawning, no writes anywhere. Phases 2–3 are deferred
-(`chug_collect`/`chug_launch` write leg, server log file, cancellation,
-resources).
+`chug_collect`: input `{"cwd": "<absolute path>", "pid": <optional int>,
+"base": "<optional git ref>"}`, output the latest segment's structured
+result — the verdict (goal-accepted/goal-rejected/aborted/running/
+starting), the accepted goal's summary, the check cmd, a liveness line
+when `pid` is given, and best-effort commit refs (`base` scopes the
+range as `<base>..HEAD`). No process spawning, no writes anywhere. The
+write leg `chug_launch` (T129, flag-gated) and phase 3 (server log file,
+cancellation, resources) are deferred.
 
 **stdout purity**: a stdio MCP server's stdout IS the wire — `chug
 mcp-serve` prints nothing but protocol messages (no banner, no log

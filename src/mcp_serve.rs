@@ -1,33 +1,39 @@
-//! T124 — F10 phase 1: `chug mcp-serve`, the stdio MCP SERVER side.
+//! T124 — F10 phase 1 + T128 — phase 2a: `chug mcp-serve`, the stdio MCP
+//! SERVER side.
 //!
 //! Until now chug was an MCP CLIENT only (`src/mcp.rs` consumes servers);
 //! nothing exposed chug TO another agent — Claude Code, the bridge fleet,
 //! or a second chug could observe a run only by shelling out and mining
 //! `.chug/` by hand. This module flips that: `chug mcp-serve` speaks
 //! newline-delimited JSON-RPC 2.0 on stdio (the exact framing the client
-//! side writes — one object per line) and serves ONE read-only tool,
-//! [`CHUG_STATUS_TOOL`], until stdin EOF.
+//! side writes — one object per line) and serves TWO read-only tools,
+//! [`CHUG_STATUS_TOOL`] and [`CHUG_COLLECT_TOOL`], until stdin EOF.
 //!
 //! **Stdout purity** — the one rule that shapes everything here: a stdio
 //! MCP server's stdout IS the wire. Every byte this process writes to
 //! stdout must be a protocol message; a stray banner or log line corrupts
 //! the client's framing. So there is no banner, no ledger print, no
-//! driver lock, no events.jsonl write, and no `println!` anywhere in this
-//! module — responses go through the single `writeln!` in [`serve_from`],
-//! and diagnostics (if any ever appear) go to stderr. The subcommand
-//! dispatches STRAIGHT to [`serve`] in `main.rs` — it does not route
-//! through any code path that writes a banner or a `run_start` line
+//! driver lock, no events.jsonl write, and no console output anywhere in
+//! this module — responses go through the single `writeln!` in
+//! [`serve_from`], and diagnostics (if any ever appear) go to stderr. The
+//! subcommand dispatches STRAIGHT to [`serve`] in `main.rs` — it does not
+//! route through any code path that writes a banner or a `run_start` line
 //! (pinned structurally by the grep test below).
 //!
-//! Read-only by design (phase 1): no process spawning, no writes
-//! anywhere. The tool reads `<cwd>/.chug/events.jsonl` through the
-//! delegate seams — [`crate::delegate::read_events`] /
-//! [`crate::delegate::summarize_events`] — and renders a COMPACT summary
-//! (the delegate `render_status` text is pinned by the delegate tests and
-//! is deliberately NOT reused).
+//! Read-only by design (phases 1–2a): no process spawning, no writes
+//! anywhere. `chug_status` reads `<cwd>/.chug/events.jsonl` through the
+//! delegate seams and renders a COMPACT summary; `chug_collect` answers
+//! the structured-result question over the SAME file — the latest
+//! segment's verdict, the accepted goal's summary, the check cmd, the
+//! child's liveness when a pid is given, and best-effort commit refs —
+//! built on delegate's T69 collect seams
+//! ([`crate::delegate::summarize_collect`],
+//! [`crate::delegate::collect_git_commits`]). Both renders are MCP-side:
+//! the delegate `render_status`/`render_collect` texts are byte-pinned by
+//! the delegate tests and are deliberately NOT reused.
 //!
-//! Deferred (F10 phases 2–3): `chug_collect`/`chug_launch` (the write
-//! leg), a server log file, `tools/listChanged`, cancellation,
+//! Deferred (F10 phase 2b/3): `chug_launch` (the write leg, flag-gated),
+//! a server log file, `tools/listChanged`, cancellation,
 //! resources/prompts.
 
 use std::io::{BufRead, Write};
@@ -45,6 +51,12 @@ const SERVER_VERSION: &str = crate::build_info::VERSION;
 /// cwd's LATEST `.chug/events.jsonl` run segment. Read-only: reads one
 /// file, spawns nothing, writes nothing.
 const CHUG_STATUS_TOOL: &str = "chug_status";
+
+/// The phase-2a tool (T128): a chug cwd's structured RESULT — the latest
+/// run segment's verdict, the accepted goal's summary, the check cmd, the
+/// child's liveness when a pid is given, and best-effort commit refs.
+/// Read-only: reads one file + `git log`, spawns nothing, writes nothing.
+const CHUG_COLLECT_TOOL: &str = "chug_collect";
 
 // ---------------------------------------------------------------------------
 // The serve loop
@@ -126,7 +138,10 @@ fn handle_message(line: &str) -> Option<String> {
     match method {
         "initialize" => Some(ok_response(id, initialize_result())),
         "ping" => Some(ok_response(id, json!({}))),
-        "tools/list" => Some(ok_response(id, json!({ "tools": [chug_status_schema()] }))),
+        "tools/list" => Some(ok_response(
+            id,
+            json!({ "tools": [chug_status_schema(), chug_collect_schema()] }),
+        )),
         "tools/call" => Some(call_tool(id, obj)),
         other => Some(error_response(
             id,
@@ -146,7 +161,7 @@ fn initialize_result() -> Value {
     })
 }
 
-/// The single tool's listing entry. `inputSchema.required` names `cwd` —
+/// The `chug_status` listing entry. `inputSchema.required` names `cwd` —
 /// pinned by tests on both sides of the framing.
 fn chug_status_schema() -> Value {
     json!({
@@ -170,6 +185,46 @@ fn chug_status_schema() -> Value {
     })
 }
 
+/// The `chug_collect` listing entry (T128): same required `cwd`, plus the
+/// optional `pid` (liveness line, mirroring `delegate collect`'s pid
+/// semantics) and `base` (scopes the commit-refs range as `<base>..HEAD`).
+fn chug_collect_schema() -> Value {
+    json!({
+        "name": CHUG_COLLECT_TOOL,
+        "description":
+            "Collect a chug cwd's structured result: the LATEST run segment's \
+             verdict (goal-accepted/goal-rejected/aborted/running/starting), \
+             the accepted goal's summary, the latest check cmd, the child's \
+             liveness when a pid is given, and best-effort commit refs. \
+             Read-only: spawns nothing, writes nothing.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "cwd": {
+                    "type": "string",
+                    "description":
+                        "Absolute path to the chug working directory to observe \
+                         (must exist and contain .chug/)"
+                },
+                "pid": {
+                    "type": "integer",
+                    "description":
+                        "Optional child pid — adds a liveness line (alive \
+                         true/false); absent means no liveness claim"
+                },
+                "base": {
+                    "type": "string",
+                    "description":
+                        "Optional git ref scoping the commit-refs range as \
+                         <base>..HEAD; absent means the bounded default range \
+                         over HEAD"
+                }
+            },
+            "required": ["cwd"]
+        }
+    })
+}
+
 /// Dispatch `tools/call`. A known tool's OWN failure (bad cwd, unreadable
 /// events) is a tool RESULT with `isError: true` — not a JSON-RPC error —
 /// so the caller sees the tool ran and failed, the shape the client side
@@ -179,11 +234,14 @@ fn call_tool(id: Value, req: &Map<String, Value>) -> String {
     let Some(name) = params.get("name").and_then(Value::as_str) else {
         return error_response(id, -32602, "Invalid params: tools/call requires a tool name");
     };
-    if name != CHUG_STATUS_TOOL {
-        return error_response(id, -32602, &format!("unknown tool: {name}"));
-    }
     let arguments = params.get("arguments").cloned().unwrap_or(json!({}));
-    let (text, is_error) = chug_status(&arguments);
+    let (text, is_error) = match name {
+        CHUG_STATUS_TOOL => chug_status(&arguments),
+        CHUG_COLLECT_TOOL => chug_collect(&arguments),
+        other => {
+            return error_response(id, -32602, &format!("unknown tool: {other}"));
+        }
+    };
     ok_response(
         id,
         json!({
@@ -194,8 +252,32 @@ fn call_tool(id: Value, req: &Map<String, Value>) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// The chug_status tool
+// The tools
 // ---------------------------------------------------------------------------
+
+/// The shared fail-fast `cwd` validator (T128): the exact delegate-launch
+/// legs both tools serve — absolute, then exists as a directory, then has a
+/// `.chug/` directory. Each violation names the RECEIVED path verbatim and
+/// carries the CALLING tool's name, so `chug_status`'s texts are byte-
+/// identical to the pre-factor messages (the phase-1 tests pin them).
+fn validate_chug_cwd(tool: &str, raw: &str) -> Result<PathBuf, String> {
+    let cwd = PathBuf::from(raw);
+    // Same fail-fast legs as delegate's cwd parse: absolute, then exists.
+    if !cwd.is_absolute() {
+        return Err(format!("{tool}: cwd must be an absolute directory, got {raw:?}"));
+    }
+    if !cwd.is_dir() {
+        return Err(format!(
+            "{tool}: cwd does not exist or is not a directory: {}",
+            cwd.display()
+        ));
+    }
+    let chug_dir = cwd.join(".chug");
+    if !chug_dir.is_dir() {
+        return Err(format!("{tool}: no .chug/ directory in {}", cwd.display()));
+    }
+    Ok(cwd)
+}
 
 /// `chug_status`: validate the cwd the delegate-launch fail-fast way (each
 /// violation is an `isError` text naming the RECEIVED path verbatim), then
@@ -208,31 +290,11 @@ fn chug_status(args: &Value) -> (String, bool) {
             true,
         );
     };
-    let cwd = PathBuf::from(raw);
-    // Same fail-fast legs as delegate's cwd parse: absolute, then exists.
-    if !cwd.is_absolute() {
-        return (
-            format!("{CHUG_STATUS_TOOL}: cwd must be an absolute directory, got {raw:?}"),
-            true,
-        );
-    }
-    if !cwd.is_dir() {
-        return (
-            format!(
-                "{CHUG_STATUS_TOOL}: cwd does not exist or is not a directory: {}",
-                cwd.display()
-            ),
-            true,
-        );
-    }
-    let chug_dir = cwd.join(".chug");
-    if !chug_dir.is_dir() {
-        return (
-            format!("{CHUG_STATUS_TOOL}: no .chug/ directory in {}", cwd.display()),
-            true,
-        );
-    }
-    let events_path = chug_dir.join("events.jsonl");
+    let cwd = match validate_chug_cwd(CHUG_STATUS_TOOL, raw) {
+        Ok(cwd) => cwd,
+        Err(message) => return (message, true),
+    };
+    let events_path = cwd.join(".chug").join("events.jsonl");
     let (summary, note) = crate::delegate::read_events(&events_path);
     if let Some(note) = note {
         return (
@@ -244,6 +306,72 @@ fn chug_status(args: &Value) -> (String, bool) {
         );
     }
     (render_compact_status(&cwd, &events_path, &summary), false)
+}
+
+/// `chug_collect` (T128): the structured-result answer over the same
+/// latest-segment events stream, built entirely on delegate's T69 collect
+/// seams — `read_events_tail` for the bounded tail, `summarize_collect` for
+/// the parse, `reap_and_alive` for the pid line (the exact `delegate
+/// collect` semantics: absent pid → no liveness claim), `collect_git_commits`
+/// for the commit refs. Read-only: reads one file + one `git log`, spawns
+/// nothing, writes nothing. Every failure leg is an `isError` result
+/// (missing cwd legs, unreadable events, non-string base) or a degraded
+/// note (git absent/failing) — never a panic, never a killed server loop.
+fn chug_collect(args: &Value) -> (String, bool) {
+    let Some(raw) = args.get("cwd").and_then(Value::as_str) else {
+        return (
+            format!("{CHUG_COLLECT_TOOL}: missing required argument: cwd (an absolute path to a chug working directory)"),
+            true,
+        );
+    };
+    let cwd = match validate_chug_cwd(CHUG_COLLECT_TOOL, raw) {
+        Ok(cwd) => cwd,
+        Err(message) => return (message, true),
+    };
+    let events_path = cwd.join(".chug").join("events.jsonl");
+    let lines = match crate::delegate::read_events_tail(&events_path) {
+        Ok(lines) => lines,
+        Err(e) => {
+            return (
+                format!(
+                    "{CHUG_COLLECT_TOOL}: events file unreadable: {} (events: nothing read ({e:#}))",
+                    events_path.display()
+                ),
+                true,
+            );
+        }
+    };
+    let refs: Vec<&str> = lines.iter().map(String::as_str).collect();
+    let summary = crate::delegate::summarize_collect(&refs);
+    // Same liveness leg `delegate collect` has — absent pid → no liveness
+    // claim at all; a non-integer pid is the same silence (the schema says
+    // integer, and the mirrored seam's semantics win over a second parser).
+    let pid = args.get("pid").and_then(Value::as_u64);
+    let alive = pid.and_then(crate::delegate::reap_and_alive);
+    // `base` scopes the commit-refs range as `<base>..HEAD`. A non-string
+    // value is an error, never a silent default-range fallback — the T69
+    // `delegate_base` rule: a caller that asked for a range must not
+    // silently get the default range.
+    let base = match args.get("base") {
+        None | Some(Value::Null) => None,
+        Some(value) => match value.as_str() {
+            Some(s) => Some(s.to_string()),
+            None => {
+                return (
+                    format!(
+                        "{CHUG_COLLECT_TOOL}: `base` must be a string git ref \
+                         (e.g. \"origin/main\") scoping the commit range <base>..HEAD"
+                    ),
+                    true,
+                );
+            }
+        },
+    };
+    let commits = crate::delegate::collect_git_commits(&cwd, base.as_deref());
+    (
+        render_compact_collect(&cwd, &events_path, &summary, alive, base.as_deref(), &commits),
+        false,
+    )
 }
 
 /// The compact, self-describing summary — the MCP-side renderer. Deliberately
@@ -276,6 +404,67 @@ fn render_compact_status(cwd: &Path, events_path: &Path, s: &DelegateSummary) ->
         (Some(t), Some(ts)) => out.push_str(&format!("\nlast_event: {t} {ts}")),
         (Some(t), None) => out.push_str(&format!("\nlast_event: {t}")),
         (None, _) => {}
+    }
+    out
+}
+
+/// The `chug_collect` compact renderer — the MCP-side shape of delegate's
+/// `render_collect` (that text is byte-pinned by the delegate tests and is
+/// deliberately NOT reused, the same relationship as
+/// [`render_compact_status`] vs `render_status`). Field order mirrors the
+/// delegate renderer so the two are shape-comparable: verdict, liveness
+/// (ONLY when a pid was given — no pid, no claim), the accepted goal's
+/// summary, the check cmd, the commits block (header names the queried
+/// range), and the abort reason when the verdict is `aborted`. The two
+/// self-describing header lines name the observed cwd and the events file
+/// that was read.
+fn render_compact_collect(
+    cwd: &Path,
+    events_path: &Path,
+    s: &crate::delegate::CollectSummary,
+    alive: Option<bool>,
+    base: Option<&str>,
+    commits: &Result<Vec<String>, String>,
+) -> String {
+    let mut out = format!("{CHUG_COLLECT_TOOL}: {}", cwd.display());
+    out.push_str(&format!("\nevents: {}", events_path.display()));
+    out.push_str(&format!("\nverdict: {}", s.verdict()));
+    match alive {
+        Some(true) => out.push_str("\nalive: true"),
+        Some(false) => out.push_str("\nalive: false"),
+        None => {}
+    }
+    if let Some(text) = &s.goal_summary {
+        // The FULL accepted summary, verbatim (it may wrap lines).
+        out.push_str("\nsummary: ");
+        out.push_str(text);
+    }
+    if let Some(cmd) = &s.check_cmd {
+        out.push_str(&format!("\ncheck_cmd: {cmd}"));
+    }
+    match commits {
+        Ok(lines) if lines.is_empty() => {
+            out.push_str(&format!(
+                "\ncommits: (none in range {})",
+                crate::delegate::commit_range(base)
+            ));
+        }
+        Ok(lines) => {
+            out.push_str(&format!(
+                "\ncommits (range {}, up to {}):",
+                crate::delegate::commit_range(base),
+                crate::delegate::DELEGATE_COLLECT_COMMIT_CAP
+            ));
+            for line in lines {
+                out.push_str(&format!("\n  {line}"));
+            }
+        }
+        Err(why) => out.push_str(&format!("\ncommits: (unavailable: {why})")),
+    }
+    if s.verdict_latch == Some("aborted")
+        && let Some(reason) = &s.abort_reason
+    {
+        out.push_str(&format!("\nabort_reason: {reason}"));
     }
     out
 }
@@ -403,7 +592,7 @@ mod tests {
     // ---------- tools/list ----------
 
     #[test]
-    fn tools_list_exposes_exactly_chug_status_requiring_cwd() {
+    fn tools_list_exposes_both_read_only_tools_requiring_cwd() {
         let line = handle_message(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)
             .expect("tools/list responds");
         let (_, id, result, _) = parts(&line);
@@ -412,16 +601,32 @@ mod tests {
             .as_array()
             .expect("tools array")
             .clone();
-        assert_eq!(tools.len(), 1, "phase 1 ships exactly one tool");
+        assert_eq!(tools.len(), 2, "phases 1+2a ship exactly two tools");
         assert_eq!(tools[0]["name"], "chug_status");
-        assert_eq!(tools[0]["inputSchema"]["type"], "object");
-        let required: Vec<&str> = tools[0]["inputSchema"]["required"]
-            .as_array()
-            .expect("required array")
-            .iter()
-            .filter_map(Value::as_str)
-            .collect();
-        assert!(required.contains(&"cwd"), "inputSchema requires cwd: {tools:?}");
+        assert_eq!(tools[1]["name"], "chug_collect");
+        for tool in &tools {
+            assert_eq!(tool["inputSchema"]["type"], "object");
+            let required: Vec<&str> = tool["inputSchema"]["required"]
+                .as_array()
+                .expect("required array")
+                .iter()
+                .filter_map(Value::as_str)
+                .collect();
+            assert!(
+                required.contains(&"cwd"),
+                "inputSchema requires cwd: {tools:?}"
+            );
+        }
+        // T128: `chug_collect` advertises its three params — cwd required,
+        // pid + base optional (properties, NOT required).
+        let collect = &tools[1];
+        let props = collect["inputSchema"]["properties"]
+            .as_object()
+            .expect("properties object");
+        assert_eq!(props.len(), 3, "cwd + pid + base: {props:?}");
+        assert_eq!(props["pid"]["type"], "integer", "{props:?}");
+        assert_eq!(props["base"]["type"], "string", "{props:?}");
+        assert_eq!(collect["inputSchema"]["required"], json!(["cwd"]));
     }
 
     // ---------- error taxonomy ----------
@@ -742,6 +947,182 @@ mod tests {
         assert!(!is_error, "best-effort summary, not an error: {text}");
         assert!(text.contains("state: done"), "{text}");
         assert!(text.contains("iteration: 4/50"), "{text}");
+    }
+
+    // ---------- chug_collect (T128) ----------
+
+    /// A synthetic latest-segment events fixture in the collect shape:
+    /// run_start + a verifying gate + an accepted goal.
+    fn collect_fixture(cwd: &Path) {
+        write_fixture(
+            cwd,
+            &[
+                r#"{"type":"run_start","ts":"t0","mode":"run","model":"m","max_iters":50}"#,
+                r#"{"type":"verifying","ts":"t2","cmd":"cargo test"}"#,
+                r#"{"type":"goal","ts":"t3","outcome":"accepted","summary":"did the thing, verified"}"#,
+            ],
+        );
+    }
+
+    #[test]
+    fn chug_collect_happy_path_names_verdict_summary_check_cmd_and_degraded_commits() {
+        let tmp = tempfile::tempdir().unwrap();
+        collect_fixture(tmp.path());
+        let (text, is_error) = chug_collect(&json!({ "cwd": tmp.path().display().to_string() }));
+        assert!(!is_error, "{text}");
+        assert!(text.contains("verdict: goal-accepted"), "{text}");
+        assert!(text.contains("summary: did the thing, verified"), "{text}");
+        assert!(text.contains("check_cmd: cargo test"), "{text}");
+        // Self-describing: names the cwd and the events file it read.
+        assert!(text.contains(&tmp.path().display().to_string()), "{text}");
+        assert!(text.contains(".chug/events.jsonl"), "{text}");
+        // Not-a-repo tempdir: the git leg DEGRADES to a note, never fails
+        // the call (the delegate collect rule, mirrored by this renderer).
+        assert!(text.contains("commits: (unavailable:"), "{text}");
+    }
+
+    #[test]
+    fn chug_collect_aborted_segment_renders_verdict_with_reason() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_fixture(
+            tmp.path(),
+            &[
+                r#"{"type":"run_start","ts":"t0","max_iters":10}"#,
+                r#"{"type":"iteration","ts":"t1","n":9}"#,
+                r#"{"type":"abort","ts":"t2","reason":"iteration budget exhausted","model":"m"}"#,
+            ],
+        );
+        let (text, is_error) = chug_collect(&json!({ "cwd": tmp.path().display().to_string() }));
+        assert!(!is_error, "{text}");
+        assert!(text.contains("verdict: aborted"), "{text}");
+        assert!(text.contains("abort_reason: iteration budget exhausted"), "{text}");
+        // No accepted verdict → no summary and no check_cmd lines.
+        assert!(!text.contains("summary:"), "{text}");
+        assert!(!text.contains("check_cmd:"), "{text}");
+    }
+
+    #[test]
+    fn chug_collect_missing_events_file_names_the_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join(".chug")).unwrap();
+        let (text, is_error) = chug_collect(&json!({ "cwd": tmp.path().display().to_string() }));
+        assert!(is_error, "{text}");
+        let events = tmp.path().join(".chug/events.jsonl");
+        assert!(
+            text.contains(events.display().to_string().as_str()),
+            "names the events path: {text}"
+        );
+        assert!(text.contains("events file unreadable"), "{text}");
+    }
+
+    #[test]
+    fn chug_collect_relative_cwd_is_refused_naming_the_received_string() {
+        // One leg per violation class on the SHARED validator (the
+        // nonexistent-cwd class is pinned chug_status-side; both tools run
+        // the same validator, so together the matrices cover it).
+        let (text, is_error) = chug_collect(&json!({ "cwd": "some/relative/path" }));
+        assert!(is_error, "{text}");
+        assert!(text.contains("\"some/relative/path\""), "{text}");
+        assert!(text.contains("must be an absolute directory"), "{text}");
+    }
+
+    #[test]
+    fn chug_collect_missing_chug_dir_is_refused_naming_the_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (text, is_error) = chug_collect(&json!({ "cwd": tmp.path().display().to_string() }));
+        assert!(is_error, "{text}");
+        assert!(text.contains(&tmp.path().display().to_string()), "{text}");
+        assert!(text.contains("no .chug/ directory in"), "{text}");
+    }
+
+    #[test]
+    fn chug_collect_missing_cwd_argument_is_an_error_result() {
+        let (text, is_error) = chug_collect(&json!({}));
+        assert!(is_error, "{text}");
+        assert!(text.contains("missing required argument: cwd"), "{text}");
+        assert!(text.contains(CHUG_COLLECT_TOOL), "{text}");
+    }
+
+    #[test]
+    fn chug_collect_non_string_base_is_an_error_result() {
+        // The T69 rule on the new tool: a caller that asked for a range must
+        // not silently get the default range.
+        let tmp = tempfile::tempdir().unwrap();
+        collect_fixture(tmp.path());
+        let (text, is_error) = chug_collect(&json!({
+            "cwd": tmp.path().display().to_string(), "base": 17
+        }));
+        assert!(is_error, "{text}");
+        assert!(text.contains("`base` must be a string git ref"), "{text}");
+        assert!(!text.contains("commits"), "no silent default-range fallback: {text}");
+    }
+
+    #[test]
+    fn chug_collect_pid_renders_liveness_line_absent_pid_renders_none() {
+        let tmp = tempfile::tempdir().unwrap();
+        collect_fixture(tmp.path());
+        // Absent pid → NO liveness claim at all (the delegate collect rule).
+        let (text, is_error) = chug_collect(&json!({ "cwd": tmp.path().display().to_string() }));
+        assert!(!is_error, "{text}");
+        assert!(!text.contains("alive:"), "{text}");
+        // A pid that cannot exist (macOS caps pids far below this; Linux's
+        // pid_max caps at 2^22) probes dead — the liveness line renders.
+        let (with_pid, is_error) = chug_collect(&json!({
+            "cwd": tmp.path().display().to_string(), "pid": 2_000_000_000u64
+        }));
+        assert!(!is_error, "{with_pid}");
+        assert!(with_pid.contains("alive: false"), "{with_pid}");
+    }
+
+    #[test]
+    fn chug_collect_base_is_forwarded_into_the_commit_range_seam() {
+        // A real git fixture: the distinguishing observable is WHICH commits
+        // the spawn returned — `<first>..HEAD` lists only the second, so a
+        // mutant that dropped the forward (and silently queried the default
+        // range) lists both and dies. The git plumbing itself stays pinned
+        // delegate-side (delegate_collect_git_legs_refs_base_and_degrades).
+        let tmp = tempfile::tempdir().unwrap();
+        let git = |args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .args(args)
+                .current_dir(tmp.path())
+                .output()
+                .expect("git available for the integration pin");
+            assert!(
+                out.status.success(),
+                "git {args:?} failed: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            String::from_utf8_lossy(&out.stdout).trim().to_string()
+        };
+        git(&["init", "-q"]);
+        git(&["-c", "user.email=t@t", "-c", "user.name=t", "commit", "--allow-empty", "-qm", "first"]);
+        let first = git(&["rev-parse", "--short", "HEAD"]);
+        git(&["-c", "user.email=t@t", "-c", "user.name=t", "commit", "--allow-empty", "-qm", "second"]);
+        collect_fixture(tmp.path());
+
+        // Absent base: the bounded default range over HEAD lists both.
+        let (text, is_error) = chug_collect(&json!({ "cwd": tmp.path().display().to_string() }));
+        assert!(!is_error, "{text}");
+        assert!(text.contains("commits (range HEAD, up to 20):"), "{text}");
+        assert!(text.contains(" second"), "{text}");
+        assert!(text.contains(" first"), "{text}");
+
+        // base = the first commit: `<first>..HEAD` lists ONLY the second —
+        // the forwarded range reached the real git spawn.
+        let (scoped, is_error) = chug_collect(&json!({
+            "cwd": tmp.path().display().to_string(), "base": first
+        }));
+        assert!(!is_error, "{scoped}");
+        assert!(
+            scoped.contains(&format!("commits (range {first}..HEAD, up to 20):")),
+            "{scoped}"
+        );
+        assert!(scoped.contains(" second"), "{scoped}");
+        assert!(
+            !scoped.contains(&format!("{first} first")),
+            "the first commit is outside the forwarded range: {scoped}"
+        );
     }
 
     // ---------- structural stdout purity ----------

@@ -151,16 +151,19 @@ fn mcp_serve_full_client_conversation_then_eof_exit() {
         .as_array()
         .expect("tools array")
         .clone();
-    assert_eq!(tools.len(), 1, "phase 1 ships exactly one tool: {list}");
+    assert_eq!(tools.len(), 2, "phases 1+2a ship exactly two tools: {list}");
     assert_eq!(tools[0]["name"], "chug_status");
-    let required = tools[0]["inputSchema"]["required"]
-        .as_array()
-        .expect("required array")
-        .clone();
-    assert!(
-        required.iter().any(|v| v == "cwd"),
-        "inputSchema requires cwd: {tools:?}"
-    );
+    assert_eq!(tools[1]["name"], "chug_collect");
+    for tool in &tools {
+        let required = tool["inputSchema"]["required"]
+            .as_array()
+            .expect("required array")
+            .clone();
+        assert!(
+            required.iter().any(|v| v == "cwd"),
+            "inputSchema requires cwd: {tools:?}"
+        );
+    }
 
     let call = next_response(&rx, "tools/call response");
     assert_eq!(call["id"], 3, "{call}");
@@ -248,4 +251,85 @@ fn mcp_serve_errors_keep_the_loop_alive_over_the_real_wire() {
     assert_eq!(resp["id"], 4, "{resp}");
     assert_eq!(resp["result"], serde_json::json!({}), "{resp}");
     // _child dropped here: stdin closes (EOF) and the process reaps.
+}
+
+/// T128 — the phase-2a wire leg: a real server, the full client
+/// conversation (`initialize` → `tools/list` → `tools/call chug_collect`)
+/// against a tempdir fixture, deadline-bounded throughout. Pins at the WIRE
+/// level: the collect result carries the verdict, the accepted goal's
+/// summary and the check cmd, and the not-a-repo git leg degrades to a note
+/// without failing the call.
+#[test]
+fn mcp_serve_chug_collect_full_conversation_over_the_wire() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    std::fs::create_dir_all(tmp.path().join(".chug")).expect("create fixture .chug");
+    let lines = [
+        r#"{"type":"run_start","ts":"t0","mode":"run","model":"m","max_iters":30,"max_minutes":35,"max_tokens":null}"#,
+        r#"{"type":"verifying","ts":"t2","cmd":"cargo test"}"#,
+        r#"{"type":"goal","ts":"t3","outcome":"accepted","summary":"fixture collected"}"#,
+    ];
+    let body: String = lines.iter().map(|l| format!("{l}\n")).collect();
+    std::fs::write(tmp.path().join(".chug/events.jsonl"), body).expect("write fixture events");
+    let cwd = tmp.path().display().to_string();
+    let (mut child, rx) = spawn_server();
+
+    {
+        let mut stdin = child.stdin.take().expect("piped stdin");
+        send(
+            &mut stdin,
+            r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#,
+        );
+        send(&mut stdin, r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#);
+        let call = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 3,
+            "method": "tools/call",
+            "params": {"name": "chug_collect", "arguments": {"cwd": cwd}}
+        });
+        send(&mut stdin, &call.to_string());
+    }
+
+    let init = next_response(&rx, "initialize response");
+    assert_eq!(init["id"], 1, "{init}");
+    assert!(init.get("error").is_none(), "{init}");
+
+    let list = next_response(&rx, "tools/list response");
+    assert_eq!(list["id"], 2, "{list}");
+    let names: Vec<&str> = list["result"]["tools"]
+        .as_array()
+        .expect("tools array")
+        .iter()
+        .filter_map(|t| t["name"].as_str())
+        .collect();
+    assert_eq!(names, ["chug_status", "chug_collect"], "{list}");
+
+    let call = next_response(&rx, "tools/call chug_collect response");
+    assert_eq!(call["id"], 3, "{call}");
+    assert!(call.get("error").is_none(), "the call succeeds: {call}");
+    assert_eq!(call["result"]["isError"], false, "{call}");
+    let text = call["result"]["content"][0]["text"]
+        .as_str()
+        .expect("text content block")
+        .to_string();
+    // The structured result: verdict, accepted summary, check cmd.
+    assert!(text.contains("verdict: goal-accepted"), "{text}");
+    assert!(text.contains("summary: fixture collected"), "{text}");
+    assert!(text.contains("check_cmd: cargo test"), "{text}");
+    // Not-a-repo tempdir: the commit-refs section degrades to a note.
+    assert!(text.contains("commits: (unavailable:"), "{text}");
+
+    // EOF lifecycle: close stdin → the server exits 0, in bounded time.
+    drop(child.stdin.take());
+    let deadline = Instant::now() + EXIT_DEADLINE;
+    let status = loop {
+        if let Some(status) = child.try_wait().expect("try_wait") {
+            break status;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "server did not exit within {EXIT_DEADLINE:?} of stdin EOF"
+        );
+        thread::sleep(Duration::from_millis(25));
+    };
+    assert!(status.success(), "EOF must exit 0, got: {status}");
 }
