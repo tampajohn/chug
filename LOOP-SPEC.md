@@ -96,16 +96,17 @@ impl, never 2 impls):
              clippy + test green. Commit your work here. DO NOT touch TODO.md
              or LEDGER.md — bookkeeping is the orchestrator's."
      model:       "anthropic-system.ai.glm-5-3-flash"
-     max_iters:   65
+     max_iters:   80
      max_minutes: 35
    ```
-   `max_iters: 65` and `max_minutes: 35` are explicit — delegate's
+   `max_iters: 80` and `max_minutes: 35` are explicit — delegate's
    defaults are 40/35, and T21's headroom must survive the migration.
-   (65, not 50: 4 of the last 6 glm impl children died at 50/50 with the work
-   done — T83/T85/T89/T90; T84 at 48/50; minutes never binding, t90 used
-   8m24s of 35 for 60 iterations. Measure: if >1 of the next 6 impl children
-   still dies at 65/65, the next eval considers 80 or a work-splitting
-   doctrine instead.)
+   (80, not 65: 3 of 12 post-T92 impl children died at 65/65 with the work
+   done — T91/T99/T100 run1s, totals 84/93/67; T63 resumes 21/21; minutes
+   never binding, t90 used 8m24s of 35 for 60 iterations. Measure: if >1 of
+   the next 6 impl children still dies at 80/80 with the work done, the
+   next eval considers a spec-size cap (a ~500-line estimate ceiling that
+   forces a split) instead of further iteration raises.)
    The goal carries the T47 export because delegate cannot pass env — a child
    that skips it just builds cold into its own worktree's target dir
    (harmless, slow).
@@ -135,7 +136,7 @@ impl, never 2 impls):
    incomplete work, the FIRST recovery is ONE `delegate` relaunch in the
    SAME worktree with `resume: true` — same spec, same goal (the goal
    re-carries the T47 `CARGO_TARGET_DIR` export), same model, same
-   budgets (65/35 impl, 50/30 validate) — which continues the child's
+   budgets (80/35 impl, 50/30 validate) — which continues the child's
    prior transcript in that worktree instead of starting cold. Resume
    works because the worktree is never removed pre-harvest (T19), so the
    child's untracked `.chug/` transcript persists, and `delegate status`
