@@ -611,6 +611,18 @@ mod tests {
             "names the received path verbatim: {text}"
         );
         assert!(text.contains(".chug"), "{text}");
+        // T130 (the T124 M3 survivor): the three assertions above are ALL
+        // substring-satisfied by the downstream events-unreadable message
+        // (it embeds `<tmp>/.chug/events.jsonl`, is an error, and contains
+        // the literal `.chug`), so deleting the `.chug/`-existence check
+        // used to survive. The DISTINCTIVE phrase of this leg's own
+        // message — plus the negative guard against the shadow message —
+        // makes the mutant die.
+        assert!(text.contains("no .chug/ directory in"), "{text}");
+        assert!(
+            !text.contains("events file unreadable"),
+            "must be the missing-dir leg, not the shadowing events-unreadable one: {text}"
+        );
     }
 
     #[test]
@@ -624,6 +636,15 @@ mod tests {
             text.contains(events.display().to_string().as_str()),
             "names the events path: {text}"
         );
+        // T130 sweep: the DISTINCTIVE phrase of this leg's own message (a
+        // reworded message used to survive — the path assertion alone is
+        // message-text-blind), plus the sibling-shadow guard: `.chug/`
+        // EXISTS in this fixture, so the error must be the events one.
+        assert!(text.contains("events file unreadable"), "{text}");
+        assert!(
+            !text.contains("no .chug/ directory in"),
+            "must be the events-unreadable leg, not the shadowing missing-dir one: {text}"
+        );
     }
 
     #[test]
@@ -633,6 +654,16 @@ mod tests {
         // The delegate-launch fail-fast shape: the RAW received string,
         // quoted, not a silently-resolved path.
         assert!(text.contains("\"some/relative/path\""), "{text}");
+        // T130 sweep: the DISTINCTIVE phrase of this leg's own message
+        // (a reworded message used to survive — the quoted-raw assertion
+        // is message-text-blind), plus the fall-through shadow guard:
+        // with the absolute-check deleted the nonexistent-dir leg fires,
+        // and its display() output is unquoted.
+        assert!(text.contains("must be an absolute directory"), "{text}");
+        assert!(
+            !text.contains("does not exist or is not a directory"),
+            "must be the relative-cwd leg, not the fall-through nonexistent-dir shadow: {text}"
+        );
     }
 
     #[test]
@@ -641,6 +672,17 @@ mod tests {
         let (text, is_error) = chug_status(&json!({ "cwd": bogus }));
         assert!(is_error, "{text}");
         assert!(text.contains(bogus), "{text}");
+        // T130 sweep (the M3 shadow class again): the no-`.chug/` message
+        // for the SAME bogus path also contains it verbatim, so deleting
+        // the is_dir() check used to survive on the path assertion alone.
+        assert!(
+            text.contains("does not exist or is not a directory"),
+            "{text}"
+        );
+        assert!(
+            !text.contains("no .chug/ directory in"),
+            "must be the nonexistent-cwd leg, not the shadowing missing-dir one: {text}"
+        );
     }
 
     #[test]
@@ -648,6 +690,14 @@ mod tests {
         let (text, is_error) = chug_status(&json!({}));
         assert!(is_error, "{text}");
         assert!(text.contains("cwd"), "{text}");
+        // T130 sweep: "cwd" alone is substring-satisfied by the
+        // relative-cwd message a neutered guard falls through to — pin
+        // the DISTINCTIVE phrase and guard against that shadow.
+        assert!(text.contains("missing required argument: cwd"), "{text}");
+        assert!(
+            !text.contains("must be an absolute directory"),
+            "must be the missing-argument leg, not the fall-through relative-cwd shadow: {text}"
+        );
         // And via the full protocol path it is a tool RESULT, not a
         // JSON-RPC error (the tool ran; its input was bad).
         let line = handle_message(
@@ -665,6 +715,14 @@ mod tests {
         let (text, is_error) = chug_status(&json!({ "cwd": 17 }));
         assert!(is_error, "{text}");
         assert!(text.contains("cwd"), "{text}");
+        // T130 sweep: same guard as the missing-argument leg (as_str()
+        // yields None either way) — pin its DISTINCTIVE phrase and guard
+        // against the same relative-cwd fall-through shadow.
+        assert!(text.contains("missing required argument: cwd"), "{text}");
+        assert!(
+            !text.contains("must be an absolute directory"),
+            "must be the missing-argument leg, not the fall-through relative-cwd shadow: {text}"
+        );
     }
 
     #[test]
