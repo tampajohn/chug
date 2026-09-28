@@ -45,6 +45,24 @@ const DELEGATE_WAIT_POLL: Duration = Duration::from_millis(2500);
 /// range, so a child worktree with a huge history can never flood the result.
 const DELEGATE_COLLECT_COMMIT_CAP: usize = 20;
 
+/// T115: the launch `goal_tail` preview window — the LAST ≤120 chars of the
+/// goal, T25's tail-anchoring rule. The observed composition-garble class
+/// (cycle 60: the T111 validator's launch goal arrived with a duplicated
+/// trailing block) duplicates the goal's own TAIL, so a tail window is what
+/// makes it visible in the echoed preview.
+const GOAL_TAIL_CHARS: usize = 120;
+
+/// T115: the last ≤`max_chars` chars of `text` — T25's tail-anchoring rule,
+/// verbatim: chars()-based (never byte slicing, so multibyte goals stay on
+/// char boundaries), no ellipsis marker, a shorter text kept whole. The
+/// launch `goal_tail` echo re-renders this over the exact goal string passed
+/// to the child argv, so the sender's next iteration sees the goal's ending
+/// bytes — including a duplicated tail — without re-reading its own payload.
+fn tail_preview(text: &str, max_chars: usize) -> String {
+    let total = text.chars().count();
+    text.chars().skip(total.saturating_sub(max_chars)).collect()
+}
+
 /// T23: `delegate` — launch and observe a bounded child `chug run`.
 ///
 /// Two actions. `launch` spawns a detached child
@@ -324,6 +342,21 @@ fn delegate_launch(input: &Value) -> anyhow::Result<ToolResult> {
     // never waited on or reaped here.
     drop(child);
 
+    // T115: the goal-integrity echoes, computed over the EXACT `goal` string
+    // that went into the child argv above. Byte count + SHA-256 + tail
+    // preview turn the cycle-60 eyeball catch (the T111 validator's launch
+    // goal arrived with a duplicated tail) into a designed glance: the
+    // sender's next iteration reads this result and sees the goal's bytes.
+    // Honest two-class split: a COMPOSITION garble (the parent model garbles
+    // its own tool-call text) is duplicated in the child's hash too — hashes
+    // match the garble, only the tail preview exposes it; a TRANSMISSION
+    // garble (argv/pipe corrupts) is what parent-hash vs child-hash
+    // comparison detects (the child records its own `goal_sha256` on
+    // `run_start`). chug reports; the orchestrator adjudicates.
+    let goal_bytes = goal.len();
+    let goal_sha = crate::eventlog::goal_sha256(goal);
+    let goal_tail = tail_preview(goal, GOAL_TAIL_CHARS);
+
     // T39/T58: the configured token budget and the resume leg are echoed back
     // only when set — absent, the return text is byte-identical to pre-T39.
     let tokens_note = match max_tokens {
@@ -333,7 +366,7 @@ fn delegate_launch(input: &Value) -> anyhow::Result<ToolResult> {
     let resume_note = if resume { " resume: true" } else { "" };
     Ok(ToolResult {
         content: format!(
-            "launched: pid {pid}\nlog: {}\nevents: {}\nmodel: {model} max_iters: {max_iters} max_minutes: {max_minutes}{tokens_note}{resume_note}",
+            "launched: pid {pid}\nlog: {}\nevents: {}\ngoal_bytes: {goal_bytes}\ngoal_sha256: {goal_sha}\ngoal_tail: {goal_tail}\nmodel: {model} max_iters: {max_iters} max_minutes: {max_minutes}{tokens_note}{resume_note}",
             log_path.display(),
             chug_dir.join("events.jsonl").display(),
         ),

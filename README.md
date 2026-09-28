@@ -194,8 +194,10 @@ names, and frontmatter (description/allowed-tools).
   `.chug/events.jsonl`, one JSON object per line (`jq`-mineable): run start
   (the banner fields: version/commit/model/spec/cwd/mode — plus the
   checkout's `head_branch`/`head_commit` when the cwd's HEAD resolves at
-  runtime, `null` when it doesn't — and the configured budget ceilings —
-  `max_iters`, `max_minutes`, `max_tokens` as `null` when unset), one line
+  runtime, `null` when it doesn't — the configured budget ceilings —
+  `max_iters`, `max_minutes`, `max_tokens` as `null` when unset — and the
+  goal's `goal_sha256`, SHA-256 hex when the mode has a goal, `null` when it
+  doesn't: the child-side half of the delegate integrity comparison), one line
   per iteration with cumulative tokens, tool results (ok/is_error/duration_ms, ≤200-char
   previews — error results keep a tail-anchored ≤2000-char window, so the
   failing test's name or error block at the end of the output is on record),
@@ -329,8 +331,19 @@ a git worktree). Three actions:
   ceiling, omitted = no token ceiling; `resume: true` optional to continue
   the child's aborted run instead of starting fresh) against an absolute
   `cwd` you prepared, appends its stdout+stderr to
-  `<cwd>/.chug/delegate.log`, and returns immediately with the child `pid`
-  and the log/events paths — it never waits on the child
+  `<cwd>/.chug/delegate.log`, and returns immediately with the child `pid`,
+  the log/events paths, and the goal-integrity echoes — `goal_bytes` (the
+  goal's UTF-8 byte length), `goal_sha256` (SHA-256 hex over the exact goal
+  string passed to the child argv), and `goal_tail` (the tail-anchored
+  ≤120-char preview, the same rule as error previews — read them on your
+  next iteration: the echo turns the send-time eyeball catch into a designed
+  glance). Two garble
+  classes, honestly separated: a composition garble (you garble your own
+  tool-call text, e.g. a duplicated tail) matches in BOTH hashes — the
+  child hashes the same garbled bytes — and only the `goal_tail` preview
+  exposes it; a transmission garble (the argv/pipe corrupts) is what
+  comparing `goal_sha256` against the child's `run_start` `goal_sha256`
+  detects. chug reports, it does not adjudicate — it never waits on the child
 - **`status`** — reports the child's liveness (when you pass the `pid`), a
   summary of its `.chug/events.jsonl` — the child's latest run segment
   (state, `last_iteration` + `max_iters`, budget-low / goal / abort flags

@@ -4,7 +4,7 @@
 // T109 req 4 count-pin anchor (see mod.rs's pin): this family's
 // #[test] fn count — a dropped `mod launch;` line fails the pin's
 // reference to this const to compile.
-pub(super) const TEST_COUNT: usize = 11;
+pub(super) const TEST_COUNT: usize = 13;
     use super::*; // the shared harness (delegate::tests) + delegate's own imports
 
     /// End-to-end with a stub binary: `CHUG_DELEGATE_BIN` points at a script
@@ -592,6 +592,122 @@ pub(super) const TEST_COUNT: usize = 11;
                 .content
                 .contains("max_iters: 40 max_minutes: 35 max_tokens: 250000 resume: true"),
             "{}",
+            launch.content
+        );
+        let pid = spawn_pid_of(&launch);
+        kill_pid_group(pid);
+        // SAFETY: serialized by DELEGATE_ENV_LOCK; no other test reads this var.
+        unsafe { std::env::remove_var("CHUG_DELEGATE_BIN") };
+    }
+
+
+    // ---- T115: the launch result's goal-integrity echoes ----
+
+    /// T115 long-goal leg: the launch result reports the goal's integrity
+    /// surface over the exact goal string passed to the child argv —
+    /// `goal_bytes` (UTF-8 byte length), `goal_sha256` (pinned against the
+    /// external `shasum -a 256` vector for the identical string), and a
+    /// tail-anchored ≤120-char `goal_tail`. A 216-byte goal's tail is the
+    /// LAST 120 chars: the marker at the very end is what the preview ends
+    /// with, and a head window would drop it entirely — cycle-60's
+    /// duplicated-TAIL composition garble lives exactly at the end.
+    #[cfg(unix)]
+    #[test]
+    fn delegate_launch_reports_goal_bytes_sha256_and_tail_anchored_tail() {
+        let _guard = DELEGATE_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let child_dir = tempfile::tempdir().unwrap();
+        let ctx_cwd = tempfile::tempdir().unwrap();
+        // SAFETY: serialized by DELEGATE_ENV_LOCK; no other test reads this var.
+        unsafe { std::env::set_var("CHUG_DELEGATE_BIN", write_argv_stub(ctx_cwd.path())) };
+        ensure_spec_file("/tmp/chug-stub-spec.md");
+        let goal = format!("{}TAIL-MARKER-t115", "x".repeat(200));
+        assert_eq!(goal.len(), 216, "fixture goal is 216 bytes");
+        let launch = dispatch(
+            &delegate_ctx(ctx_cwd.path()),
+            "delegate",
+            &json!({
+                "action": "launch",
+                "cwd": child_dir.path(),
+                "spec": "/tmp/chug-stub-spec.md",
+                "goal": goal,
+                "model": "m",
+            }),
+        );
+        assert!(!launch.is_error, "{}", launch.content);
+        // Byte length over UTF-8 bytes (ASCII fixture: bytes == chars).
+        assert!(
+            launch.content.contains(&format!("goal_bytes: {}", goal.len())),
+            "{}",
+            launch.content
+        );
+        // The sha is pinned against the external vector (`shasum -a 256` of
+        // the identical byte string) AND equal to the child-side helper —
+        // the two ends the orchestrator compares against each other.
+        assert!(
+            launch.content.contains(
+                "goal_sha256: 39a6464943ca682e911300e68501593ea6259d3c4a736ff3e9ae0c33f70d6de9"
+            ),
+            "{}",
+            launch.content
+        );
+        assert_eq!(
+            crate::eventlog::goal_sha256(&goal),
+            "39a6464943ca682e911300e68501593ea6259d3c4a736ff3e9ae0c33f70d6de9"
+        );
+        // Tail-anchored: the LAST 120 chars (head bytes dropped), ≤120 chars,
+        // ending with the goal's final marker — the duplicated-tail class is
+        // visible in exactly this window.
+        let expected_tail: String = goal.chars().skip(goal.chars().count() - 120).collect();
+        assert_eq!(expected_tail.chars().count(), 120);
+        assert!(
+            launch
+                .content
+                .contains(&format!("goal_tail: {expected_tail}\n")),
+            "{}",
+            launch.content
+        );
+        let pid = spawn_pid_of(&launch);
+        kill_pid_group(pid);
+        // SAFETY: serialized by DELEGATE_ENV_LOCK; no other test reads this var.
+        unsafe { std::env::remove_var("CHUG_DELEGATE_BIN") };
+    }
+
+    /// T115 short-goal leg: a goal ≤120 chars renders `goal_tail` VERBATIM —
+    /// the whole goal, byte-identical (a short goal is its own tail) — with
+    /// the byte count and the `shasum -a 256`-pinned sha alongside.
+    #[cfg(unix)]
+    #[test]
+    fn delegate_launch_goal_tail_is_verbatim_for_a_short_goal() {
+        let _guard = DELEGATE_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let child_dir = tempfile::tempdir().unwrap();
+        let ctx_cwd = tempfile::tempdir().unwrap();
+        // SAFETY: serialized by DELEGATE_ENV_LOCK; no other test reads this var.
+        unsafe { std::env::set_var("CHUG_DELEGATE_BIN", write_argv_stub(ctx_cwd.path())) };
+        ensure_spec_file("/tmp/chug-stub-spec.md");
+        let goal = "t115 short goal";
+        let launch = dispatch(
+            &delegate_ctx(ctx_cwd.path()),
+            "delegate",
+            &json!({
+                "action": "launch",
+                "cwd": child_dir.path(),
+                "spec": "/tmp/chug-stub-spec.md",
+                "goal": goal,
+                "model": "m",
+            }),
+        );
+        assert!(!launch.is_error, "{}", launch.content);
+        assert!(launch.content.contains("goal_bytes: 15"), "{}", launch.content);
+        assert!(
+            launch.content.contains(
+                "goal_sha256: ee9783704a895564c7bd05d69710bc684a4c288cc650ef2d71a3bfb699377220"
+            ),
+            "{}",
+            launch.content
+        );
+        assert!(
+            launch.content.contains("goal_tail: t115 short goal\n"),
+            "short goal's tail must be the whole goal verbatim: {}",
             launch.content
         );
         let pid = spawn_pid_of(&launch);

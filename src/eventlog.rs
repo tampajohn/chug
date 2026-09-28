@@ -18,6 +18,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 
 use crate::archive;
 use crate::events::{BudgetExceeded, Event, EventSink};
@@ -41,12 +42,37 @@ pub fn rotate_fresh(cwd: &Path) -> archive::Outcome {
     }
 }
 
+/// T115: SHA-256 over a goal's UTF-8 bytes, lowercase hex — the ONE shared
+/// primitive for both ends of the delegate integrity comparison: the parent
+/// hashes the exact goal string it passes to the child argv (the launch
+/// result's `goal_sha256`), the child hashes the goal it actually received
+/// (its `run_start` line's `goal_sha256`). Equal hashes mean the argv/pipe
+/// delivered the goal byte-intact (the transmission class); unequal hashes
+/// mean corruption in between. Pure so the `run_start` call sites stay thin.
+/// `sha2` over a bespoke hash: the hex is cross-checkable with external
+/// `shasum -a 256` for out-of-band verification.
+pub(crate) fn goal_sha256(goal: &str) -> String {
+    let digest = Sha256::digest(goal.as_bytes());
+    let mut hex = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        hex.push_str(&format!("{byte:02x}"));
+    }
+    hex
+}
+
 /// The run-start record: version, commit, model, spec path, cwd, mode —
 /// the same fields as the T11 startup banner — plus the configured budget
 /// ceilings (T17), so a post-hoc `jq` pass can ask "how close to the ceiling
 /// did this run sail" even for runs that never aborted. `max_tokens` is
 /// `null` when unset (0), never a phantom number. Written once per
 /// autonomous run and once per chat session.
+///
+/// T115: `goal_sha256` is the SHA-256 ([`goal_sha256`]) of the goal's UTF-8
+/// bytes when the run has a goal (run and plan modes), `null` when it
+/// doesn't (chat opens goal-less) — the field is always present in the
+/// serialized line, matching how `max_tokens` serializes null. This is the
+/// child-side half of the delegate integrity comparison: equal to the
+/// parent's launch-result `goal_sha256` iff the goal arrived byte-intact.
 ///
 /// T20: `head_branch`/`head_commit` carry the **cwd's** checkout identity
 /// (see [`crate::build_info::resolve_head`]) so a harvested child stream
@@ -63,6 +89,7 @@ pub fn run_start(
     max_minutes: u64,
     max_tokens: u64,
     head: Option<(&str, &str)>,
+    goal: Option<&str>,
 ) {
     append_line(
         cwd,
@@ -80,6 +107,7 @@ pub fn run_start(
             "max_iters": max_iters,
             "max_minutes": max_minutes,
             "max_tokens": (max_tokens > 0).then_some(max_tokens),
+            "goal_sha256": goal.map(goal_sha256),
         }),
     );
 }
@@ -349,6 +377,9 @@ mod tests {
             120,
             0,
             None,
+            // T115: the base-shape pin keeps the goal-less leg (null), so the
+            // other fields' byte-identical representation is pinned both ways.
+            None,
         );
         let lines = read_lines(tmp.path());
         assert_eq!(lines.len(), 1);
@@ -385,7 +416,7 @@ mod tests {
     #[test]
     fn run_start_records_token_budget_when_set() {
         let tmp = tempfile::tempdir().unwrap();
-        run_start(tmp.path(), "run", None, "m", 8, 35, 250_000, None);
+        run_start(tmp.path(), "run", None, "m", 8, 35, 250_000, None, None);
         let lines = read_lines(tmp.path());
         assert_eq!(lines[0]["max_iters"], 8);
         assert_eq!(lines[0]["max_minutes"], 35);
@@ -407,12 +438,73 @@ mod tests {
             120,
             0,
             Some(("loop-t20", "9056c78")),
+            None,
         );
         let lines = read_lines(tmp.path());
         assert_eq!(lines[0]["head_branch"], "loop-t20");
         assert_eq!(lines[0]["head_commit"], "9056c78");
         // The baked build commit stays untouched alongside the checkout's.
         assert_eq!(lines[0]["commit"], crate::build_info::GIT_COMMIT);
+    }
+
+    /// T115: the hash primitive against known vectors — `sha256("hello
+    /// world")` and the empty string, both cross-checkable with external
+    /// `shasum -a 256` (and confirmed against Python's hashlib pre-pin).
+    #[test]
+    fn goal_sha256_known_vectors() {
+        assert_eq!(
+            goal_sha256("hello world"),
+            "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9"
+        );
+        assert_eq!(
+            goal_sha256(""),
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "an empty goal still hashes (the child records the empty goal's digest)"
+        );
+    }
+
+    /// T115: run_start records the goal's SHA-256 when the run has a goal —
+    /// the child-side half of the delegate integrity comparison, pinned here
+    /// against the same vector `shasum -a 256` gives for the fixed string.
+    #[test]
+    fn run_start_records_goal_sha256_when_goal_present() {
+        let tmp = tempfile::tempdir().unwrap();
+        run_start(
+            tmp.path(),
+            "run",
+            None,
+            "m",
+            8,
+            35,
+            0,
+            None,
+            Some("hello world"),
+        );
+        let lines = read_lines(tmp.path());
+        assert_eq!(
+            lines[0]["goal_sha256"],
+            "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9",
+            "{lines:?}"
+        );
+    }
+
+    /// T115: goal-less modes (chat) record null — but the FIELD is always
+    /// present in the serialized line (matching how `max_tokens` serializes
+    /// null), so jq can distinguish "no goal" from a truncated line.
+    #[test]
+    fn run_start_goal_sha256_null_but_always_present_without_goal() {
+        let tmp = tempfile::tempdir().unwrap();
+        run_start(tmp.path(), "chat", None, "m", 8, 35, 0, None, None);
+        let lines = read_lines(tmp.path());
+        assert!(
+            lines[0]["goal_sha256"].is_null(),
+            "no goal → null, never a phantom hash: {lines:?}"
+        );
+        let obj = lines[0].as_object().expect("run_start is an object");
+        assert!(
+            obj.contains_key("goal_sha256"),
+            "the field must be PRESENT even when null: {lines:?}"
+        );
     }
 
     /// T17: a BudgetLow event serializes as one jq-mineable line, with
@@ -480,7 +572,7 @@ mod tests {
     #[test]
     fn rotate_fresh_archives_non_empty_events_log() {
         let tmp = tempfile::tempdir().unwrap();
-        run_start(tmp.path(), "run", None, "m", 5, 120, 0, None);
+        run_start(tmp.path(), "run", None, "m", 5, 120, 0, None, None);
 
         let out = rotate_fresh(tmp.path());
         let Outcome::Archived(dst) = out else {
@@ -736,7 +828,7 @@ mod tests {
             model: "m".into(),
             budget: None,
         });
-        run_start(tmp.path(), "run", None, "m", 5, 120, 0, None);
+        run_start(tmp.path(), "run", None, "m", 5, 120, 0, None, None);
     }
 
     /// T91: an ImageDegraded event serializes as one jq-mineable

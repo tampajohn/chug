@@ -1,5 +1,6 @@
 // T109: the body of delegate.rs's `#[cfg(test)] mod tests` (3,129 lines,
-// 83 #[test] fns at the split) lives in this file+directory module pair;
+// 83 #[test] fns at the split, 86 after T115) lives in this file+directory
+// module pair;
 // delegate.rs keeps the one-line declaration. THIS FILE HOLDS THE SHARED
 // HARNESS (T84's one rule): the spec-named helper family (delegate_ctx,
 // DELEGATE_ENV_LOCK, write_argv_stub, ensure_spec_file, wait_for_argv_dump,
@@ -161,7 +162,7 @@
     ///     a dropped `mod <family>;` line leaves the path unresolved and the
     ///     module fails to COMPILE;
     /// (2) each pinned count is checked against the family file's actual
-    ///     `#[test]` fns (include_str!), and the total is pinned at 83 — so
+    ///     `#[test]` fns (include_str!), and the total is pinned at 86 — so
     ///     an edited, deleted, or added moved test trips the assertion.
     #[test]
     fn delegate_test_module_count_pin() {
@@ -195,7 +196,7 @@
             total += actual;
         }
         assert_eq!(
-            total, 83,
+            total, 86,
             "delegate test count drifted — recount and update the count pin"
         );
     }

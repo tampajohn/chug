@@ -182,7 +182,8 @@ fn run_chat_with(
     // T11: the session's events log opens with the banner fields (mode
     // "chat"; a spec, if any, arrives later via /spec) plus the configured
     // per-turn budget ceilings (T17) and the cwd's checkout HEAD (T20,
-    // best-effort: unresolvable → null fields).
+    // best-effort: unresolvable → null fields). T115: `goal_sha256` is null
+    // here — chat sessions open goal-less (objectives arrive turn by turn).
     let head = crate::build_info::resolve_head(&cfg.cwd);
     eventlog::run_start(
         &cfg.cwd,
@@ -193,6 +194,7 @@ fn run_chat_with(
         cfg.max_minutes,
         cfg.max_tokens,
         crate::build_info::as_pair(&head),
+        None,
     );
     // No goal text at session start (objectives arrive turn by turn); the
     // trace is identified by its id, mode metadata, and tags.
