@@ -117,6 +117,11 @@ pub(crate) fn delegate(_ctx: &ToolCtx, input: &Value) -> anyhow::Result<ToolResu
 /// The child's working directory. Absolute, and deliberately not confined to
 /// the orchestrator's cwd — the one [`resolve_safe`] exemption (see
 /// [`delegate`]).
+///
+/// T103: the cwd must also EXIST as a directory (probed here, riding the same
+/// exemption — status/collect re-render it the same way). A
+/// corrupted-but-absolute cwd previously made it to spawn and died inside the
+/// child; the error now names the received path verbatim at the call site.
 fn delegate_cwd(input: &Value) -> anyhow::Result<PathBuf> {
     let raw = get_str(input, "cwd")?;
     let cwd = PathBuf::from(raw);
@@ -124,18 +129,45 @@ fn delegate_cwd(input: &Value) -> anyhow::Result<PathBuf> {
         bail!("delegate: cwd must be an absolute directory, got {raw:?}");
     }
     if !cwd.is_dir() {
-        bail!("delegate: cwd is not a directory: {}", cwd.display());
+        bail!(
+            "delegate: cwd does not exist or is not a directory: {}",
+            cwd.display()
+        );
     }
     Ok(cwd)
 }
 
 /// The child's spec path: absolute (it is read by the child, whose cwd is the
 /// worktree, not by us — a relative path would mean something else there).
+///
+/// T103: the absoluteness bail validates only SHAPE — a corrupted-but-absolute
+/// spec (goal text glued to a path, a hallucinated slug, a truncated path)
+/// used to pass here and spawn a doomed child that burned setup iterations
+/// before dying on its own spec read. The probe below refuses the payload at
+/// the call site instead, so the caller self-corrects in ONE iteration (the
+/// T94 thesis applied to the launch surface) and the received path is named
+/// verbatim, making the corruption visible in the error.
+///
+/// TOCTOU (deliberate, per spec req 3): the path can still vanish between this
+/// probe and the child's own read — the probe exists to catch MALFORMED
+/// payloads, not to guarantee the child succeeds; the child's own spec-read
+/// error remains the backstop. `File::open` (not just metadata) is the
+/// readability ground truth for this user; a regular file that exists but
+/// cannot be opened is refused with the same error.
 fn delegate_spec(input: &Value) -> anyhow::Result<PathBuf> {
     let raw = get_str(input, "spec")?;
     let spec = PathBuf::from(raw);
     if !spec.is_absolute() {
         bail!("delegate: spec must be an absolute path, got {raw:?}");
+    }
+    // `is_file` alone would admit a directory (open(2) on a directory
+    // succeeds); the open() leg is what makes "readable file" honest.
+    let readable = spec.is_file() && fs::File::open(&spec).is_ok();
+    if !readable {
+        bail!(
+            "delegate: spec does not exist or is not a readable file: {}",
+            spec.display()
+        );
     }
     Ok(spec)
 }
@@ -2795,6 +2827,8 @@ log_tail: (none)";
         fs::set_permissions(&stub, fs::Permissions::from_mode(0o755)).unwrap();
         // SAFETY: serialized by DELEGATE_ENV_LOCK; no other test reads this var.
         unsafe { std::env::set_var("CHUG_DELEGATE_BIN", &stub) };
+        // T103: the spec probe needs a real file (see ensure_spec_file).
+        ensure_spec_file("/tmp/chug-stub-spec.md");
 
         let launch = dispatch(
             &delegate_ctx(ctx_cwd.path()),
@@ -2910,6 +2944,9 @@ log_tail: (none)";
         let tmp = tempfile::tempdir().unwrap();
         // SAFETY: serialized by DELEGATE_ENV_LOCK; no other test reads this var.
         unsafe { std::env::set_var("CHUG_DELEGATE_BIN", "/nonexistent/chug") };
+        // T103: the spec probe must PASS so the leg still tests the binary
+        // error, not spec existence (see ensure_spec_file).
+        ensure_spec_file("/tmp/chug-spec.md");
         let result = dispatch(
             &delegate_ctx(tmp.path()),
             "delegate",
@@ -2928,6 +2965,195 @@ log_tail: (none)";
             "error must name the binary path: {}",
             result.content
         );
+    }
+
+    // ---- T103: launch payload existence probes (spec + cwd fail-fast) ----
+
+    /// T103 req 1+2: a nonexistent spec is refused AT THE CALL SITE with the
+    /// received path named verbatim (a corrupted payload is visible in the
+    /// error) — and no child is spawned, no `.chug/delegate.log` is created
+    /// (fail-fast in the caller, not in a child that dies at iteration 1).
+    /// NON-VACUOUSNESS: pre-edit this payload reached the launch attempt
+    /// (shape-only validation), so the error asserts fail.
+    #[test]
+    fn delegate_launch_refuses_nonexistent_spec_naming_the_path() {
+        let _guard = DELEGATE_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let child_dir = tempfile::tempdir().unwrap();
+        let ctx_cwd = tempfile::tempdir().unwrap();
+        // Absolute (passes the pre-existing shape bail) and guaranteed
+        // nonexistent: a name under a real dir that was never created. The
+        // seam points at a nonexistent binary so the RED leg can never spawn
+        // a real child even if the probe is dropped.
+        // SAFETY: serialized by DELEGATE_ENV_LOCK; no other test reads this var.
+        unsafe { std::env::set_var("CHUG_DELEGATE_BIN", "/nonexistent/chug") };
+        let bogus_spec = ctx_cwd.path().join("t103-no-such-spec.md");
+        let result = dispatch(
+            &delegate_ctx(ctx_cwd.path()),
+            "delegate",
+            &json!({
+                "action": "launch",
+                "cwd": child_dir.path(),
+                "spec": bogus_spec.display().to_string(),
+                "goal": "g",
+                "model": "m",
+            }),
+        );
+        // SAFETY: serialized by DELEGATE_ENV_LOCK; no other test reads this var.
+        unsafe { std::env::remove_var("CHUG_DELEGATE_BIN") };
+        assert!(result.is_error, "{}", result.content);
+        assert!(
+            result
+                .content
+                .contains("delegate: spec does not exist or is not a readable file"),
+            "refusal must carry the req-1 error: {}",
+            result.content
+        );
+        assert!(
+            result.content.contains(bogus_spec.to_str().unwrap()),
+            "error must name the received path verbatim: {}",
+            result.content
+        );
+        // Req 2: fail-fast in the caller — the child's fixed log location is
+        // never created (which also means no events file, no spawn).
+        assert!(
+            !child_dir.path().join(".chug").exists(),
+            "a refused spec must never create the child's .chug/"
+        );
+    }
+
+    /// T103: a spec that exists but is a DIRECTORY is refused with the same
+    /// error class. `File::open` alone would admit it (open(2) succeeds on a
+    /// directory); the probe's is_file leg is what makes "readable file"
+    /// honest.
+    #[test]
+    fn delegate_launch_refuses_a_directory_spec_with_the_same_error() {
+        let _guard = DELEGATE_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let child_dir = tempfile::tempdir().unwrap();
+        let ctx_cwd = tempfile::tempdir().unwrap();
+        // SAFETY: serialized by DELEGATE_ENV_LOCK; no other test reads this var.
+        unsafe { std::env::set_var("CHUG_DELEGATE_BIN", "/nonexistent/chug") };
+        let result = dispatch(
+            &delegate_ctx(ctx_cwd.path()),
+            "delegate",
+            &json!({
+                "action": "launch",
+                "cwd": child_dir.path(),
+                "spec": ctx_cwd.path().display().to_string(),
+                "goal": "g",
+                "model": "m",
+            }),
+        );
+        // SAFETY: serialized by DELEGATE_ENV_LOCK; no other test reads this var.
+        unsafe { std::env::remove_var("CHUG_DELEGATE_BIN") };
+        assert!(result.is_error, "{}", result.content);
+        assert!(
+            result
+                .content
+                .contains("delegate: spec does not exist or is not a readable file"),
+            "directory spec must hit the same error class: {}",
+            result.content
+        );
+        assert!(
+            result.content.contains(ctx_cwd.path().to_str().unwrap()),
+            "error must name the received path verbatim: {}",
+            result.content
+        );
+        assert!(
+            !child_dir.path().join(".chug").exists(),
+            "a refused spec must never create the child's .chug/"
+        );
+    }
+
+    /// T103: a nonexistent cwd (absolute, directory-shaped) is refused at the
+    /// call site with the received path named verbatim — no spawn, no log.
+    /// The existence leg itself pre-dated T103 (`delegate_cwd` already
+    /// probed `is_dir`); what T103 changes is the error naming the MISSING
+    /// case instead of claiming the path exists but is not a directory —
+    /// that reword is the RED leg here.
+    #[test]
+    fn delegate_launch_refuses_nonexistent_cwd_naming_the_path() {
+        let _guard = DELEGATE_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let ctx_cwd = tempfile::tempdir().unwrap();
+        // SAFETY: serialized by DELEGATE_ENV_LOCK; no other test reads this var.
+        unsafe { std::env::set_var("CHUG_DELEGATE_BIN", "/nonexistent/chug") };
+        let real_spec = ctx_cwd.path().join("t103-real-spec.md");
+        fs::write(&real_spec, "# t103: a real, readable spec\n").unwrap();
+        let missing_cwd = ctx_cwd.path().join("t103-no-such-child-dir");
+        let result = dispatch(
+            &delegate_ctx(ctx_cwd.path()),
+            "delegate",
+            &json!({
+                "action": "launch",
+                "cwd": missing_cwd.display().to_string(),
+                "spec": real_spec.display().to_string(),
+                "goal": "g",
+                "model": "m",
+            }),
+        );
+        // SAFETY: serialized by DELEGATE_ENV_LOCK; no other test reads this var.
+        unsafe { std::env::remove_var("CHUG_DELEGATE_BIN") };
+        assert!(result.is_error, "{}", result.content);
+        assert!(
+            result
+                .content
+                .contains("delegate: cwd does not exist or is not a directory"),
+            "refusal must carry the req-1 cwd error: {}",
+            result.content
+        );
+        assert!(
+            result.content.contains(missing_cwd.to_str().unwrap()),
+            "error must name the received path verbatim: {}",
+            result.content
+        );
+        // The probe ran before anything touched the (nonexistent) child dir.
+        assert!(
+            !missing_cwd.exists(),
+            "a refused cwd must never be created by the launch path"
+        );
+    }
+
+    /// T103: a BOTH-valid payload (real, readable spec file; real cwd) still
+    /// launches — the probe passes it through and the child argv carries the
+    /// spec path verbatim. Guards against over-rejection of well-formed
+    /// payloads. (Regression pin, not a RED leg: it is green both before and
+    /// after the probe by construction.)
+    #[cfg(unix)]
+    #[test]
+    fn delegate_launch_with_both_payloads_valid_still_spawns() {
+        let _guard = DELEGATE_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let child_dir = tempfile::tempdir().unwrap();
+        let ctx_cwd = tempfile::tempdir().unwrap();
+        // SAFETY: serialized by DELEGATE_ENV_LOCK; no other test reads this var.
+        unsafe { std::env::set_var("CHUG_DELEGATE_BIN", write_argv_stub(ctx_cwd.path())) };
+        let spec = ctx_cwd.path().join("t103-both-valid-spec.md");
+        fs::write(&spec, "# t103: both-valid launch payload\n").unwrap();
+        let launch = dispatch(
+            &delegate_ctx(ctx_cwd.path()),
+            "delegate",
+            &json!({
+                "action": "launch",
+                "cwd": child_dir.path(),
+                "spec": spec.display().to_string(),
+                "goal": "g",
+                "model": "m",
+            }),
+        );
+        assert!(!launch.is_error, "{}", launch.content);
+        assert!(
+            launch.content.contains("launched: pid "),
+            "both-valid launch must spawn: {}",
+            launch.content
+        );
+        let argv = wait_for_argv_dump(child_dir.path());
+        assert!(
+            argv.windows(2).any(|w| w[0] == "--spec" && w[1] == spec.to_str().unwrap()),
+            "spec must reach the child verbatim: {:?}",
+            argv
+        );
+        let pid = spawn_pid_of(&launch);
+        kill_pid_group(pid);
+        // SAFETY: serialized by DELEGATE_ENV_LOCK; no other test reads this var.
+        unsafe { std::env::remove_var("CHUG_DELEGATE_BIN") };
     }
 
     // ---- T39: delegate launch optional max_tokens passthrough ----
@@ -3090,6 +3316,26 @@ log_tail: (none)";
         stub
     }
 
+    /// T103: the launch spec probe requires a REAL, readable spec file. The
+    /// stub/argv launch tests always passed the fictional
+    /// `/tmp/chug-stub-spec.md` (the missing-binary leg: `/tmp/chug-spec.md`)
+    /// — the stub child never reads the spec, only its argv, so the file
+    /// never existed and the probe now correctly refuses the payload. Ensure
+    /// it exists so those legs keep testing what they tested (asserts and
+    /// pinned path strings untouched). Content is never read (the probe
+    /// stats+opens; the stub dumps argv); deliberately NOT cleaned up — a
+    /// parallel test may still be probing it.
+    fn ensure_spec_file(path: &str) {
+        if Path::new(path).is_file() {
+            return;
+        }
+        fs::write(
+            path,
+            "t103: launch-payload probe needs a real spec file; content is unread\n",
+        )
+        .expect("ensure stub spec file exists");
+    }
+
     /// The stub's argv dump, polled for (launch returns at spawn; the stub
     /// writes the dump within milliseconds of exec).
     #[cfg(unix)]
@@ -3140,6 +3386,8 @@ log_tail: (none)";
         let ctx_cwd = tempfile::tempdir().unwrap();
         // SAFETY: serialized by DELEGATE_ENV_LOCK; no other test reads this var.
         unsafe { std::env::set_var("CHUG_DELEGATE_BIN", write_argv_stub(ctx_cwd.path())) };
+        // T103: the spec probe needs a real file (see ensure_spec_file).
+        ensure_spec_file("/tmp/chug-stub-spec.md");
         let launch = dispatch(
             &delegate_ctx(ctx_cwd.path()),
             "delegate",
@@ -3185,6 +3433,8 @@ log_tail: (none)";
         let ctx_cwd = tempfile::tempdir().unwrap();
         // SAFETY: serialized by DELEGATE_ENV_LOCK; no other test reads this var.
         unsafe { std::env::set_var("CHUG_DELEGATE_BIN", write_argv_stub(ctx_cwd.path())) };
+        // T103: the spec probe needs a real file (see ensure_spec_file).
+        ensure_spec_file("/tmp/chug-stub-spec.md");
         let launch = dispatch(
             &delegate_ctx(ctx_cwd.path()),
             "delegate",
@@ -3237,6 +3487,8 @@ log_tail: (none)";
         let ctx_cwd = tempfile::tempdir().unwrap();
         // SAFETY: serialized by DELEGATE_ENV_LOCK; no other test reads this var.
         unsafe { std::env::set_var("CHUG_DELEGATE_BIN", write_argv_stub(ctx_cwd.path())) };
+        // T103: the spec probe needs a real file (see ensure_spec_file).
+        ensure_spec_file("/tmp/chug-stub-spec.md");
         let launch = dispatch(
             &delegate_ctx(ctx_cwd.path()),
             "delegate",
@@ -3273,6 +3525,8 @@ log_tail: (none)";
         let ctx_cwd = tempfile::tempdir().unwrap();
         // SAFETY: serialized by DELEGATE_ENV_LOCK; no other test reads this var.
         unsafe { std::env::set_var("CHUG_DELEGATE_BIN", write_argv_stub(ctx_cwd.path())) };
+        // T103: the spec probe needs a real file (see ensure_spec_file).
+        ensure_spec_file("/tmp/chug-stub-spec.md");
         for bad in [json!(0), json!(-5)] {
             let result = dispatch(
                 &delegate_ctx(ctx_cwd.path()),
@@ -3386,6 +3640,8 @@ log_tail: (none)";
         let ctx_cwd = tempfile::tempdir().unwrap();
         // SAFETY: serialized by DELEGATE_ENV_LOCK; no other test reads this var.
         unsafe { std::env::set_var("CHUG_DELEGATE_BIN", write_argv_stub(ctx_cwd.path())) };
+        // T103: the spec probe needs a real file (see ensure_spec_file).
+        ensure_spec_file("/tmp/chug-stub-spec.md");
         let launch = dispatch(
             &delegate_ctx(ctx_cwd.path()),
             "delegate",
