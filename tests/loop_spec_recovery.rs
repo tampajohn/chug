@@ -60,6 +60,23 @@
 //! the "## Extend `TODO.md`" section), AFTER the ADD-side sentence it
 //! extends and BEFORE the estimate-ceiling sentence — ordering pinned so
 //! the rule reads as an extension of the T96 bar, never a replacement.
+//!
+//! T120 doctrine: cycle-61 produced two orchestrator SELF-inflicted
+//! incidents, both discipline gaps LOOP-SPEC never wrote down. (1) The
+//! healthy-validator SIGKILL — a RENDER-ONLY garble in the orchestrator's
+//! own console view (a duplicated-tail rendering artifact in the delegate
+//! status output) was read as a corrupt launch goal, and the kill landed
+//! in the SAME breath as the check, before any read-back; transcript
+//! read-back afterwards proved the 2166-byte payload intact, and a full
+//! validator spin-up burned on the relaunch. (2) The anchor-typo silent
+//! no-op — a `sed -i` bookkeeping edit with a typo'd anchor exited 0
+//! changing nothing, because sed never fails on no-match (`edit_file`
+//! does). The lessons lived only in EVALUATION.md; orchestrators read
+//! LOOP-SPEC every cycle. Legs (k)–(l) pin the two rules where they are
+//! read: the kill rule inside step 2 (beside the poll-posture and
+//! budget-death-recovery paragraphs) and the sed-assertion rule inside
+//! step 5 (beside the TODO.md bookkeeping-edit discipline), both
+//! exactly-once + windowed in the T64/T114 pattern.
 
 /// The leg's signature phrase: "resume" + the one-attempt cap language in
 /// one contiguous run. Must occur EXACTLY once in LOOP-SPEC.md.
@@ -534,5 +551,150 @@ fn break_side_rule_sits_after_add_side_rule_and_before_estimate_sentence() {
          after the ADD-side rule it extends ({add}) and BEFORE the \
          estimate-ceiling sentence ({estimate}) — the rule was found at \
          offset {break_rule}"
+    );
+}
+
+// ---- T120 — verify-then-kill SEQUENTIAL (step 2) + assert-after-sed (step 5) ----
+//
+// The two cycle-61 orchestrator self-inflicted incidents, now doctrine:
+// the kill rule (verify-then-kill is SEQUENTIAL — read the payload back
+// from the child's on-disk artifacts in a SEPARATE completed step, kill
+// only on proof) lives in step 2 beside the poll-posture and
+// budget-death-recovery paragraphs; the edit-assertion rule (sed exits 0
+// on no-match — grep-verify the needle after any in-place bash edit)
+// lives in step 5 beside the TODO.md bookkeeping-edit discipline. These
+// legs pin both rules exactly-once + windowed, in the T64/T114 pattern.
+
+/// The kill rule's commitment needle — verbatim per the spec's check:
+/// grep (line-wise, so the LOOP-SPEC wrapping must keep it on a single
+/// line). Must occur EXACTLY once in LOOP-SPEC.md.
+const VERIFY_THEN_KILL_SEQUENTIAL: &str = "verify-then-kill is SEQUENTIAL";
+
+/// The kill rule's enforcement needle — the same-breath prohibition,
+/// verbatim per the spec's check: grep (capital N per the check's
+/// case-sensitivity). Must occur EXACTLY once in LOOP-SPEC.md.
+const NEVER_KILL_SAME_BREATH: &str = "Never kill in the same breath";
+
+/// The sed rule's needle — the silent-success fact the assertion
+/// discipline exists for, verbatim per the spec's check: grep. Must occur
+/// EXACTLY once in LOOP-SPEC.md.
+const SED_NO_MATCH: &str = "sed exits 0 on no-match";
+
+/// Step 5's heading, matched loosely (the T64 pattern; unique in the file
+/// today) and step 6's heading that closes the window — the sed rule must
+/// live inside step 5's bookkeeping window, not drift into another step.
+const STEP5_HEADING_LOOSE: &str = "5. **";
+const STEP6_HEADING_LOOSE: &str = "6. **";
+
+/// (k) T120 — both kill-rule needles occur EXACTLY once in LOOP-SPEC.md,
+/// inside step 2's window (the T64 loose-heading scope pattern: step 2's
+/// heading through step 3's heading), read-first before kill-after
+/// (the SEQUENTIAL commitment needle precedes the same-breath prohibition,
+/// mirroring the rule's own order). Delete the rule and both needles go
+/// red (count 0, which also breaks the spec's own line-wise grep); a
+/// duplicate statement elsewhere goes red (count 2); moving the rule out
+/// of step 2 dies on the window find.
+#[test]
+fn kill_rule_needles_occur_exactly_once_inside_step_2() {
+    // Needle self-check (T48 idiom): a mangled needle must not let this
+    // pin pass silently.
+    assert!(
+        VERIFY_THEN_KILL_SEQUENTIAL.starts_with("verify-then-kill")
+            && VERIFY_THEN_KILL_SEQUENTIAL.ends_with("SEQUENTIAL"),
+        "the kill-rule needle must carry the verify-then-kill language \
+         verbatim (per the spec's case-sensitive, line-wise check:)"
+    );
+    assert!(
+        NEVER_KILL_SAME_BREATH.starts_with("Never kill")
+            && NEVER_KILL_SAME_BREATH.ends_with("same breath"),
+        "the same-breath needle must carry the prohibition language \
+         verbatim (capital N, per the spec's check:)"
+    );
+    let spec = loop_spec();
+    for (needle, what) in [
+        (
+            VERIFY_THEN_KILL_SEQUENTIAL,
+            "the verify-then-kill is SEQUENTIAL rule",
+        ),
+        (
+            NEVER_KILL_SAME_BREATH,
+            "the Never-kill-in-the-same-breath prohibition",
+        ),
+    ] {
+        assert_eq!(
+            spec.matches(needle).count(),
+            1,
+            "LOOP-SPEC must state {what} exactly once — zero means the kill \
+             rule was deleted (or a needle was rewrapped across a line \
+             break, which also breaks the spec's own line-wise grep), more \
+             than one means it is stated twice"
+        );
+    }
+    let start = spec
+        .find(STEP2_HEADING_LOOSE)
+        .expect("step-2 heading (`2. **`) present");
+    let end = start
+        + spec[start..]
+            .find(STEP3_HEADING)
+            .expect("step-3 heading present after step 2's");
+    let window = &spec[start..end];
+    let sequential = window.find(VERIFY_THEN_KILL_SEQUENTIAL).unwrap_or_else(|| {
+        panic!(
+            "step-2 window must carry {VERIFY_THEN_KILL_SEQUENTIAL:?} \
+             (kill rule deleted, or moved out of step 2?)"
+        )
+    });
+    let same_breath = window.find(NEVER_KILL_SAME_BREATH).unwrap_or_else(|| {
+        panic!(
+            "step-2 window must carry {NEVER_KILL_SAME_BREATH:?} \
+             (kill rule deleted, or moved out of step 2?)"
+        )
+    });
+    assert!(
+        sequential < same_breath,
+        "the kill rule must read first, kill after — the verify-then-kill \
+         is SEQUENTIAL commitment ({sequential}) precedes the Never kill \
+         in the same breath prohibition ({same_breath})"
+    );
+}
+
+/// (l) T120 — the sed needle occurs EXACTLY once in LOOP-SPEC.md, inside
+/// step 5's window (the T64 loose-heading scope pattern: step 5's heading
+/// through step 6's heading). Delete the rule and the needle goes red
+/// (count 0, which also breaks the spec's own line-wise grep); a
+/// duplicate statement elsewhere goes red (count 2); moving the rule out
+/// of step 5 dies on the window find.
+#[test]
+fn sed_no_match_needle_occurs_exactly_once_inside_step_5() {
+    // Needle self-check (T48 idiom): a mangled needle must not let this
+    // pin pass silently.
+    assert!(
+        SED_NO_MATCH.starts_with("sed exits 0")
+            && SED_NO_MATCH.ends_with("no-match"),
+        "the sed needle must carry the no-match silent-success language \
+         verbatim (per the spec's case-sensitive, line-wise check:)"
+    );
+    let spec = loop_spec();
+    assert_eq!(
+        spec.matches(SED_NO_MATCH).count(),
+        1,
+        "LOOP-SPEC must state the sed no-match silent-success fact exactly \
+         once — zero means the edit-assertion rule was deleted (or the \
+         needle was rewrapped across a line break, which also breaks the \
+         spec's own line-wise grep), more than one means it is stated twice"
+    );
+    let start = spec
+        .find(STEP5_HEADING_LOOSE)
+        .expect("step-5 heading (`5. **`) present");
+    let end = start
+        + spec[start..]
+            .find(STEP6_HEADING_LOOSE)
+            .expect("step-6 heading present after step 5's");
+    let window = &spec[start..end];
+    assert!(
+        window.contains(SED_NO_MATCH),
+        "step 5's window must carry {SED_NO_MATCH:?} — the \
+         edit-assertion rule was deleted, or moved out of step 5's \
+         bookkeeping window"
     );
 }
