@@ -406,6 +406,26 @@ wrap**: the live site has 0 markers — orchestrator inserts the one-time
 marker pair at cycle-53 wrap so the NEXT loopd cycle runs the first real
 sync (acceptance: a later cycle's Outcomes records the site commit).
 
+**T95 README layout + module set-equality guard — LANDED, fast-forward e80b3c5.**
+glm impl (pid 69319) goal-accepted **26/65 in ~2.5 min** — after an
+orchestrator misfire (I launched the first attempt with a hallucinated
+spec slug `t95-transcript-dir-pin.md`; the child failed at spawn with
+spec-not-found, I read the row, relaunched with the correct
+`t95-readme-layout-guard.md` — the spawn-failure-as-error-signal caught
+my own bookkeeping slip in one iteration, ironically the T94 thesis).
+README one-word insertion (`permissions` between delegate and plan — the
+list is historical-order not sorted, the child placed it where neighbors
+keep alpha order) + `tests/readme_layout.rs`: a std-only set-equality
+guard (newline-tolerant braces-list parse vs src/*.rs-minus-main walk,
+runtime `current_dir` per T48, non-vacuity pins BOTH sides, failure names
+both drift directions + the T86 class pointer) — the T86-class SECOND
+sighting earned automation per eval §6(c). RED proofs recorded both
+directions (revert → names ["permissions"]; phantom → names ["phantom"]).
+Review: nextest **777/777** (776+1) + clippy + guard 1/1 under
+target-shared; post-merge 777/777. kimi SKIPPED per routing
+d1790556692-25 (the guard is its own adversarial artifact). 1 artifact
+harvested. Arc: 1 misfired launch + 1 impl, ~5 min wall.
+
 ### Cycle 52 (2026-09-27) — routine glm freshness-skip; T90 LANDED (e9afed9, fast-forward merge) — F4 permissions phase 1: the deny-only fail-closed policy layer
 
 - **T90 LANDED** (e9afed9): `.chug/permissions.json` deny-list — new `src/permissions.rs` (363 prod lines, at the ~350 guard's edge) holds all policy logic: absent/empty config = zero rules + zero cost; malformed config fails OPEN (one stderr warn + one `permission_error` line, T83 parity); per-rule malformed legs (unknown key, two matchers, non-string value, missing tool, matcher-that-cannot-fit) are skipped in place with valid siblings still denying; deny rules are a tool glob + at most one `command`/`path`/`url` arg matcher, first-match-wins, missing/non-string arg under an arg rule fails toward execution; deny text `[permission denied] <rule summary>`. Driver gates dispatch FIRST (permissions → PreToolUse hooks → plan/MCP/risk gate) riding the T83 `blocked` flag in run+chat+plan, so a denied call fires no hooks and never executes. `hooks::glob_matches` made pub(crate), reused byte-identically. README Permissions section integrated after Hooks; FEATURES F4 row annotated at flip. 24 tests (17 unit + 7 driver integration incl. ZERO-hook-fires ordering pins + plan-mode leg + fail-open-exactly-once).
