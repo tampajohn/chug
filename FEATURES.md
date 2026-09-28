@@ -40,7 +40,7 @@ retired: driver already batches (cycle-11 eval).
 
 | # | Feature | What | Benchmark |
 |---|---------|------|-----------|
-| F10 | **chug as MCP server** | `chug mcp-serve`: expose run/delegate/status as MCP tools so Claude Code, the bridge fleet, or another chug can drive it. The fleet primitive. | unreal-agent remote ops; bridge fleet |
+| F10 | **chug as MCP server** — SPLIT (cycle-64 eval): phase 1 → T124 (`chug mcp-serve` stdio JSON-RPC server skeleton + read-only `chug_status` over any cwd) FILED; phases 2–3 deferred with written reason EVALUATION.md cycle-64 §4 (phase 2: `chug_collect` + `chug_launch` write leg — needs the permissions/hooks interaction thought through, filed after phase 1 lands; phase 3: notifications/resources) | `chug mcp-serve`: expose run/delegate/status as MCP tools so Claude Code, the bridge fleet, or another chug can drive it. The fleet primitive. | unreal-agent remote ops; bridge fleet |
 | F11 | **MCP resources+prompts** | Consume MCP resource/prompt capabilities (today: tools only). | MCP spec |
 | F12 | **Web search** | Provider-pluggable search tool complementing web_fetch. | Claude Code |
 
