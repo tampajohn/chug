@@ -706,3 +706,56 @@
         );
     }
 
+
+    /// T147 (T138 plan-guard kill): plan mode never starts MCP servers. The
+    /// prod plan construction (`run_plan`) builds the EMPTY registry — which
+    /// is exactly what made a removed mode-guard invisible to every existing
+    /// test — so this leg drives the REAL plan-mode loop with a PENDING
+    /// registry (an mcp.json whose command touches a flag file, parsed but
+    /// never started; the T138 flag-file harness shape) and asserts the loop
+    /// leaves it unstarted: no flag file (the command never executed) and no
+    /// registered server. Removing the `if ctx.mode != Mode::Plan` guard
+    /// around `mcp.start` turns this RED — the spawn fires and the flag
+    /// appears.
+    #[test]
+    fn plan_loop_never_starts_a_pending_mcp_registry() {
+        let tmp = tempfile::tempdir().unwrap();
+        let flag = tmp.path().join("t147-plan-flag");
+        write_echo_server_prelude(
+            tmp.path(),
+            &format!("import pathlib\npathlib.Path({flag:?}).write_text(\"ran\")\n"),
+        );
+        let mut mcp = McpRegistry::new(tmp.path(), false, None).expect("pending registry");
+        assert!(
+            mcp.tool_schemas().is_empty(),
+            "premise: new() parses the config but defers every spawn"
+        );
+        let (_utx, urx) = mpsc::channel::<SlashUpdate>();
+        let controls = Controls::detached();
+        let ctx = ctx_for_plan(&tmp, None, &controls, &urx);
+        let mut knobs = knobs_with(5);
+        let mut llm = ScriptedLlm::new(vec![tool_use_response(
+            "submit_plan",
+            json!({"plan": "# Plan\n\nno MCP in plan mode\n"}),
+        )]);
+        let mut gate = None;
+        let mut messages = Vec::new();
+        let mut sink = RecordingSink::default();
+        let outcome = drive_loop(
+            &ctx,
+            &mut knobs,
+            &mut llm,
+            &mut gate,
+            &mut messages,
+            None,
+            &mut sink,
+            &mut mcp,
+        )
+        .unwrap();
+        assert!(matches!(outcome, DriveOutcome::RunFinished(0)), "{outcome:?}");
+        // No flag file: the mcp.json command never executed.
+        assert!(!flag.exists(), "plan mode must never execute the mcp.json command");
+        // No server spawned or registered: the pending list is untouched by
+        // the plan-mode loop.
+        assert!(mcp.tool_schemas().is_empty(), "plan mode must never start MCP servers");
+    }
