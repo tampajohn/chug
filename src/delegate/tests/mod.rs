@@ -27,7 +27,10 @@
 
     /// The tests that mutate `CHUG_DELEGATE_BIN` take this: the env is
     /// process-global and cargo runs test threads in parallel.
-    static DELEGATE_ENV_LOCK: Mutex<()> = Mutex::new(());
+    ///
+    /// T129: `pub(crate)` so the `chug mcp-serve` stub-spawn legs (same test
+    /// binary, same env var) take the SAME lock — one env, one lock.
+    pub(crate) static DELEGATE_ENV_LOCK: Mutex<()> = Mutex::new(());
 
     // ---- T29: status wait_secs long-poll ----
 

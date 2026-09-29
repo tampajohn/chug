@@ -1,12 +1,12 @@
-//! T124 — F10 phase 1 + T128 — phase 2a: `chug mcp-serve`, the stdio MCP
-//! SERVER side.
+//! T124 — F10 phase 1 + T128 — phase 2a + T129 — phase 2b: `chug mcp-serve`,
+//! the stdio MCP SERVER side.
 //!
 //! Until now chug was an MCP CLIENT only (`src/mcp.rs` consumes servers);
 //! nothing exposed chug TO another agent — Claude Code, the bridge fleet,
 //! or a second chug could observe a run only by shelling out and mining
 //! `.chug/` by hand. This module flips that: `chug mcp-serve` speaks
 //! newline-delimited JSON-RPC 2.0 on stdio (the exact framing the client
-//! side writes — one object per line) and serves TWO read-only tools,
+//! side writes — one object per line) and serves the two read-only tools,
 //! [`CHUG_STATUS_TOOL`] and [`CHUG_COLLECT_TOOL`], until stdin EOF.
 //!
 //! **Stdout purity** — the one rule that shapes everything here: a stdio
@@ -20,8 +20,18 @@
 //! route through any code path that writes a banner or a `run_start` line
 //! (pinned structurally by the grep test below).
 //!
-//! Read-only by design (phases 1–2a): no process spawning, no writes
-//! anywhere. `chug_status` reads `<cwd>/.chug/events.jsonl` through the
+//! Read-only by default (phases 1–2a): no process spawning, no writes
+//! anywhere. T129 adds the ONE write verb, `chug_launch` (F10 phase 2b),
+//! and gates it on the `--allow-launch` server flag — the flag is the
+//! policy boundary: without it the server is byte-for-byte the read-only
+//! one (`chug_launch` is not advertised in `tools/list` and a call for it
+//! gets the unknown-tool error), and with it the tool launches a bounded
+//! detached `chug run` through the ONE delegate launch path
+//! ([`crate::delegate::delegate_launch`] — no second spawner, no new
+//! quoting code). The server adds no bypass: the spawned child is an
+//! ordinary `chug run` in the target cwd, subject to that cwd's own
+//! permissions/hooks/risk-gate chain and its own `.chug/driver.lock`.
+//! `chug_status` reads `<cwd>/.chug/events.jsonl` through the
 //! delegate seams and renders a COMPACT summary; `chug_collect` answers
 //! the structured-result question over the SAME file — the latest
 //! segment's verdict, the accepted goal's summary, the check cmd, the
@@ -32,10 +42,10 @@
 //! the delegate `render_status`/`render_collect` texts are byte-pinned by
 //! the delegate tests and are deliberately NOT reused.
 //!
-//! Deferred (F10 phase 2b/3): `chug_launch` (the write leg, flag-gated),
-//! a server log file, `tools/listChanged`, cancellation,
-//! resources/prompts.
+//! Deferred (F10 phase 3): a server log file, `tools/listChanged`,
+//! cancellation, resources/prompts.
 
+use std::fs;
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
 
@@ -58,6 +68,22 @@ const CHUG_STATUS_TOOL: &str = "chug_status";
 /// Read-only: reads one file + `git log`, spawns nothing, writes nothing.
 const CHUG_COLLECT_TOOL: &str = "chug_collect";
 
+/// The phase-2b write tool (T129): launch a bounded detached `chug run` in
+/// a chug working directory. Advertised and callable ONLY when the server
+/// was started with `--allow-launch` — the flag is the policy boundary
+/// (default OFF: a read-only deployment cannot be surprised into spawning).
+const CHUG_LAUNCH_TOOL: &str = "chug_launch";
+
+/// T129: the `chug_launch` iteration-budget ceiling — loopd's own ceiling.
+/// A `max_iters` above it is REJECTED (never clamped) naming the received
+/// value and this number.
+const CHUG_LAUNCH_MAX_ITERS_CEILING: u64 = 200;
+
+/// T129: the `chug_launch` wall-clock-budget ceiling — loopd's own. A
+/// `max_minutes` above it is REJECTED (never clamped) naming the received
+/// value and this number.
+const CHUG_LAUNCH_MAX_MINUTES_CEILING: u64 = 240;
+
 // ---------------------------------------------------------------------------
 // The serve loop
 // ---------------------------------------------------------------------------
@@ -65,27 +91,37 @@ const CHUG_COLLECT_TOOL: &str = "chug_collect";
 /// Run the server on real stdio until stdin EOF, then return (the caller
 /// maps that to exit 0). Responses are written and flushed one at a time —
 /// an unflushed response is a wedged client.
-pub(crate) fn serve() -> anyhow::Result<()> {
+///
+/// T129: `allow_launch` gates the `chug_launch` write tool. `false` (the
+/// default, and every flagless invocation) is byte-identical to the
+/// pre-T129 read-only server.
+pub(crate) fn serve(allow_launch: bool) -> anyhow::Result<()> {
     // Stdout purity by construction: the ONLY stdout writer in the module
     // is the protocol `writeln!` inside serve_from (see the module doc).
     let stdin = std::io::stdin();
     let stdout = std::io::stdout();
     let mut out = stdout.lock();
-    serve_from(&mut stdin.lock(), &mut out)
+    serve_from_with(&mut stdin.lock(), &mut out, allow_launch)
 }
 
 /// The loop over an injected reader/writer pair, so the EOF and
 /// blank-line-skipping behavior is unit-testable without touching real
 /// stdio. Serial dispatch (read-only tools are fast; no concurrency in
-/// phase 1).
-fn serve_from(read: &mut impl BufRead, out: &mut impl Write) -> anyhow::Result<()> {
+/// phase 1). The flagless entry the framing test legs ride lives in the
+/// test module (`serve_from` there → this with `false`), so the production
+/// half carries only the flag-aware loop.
+fn serve_from_with(
+    read: &mut impl BufRead,
+    out: &mut impl Write,
+    allow_launch: bool,
+) -> anyhow::Result<()> {
     for line in read.lines() {
         let line = line?;
         // Blank lines are framing noise, not messages — skip them.
         if line.trim().is_empty() {
             continue;
         }
-        if let Some(response) = handle_message(&line) {
+        if let Some(response) = handle_message_with(&line, allow_launch) {
             // The single protocol writer. Flushed per response so a client
             // blocked on read never waits on a buffer.
             writeln!(out, "{response}")?;
@@ -110,7 +146,14 @@ fn serve_from(read: &mut impl BufRead, out: &mut impl Write) -> anyhow::Result<(
 /// - request missing `method` → `-32600`
 /// - unknown method on a request → `-32601`
 /// - `tools/call` naming an unlisted tool (or missing a usable name) → `-32602`
-fn handle_message(line: &str) -> Option<String> {
+///
+/// T129: `allow_launch` decides whether `chug_launch` exists — advertised
+/// in `tools/list` ⇔ callable in `tools/call`, both fed by this one boolean
+/// (capability honesty by construction). The flagless entry the phase-1/2a
+/// test legs ride lives in the test module (`handle_message` there → this
+/// with `false`), so the production half carries only the flag-aware
+/// dispatch.
+fn handle_message_with(line: &str, allow_launch: bool) -> Option<String> {
     let value: Value = match serde_json::from_str(line) {
         Ok(value) => value,
         // A line we cannot parse has no id to echo — the spec-mandated null.
@@ -138,11 +181,8 @@ fn handle_message(line: &str) -> Option<String> {
     match method {
         "initialize" => Some(ok_response(id, initialize_result())),
         "ping" => Some(ok_response(id, json!({}))),
-        "tools/list" => Some(ok_response(
-            id,
-            json!({ "tools": [chug_status_schema(), chug_collect_schema()] }),
-        )),
-        "tools/call" => Some(call_tool(id, obj)),
+        "tools/list" => Some(ok_response(id, json!({ "tools": tools_list(allow_launch) }))),
+        "tools/call" => Some(call_tool(id, obj, allow_launch)),
         other => Some(error_response(
             id,
             -32601,
@@ -159,6 +199,18 @@ fn initialize_result() -> Value {
         "capabilities": { "tools": {} },
         "serverInfo": { "name": "chug", "version": SERVER_VERSION },
     })
+}
+
+/// The `tools/list` tool set. Capability honesty (T129): `chug_launch` is
+/// advertised ONLY when the server was started with `--allow-launch` — the
+/// same boolean feeds `tools/call`, so advertised ⇔ callable by
+/// construction.
+fn tools_list(allow_launch: bool) -> Vec<Value> {
+    let mut tools = vec![chug_status_schema(), chug_collect_schema()];
+    if allow_launch {
+        tools.push(chug_launch_schema());
+    }
+    tools
 }
 
 /// The `chug_status` listing entry. `inputSchema.required` names `cwd` —
@@ -225,11 +277,80 @@ fn chug_collect_schema() -> Value {
     })
 }
 
+/// The `chug_launch` listing entry (T129): the write leg. Four required
+/// params (`cwd`, `spec`, `goal`, `model` — the required list is pinned
+/// exact) plus the two optional budgets carrying loopd's ceilings
+/// (200 iters / 240 minutes) in the schema itself. Advertised only under
+/// `--allow-launch`.
+fn chug_launch_schema() -> Value {
+    json!({
+        "name": CHUG_LAUNCH_TOOL,
+        "description":
+            "Launch a bounded detached `chug run` in a chug working directory \
+             (the write leg; requires the server to be started with \
+             --allow-launch). The child is an ordinary `chug run` in the \
+             target cwd — subject to that cwd's own permissions/hooks/\
+             risk-gate chain and its own single-driver lock, exactly as if \
+             a human typed the command. Returns the spawned pid, the events \
+             path, and the log path.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "cwd": {
+                    "type": "string",
+                    "description":
+                        "Absolute path to the chug working directory to launch \
+                         in (must exist and contain .chug/); the child runs \
+                         with this as its cwd"
+                },
+                "spec": {
+                    "type": "string",
+                    "description":
+                        "Absolute path to an existing spec file for the child run"
+                },
+                "goal": {
+                    "type": "string",
+                    "description": "Non-empty goal text for the child run"
+                },
+                "model": {
+                    "type": "string",
+                    "description":
+                        "Non-empty model id, passed through — the spawned \
+                         child's own auth/settings chain validates it"
+                },
+                "max_iters": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 200,
+                    "description":
+                        "Optional iteration budget, 1..=200 — a value above \
+                         the 200 ceiling is rejected, not clamped"
+                },
+                "max_minutes": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 240,
+                    "description":
+                        "Optional wall-clock budget in minutes, 1..=240 — a \
+                         value above the 240 ceiling is rejected, not clamped"
+                }
+            },
+            "required": ["cwd", "spec", "goal", "model"]
+        }
+    })
+}
+
 /// Dispatch `tools/call`. A known tool's OWN failure (bad cwd, unreadable
-/// events) is a tool RESULT with `isError: true` — not a JSON-RPC error —
-/// so the caller sees the tool ran and failed, the shape the client side
-/// already parses (`isError` + text content).
-fn call_tool(id: Value, req: &Map<String, Value>) -> String {
+/// events, refused launch) is a tool RESULT with `isError: true` — not a
+/// JSON-RPC error — so the caller sees the tool ran and failed, the shape
+/// the client side already parses (`isError` + text content).
+///
+/// T129: `chug_launch` is routable only under the flag; without
+/// `allow_launch` its name falls through to the unknown-tool arm — the
+/// SAME `-32602` a never-existing tool gets, so a read-only deployment
+/// cannot be probed into revealing that a launch tool exists behind a
+/// flag (and no error kills the loop).
+fn call_tool(id: Value, req: &Map<String, Value>, allow_launch: bool) -> String {
     let params = req.get("params").cloned().unwrap_or(Value::Null);
     let Some(name) = params.get("name").and_then(Value::as_str) else {
         return error_response(id, -32602, "Invalid params: tools/call requires a tool name");
@@ -238,6 +359,7 @@ fn call_tool(id: Value, req: &Map<String, Value>) -> String {
     let (text, is_error) = match name {
         CHUG_STATUS_TOOL => chug_status(&arguments),
         CHUG_COLLECT_TOOL => chug_collect(&arguments),
+        CHUG_LAUNCH_TOOL if allow_launch => chug_launch(&arguments),
         other => {
             return error_response(id, -32602, &format!("unknown tool: {other}"));
         }
@@ -374,6 +496,158 @@ fn chug_collect(args: &Value) -> (String, bool) {
     )
 }
 
+// ---------------------------------------------------------------------------
+// T129: the write leg — chug_launch (flag-gated)
+// ---------------------------------------------------------------------------
+
+/// `chug_launch` (T129): validate the request, then hand it to the ONE
+/// delegate launch path ([`crate::delegate::delegate_launch`]) — no second
+/// spawner: the detached spawn (`process_group(0)` + SIGHUP-ignore nohup
+/// parity), the `<cwd>/.chug/delegate.log` log, the `CHUG_DELEGATE_BIN`
+/// binary seam, the goal's byte-exact argv delivery (the delegate path
+/// spawns the binary directly with `Command` args, so quoting is the argv
+/// mechanism's job — no new quoting code here), and the default budgets
+/// (40/35 when absent) all belong to that mechanism.
+///
+/// The server adds no bypass: the child is an ordinary `chug run` in the
+/// target cwd, subject to that cwd's own `.chug/permissions.json` deny
+/// rules, `.chug/hooks.json` vetoes, risk gate, and its own
+/// `.chug/driver.lock` (a conflicting launch fails fast child-side and
+/// surfaces via `chug_status`/`chug_collect`).
+///
+/// Every validation failure is an `isError` result naming the RECEIVED
+/// value (the phase-1 text shape); a launch failure (spawn error, or a
+/// lock conflict surfacing at spawn time) is likewise an `isError` result —
+/// never a panic, never a killed server loop, never a stray stdout byte.
+fn chug_launch(args: &Value) -> (String, bool) {
+    let launch_input = match validate_launch_request(args) {
+        Ok(input) => input,
+        Err(message) => return (message, true),
+    };
+    match crate::delegate::delegate_launch(&launch_input) {
+        // The delegate launch result text — pid, log, events, the budgets —
+        // returned as-is (mirroring delegate launch's return shape).
+        Ok(result) => (result.content, false),
+        Err(e) => (format!("{CHUG_LAUNCH_TOOL}: {e:#}"), true),
+    }
+}
+
+/// The full `chug_launch` validation chain, producing the delegate launch
+/// input. Four required params plus the two optional budgets; every
+/// violation names the RECEIVED value verbatim (the phase-1 error shape).
+fn validate_launch_request(args: &Value) -> Result<Value, String> {
+    // cwd: the SAME fail-fast validator `chug_status`/`chug_collect` serve —
+    // absolute, then exists as a directory, then has a `.chug/` directory —
+    // with error-text parity (the tool name prefixes each message).
+    let Some(raw_cwd) = args.get("cwd").and_then(Value::as_str) else {
+        return Err(format!(
+            "{CHUG_LAUNCH_TOOL}: missing required argument: cwd (an absolute path to a chug working directory)"
+        ));
+    };
+    let cwd = validate_chug_cwd(CHUG_LAUNCH_TOOL, raw_cwd)?;
+    // spec: an absolute path to an existing FILE — the same probe delegate
+    // launch serves (`File::open` is the readability ground truth; open(2)
+    // alone would admit a directory), so every leg carries the
+    // `chug_launch` voice and the seam-side re-validation is a no-op.
+    let Some(raw_spec) = args.get("spec").and_then(Value::as_str) else {
+        return Err(format!(
+            "{CHUG_LAUNCH_TOOL}: missing required argument: spec (an absolute path to a spec file)"
+        ));
+    };
+    let spec = PathBuf::from(raw_spec);
+    if !spec.is_absolute() {
+        return Err(format!(
+            "{CHUG_LAUNCH_TOOL}: spec must be an absolute path, got {raw_spec:?}"
+        ));
+    }
+    if !(spec.is_file() && fs::File::open(&spec).is_ok()) {
+        return Err(format!(
+            "{CHUG_LAUNCH_TOOL}: spec does not exist or is not a readable file: {}",
+            spec.display()
+        ));
+    }
+    // goal: non-empty after trim — an empty goal would spawn a child with
+    // nothing to do.
+    let Some(goal) = args.get("goal").and_then(Value::as_str) else {
+        return Err(format!(
+            "{CHUG_LAUNCH_TOOL}: missing required argument: goal (the child run's goal text)"
+        ));
+    };
+    if goal.trim().is_empty() {
+        return Err(format!(
+            "{CHUG_LAUNCH_TOOL}: goal must be a non-empty string after trim, got {goal:?}"
+        ));
+    }
+    // model: non-empty, passed through — the spawned child's own
+    // auth/settings chain validates it; the server adds no model policy.
+    let Some(model) = args.get("model").and_then(Value::as_str) else {
+        return Err(format!(
+            "{CHUG_LAUNCH_TOOL}: missing required argument: model (the child run's model id)"
+        ));
+    };
+    if model.is_empty() {
+        return Err(format!(
+            "{CHUG_LAUNCH_TOOL}: model must be a non-empty string, got {model:?}"
+        ));
+    }
+    let (max_iters, max_minutes) = parse_launch_budgets(args)?;
+    // The delegate launch input, assembled: exactly the fields the seam
+    // reads. Absent budgets are OMITTED (the delegate defaults 40/35 then
+    // apply seam-side — same as a human's flagless launch);
+    // `max_tokens`/`resume` pass-through is out of T129's scope.
+    let mut input = serde_json::Map::new();
+    input.insert("cwd".to_string(), json!(cwd.display().to_string()));
+    input.insert("spec".to_string(), json!(spec.display().to_string()));
+    input.insert("goal".to_string(), json!(goal));
+    input.insert("model".to_string(), json!(model));
+    if let Some(iters) = max_iters {
+        input.insert("max_iters".to_string(), json!(iters));
+    }
+    if let Some(mins) = max_minutes {
+        input.insert("max_minutes".to_string(), json!(mins));
+    }
+    Ok(Value::Object(input))
+}
+
+/// One optional budget (`max_iters` / `max_minutes`): absent (or JSON null)
+/// → `None` (the delegate launch defaults apply seam-side); present → an
+/// integer in `1..=ceiling`. Reject, never clamp (the delegate `wait_secs`
+/// rule): a value above the ceiling is REFUSED naming the received value
+/// and the ceiling — `chug_launch`'s ceilings are loopd's own (200
+/// iterations / 240 minutes), so a silently-clamped launch would run a
+/// different loop than the caller asked for.
+fn parse_launch_budget(args: &Value, key: &str, ceiling: u64) -> Result<Option<u64>, String> {
+    let Some(value) = args.get(key) else {
+        return Ok(None);
+    };
+    if value.is_null() {
+        return Ok(None);
+    }
+    let Some(n) = value.as_i64() else {
+        return Err(format!(
+            "{CHUG_LAUNCH_TOOL}: `{key}` must be an integer (1..={ceiling}), got {value}"
+        ));
+    };
+    if n < 1 {
+        return Err(format!("{CHUG_LAUNCH_TOOL}: `{key}` must be at least 1, got {n}"));
+    }
+    // n >= 1 here, so the cast is lossless.
+    let n = n as u64;
+    if n > ceiling {
+        return Err(format!(
+            "{CHUG_LAUNCH_TOOL}: `{key}` must be at most {ceiling}, got {n}"
+        ));
+    }
+    Ok(Some(n))
+}
+
+/// Both optional budgets in one pass, in schema order.
+fn parse_launch_budgets(args: &Value) -> Result<(Option<u64>, Option<u64>), String> {
+    let max_iters = parse_launch_budget(args, "max_iters", CHUG_LAUNCH_MAX_ITERS_CEILING)?;
+    let max_minutes = parse_launch_budget(args, "max_minutes", CHUG_LAUNCH_MAX_MINUTES_CEILING)?;
+    Ok((max_iters, max_minutes))
+}
+
 /// The compact, self-describing summary — the MCP-side renderer. Deliberately
 /// NOT [`crate::delegate::render_status`]: that text is byte-pinned by the
 /// delegate tests (it serves the in-loop `delegate status` tool), while this
@@ -506,6 +780,19 @@ fn to_line(value: &Value) -> String {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// The flagless dispatch — the pre-T129 entry, byte-identical read-only
+    /// behavior, and the call site every phase-1/2a leg already rides
+    /// (unchanged by T129). The flag-ON legs call
+    /// [`handle_message_with`](super::handle_message_with) directly.
+    fn handle_message(line: &str) -> Option<String> {
+        super::handle_message_with(line, false)
+    }
+
+    /// The flagless serve loop — the pre-T129 entry for the framing legs.
+    fn serve_from(read: &mut impl BufRead, out: &mut impl Write) -> anyhow::Result<()> {
+        super::serve_from_with(read, out, false)
+    }
 
     /// Parse a response line into its envelope parts.
     fn parts(line: &str) -> (Value, Option<Value>, Option<Value>, Option<Value>) {
@@ -1123,6 +1410,446 @@ mod tests {
             !scoped.contains(&format!("{first} first")),
             "the first commit is outside the forwarded range: {scoped}"
         );
+    }
+
+    // ---------- chug_launch (T129) ----------
+
+    /// Route a `chug_launch` tools/call through the FULL dispatch with the
+    /// given flag, returning (text, isError) — the same shape the wire
+    /// serves. A routed call must always be a tool RESULT (a JSON-RPC error
+    /// would mean the tool was not routable at all).
+    fn launch_call(allow_launch: bool, arguments: &Value) -> (String, Option<bool>) {
+        let req = json!({
+            "jsonrpc": "2.0", "id": 129, "method": "tools/call",
+            "params": {"name": "chug_launch", "arguments": arguments}
+        });
+        let line = handle_message_with(&req.to_string(), allow_launch).expect("responds");
+        let (_, id, _, error) = parts(&line);
+        assert_eq!(id, Some(json!(129)), "id echoed: {line}");
+        assert!(
+            error.is_none(),
+            "a routed launch call is a tool result, not a JSON-RPC error: {line}"
+        );
+        tool_result(&line)
+    }
+
+    /// A real spec file in `dir` (the launch spec probe needs one).
+    fn write_launch_spec(dir: &Path) -> PathBuf {
+        let spec = dir.join("t129-spec.md");
+        fs::write(&spec, "# t129 launch-matrix spec\n").unwrap();
+        spec
+    }
+
+    /// The launch-matrix payload with every required param valid.
+    fn full_launch_args(cwd: &Path, spec: &Path) -> Value {
+        json!({
+            "cwd": cwd.display().to_string(),
+            "spec": spec.display().to_string(),
+            "goal": "t129 matrix goal",
+            "model": "matrix-model",
+        })
+    }
+
+    #[test]
+    fn chug_launch_flagless_call_is_the_unknown_tool_error() {
+        // Without the flag the write leg DOES NOT EXIST: the unknown-tool
+        // error, the same -32602 a never-existing tool gets — a read-only
+        // deployment cannot be probed into revealing a hidden tool.
+        let line = handle_message(
+            r#"{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"chug_launch","arguments":{}}}"#,
+        )
+        .expect("responds");
+        let (_, id, _, error) = parts(&line);
+        assert_eq!(id, Some(json!(5)), "{line}");
+        let error = error.expect("error object");
+        assert_eq!(error["code"], -32602, "{line}");
+        let message = error["message"].as_str().unwrap();
+        assert!(message.contains("chug_launch"), "{line}");
+        assert!(message.contains("unknown tool"), "{line}");
+        // And the flagless tools/list does not advertise it — the read-only
+        // tool set is byte-identical to pre-T129.
+        let list = handle_message(r#"{"jsonrpc":"2.0","id":6,"method":"tools/list"}"#)
+            .expect("responds");
+        let (_, _, result, _) = parts(&list);
+        let tools = result.expect("result")["tools"]
+            .as_array()
+            .expect("tools array")
+            .clone();
+        let names: Vec<&str> = tools.iter().filter_map(|t| t["name"].as_str()).collect();
+        assert_eq!(names, ["chug_status", "chug_collect"], "{list}");
+    }
+
+    #[test]
+    fn chug_launch_flag_on_advertised_with_the_exact_schema() {
+        let line = handle_message_with(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#, true)
+            .expect("responds");
+        let (_, _, result, _) = parts(&line);
+        let tools = result.expect("result")["tools"]
+            .as_array()
+            .expect("tools array")
+            .clone();
+        assert_eq!(tools.len(), 3, "two read-only tools + the write leg: {tools:?}");
+        assert_eq!(tools[0]["name"], "chug_status");
+        assert_eq!(tools[1]["name"], "chug_collect");
+        assert_eq!(tools[2]["name"], "chug_launch");
+        let schema = &tools[2]["inputSchema"];
+        // The required list is EXACT: cwd, spec, goal, model.
+        assert_eq!(schema["required"], json!(["cwd", "spec", "goal", "model"]));
+        let props = schema["properties"].as_object().expect("properties object");
+        assert_eq!(props.len(), 6, "cwd + spec + goal + model + two budgets: {props:?}");
+        for key in ["cwd", "spec", "goal", "model"] {
+            assert_eq!(props[key]["type"], "string", "{props:?}");
+        }
+        // The loopd ceilings are IN the schema: 1..=200 and 1..=240.
+        assert_eq!(props["max_iters"]["type"], "integer", "{props:?}");
+        assert_eq!(props["max_iters"]["minimum"], 1, "{props:?}");
+        assert_eq!(props["max_iters"]["maximum"], 200, "{props:?}");
+        assert_eq!(props["max_minutes"]["type"], "integer", "{props:?}");
+        assert_eq!(props["max_minutes"]["minimum"], 1, "{props:?}");
+        assert_eq!(props["max_minutes"]["maximum"], 240, "{props:?}");
+    }
+
+    #[test]
+    fn chug_launch_flag_on_dispatch_is_a_tool_result_not_unknown_tool() {
+        // Under the flag the tool is ROUTABLE: a validation failure is an
+        // isError RESULT (the tool ran; the input was bad) — the same call
+        // without the flag is the -32602 pinned above. Advertised ⇔
+        // callable, both directions.
+        let (text, is_error) = launch_call(true, &json!({ "cwd": "relative/cwd" }));
+        assert_eq!(is_error, Some(true), "{text}");
+    }
+
+    #[test]
+    fn chug_launch_missing_required_arguments_are_is_error_results() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join(".chug")).unwrap();
+        let spec = write_launch_spec(tmp.path());
+        // Each required param absent → an isError naming the argument.
+        for (args, key) in [
+            (json!({}), "cwd"),
+            (json!({ "cwd": tmp.path() }), "spec"),
+            (
+                json!({ "cwd": tmp.path(), "spec": spec.display().to_string() }),
+                "goal",
+            ),
+            (
+                json!({
+                    "cwd": tmp.path(),
+                    "spec": spec.display().to_string(),
+                    "goal": "g"
+                }),
+                "model",
+            ),
+        ] {
+            let (text, is_error) = launch_call(true, &args);
+            assert_eq!(is_error, Some(true), "{text}");
+            assert!(
+                text.contains(&format!("missing required argument: {key}")),
+                "{key}: {text}"
+            );
+        }
+    }
+
+    #[test]
+    fn chug_launch_relative_cwd_is_refused_naming_the_received_string() {
+        let tmp = tempfile::tempdir().unwrap();
+        let spec = write_launch_spec(tmp.path());
+        let (text, is_error) = launch_call(
+            true,
+            &json!({
+                "cwd": "relative/cwd",
+                "spec": spec.display().to_string(),
+                "goal": "g",
+                "model": "m"
+            }),
+        );
+        assert_eq!(is_error, Some(true), "{text}");
+        // The SAME validator and error-text parity as chug_status/chug_collect:
+        // the RAW received string, quoted.
+        assert!(text.contains("\"relative/cwd\""), "{text}");
+        assert!(text.contains("must be an absolute directory"), "{text}");
+        assert!(text.starts_with("chug_launch:"), "tool-named error: {text}");
+    }
+
+    #[test]
+    fn chug_launch_cwd_without_chug_dir_is_refused_naming_the_path() {
+        let empty = tempfile::tempdir().unwrap(); // exists, but no .chug/
+        let scratch = tempfile::tempdir().unwrap();
+        let spec = write_launch_spec(scratch.path());
+        let (text, is_error) = launch_call(true, &full_launch_args(empty.path(), &spec));
+        assert_eq!(is_error, Some(true), "{text}");
+        assert!(text.contains(&empty.path().display().to_string()), "{text}");
+        assert!(text.contains("no .chug/ directory in"), "{text}");
+    }
+
+    #[test]
+    fn chug_launch_nonexistent_spec_is_refused_naming_the_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join(".chug")).unwrap();
+        let bogus = "/definitely/not/t129-spec.md";
+        let (text, is_error) = launch_call(
+            true,
+            &json!({
+                "cwd": tmp.path().display().to_string(),
+                "spec": bogus,
+                "goal": "g",
+                "model": "m"
+            }),
+        );
+        assert_eq!(is_error, Some(true), "{text}");
+        assert!(text.contains(bogus), "names the received path: {text}");
+        assert!(
+            text.contains("spec does not exist or is not a readable file"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn chug_launch_relative_spec_is_refused_naming_the_received_string() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join(".chug")).unwrap();
+        let (text, is_error) = launch_call(
+            true,
+            &json!({
+                "cwd": tmp.path().display().to_string(),
+                "spec": "t129-relative-spec.md",
+                "goal": "g",
+                "model": "m"
+            }),
+        );
+        assert_eq!(is_error, Some(true), "{text}");
+        assert!(text.contains("\"t129-relative-spec.md\""), "{text}");
+        assert!(text.contains("spec must be an absolute path"), "{text}");
+    }
+
+    #[test]
+    fn chug_launch_empty_and_whitespace_goals_are_refused() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join(".chug")).unwrap();
+        let spec = write_launch_spec(tmp.path());
+        for goal in ["", "   \t "] {
+            let (text, is_error) = launch_call(
+                true,
+                &json!({
+                    "cwd": tmp.path().display().to_string(),
+                    "spec": spec.display().to_string(),
+                    "goal": goal,
+                    "model": "m"
+                }),
+            );
+            assert_eq!(is_error, Some(true), "{goal:?}: {text}");
+            assert!(
+                text.contains("goal must be a non-empty string after trim"),
+                "{goal:?}: {text}"
+            );
+            // Validation precedes the spawn seam: a refused payload must not
+            // have launched anything (no delegate.log was opened).
+            assert!(
+                !tmp.path().join(".chug/delegate.log").exists(),
+                "a refused goal must not spawn: {goal:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn chug_launch_empty_model_is_refused() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join(".chug")).unwrap();
+        let spec = write_launch_spec(tmp.path());
+        let (text, is_error) = launch_call(
+            true,
+            &json!({
+                "cwd": tmp.path().display().to_string(),
+                "spec": spec.display().to_string(),
+                "goal": "g",
+                "model": ""
+            }),
+        );
+        assert_eq!(is_error, Some(true), "{text}");
+        assert!(text.contains("model must be a non-empty string"), "{text}");
+        assert!(!tmp.path().join(".chug/delegate.log").exists(), "no spawn: {text}");
+    }
+
+    #[test]
+    fn chug_launch_budgets_above_the_ceilings_are_refused_naming_the_ceiling() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join(".chug")).unwrap();
+        let spec = write_launch_spec(tmp.path());
+        // 201 > 200: REJECTED (not clamped), naming the received value and
+        // the 200 ceiling (loopd's own).
+        let (text, is_error) = launch_call(
+            true,
+            &json!({
+                "cwd": tmp.path().display().to_string(),
+                "spec": spec.display().to_string(),
+                "goal": "g",
+                "model": "m",
+                "max_iters": 201
+            }),
+        );
+        assert_eq!(is_error, Some(true), "{text}");
+        assert!(text.contains("`max_iters` must be at most 200"), "{text}");
+        assert!(text.contains("got 201"), "{text}");
+        // 241 > 240: the same reject-above semantics.
+        let (text, is_error) = launch_call(
+            true,
+            &json!({
+                "cwd": tmp.path().display().to_string(),
+                "spec": spec.display().to_string(),
+                "goal": "g",
+                "model": "m",
+                "max_minutes": 241
+            }),
+        );
+        assert_eq!(is_error, Some(true), "{text}");
+        assert!(text.contains("`max_minutes` must be at most 240"), "{text}");
+        assert!(text.contains("got 241"), "{text}");
+        // Neither refusal spawned anything.
+        assert!(!tmp.path().join(".chug/delegate.log").exists(), "no spawn: {text}");
+    }
+
+    #[test]
+    fn chug_launch_budgets_parse_reject_above_accept_boundary_and_default_to_none() {
+        // Boundary legs 200/240 ACCEPTED (at the validation layer — the
+        // stub-spawn leg covers the full path with these values).
+        let parsed = parse_launch_budgets(&json!({ "max_iters": 200, "max_minutes": 240 }))
+            .expect("boundary values accepted");
+        assert_eq!(parsed, (Some(200), Some(240)));
+        // Reject-above names the received value and the ceiling.
+        let err = parse_launch_budgets(&json!({ "max_iters": 201 })).unwrap_err();
+        assert!(err.contains("max_iters") && err.contains("at most 200") && err.contains("201"), "{err}");
+        let err = parse_launch_budgets(&json!({ "max_minutes": 241 })).unwrap_err();
+        assert!(err.contains("max_minutes") && err.contains("at most 240") && err.contains("241"), "{err}");
+        // Below 1 and non-integers are refused too — never clamped, never
+        // silently defaulted.
+        for bad in [json!(0), json!(-5), json!("200"), json!(7.5), json!(true)] {
+            let err = parse_launch_budgets(&json!({ "max_iters": bad })).unwrap_err();
+            assert!(err.contains("max_iters"), "{bad}: {err}");
+        }
+        // Absent (or null) → None: the delegate defaults (40/35) apply
+        // seam-side, exactly like a flagless human launch.
+        assert_eq!(parse_launch_budgets(&json!({})).unwrap(), (None, None));
+        assert_eq!(
+            parse_launch_budgets(&json!({ "max_iters": null, "max_minutes": null })).unwrap(),
+            (None, None)
+        );
+    }
+
+    /// Poll (deadline-bounded) for the stub's atomically-published dump —
+    /// launch returns at spawn, so the dump lands milliseconds later.
+    #[cfg(unix)]
+    fn wait_for_stub_dump(path: &Path) -> Vec<String> {
+        use std::time::{Duration, Instant};
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            if let Ok(text) = fs::read_to_string(path) {
+                let dump: Vec<String> = text.lines().map(str::to_string).collect();
+                if !dump.is_empty() {
+                    return dump;
+                }
+            }
+            assert!(
+                Instant::now() < deadline,
+                "stub never wrote {}",
+                path.display()
+            );
+            std::thread::sleep(Duration::from_millis(25));
+        }
+    }
+
+    /// The stub-spawn leg: `CHUG_DELEGATE_BIN` pointed at a tiny shell stub
+    /// (the T126 idiom — written in the test's tempdir, records its argv and
+    /// cwd, sleeps as a fake child) that the launch seam substitutes for the
+    /// real binary. Pins the EXACT child argv order/values, the child's cwd,
+    /// the boundary budgets (200/240) reaching the argv verbatim, and that
+    /// the returned pid/log/events name real paths. The stub is killed at
+    /// leg end. The goal carries spaces and double quotes — the delegate
+    /// argv mechanism delivers it byte-exact with no quoting code.
+    #[cfg(unix)]
+    #[test]
+    fn chug_launch_stub_spawn_pins_exact_argv_cwd_and_return_paths() {
+        use std::os::unix::fs::PermissionsExt;
+        use std::time::Duration;
+        // The env var is process-global and the delegate tests mutate it too
+        // (same test binary) — one env, one lock.
+        let _guard = crate::delegate::tests::DELEGATE_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let target = tempfile::tempdir().unwrap();
+        let scratch = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(target.path().join(".chug")).unwrap();
+        let spec = write_launch_spec(scratch.path());
+        let stub = scratch.path().join("chug-launch-stub.sh");
+        std::fs::write(
+            &stub,
+            concat!(
+                "#!/bin/sh\n",
+                "pwd -P > cwd.txt\n",
+                "printf '%s\\n' \"$@\" > argv.tmp && mv argv.tmp argv.txt\n",
+                ": > .chug/events.jsonl\n",
+                "sleep 60\n",
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&stub, fs::Permissions::from_mode(0o755)).unwrap();
+        // SAFETY: serialized by the delegate env lock; removed before return.
+        unsafe { std::env::set_var("CHUG_DELEGATE_BIN", &stub) };
+        let goal = "t129 goal with spaces and \"quotes\"";
+        let (text, is_error) = launch_call(
+            true,
+            &json!({
+                "cwd": target.path().display().to_string(),
+                "spec": spec.display().to_string(),
+                "goal": goal,
+                "model": "stub-model",
+                "max_iters": 200,
+                "max_minutes": 240,
+            }),
+        );
+        assert_eq!(is_error, Some(false), "{text}");
+        // The return shape mirrors delegate launch: pid, log, events.
+        let pid: u32 = text
+            .lines()
+            .find_map(|l| l.strip_prefix("launched: pid "))
+            .expect("pid line in launch result")
+            .trim()
+            .parse()
+            .expect("pid parses");
+        let log_path = target.path().join(".chug/delegate.log");
+        let events_path = target.path().join(".chug/events.jsonl");
+        assert!(text.contains(&format!("log: {}", log_path.display())), "{text}");
+        assert!(text.contains(&format!("events: {}", events_path.display())), "{text}");
+        // Real paths: the log exists (the parent opened it for the child's
+        // stdout+stderr before spawn).
+        assert!(log_path.is_file(), "log must exist: {text}");
+        // The EXACT child argv, in order, with the boundary budgets verbatim.
+        let argv = wait_for_stub_dump(&target.path().join("argv.txt"));
+        let expected = [
+            "run",
+            "--spec",
+            spec.to_str().unwrap(),
+            "--goal",
+            goal,
+            "--model",
+            "stub-model",
+            "--max-iters",
+            "200",
+            "--max-minutes",
+            "240",
+        ];
+        assert_eq!(argv, expected, "exact child argv");
+        // The child ran IN the target cwd: `pwd -P` names it, and its
+        // relative events touch landed in that cwd's .chug/.
+        let cwd_txt = fs::read_to_string(target.path().join("cwd.txt")).expect("cwd.txt");
+        let expected_cwd = fs::canonicalize(target.path()).unwrap();
+        assert_eq!(cwd_txt.trim(), expected_cwd.to_str().unwrap(), "child cwd");
+        assert!(events_path.is_file(), "events file created by the stub: {text}");
+        // Reap/kill the stub at leg end (its own process group), then
+        // restore the seam.
+        crate::tools::kill_pid_group(pid);
+        std::thread::sleep(Duration::from_millis(50));
+        // SAFETY: serialized by the delegate env lock.
+        unsafe { std::env::remove_var("CHUG_DELEGATE_BIN") };
     }
 
     // ---------- structural stdout purity ----------

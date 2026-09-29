@@ -627,9 +627,35 @@ last_iteration vs max_iters, goal/abort/budget-low flags, abort reason).
 result — the verdict (goal-accepted/goal-rejected/aborted/running/
 starting), the accepted goal's summary, the check cmd, a liveness line
 when `pid` is given, and best-effort commit refs (`base` scopes the
-range as `<base>..HEAD`). No process spawning, no writes anywhere. The
-write leg `chug_launch` (T129, flag-gated) and phase 3 (server log file,
-cancellation, resources) are deferred.
+range as `<base>..HEAD`). No process spawning, no writes anywhere.
+
+The write leg `chug_launch` (T129) exists only when the operator starts
+the server with `chug mcp-serve --allow-launch` — the flag is the policy
+boundary, and the default is OFF. Without it the server is byte-for-byte
+the read-only one: `chug_launch` is not advertised in `tools/list`, and a
+`tools/call` for it returns the unknown-tool error (`-32602`). With it,
+`tools/list` advertises `chug_launch` (advertised ⇔ callable) and a call
+launches a bounded detached `chug run` in a chug working directory,
+returning the spawned pid, the events path, and the log path. Params:
+`cwd` (required — absolute path to an existing chug working directory
+with `.chug/`), `spec` (required — absolute path to an existing spec
+file), `goal` (required — non-empty after trim), `model` (required —
+passed through; the spawned child's own auth/settings chain validates
+it), plus optional `max_iters` (1..=200) and `max_minutes` (1..=240) — a
+value above a ceiling is rejected, not clamped; budgets absent fall back
+to the delegate defaults (40 iterations / 35 minutes).
+
+**Launch safety**: the spawned child is an ordinary `chug run` in the
+target cwd — it runs that cwd's OWN policy chain (`.chug/permissions.json`
+deny rules, `.chug/hooks.json` vetoes, risk gate) exactly as if a human
+typed the command, and single-driver safety is the child's own
+`.chug/driver.lock` (a conflicting launch fails fast child-side and
+surfaces via `chug_status`/`chug_collect`). Launch failures are `isError`
+results; nothing else about the server changes, and no error kills the
+loop.
+
+Phase 2 (the read tools plus the flag-gated write leg) is CLOSED. Phase 3
+(server log file, cancellation, resources) is deferred.
 
 **stdout purity**: a stdio MCP server's stdout IS the wire — `chug
 mcp-serve` prints nothing but protocol messages (no banner, no log
