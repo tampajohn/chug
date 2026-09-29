@@ -32,6 +32,12 @@ mod tgrep;
 mod todos;
 mod webfetch;
 
+/// T151: the ONE shared serialization domain for wall-clock/spawn-timing
+/// tests (see the module doc). Compiled only under `cargo test` — a
+/// release build carries no lock and no test code.
+#[cfg(test)]
+mod testsupport;
+
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::atomic::AtomicBool;

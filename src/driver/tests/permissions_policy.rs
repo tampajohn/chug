@@ -154,6 +154,10 @@
     /// normally, hooks still fire around it, and no deny line lands.
     #[test]
     fn non_matching_command_executes_and_hooks_still_fire() {
+        // T151: hold the shared timing domain across the whole body (first
+        // acquisition — see crate::testsupport's lock-order rule). Named T151 sighting + siblings whose asserts inspect bash/hook/MCP child outcomes (spawn timing).
+        let _timing = crate::testsupport::timing_guard();
+
         let tmp = tempfile::tempdir().unwrap();
         write_permissions_json(
             tmp.path(),
@@ -423,6 +427,10 @@
     /// both calls execute, and the loop behaves exactly as with no config.
     #[test]
     fn malformed_permissions_config_fails_open_once_and_run_continues() {
+        // T151: hold the shared timing domain across the whole body (first
+        // acquisition — see crate::testsupport's lock-order rule). Named T151 sighting + siblings whose asserts inspect bash/hook/MCP child outcomes (spawn timing).
+        let _timing = crate::testsupport::timing_guard();
+
         let tmp = tempfile::tempdir().unwrap();
         write_permissions_raw(tmp.path(), "{ not json !!!");
         let (_utx, urx) = mpsc::channel::<SlashUpdate>();
@@ -624,6 +632,10 @@ for line in sys.stdin:
     /// handshake completed.
     #[test]
     fn unrelated_deny_still_spawns_repo_mcp_server() {
+        // T151: hold the shared timing domain across the whole body (first
+        // acquisition — see crate::testsupport's lock-order rule). Named T151 sighting + siblings whose asserts inspect bash/hook/MCP child outcomes (spawn timing).
+        let _timing = crate::testsupport::timing_guard();
+
         let tmp = tempfile::tempdir().unwrap();
         write_flag_spawning_mcp_server(tmp.path());
         write_permissions_json(tmp.path(), json!([{"tool": "write_file"}]));
