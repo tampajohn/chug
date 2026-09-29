@@ -163,6 +163,10 @@
     /// recorded. The tee is transparent to the real sink.
     #[test]
     fn drive_loop_writes_events_jsonl() {
+        // T151: hold the shared timing domain across the whole body (first
+        // acquisition — see crate::testsupport's lock-order rule). Named T151 sighting + spawn sibling (bash/check children).
+        let _timing = crate::testsupport::timing_guard();
+
         let tmp = tempfile::tempdir().unwrap();
         let (_utx, urx) = mpsc::channel::<SlashUpdate>();
         let controls = Controls::detached();
@@ -350,6 +354,10 @@
     /// completes through the real sink.
     #[test]
     fn drive_loop_survives_unwritable_events_log() {
+        // T151: hold the shared timing domain across the whole body (first
+        // acquisition — see crate::testsupport's lock-order rule). Named T151 sighting + spawn sibling (bash/check children).
+        let _timing = crate::testsupport::timing_guard();
+
         let tmp = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(tmp.path().join(".chug").join("events.jsonl")).unwrap();
         let (_utx, urx) = mpsc::channel::<SlashUpdate>();

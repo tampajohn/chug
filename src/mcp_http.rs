@@ -1237,12 +1237,67 @@ pub(crate) mod tests {
     const DEAD_PORT_ATTEMPTS: usize = 32;
 
     /// True when `port` currently REFUSES connections (nothing listening).
+    ///
+    /// Single-shot, definitive-only: `ConnectionRefused` (an RST landed —
+    /// nothing is listening) and `Ok(_)` (a listener answered — someone
+    /// holds the port) are both trusted; any other `Err` kind is NOT a
+    /// verdict. Dead-expecting legs must not use this form directly under
+    /// load: see [`port_refuses_within_backstop`] (T151).
     fn port_refuses_connections(port: u16) -> bool {
         let addr = SocketAddr::from(([127, 0, 0, 1], port));
         matches!(
             TcpStream::connect_timeout(&addr, DEAD_PORT_PROBE_TIMEOUT),
             Err(e) if e.kind() == std::io::ErrorKind::ConnectionRefused
         )
+    }
+
+    /// T151: liveness BACKSTOP for the dead-direction probes' polling
+    /// conversion (req 3 — convert, don't widen). A refused loopback connect
+    /// lands in microseconds unpolluted; the backstop only bounds the poll
+    /// when whole-machine starvation stretches the per-connect probe
+    /// (whose 1s ceiling, [`DEAD_PORT_PROBE_TIMEOUT`], is UNCHANGED) into
+    /// TimedOut non-verdicts. 5s is ≥10x the unpolluted refusal
+    /// (sub-millisecond — ≥5000x) and rides out ~5 consecutive full-ceiling
+    /// stalls before the caller classifies. It is NEW to this polling leg:
+    /// no existing timeout/grace/slack constant is touched.
+    const DEAD_PORT_PROBE_BACKSTOP: Duration = Duration::from_secs(5);
+
+    /// T151: the dead-direction probe, converted from single-shot to
+    /// condition-polling against a deadline (req 3 — the cycle-70 goal-gate
+    /// rejections read a genuinely dead port's connect as a 1s TimedOut
+    /// under whole-machine starvation, which the single-shot check
+    /// misclassified as "live": `check_dead_port` then named a theft and
+    /// `dead_port_probe_retry_with`'s post-drop leg panicked "real
+    /// regression" — both red with zero real faults). Semantics per
+    /// attempt are [`port_refuses_connections`]'s: `ConnectionRefused` is a
+    /// definitive DEAD verdict (return true immediately); `Ok(_)` is a
+    /// definitive LIVE verdict (a real listener answered — return false
+    /// immediately, NO backstop burn, which keeps the T59/T66
+    /// scripted-theft pins fast); only the ambiguous `Err(_)` kinds —
+    /// starvation artifacts — are re-polled, every ≤50ms, until the
+    /// backstop. The backstop is a liveness fence, not the assertion: a
+    /// genuinely dead port refuses on some poll long before it, and a
+    /// genuinely live port answers on the first.
+    fn port_refuses_within_backstop(port: u16) -> bool {
+        let addr = SocketAddr::from(([127, 0, 0, 1], port));
+        let t0 = Instant::now();
+        loop {
+            match TcpStream::connect_timeout(&addr, DEAD_PORT_PROBE_TIMEOUT) {
+                Err(e) if e.kind() == std::io::ErrorKind::ConnectionRefused => return true,
+                // A listener answered: definitive theft/in-use — report
+                // immediately (the caller's theft path is exactly this
+                // reading).
+                Ok(_) => return false,
+                // Starvation artifact (the probe's unchanged 1s ceiling
+                // expired before the RST landed): NOT a verdict — poll and
+                // retry until the backstop.
+                Err(_) => {}
+            }
+            if t0.elapsed() >= DEAD_PORT_PROBE_BACKSTOP {
+                return false;
+            }
+            thread::sleep(Duration::from_millis(50));
+        }
     }
 
     /// An ephemeral port verified, at acquisition time, to refuse connections
@@ -1269,7 +1324,11 @@ pub(crate) mod tests {
                 .port();
             // The listener above is dropped at the end of this statement;
             // the probe decides whether the port is actually dead.
-            if port_refuses_connections(port) {
+            // T151: polling form — under starvation a single-shot probe's
+            // connect can time out (non-verdict) and burn an attempt; the
+            // poll re-probes until the port proves dead (or definitively
+            // live, which moves on to the next bind).
+            if port_refuses_within_backstop(port) {
                 return port;
             }
         }
@@ -1312,9 +1371,14 @@ pub(crate) mod tests {
     /// `Ok` while the port still refuses connections, `Err(theft)` once
     /// claimed. Same mechanism and message as [`assert_dead_port`], which
     /// remains the panicking form for callers without a retry path
-    /// (webfetch's T31 dead-port leg keeps it unchanged).
+    /// (webfetch's T31 dead-port leg keeps it unchanged). T151: the
+    /// dead-direction read is the polling form ([`port_refuses_within_backstop`])
+    /// — a starvation-stretched connect is a non-verdict to re-poll, not a
+    /// live reading to misreport as theft; a genuine thief still answers
+    /// `Ok(_)` on the first probe, so the theft detection this seam exists
+    /// for is unchanged (and the T59 scripted-theft pins stay fast).
     fn check_dead_port(port: u16) -> Result<(), PortTheft> {
-        if port_refuses_connections(port) {
+        if port_refuses_within_backstop(port) {
             Ok(())
         } else {
             Err(PortTheft(format!(
@@ -1419,7 +1483,13 @@ pub(crate) mod tests {
                  no theft window: real probe regression, not port-theft)"
             );
             drop(listener);
-            if port_refuses_connections(port) {
+            // T151: the dead-direction read is the polling form — this is
+            // exactly the t145/cycle-70 sighting's window (a starvation-
+            // stretched connect to a genuinely dead port read as live and
+            // misrouted into classification). A genuine thief still answers
+            // `Ok(_)` on the first probe, so the theft path is unchanged and
+            // the T66 scripted-theft pin stays fast.
+            if port_refuses_within_backstop(port) {
                 return;
             }
             let theft = theft_or_regression(
@@ -1714,6 +1784,10 @@ pub(crate) mod tests {
 
     #[test]
     fn dead_server_retries_then_tool_error_without_sleeping() {
+        // T151: hold the shared timing domain across the whole body (first
+        // acquisition — see crate::testsupport's lock-order rule). The dead-port family is a named T151 sighting class (probe timing).
+        let _timing = crate::testsupport::timing_guard();
+
         // T31: probe-verified dead port. A plain bind+drop is a TOCTOU under
         // parallel load — another test's bind_stub can claim the port between
         // our drop and the client's connect (mechanism: see dead_port). T59:
@@ -1803,6 +1877,10 @@ pub(crate) mod tests {
     /// dead_port would exhaust its attempts and panic.
     #[test]
     fn dead_port_probe_distinguishes_live_from_dead() {
+        // T151: hold the shared timing domain across the whole body (first
+        // acquisition — see crate::testsupport's lock-order rule). The dead-port family is a named T151 sighting class (probe timing).
+        let _timing = crate::testsupport::timing_guard();
+
         // T66: live-probe + drop + dead-probe run as ONE bounded-retry
         // attempt. The live leg holds the listener (no theft window); only
         // the drop→dead-probe window is exposed — first organic sighting:
@@ -1823,7 +1901,10 @@ pub(crate) mod tests {
         // here).
         let fresh = dead_port_retry_with(dead_port, |port| check_dead_port(port).map(|_| port));
         assert!(
-            port_refuses_connections(fresh),
+            // T151: dead-direction read — polling form (starvation-stretched
+            // connects are non-verdicts to re-poll, not live readings; a
+            // genuine thief answers Ok(_) on the first probe).
+            port_refuses_within_backstop(fresh),
             "dead_port handed out port {fresh} that no longer refuses connections"
         );
     }
@@ -1839,6 +1920,10 @@ pub(crate) mod tests {
     /// path executing.
     #[test]
     fn dead_port_retry_succeeds_after_scripted_theft() {
+        // T151: hold the shared timing domain across the whole body (first
+        // acquisition — see crate::testsupport's lock-order rule). The dead-port family is a named T151 sighting class (probe timing).
+        let _timing = crate::testsupport::timing_guard();
+
         let thief = TcpListener::bind("127.0.0.1:0").unwrap();
         let thief_port = thief.local_addr().unwrap().port();
         let script = RefCell::new(vec![thief_port]);
@@ -1869,6 +1954,10 @@ pub(crate) mod tests {
     /// message and is never retried).
     #[test]
     fn dead_port_retry_exhaustion_names_attempts_and_mechanism() {
+        // T151: hold the shared timing domain across the whole body (first
+        // acquisition — see crate::testsupport's lock-order rule). The dead-port family is a named T151 sighting class (probe timing).
+        let _timing = crate::testsupport::timing_guard();
+
         let thief = TcpListener::bind("127.0.0.1:0").unwrap();
         let thief_port = thief.local_addr().unwrap().port();
         let attempts = Cell::new(0usize);
@@ -1918,6 +2007,10 @@ pub(crate) mod tests {
     /// attempt 1's live-after-drop reading.
     #[test]
     fn dead_port_probe_retry_recovers_after_scripted_theft() {
+        // T151: hold the shared timing domain across the whole body (first
+        // acquisition — see crate::testsupport's lock-order rule). The dead-port family is a named T151 sighting class (probe timing).
+        let _timing = crate::testsupport::timing_guard();
+
         let bind_calls = Cell::new(0usize);
         let thief_handle = RefCell::new(None::<TcpListener>);
         dead_port_probe_retry_with(|| {
@@ -1947,6 +2040,10 @@ pub(crate) mod tests {
     /// [`dead_port_retry_exhaustion_names_attempts_and_mechanism`].
     #[test]
     fn dead_port_probe_retry_exhaustion_names_attempts_and_mechanism() {
+        // T151: hold the shared timing domain across the whole body (first
+        // acquisition — see crate::testsupport's lock-order rule). The dead-port family is a named T151 sighting class (probe timing).
+        let _timing = crate::testsupport::timing_guard();
+
         let bind_calls = Cell::new(0usize);
         let thief_handle = RefCell::new(None::<TcpListener>);
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
