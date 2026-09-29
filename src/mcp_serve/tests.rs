@@ -1551,6 +1551,186 @@
         );
     }
 
+    // ---------- T153 fix-up: the group probe predicate (ESRCH-only) ----------
+
+    /// Spawn a child that exits immediately, as its OWN group leader
+    /// (`process_group(0)` — the delegate fingerprint), and do NOT reap it:
+    /// a real zombie group leader, exactly the shape the T153 forensics
+    /// caught (sole group member = our unreaped zombie child). Returns
+    /// (pid, pgid) after ps confirms STAT reports the zombie (bounded).
+    #[cfg(unix)]
+    fn spawn_zombie_group_leader() -> (i32, i32) {
+        use std::os::unix::process::CommandExt;
+        // Clippy's zombie_processes allow is the POINT of this fixture: the
+        // Child handle is deliberately dropped (and never waited) so the
+        // exited child stays an UNREAPED ZOMBIE group leader — the exact
+        // shape the T153 forensics caught. The two probe legs below reap
+        // it explicitly (their success paths), so the suite leaks no
+        // zombie on a green run; a red run leaks one transient zombie,
+        // reparented and reaped when the test binary exits.
+        #[allow(clippy::zombie_processes)]
+        let child = std::process::Command::new("true")
+            .process_group(0)
+            .spawn()
+            .expect("spawn the exit-immediately fixture");
+        let pid = child.id() as i32;
+        // SAFETY: getpgid(2) on one bounded pid we just spawned — a pure
+        // query, no side effects.
+        let pgid = unsafe { libc::getpgid(pid) };
+        assert_eq!(pgid, pid, "the fixture is its own group leader");
+        // `true` exits within microseconds; poll ps (the forensics' own
+        // evidence shape) until STAT reports Z — bounded, never a sleep-and-
+        // hope. The child cannot be reaped by anyone else (we are the
+        // parent and never wait), so Z is stable once reached.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            let out = std::process::Command::new("ps")
+                .args(["-o", "stat=", "-p", &pid.to_string()])
+                .output()
+                .expect("ps runs");
+            let stat = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            if stat.contains('Z') {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "pid {pid} never became a zombie (ps stat {stat:?})"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+        (pid, pgid)
+    }
+
+    /// The REAL kill(2) probe's rc/errno pair, captured honestly: errno is
+    /// only read when the probe FAILED (rc == -1) — the stale-errno trap
+    /// the T153 forensics flagged (an errno text printed beside a
+    /// `killleader=0` rc sent the first evidence read down the wrong path).
+    #[cfg(unix)]
+    fn probe_group(pgid: i32) -> (i32, Option<i32>) {
+        // SAFETY: kill(2) with signal 0 on a negated pgid — an existence
+        // probe that delivers no signal.
+        let krc = unsafe { libc::kill(-pgid, 0) };
+        let errno = if krc == -1 {
+            std::io::Error::last_os_error().raw_os_error()
+        } else {
+            None
+        };
+        (krc, errno)
+    }
+
+    /// The T153 fix-up probe-predicate table (the killing test). The tick's
+    /// probe decision is pinned as a pure seam: ONLY `rc == -1 && errno ==
+    /// ESRCH` means the group emptied. The EPERM leg is THE bug this fix-up
+    /// kills: on macOS a group whose SOLE member is our own unreaped zombie
+    /// child answers `kill(-pgid, 0)` with -1/EPERM (while per-pid
+    /// `kill(zombie_pid, 0)` answers 0), and the pre-fix shape (`rc != 0` →
+    /// gone) misread that as EMPTY — `signaled: term` with the leader an
+    /// unreaped zombie, the wire happy path's dead-poll timeout
+    /// (solo-flaky 12/30). RED-proven against the pre-fix shape.
+    #[cfg(unix)]
+    #[test]
+    fn group_gone_probe_predicate_table_esrch_only() {
+        // rc == 0: a live, signallable member → NOT gone.
+        assert!(!group_gone_rc(0, None), "rc 0 is a live member, not gone");
+        // rc == -1, ESRCH: the ONLY "group emptied" answer.
+        assert!(group_gone_rc(-1, Some(libc::ESRCH)), "ESRCH means emptied");
+        // rc == -1, EPERM: macOS's answer for our own unreaped zombie —
+        // the group still exists → NOT gone (the pre-fix shape fails here).
+        assert!(
+            !group_gone_rc(-1, Some(libc::EPERM)),
+            "EPERM is not ESRCH — the group still exists"
+        );
+        // rc == -1, anything else (EINVAL …): not gone — fail-safe (keep
+        // waiting inside the bounded grace; escalation stays the backstop).
+        assert!(!group_gone_rc(-1, Some(libc::EINVAL)), "EINVAL is not gone");
+        // A defensive leg: an errno-less failure is never "gone" either.
+        assert!(!group_gone_rc(-1, None), "an errno-less failure is not gone");
+    }
+
+    /// The T153 fix-up real-zombie probe leg: the REAL `kill(-pgid, 0)`
+    /// against a group whose sole member is our own unreaped zombie child.
+    /// On this macOS host the probe fails with -1/EPERM (the forensics'
+    /// quirk); on a host that answers 0 the decision is the same — BOTH are
+    /// "not gone", which is why the assertion rides the decision, never the
+    /// raw rc. Then the reap clears the zombie and the probe turns ESRCH →
+    /// gone. Kills the "EPERM→gone" and "zombie stays a member forever"
+    /// mutants and documents the host quirk.
+    #[cfg(unix)]
+    #[test]
+    fn group_gone_real_zombie_sole_member_is_not_gone_until_reaped() {
+        let (pid, pgid) = spawn_zombie_group_leader();
+
+        // The real probe on the real zombie-only group: NOT gone, whatever
+        // the host answers.
+        let (krc, errno) = probe_group(pgid);
+        assert!(
+            !group_gone_rc(krc, errno),
+            "a group whose sole member is our unreaped zombie is NOT gone \
+             (krc {krc}, errno {errno:?})"
+        );
+        // Document the host quirk conditionally: if the probe failed, the
+        // failure is EPERM exactly — ESRCH here would mean the group
+        // emptied, and it has NOT (the zombie is still a member).
+        if krc == -1 {
+            assert_eq!(
+                errno,
+                Some(libc::EPERM),
+                "the zombie-only group probe fails with EPERM on this host"
+            );
+        }
+        // The per-pid contrast the forensics recorded: the SAME zombie
+        // answers a per-pid `kill(pid, 0)` with 0 — the group probe and the
+        // pid probe DISAGREE here, which is exactly why the predicate must
+        // be errno-shaped, never `rc != 0`.
+        assert_eq!(
+            unsafe { libc::kill(pid, 0) },
+            0,
+            "the unreaped zombie answers the per-pid probe"
+        );
+
+        // Reap (the tick's own T28 reap leg, here in its blocking form):
+        // the zombie clears, the group probe turns ESRCH, the decision
+        // flips to gone.
+        let mut status: libc::c_int = 0;
+        // SAFETY: blocking waitpid on one OWN child pid with a valid status
+        // pointer — reaps the zombie we made.
+        let rc = unsafe { libc::waitpid(pid, &mut status, 0) };
+        assert_eq!(rc, pid, "the reap consumed the zombie");
+        let (krc, errno) = probe_group(pgid);
+        assert_eq!(krc, -1, "the emptied group probe fails");
+        assert_eq!(errno, Some(libc::ESRCH), "the emptied group is ESRCH");
+        assert!(group_gone_rc(krc, errno), "reaped → the group is gone");
+    }
+
+    /// The T153 fix-up convergence invariant: looping the REAL `group_gone`
+    /// over the zombie-only group converges (each tick's reap clears the
+    /// immediately-reapable zombie, the probe turns ESRCH) AND the leader
+    /// is REAPED — never left a zombie — when it first returns true. That
+    /// post-condition is the original bug's observable shape (`signaled:
+    /// term` + an unreaped zombie the wire test's dead-poll then times out
+    /// on), pinned here as a killing test.
+    #[cfg(unix)]
+    #[test]
+    fn group_gone_convergence_reaps_the_zombie_leader() {
+        let (pid, pgid) = spawn_zombie_group_leader();
+        let mut gone = false;
+        for _ in 0..20 {
+            if group_gone(pid, pgid) {
+                gone = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(gone, "group_gone never converged within 20 ticks");
+        // The post-condition: the leader is REAPED (kill(pid, 0) fails with
+        // ESRCH), not left a zombie still answering the per-pid probe.
+        assert_ne!(
+            unsafe { libc::kill(pid, 0) },
+            0,
+            "the leader must be reaped, never left a zombie"
+        );
+    }
+
     /// The pure needle: the adjacent `run --spec` token pair matches every
     /// `chug run` spelling (--spec is REQUIRED) and nothing else.
     #[test]
