@@ -261,6 +261,27 @@ audit.**
 
 ### Cycle 71 (2026-09-29) — routine glm freshness-skip (queue non-empty, eval fresh) — T147 landed
 
+**T149 — validator budgets 60/40, doctrine (8699a70, merge of loop-t149:
+10b6f6a).** The validator-side T102: after 4 validator budget deaths in 4
+cycles (T134/T138/T142 at 50/50, T137 MINUTES-bound at 30m08s with the
+verdict written but unannounced), LOOP-SPEC step 4 now launches validators
+at max_iters 60 / max_minutes 40 with the census in the rationale and the
+measure clause (>1 of the next 8 dying at 60/40 unannounced → next eval
+considers trimming default mutation-leg counts, not further raises). Step
+2's T63-resume echo aligned; META-SPEC §6's template (which the grep found
+DOES name validator budgets) aligned in the same commit — supersedes T32's
+do-not-touch stance for this row only; src/tools.rs's delegate description
+correctly untouched (its 40/35 is delegate's own default, census-listed).
+Exactly one pin fixed the old numbers (tests/loop_spec_recovery.rs) —
+updated and RED-proven against pre-edit text. kimi REQUIRED (routing
+d1790687293-8, doctrine row, ran ALONE), launched under the row's own new
+60/40 budgets, verdict PASS (d1790688874-9): 3 parallel mutants —
+echo-revert sent the pin RED (RED-proof independently reproduced),
+weakened-needle still RED (pin non-vacuous); the step-4-sentence and
+META-SPEC text-revert mutants went full-suite GREEN — pre-existing
+unpinned-text gaps, non-blocking observations (candidate pin-breadth rows
+for a future eval). Gates 1129/1129 nextest --release worktree + main.
+
 **T148 — chug_launch wire e2e (8cd59ac, merge of loop-t148: 14d1bcd).**
 T129's descoped follow-up closed the M7+M8 survivor gap with a real-wire
 e2e: the REAL `chug mcp-serve` binary over REAL stdio (T124 harness,
