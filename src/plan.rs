@@ -9,9 +9,12 @@
 //! The whole plan-mode surface lives here (the T37 webfetch.rs / T70
 //! decisions.rs one-tool-per-file pattern) so src/tools.rs does not grow:
 //!
-//! - **Tool contract**: EXACTLY five tools are advertised to the API —
-//!   `read_file`, `grep`, `glob`, `list_dir`, and the new `submit_plan`.
-//!   Nothing else: no write_file/edit_file/bash/delegate/web_fetch/
+//! - **Tool contract**: EXACTLY six tools are advertised to the API —
+//!   `read_file`, `grep`, `glob`, `list_dir`, `web_fetch` (T146: read-only
+//!   by design — GET-only, http/https, size-capped, the T37 contract — so it
+//!   satisfies plan mode's contract; research during planning is the
+//!   benchmark shape), and the `submit_plan` write/exit path.
+//!   Nothing else: no write_file/edit_file/bash/delegate/
 //!   update_ledger/goal_complete/decision_log, no todo tools
 //!   (todo_add/todo_update/todo_list — T111), and no MCP schemas.
 //! - **`submit_plan`** is the single deliberate write/exit path: input
@@ -34,16 +37,25 @@ use serde_json::{json, Value};
 
 use crate::tools::{self, ToolCtx, ToolResult};
 
-/// The four read-only exploration tools plan mode inherits from the builtin
-/// registry (filtered from `tools::tool_schemas()` by name).
-pub const READ_ONLY_TOOLS: [&str; 4] = ["read_file", "grep", "glob", "list_dir"];
+/// The read-only exploration tools plan mode inherits from the builtin
+/// registry (filtered from `tools::tool_schemas()` by name). T146: web_fetch
+/// joins them — read-only by design (GET-only, http/https, size-capped, the
+/// T37 contract), so planning can research without any mutation surface.
+pub const READ_ONLY_TOOLS: [&str; 5] = ["read_file", "grep", "glob", "list_dir", "web_fetch"];
 
-/// The complete plan-mode tool surface: the read-only four plus the one
+/// The complete plan-mode tool surface: the read-only five plus the one
 /// deliberate write/exit path. Pinned with exact cardinality by tests.
-pub const PLAN_TOOL_NAMES: [&str; 5] = ["read_file", "grep", "glob", "list_dir", "submit_plan"];
+pub const PLAN_TOOL_NAMES: [&str; 6] = [
+    "read_file",
+    "grep",
+    "glob",
+    "list_dir",
+    "web_fetch",
+    "submit_plan",
+];
 
 /// Plan-mode preamble: read-only contract, one exit.
-pub const PLAN_PREAMBLE: &str = "You are chug in plan mode: a READ-ONLY planning session. Explore the repository with your read-only tools (read_file, grep, glob, list_dir), then call submit_plan ONCE with the complete implementation plan as markdown. submit_plan is the only write available and it ends the session — write the plan in it, not to any file. You are not implementing anything: do not claim work is done, and do not describe actions as taken.";
+pub const PLAN_PREAMBLE: &str = "You are chug in plan mode: a READ-ONLY planning session. Explore the repository with your read-only tools (read_file, grep, glob, list_dir, web_fetch), then call submit_plan ONCE with the complete implementation plan as markdown. submit_plan is the only write available and it ends the session — write the plan in it, not to any file. You are not implementing anything: do not claim work is done, and do not describe actions as taken.";
 
 /// The anti-stall kick text for plan mode (the autonomous KICK names
 /// goal_complete and ledger updates, neither of which exists here).
@@ -65,7 +77,7 @@ pub fn schema() -> Value {
     })
 }
 
-/// The exact tool list a plan-mode run advertises: the read-only four,
+/// The exact tool list a plan-mode run advertises: the read-only five,
 /// filtered from the builtin registry by name (so their schemas can never
 /// drift from the run-mode ones), plus `submit_plan`. No MCP schemas are
 /// ever appended to this list.
@@ -178,30 +190,30 @@ mod tests {
         }
     }
 
-    // ---------- the five-tool surface, exact cardinality ----------
+    // ---------- the six-tool surface, exact cardinality ----------
 
     #[test]
-    fn plan_tool_list_is_exactly_the_five_names() {
+    fn plan_tool_list_is_exactly_the_six_names() {
         let schemas = tool_schemas();
         let names: Vec<&str> = schemas
             .iter()
             .filter_map(|s| s.get("name").and_then(Value::as_str))
             .collect();
-        // Exact cardinality: a sixth schema added, or one dropped, is RED.
-        assert_eq!(names.len(), 5, "{names:?}");
+        // Exact cardinality: a seventh schema added, or one dropped, is RED.
+        assert_eq!(names.len(), 6, "{names:?}");
         let mut sorted = names.clone();
         sorted.sort_unstable();
         let mut expected = PLAN_TOOL_NAMES.to_vec();
         expected.sort_unstable();
-        assert_eq!(sorted, expected, "plan surface must be exactly the five");
+        assert_eq!(sorted, expected, "plan surface must be exactly the six");
         // No duplicates hiding behind the cardinality check.
         let set: std::collections::BTreeSet<&str> = names.iter().copied().collect();
-        assert_eq!(set.len(), 5, "duplicate names in the plan surface: {names:?}");
+        assert_eq!(set.len(), 6, "duplicate names in the plan surface: {names:?}");
     }
 
     #[test]
     fn plan_read_only_schemas_match_the_run_mode_ones_byte_for_byte() {
-        // The four read-only schemas are FILTERED from the builtin registry,
+        // The read-only five are FILTERED from the builtin registry,
         // not re-declared: any run-mode description drift shows up here too,
         // and a plan-local re-declaration would fail this byte compare.
         let schemas = tool_schemas();
@@ -213,7 +225,7 @@ mod tests {
                     .is_some_and(|n| READ_ONLY_TOOLS.contains(&n))
             })
             .collect();
-        assert_eq!(plan.len(), 4);
+        assert_eq!(plan.len(), 5);
         for schema in plan {
             let name = schema["name"].as_str().unwrap();
             let builtins = tools::tool_schemas();
@@ -223,6 +235,41 @@ mod tests {
                 .unwrap_or_else(|| panic!("{name} missing from the builtin registry"));
             assert_eq!(schema, builtin, "{name} must be the builtin schema");
         }
+    }
+
+    /// T146: web_fetch is the sixth tool — a name-level dispatch assertion
+    /// (no network): the call routes to the REAL web_fetch (a dead-URL
+    /// connection error is fine), so the only way this passes is that the
+    /// plan gate did NOT reject the name.
+    #[test]
+    fn web_fetch_is_dispatched_not_gate_rejected() {
+        let tmp = tempfile::tempdir().unwrap();
+        let result = dispatch(
+            &ctx(tmp.path()),
+            "web_fetch",
+            &json!({"url": "http://127.0.0.1:1/x"}),
+            None,
+        );
+        assert!(
+            !result.content.contains("plan mode"),
+            "web_fetch must reach the real tool, not the plan gate: {}",
+            result.content
+        );
+        assert!(
+            !result.content.contains("allowed set"),
+            "web_fetch must not be rejected with the allowed-set error: {}",
+            result.content
+        );
+    }
+
+    /// T146: the preamble names the full read-only set, so the model knows
+    /// web_fetch is usable during planning.
+    #[test]
+    fn plan_preamble_mentions_web_fetch() {
+        assert!(
+            PLAN_PREAMBLE.contains("web_fetch"),
+            "PLAN_PREAMBLE must name web_fetch: {PLAN_PREAMBLE}"
+        );
     }
 
     // ---------- defense in depth: the rejection sweep ----------
@@ -279,11 +326,8 @@ mod tests {
                     );
                 }),
             ),
-            (
-                "web_fetch",
-                json!({"url": "http://127.0.0.1:1/x"}),
-                Box::new(|_: &Path| {}), // message assert below is the leg
-            ),
+            // T146: web_fetch is no longer an excluded leg — it is the sixth
+            // plan tool (see `web_fetch_is_dispatched_not_gate_rejected`).
             (
                 "update_ledger",
                 json!({"content": "MUTATED LEDGER"}),
@@ -335,7 +379,9 @@ mod tests {
                 Box::new(|_: &Path| {}),
             ),
         ];
-        assert_eq!(legs.len(), 11, "one leg per excluded registered tool");
+        // One leg per excluded registered tool (T146: web_fetch left the
+        // excluded set — the plan surface is six tools now).
+        assert_eq!(legs.len(), 10, "one leg per excluded registered tool");
 
         for (name, input, check) in legs {
             let result = dispatch(&ctx(tmp.path()), name, &input, None);

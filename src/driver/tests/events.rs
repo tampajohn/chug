@@ -32,6 +32,7 @@
             mcp_off: true,
             // T117: a literal test goal — no pack expansion (None wiring leg).
             goal_pack: None,
+            approve: None,
         };
         let client = Client::new_without_credentials("test-model", crate::api::DEFAULT_MAX_TOKENS).unwrap();
         let mut sink = RecordingSink::default();
@@ -116,6 +117,7 @@
                 mcp_config: None,
                 mcp_off: true,
                 goal_pack: goal_pack.clone(),
+                approve: None,
             };
             let client = Client::new_without_credentials("test-model", crate::api::DEFAULT_MAX_TOKENS).unwrap();
             let mut sink = RecordingSink::default();
