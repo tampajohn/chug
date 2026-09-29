@@ -425,6 +425,32 @@ confirmed: a fix that hardens one guard can silently break another —
 adversarial round 2 on the FIX-UP (not just the feature) is what caught
 F1.
 
+**T138 — mcp.json executes before permission enforcement (pri 2, landed
+37f8edc rebased ff from 0712c61).** The codex review's §2 HIGH
+supply-chain item: a repo-controlled `mcp.json` spawned its stdio
+command during startup — BEFORE permissions loaded — so denying
+`bash`/`mcp__*` never prevented the checkout's own code from executing
+(mcp.rs:366/469, driver.rs:295/658). Fix (impl 0712c61, glm, 96/80
+across two segments after a T63 resume): `McpRegistry::new` is now
+parse-only; a new `start(&Permissions)` does spawn+handshake and is
+called by drive_loop immediately after `Permissions::load` (run AND
+chat; plan mode structurally never starts MCP). The spawn gate
+`Permissions::mcp_spawn_block_reason` judges deny rules alone — no tool
+list exists pre-spawn — with three blocking shapes: a whole-namespace
+deny (probed with TWO distinct synthetic servers so a server-specific
+glob never reads as deny-everything), a whole-server deny, and (stdio
+only) a `bash` deny — arg-matcher rules exempt. Credentials leg: stdio
+spawns env_clear + fixed baseline (PATH/HOME/TMPDIR/LANG/LC_ALL +
+windows extras) + the entry's env map only. RED proven with flag-file
+driver tests (the command ran despite denies pre-fix; reproduced at
+parent ae257da by the validator). kimi REQUIRED PASS d1790652558-6:
+gate legs verified by mutation (6 mutants, M2–M6 killed; M1 drop-2nd-
+probe SURVIVED — non-blocking, availability-only delta — plus
+plan-guard test gap and doc nits, all carried); validator's 1st segment
+budget-died 50/50 mid-mutant-batch, resumed per T63 and finished at
+iter 4 (5th consecutive resume success). Post-merge nextest 1077/1077
+(target-shared-main).
+
 ### Cycle 66 (2026-09-28) — routine (reconciled cycle-65 divergence first) — codex-intake queue T134–T142
 
 **CYCLE-66 CYCLE-LEVEL NOTES (wrap).** FOUR items landed (T140,
