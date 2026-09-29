@@ -2786,6 +2786,40 @@ mod tests {
         );
     }
 
+    /// T147 (T141-M1 kill): the open-block check is the ONLY rejector for a
+    /// stream that opens a tool_use block, delivers a VALID but partial
+    /// input, and then ends with `message_stop` WITHOUT `content_block_stop`.
+    /// The `message_stop` guard alone accepts this shape (the terminal event
+    /// arrived; the old close-on-message_stop path parses the partial JSON
+    /// fine and synthesizes an executable `goal_complete`) — only the
+    /// open-block check rejects it. Removing that check must flip exactly
+    /// this test RED (every other truncation test ends WITHOUT message_stop
+    /// and stays green under the mutant — the M1 mask).
+    #[test]
+    fn accumulator_open_tool_block_with_message_stop_is_rejected() {
+        let mut acc = StreamAccumulator::new(None);
+        acc_feed_all(
+            &mut acc,
+            &[&sse_stream(&[
+                msg_start(),
+                json!({"type": "content_block_start", "index": 0, "content_block": {"type": "tool_use", "id": "tu_goal", "name": "goal_complete", "input": {}}}),
+                // A VALID but partial input: the proxy cut the stream after
+                // the first delta — a block closed here would parse fine and
+                // execute.
+                json!({"type": "content_block_delta", "index": 0, "delta": {"type": "input_json_delta", "partial_json": "{\"summary\":\"all checks green\"}"}}),
+                json!({"type": "message_delta", "delta": {"stop_reason": "tool_use"}, "usage": {"output_tokens": 9}}),
+                // The terminal event arrives; the block was never closed.
+                json!({"type": "message_stop"}),
+            ])],
+        );
+        let err = acc.finish().unwrap_err();
+        assert!(
+            matches!(err, StreamError::Retryable(TransportError::Connection(ref m))
+                if m.contains("truncated") && m.contains("content_block_stop") && m.contains("tool_use")),
+            "{err:?}"
+        );
+    }
+
     /// T141 (codex review, HIGH): `message_stop` is tracked, not ignored. A
     /// stream that ended after every block closed — `message_delta` even
     /// carried a stop_reason — but before the terminal `message_stop` is

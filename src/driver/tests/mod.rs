@@ -101,10 +101,20 @@
     /// Fake MCP echo server (same script family as mcp.rs's tests) configured
     /// via mcp.json in the cwd.
     fn write_echo_server(dir: &Path) {
+        write_echo_server_prelude(dir, "");
+    }
+
+    /// Variant with a PYTHON PRELUDE prepended to the server script (the T138
+    /// flag-file harness shape: `import pathlib\npathlib.Path(...).write_text
+    /// ("ran")\n` runs the instant the command executes, before any
+    /// handshake) — a flag file is proof of a spawn.
+    fn write_echo_server_prelude(dir: &Path, prelude: &str) {
         let py = dir.join("fake_srv.py");
         std::fs::write(
             &py,
-            r#"
+            format!(
+                "{prelude}{}",
+                r#"
 import sys, json
 def send(o):
     sys.stdout.write(json.dumps(o) + "\n"); sys.stdout.flush()
@@ -122,7 +132,8 @@ for line in sys.stdin:
         send({"jsonrpc": "2.0", "id": i, "result": {"tools": [{"name": "echo", "description": "Echo the arguments back", "inputSchema": {"type": "object", "properties": {"text": {"type": "string"}}}}]}})
     elif m == "tools/call":
         send({"jsonrpc": "2.0", "id": i, "result": {"content": [{"type": "text", "text": "echo: " + json.dumps(req["params"]["arguments"])}], "isError": False}})
-"#,
+"#
+            ),
         )
         .unwrap();
         let cfg = json!({
