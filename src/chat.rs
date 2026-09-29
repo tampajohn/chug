@@ -203,6 +203,9 @@ fn run_chat_with(
         crate::build_info::as_pair(&head),
         None,
         None,
+        // T146: chat carries no approved plan — the fields stay present-null.
+        None,
+        None,
     );
     // No goal text at session start (objectives arrive turn by turn); the
     // trace is identified by its id, mode metadata, and tags.

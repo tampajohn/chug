@@ -5,10 +5,10 @@
     // ===================== T73: plan mode =====================
 
     /// Schema-filter pin: the tool list a plan-mode run sends to the API is
-    /// EXACTLY the five names (set compare with exact cardinality — a sixth
-    /// added or one dropped turns this RED).
+    /// EXACTLY the six names (set compare with exact cardinality — a seventh
+    /// added or one dropped turns this RED). T146 added web_fetch.
     #[test]
-    fn plan_mode_advertises_exactly_the_five_tool_schemas() {
+    fn plan_mode_advertises_exactly_the_six_tool_schemas() {
         let tmp = tempfile::tempdir().unwrap();
         let out = tmp.path().join("plan.md");
         let (_utx, urx) = mpsc::channel::<SlashUpdate>();
@@ -40,19 +40,20 @@
             .map(String::from)
             .collect();
         names.sort();
-        assert_eq!(names.len(), 5, "exact cardinality five: {names:?}");
+        assert_eq!(names.len(), 6, "exact cardinality six: {names:?}");
         assert_eq!(
             names,
-            vec!["glob", "grep", "list_dir", "read_file", "submit_plan"],
-            "the plan surface is exactly the five read-only tools + submit_plan"
+            vec!["glob", "grep", "list_dir", "read_file", "submit_plan", "web_fetch"],
+            "the plan surface is exactly the six read-only tools + submit_plan"
         );
     }
 
     /// Rejection sweep through the LOOP (T72 sweep-the-family doctrine): one
-    /// leg per excluded registered tool. Scripted tool_use of the excluded
-    /// name in plan mode → tool error naming the allowed set; the loop
-    /// CONTINUES (the scripted follow-up submit_plan runs); the tool never
-    /// executed (per-leg side-effect pin).
+    /// leg per excluded registered tool (T146: web_fetch left the set — it
+    /// is the sixth plan tool now, advertised above). Scripted tool_use of
+    /// the excluded name in plan mode → tool error naming the allowed set;
+    /// the loop CONTINUES (the scripted follow-up submit_plan runs); the
+    /// tool never executed (per-leg side-effect pin).
     #[test]
     fn plan_mode_rejects_every_excluded_tool_and_the_loop_continues() {
         let excluded = [
@@ -60,7 +61,6 @@
             "edit_file",
             "bash",
             "delegate",
-            "web_fetch",
             "update_ledger",
             "goal_complete",
             "decision_log",
@@ -84,7 +84,6 @@
                     "goal": "g",
                     "model": "m"
                 }),
-                "web_fetch" => json!({"url": "http://127.0.0.1:1/x"}),
                 "update_ledger" => json!({"content": "MUTATED LEDGER"}),
                 "goal_complete" => json!({"summary": "claim done"}),
                 "decision_log" => json!({
@@ -143,7 +142,6 @@
                 ),
                 "bash" => assert!(!tmp.path().join("pwned-by-bash.txt").exists()),
                 "delegate" => assert!(!child_dir.path().join(".chug/delegate.log").exists()),
-                "web_fetch" => {} // the plan-gate message assert above is the leg
                 "update_ledger" => assert!(!tmp.path().join("LEDGER.md").exists()),
                 // goal_complete: rejected as a TOOL, not honored as the exit —
                 // the second scripted call proves the loop moved past it.
@@ -349,14 +347,14 @@
     /// plan branch must never extend the advertised list with mcp schemas
     /// (an empty prod registry would make that extension invisible).
     #[test]
-    fn plan_loop_advertises_exactly_five_tools_with_a_live_mcp_registry() {
+    fn plan_loop_advertises_exactly_six_tools_with_a_live_mcp_registry() {
         let tmp = tempfile::tempdir().unwrap();
         write_echo_server(tmp.path());
         let mut mcp = McpRegistry::new(tmp.path(), false, None).expect("live fake registry");
         // T138: spawn is deferred to start(); plan mode never starts MCP
         // servers, so this test starts the registry explicitly to keep its
         // premise (a LIVE non-empty registry) while the loop must still
-        // never extend the five-tool list with mcp schemas.
+        // never extend the six-tool list (T146) with mcp schemas.
         mcp.start(&crate::permissions::Permissions::empty());
         assert!(
             !mcp.tool_schemas().is_empty(),
@@ -364,7 +362,7 @@
         );
         let mut llm = ToolRecordingLlm::new(vec![tool_use_response(
             "submit_plan",
-            json!({"plan": "# Plan\n\nfive tools only\n"}),
+            json!({"plan": "# Plan\n\nsix tools only\n"}),
         )]);
         let mut sink = RecordingSink::default();
         let code = run_plan_loop(
@@ -384,7 +382,7 @@
         names.sort();
         assert_eq!(
             names,
-            vec!["glob", "grep", "list_dir", "read_file", "submit_plan"],
+            vec!["glob", "grep", "list_dir", "read_file", "submit_plan", "web_fetch"],
             "the live MCP schemas must never reach a plan-mode API call: {names:?}"
         );
     }
@@ -696,7 +694,7 @@
             !chat_names.contains(&"submit_plan".to_string()),
             "chat-mode list must not advertise submit_plan: {chat_names:?}"
         );
-        // Plan surface: the five, submit_plan included.
+        // Plan surface: the six (T146 added web_fetch), submit_plan included.
         let plan_names: Vec<String> = crate::plan::tool_schemas()
             .iter()
             .filter_map(|t| t.get("name").and_then(Value::as_str))

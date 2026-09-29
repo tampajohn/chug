@@ -359,9 +359,10 @@ fn image_result_events_preview_carries_short_note_no_base64() {
     assert_eq!(tr["preview"], note, "events line carries the short note");
 }
 
-/// Plan-mode leg: read_file is one of the five plan tools — an image read
-/// works there, riding the same array-content shape (five-tool contract is
-/// pinned separately by `plan_mode_advertises_exactly_the_five_tool_schemas`).
+/// Plan-mode leg: read_file is one of the six plan tools (T146 added
+/// web_fetch) — an image read works there, riding the same array-content
+/// shape (six-tool contract is pinned separately by
+/// `plan_mode_advertises_exactly_the_six_tool_schemas`).
 #[test]
 fn image_read_works_in_plan_mode() {
     let tmp = tempfile::tempdir().unwrap();

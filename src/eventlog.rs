@@ -52,7 +52,15 @@ pub fn rotate_fresh(cwd: &Path) -> archive::Outcome {
 /// `sha2` over a bespoke hash: the hex is cross-checkable with external
 /// `shasum -a 256` for out-of-band verification.
 pub(crate) fn goal_sha256(goal: &str) -> String {
-    let digest = Sha256::digest(goal.as_bytes());
+    sha256_hex(goal.as_bytes())
+}
+
+/// T146: SHA-256 over raw bytes (lowercase hex) — the shared hasher behind
+/// [`goal_sha256`] and the `--approve` plan file's `plan_sha256` (the file's
+/// raw bytes, not its decoded text, is what is hashed: the on-disk artifact
+/// is the approved thing).
+pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
+    let digest = Sha256::digest(bytes);
     let mut hex = String::with_capacity(digest.len() * 2);
     for byte in digest {
         hex.push_str(&format!("{byte:02x}"));
@@ -95,6 +103,12 @@ pub(crate) fn goal_sha256(goal: &str) -> String {
 /// distinct from the cumulative `max_tokens` budget beside it. A post-hoc
 /// `jq` pass can now ask whether a truncating run was riding the old 8192
 /// shape.
+/// T146: `approve` names the operator-approved plan file passed to
+/// `chug run --approve <path>` (the path exactly as the operator typed it),
+/// with `plan_sha256` the SHA-256 of that file's raw bytes — the F2 phase-2a
+/// execution-contract pair, sitting next to the goal provenance fields above.
+/// Both fields are ALWAYS present, `null` when the flag is absent (the T117
+/// honesty shape; chat and plan mode never carry one and pass `null`).
 #[allow(clippy::too_many_arguments)] // one line per field, same shape as the banner
 pub fn run_start(
     cwd: &Path,
@@ -108,6 +122,8 @@ pub fn run_start(
     head: Option<(&str, &str)>,
     goal: Option<&str>,
     goal_pack: Option<&str>,
+    approve: Option<&str>,
+    plan_sha256: Option<&str>,
 ) {
     append_line(
         cwd,
@@ -128,6 +144,8 @@ pub fn run_start(
             "max_tokens_per_request": max_tokens_per_request,
             "goal_sha256": goal.map(goal_sha256),
             "goal_pack": goal_pack,
+            "approve": approve,
+            "plan_sha256": plan_sha256,
         }),
     );
 }
@@ -403,6 +421,9 @@ mod tests {
             // T117: a literal goal means no pack expansion (goal_pack null).
             None,
             None,
+            // T146: approve/plan_sha256 ride every run_start line — null here.
+            None,
+            None,
         );
         let lines = read_lines(tmp.path());
         assert_eq!(lines.len(), 1);
@@ -439,7 +460,7 @@ mod tests {
     #[test]
     fn run_start_records_token_budget_when_set() {
         let tmp = tempfile::tempdir().unwrap();
-        run_start(tmp.path(), "run", None, "m", 8, 35, 250_000, crate::api::DEFAULT_MAX_TOKENS, None, None, None);
+        run_start(tmp.path(), "run", None, "m", 8, 35, 250_000, crate::api::DEFAULT_MAX_TOKENS, None, None, None, None, None);
         let lines = read_lines(tmp.path());
         assert_eq!(lines[0]["max_iters"], 8);
         assert_eq!(lines[0]["max_minutes"], 35);
@@ -454,7 +475,7 @@ mod tests {
     #[test]
     fn run_start_records_per_request_max_tokens_cap() {
         let tmp = tempfile::tempdir().unwrap();
-        run_start(tmp.path(), "run", None, "m", 8, 35, 250_000, 8192, None, None, None);
+        run_start(tmp.path(), "run", None, "m", 8, 35, 250_000, 8192, None, None, None, None, None);
         let lines = read_lines(tmp.path());
         assert_eq!(lines[0]["max_tokens_per_request"], 8192);
         assert_eq!(
@@ -484,6 +505,8 @@ mod tests {
             0,
             crate::api::DEFAULT_MAX_TOKENS,
             Some(("loop-t20", "9056c78")),
+            None,
+            None,
             None,
             None,
         );
@@ -528,6 +551,8 @@ mod tests {
             None,
             Some("hello world"),
             None,
+            None,
+            None,
         );
         let lines = read_lines(tmp.path());
         assert_eq!(
@@ -543,7 +568,7 @@ mod tests {
     #[test]
     fn run_start_goal_sha256_null_but_always_present_without_goal() {
         let tmp = tempfile::tempdir().unwrap();
-        run_start(tmp.path(), "chat", None, "m", 8, 35, 0, crate::api::DEFAULT_MAX_TOKENS, None, None, None);
+        run_start(tmp.path(), "chat", None, "m", 8, 35, 0, crate::api::DEFAULT_MAX_TOKENS, None, None, None, None, None);
         let lines = read_lines(tmp.path());
         assert!(
             lines[0]["goal_sha256"].is_null(),
@@ -573,6 +598,8 @@ mod tests {
             None,
             Some("the expanded body"),
             Some("smoke"),
+            None,
+            None,
         );
         let lines = read_lines(tmp.path());
         assert_eq!(lines[0]["goal_pack"], "smoke", "{lines:?}");
@@ -584,7 +611,7 @@ mod tests {
     #[test]
     fn run_start_goal_pack_null_but_always_present_on_a_plain_goal() {
         let tmp = tempfile::tempdir().unwrap();
-        run_start(tmp.path(), "run", None, "m", 8, 35, 0, crate::api::DEFAULT_MAX_TOKENS, None, Some("plain"), None);
+        run_start(tmp.path(), "run", None, "m", 8, 35, 0, crate::api::DEFAULT_MAX_TOKENS, None, Some("plain"), None, None, None);
         let lines = read_lines(tmp.path());
         assert!(
             lines[0]["goal_pack"].is_null(),
@@ -595,6 +622,48 @@ mod tests {
             obj.contains_key("goal_pack"),
             "the field must be PRESENT even when null: {lines:?}"
         );
+    }
+
+    /// T146: the approved-plan pair rides the opening line both ways — the
+    /// path as typed + the file-bytes hash when `--approve` was given, both
+    /// fields PRESENT but null when it wasn't (the T117 honesty shape).
+    #[test]
+    fn run_start_records_approve_fields_both_ways() {
+        for (approve, plan_sha) in [
+            (Some("plan.md"), Some("deadbeef")),
+            (None, None),
+        ] {
+            let tmp = tempfile::tempdir().unwrap();
+            run_start(
+                tmp.path(),
+                "run",
+                None,
+                "m",
+                8,
+                35,
+                0,
+                crate::api::DEFAULT_MAX_TOKENS,
+                None,
+                None,
+                None,
+                approve,
+                plan_sha,
+            );
+            let lines = read_lines(tmp.path());
+            match approve {
+                Some(path) => {
+                    assert_eq!(lines[0]["approve"], path, "{lines:?}");
+                    assert_eq!(lines[0]["plan_sha256"], plan_sha.unwrap());
+                }
+                None => {
+                    assert!(lines[0]["approve"].is_null(), "{lines:?}");
+                    assert!(lines[0]["plan_sha256"].is_null(), "{lines:?}");
+                }
+            }
+            let obj = lines[0].as_object().expect("run_start is an object");
+            assert!(obj.contains_key("approve"), "{lines:?}");
+            assert!(obj.contains_key("plan_sha256"), "{lines:?}");
+        }
     }
 
     /// T117 known vector: `goal_sha256` hashes the EXPANDED text — what the
@@ -628,6 +697,8 @@ mod tests {
             None,
             Some(&expanded),
             Some("smoke"),
+            None,
+            None,
         );
         let lines = read_lines(tmp.path());
         assert_eq!(lines[0]["goal_pack"], "smoke");
@@ -708,7 +779,7 @@ mod tests {
     #[test]
     fn rotate_fresh_archives_non_empty_events_log() {
         let tmp = tempfile::tempdir().unwrap();
-        run_start(tmp.path(), "run", None, "m", 5, 120, 0, crate::api::DEFAULT_MAX_TOKENS, None, None, None);
+        run_start(tmp.path(), "run", None, "m", 5, 120, 0, crate::api::DEFAULT_MAX_TOKENS, None, None, None, None, None);
 
         let out = rotate_fresh(tmp.path());
         let Outcome::Archived(dst) = out else {
@@ -964,7 +1035,7 @@ mod tests {
             model: "m".into(),
             budget: None,
         });
-        run_start(tmp.path(), "run", None, "m", 5, 120, 0, crate::api::DEFAULT_MAX_TOKENS, None, None, None);
+        run_start(tmp.path(), "run", None, "m", 5, 120, 0, crate::api::DEFAULT_MAX_TOKENS, None, None, None, None, None);
     }
 
     /// T91: an ImageDegraded event serializes as one jq-mineable

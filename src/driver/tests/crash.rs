@@ -86,6 +86,7 @@
             mcp_config: None,
             mcp_off: true,
             goal_pack: None,
+            approve: None,
         }
     }
 
