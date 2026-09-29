@@ -534,8 +534,8 @@ fn mcp_serve_chug_launch_happy_path_over_the_real_wire() {
     let names: Vec<&str> = tools.iter().filter_map(|t| t["name"].as_str()).collect();
     assert_eq!(
         names,
-        ["chug_status", "chug_collect", "chug_launch"],
-        "the flag advertised the write leg: {list}"
+        ["chug_status", "chug_collect", "chug_launch", "chug_cancel"],
+        "the flag advertised both write legs: {list}"
     );
     let launch = tools
         .iter()
@@ -753,4 +753,291 @@ fn mcp_serve_chug_launch_default_deny_over_the_real_wire() {
     assert!(message.contains("chug_launch"), "{call}");
 
     close_stdin_and_expect_success_exit(child, "default-deny");
+}
+
+// ---------------------------------------------------------------------------
+// T153 — the chug_cancel wire e2e: real stdio, real server, stubbed child
+// ---------------------------------------------------------------------------
+
+/// The cancel legs' fixture: the spec file the launch must carry, and the
+/// stub child the `CHUG_DELEGATE_BIN` seam substitutes for the real binary.
+/// Unlike the T148 launch stub (records + exits 0), THIS stub records its
+/// argv and then `sleep 60`s — a LIVE delegate-shaped child for the cancel
+/// to stop (a dead pid never reaches the signal legs). Both live in their
+/// own unique tempdirs; the tempdir drop cleans every stub file.
+#[cfg(unix)]
+fn write_cancel_spec_and_stub(scratch: &std::path::Path) -> (std::path::PathBuf, std::path::PathBuf) {
+    let spec = scratch.join("t153-wire-spec.md");
+    std::fs::write(&spec, "# T153 cancel wire spec\n").expect("write spec file");
+    let stub = scratch.join("t153-cancel-stub.sh");
+    std::fs::write(
+        &stub,
+        "#!/bin/sh\n\
+         { printf 'argv:\\n'; printf '%s\\n' \"$@\"; } > stub-record.txt\n\
+         sleep 60\n",
+    )
+    .expect("write stub script");
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755))
+        .expect("make the stub executable");
+    (spec, stub)
+}
+
+/// Bounded poll (~5 s, the T148 cadence) until `probe(pid)` turns true.
+#[cfg(unix)]
+fn poll_pid_state(pid: u32, want_alive: bool, what: &str) {
+    let deadline = Instant::now() + LAUNCH_RECORD_DEADLINE;
+    // SAFETY: kill(pid, 0) — a pure liveness probe, no signal delivered.
+    let alive = |pid: u32| unsafe { libc::kill(pid as i32, 0) == 0 };
+    while alive(pid) != want_alive {
+        assert!(
+            Instant::now() < deadline,
+            "{what}: pid {pid} never became {} within {LAUNCH_RECORD_DEADLINE:?}",
+            if want_alive { "alive" } else { "dead" }
+        );
+        thread::sleep(Duration::from_millis(25));
+    }
+}
+
+/// Leg 1 — the cancel happy path over a REAL stdio wire: the server with
+/// `--allow-launch` launches a LIVE stub child through the ONE delegate
+/// launch path (so the child IS its own process-group leader and its argv
+/// is delegate-shaped `run --spec …` — both ownership legs hold for real),
+/// `tools/list` advertises `chug_cancel` beside `chug_launch`, and the
+/// cancel call returns the payload with the stub PROVABLY dead afterwards.
+/// Deadline-bounded throughout — no sub-ms ordering assertions (the carried
+/// T129 nit).
+#[cfg(unix)]
+#[test]
+fn mcp_serve_chug_cancel_happy_path_over_the_real_wire() {
+    let _guard = LAUNCH_LEG_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let scratch = tempfile::tempdir().expect("scratch tempdir");
+    let target = tempfile::tempdir().expect("target tempdir");
+    std::fs::create_dir_all(target.path().join(".chug")).expect("target .chug");
+    let (spec, stub) = write_cancel_spec_and_stub(scratch.path());
+
+    // The flag and the stub seam are THIS server's argv/env only; the stub
+    // stays alive in `sleep 60` until the cancel stops it. ONE stdin handle
+    // is held across all sends (a second `take()` would find None).
+    let (mut child, rx) = spawn_server_with(
+        &["--allow-launch"],
+        &[("CHUG_DELEGATE_BIN", stub.to_str().expect("utf-8 stub path"))],
+    );
+    let mut stdin = child.stdin.take().expect("piped stdin");
+    send(&mut stdin, r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#);
+    send(&mut stdin, r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#);
+    let launch = serde_json::json!({
+        "jsonrpc": "2.0", "id": 3, "method": "tools/call",
+        "params": {"name": "chug_launch", "arguments": {
+            "cwd": target.path().display().to_string(),
+            "spec": spec.display().to_string(),
+            "goal": "t153 wire cancel goal",
+            "model": "wire-model"
+        }}
+    });
+    send(&mut stdin, &launch.to_string());
+
+    let init = next_response(&rx, "initialize response");
+    assert_eq!(init["id"], 1, "{init}");
+
+    // Both write legs advertised under the one flag.
+    let list = next_response(&rx, "tools/list response");
+    assert_eq!(list["id"], 2, "{list}");
+    let names: Vec<&str> = list["result"]["tools"]
+        .as_array()
+        .expect("tools array")
+        .iter()
+        .filter_map(|t| t["name"].as_str())
+        .collect();
+    assert_eq!(
+        names,
+        ["chug_status", "chug_collect", "chug_launch", "chug_cancel"],
+        "the flag advertised both write legs: {list}"
+    );
+
+    // Launch: the payload carries the stub child's pid.
+    let launch = next_response(&rx, "tools/call chug_launch response");
+    assert_eq!(launch["id"], 3, "{launch}");
+    assert_eq!(launch["result"]["isError"], false, "{launch}");
+    let launch_text = launch["result"]["content"][0]["text"]
+        .as_str()
+        .expect("text content block")
+        .to_string();
+    let pid: u32 = launch_text
+        .lines()
+        .find_map(|l| l.strip_prefix("launched: pid "))
+        .unwrap_or_else(|| panic!("pid line in the launch payload: {launch_text}"))
+        .trim()
+        .parse()
+        .unwrap_or_else(|e| panic!("pid does not parse: {e}\n{launch_text}"));
+    // The stub is LIVE: its record landed (it started) and it is asleep in
+    // `sleep 60`, a real delegate-shaped child to cancel.
+    wait_for_stub_record(
+        &target.path().join("stub-record.txt"),
+        &[
+            "argv:".to_string(),
+            "run".to_string(),
+            "--spec".to_string(),
+            spec.display().to_string(),
+            "--goal".to_string(),
+            "t153 wire cancel goal".to_string(),
+            "--model".to_string(),
+            "wire-model".to_string(),
+            // The delegate launch path appends the DEFAULT budgets when the
+            // caller omits them — the launch record carries them too.
+            "--max-iters".to_string(),
+            "40".to_string(),
+            "--max-minutes".to_string(),
+            "35".to_string(),
+        ],
+    );
+    poll_pid_state(pid, true, "the stub child should be alive after launch");
+
+    // Cancel it over the wire (the same held stdin handle).
+    let cancel = serde_json::json!({
+        "jsonrpc": "2.0", "id": 4, "method": "tools/call",
+        "params": {"name": "chug_cancel", "arguments": {
+            "cwd": target.path().display().to_string(),
+            "pid": pid
+        }}
+    });
+    send(&mut stdin, &cancel.to_string());
+    let cancel = next_response(&rx, "tools/call chug_cancel response");
+    assert_eq!(cancel["id"], 4, "{cancel}");
+    assert!(
+        cancel.get("error").is_none(),
+        "a routed cancel is a tool result, not a JSON-RPC error: {cancel}"
+    );
+    assert_eq!(cancel["result"]["isError"], false, "the cancel succeeded: {cancel}");
+    let text = cancel["result"]["content"][0]["text"]
+        .as_str()
+        .expect("text content block")
+        .to_string();
+    assert!(
+        text.contains(&format!("pid {pid}")),
+        "the payload names the cancelled pid: {text}"
+    );
+    assert!(text.contains("signaled: term"), "the TERM sufficed: {text}");
+    assert!(text.contains("waited_ms: "), "{text}");
+
+    // The stub is PROVABLY dead: within the bounded poll the pid is gone
+    // (the server's own poll reaped it — the production zombie shape).
+    poll_pid_state(pid, false, "the cancelled stub child should be dead");
+
+    // The loop is alive, and EOF still exits 0.
+    send(&mut stdin, r#"{"jsonrpc":"2.0","id":5,"method":"ping"}"#);
+    let ping = next_response(&rx, "ping after the cancel");
+    assert_eq!(ping["id"], 5, "{ping}");
+    assert_eq!(ping["result"], serde_json::json!({}), "{ping}");
+
+    drop(stdin);
+    close_stdin_and_expect_success_exit(child, "cancel happy path");
+}
+
+/// Leg 2 — the policy boundary over the real wire: WITHOUT `--allow-launch`
+/// the second write leg does not exist. `tools/list` names EXACTLY the two
+/// read-only tools (a mutant that advertises `chug_cancel` unconditionally
+/// dies on the exact-list equality), and a `tools/call` for it gets the
+/// SAME unknown-tool `-32602` a never-existing tool gets — nothing probed,
+/// nothing signalled.
+#[test]
+fn mcp_serve_chug_cancel_default_deny_over_the_real_wire() {
+    let (mut child, rx) = spawn_server_with(&[], &[]);
+    {
+        let mut stdin = child.stdin.take().expect("piped stdin");
+        send(&mut stdin, r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#);
+        send(&mut stdin, r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#);
+        let call = serde_json::json!({
+            "jsonrpc": "2.0", "id": 3, "method": "tools/call",
+            "params": {"name": "chug_cancel", "arguments": {
+                "cwd": "relative/path", "pid": 1
+            }}
+        });
+        send(&mut stdin, &call.to_string());
+    }
+
+    let init = next_response(&rx, "initialize response");
+    assert_eq!(init["id"], 1, "{init}");
+
+    let list = next_response(&rx, "tools/list response");
+    assert_eq!(list["id"], 2, "{list}");
+    let names: Vec<&str> = list["result"]["tools"]
+        .as_array()
+        .expect("tools array")
+        .iter()
+        .filter_map(|t| t["name"].as_str())
+        .collect();
+    assert_eq!(
+        names,
+        ["chug_status", "chug_collect"],
+        "chug_cancel must be ABSENT from the default-deny tool set: {list}"
+    );
+
+    let call = next_response(&rx, "default-deny chug_cancel response");
+    assert_eq!(call["id"], 3, "{call}");
+    let error = call.get("error").unwrap_or_else(|| {
+        panic!("the default-deny call must be the unknown-tool error: {call}")
+    });
+    assert_eq!(error["code"], -32602, "{call}");
+    let message = error["message"].as_str().expect("error message string");
+    assert!(message.contains("unknown tool"), "{call}");
+    assert!(message.contains("chug_cancel"), "{call}");
+
+    close_stdin_and_expect_success_exit(child, "cancel default-deny");
+}
+
+/// Leg 3 — the ESRCH leg over the real wire: a call naming a pid that CANNOT
+/// exist (2_000_000_000 is above every kernel pid ceiling — macOS 99999,
+/// Linux 2^22 — yet within i32) is an `isError` tool RESULT naming "no such
+/// process" and stating nothing was signalled, NOT a JSON-RPC error and NOT
+/// a crash — and the loop is alive afterwards (the ping round-trips).
+#[cfg(unix)]
+#[test]
+fn mcp_serve_chug_cancel_dead_pid_is_error_and_loop_alive_over_the_wire() {
+    let target = tempfile::tempdir().expect("target tempdir");
+    std::fs::create_dir_all(target.path().join(".chug")).expect("target .chug");
+    let (mut child, rx) = spawn_server_with(&["--allow-launch"], &[]);
+    {
+        let mut stdin = child.stdin.take().expect("piped stdin");
+        send(&mut stdin, r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#);
+        let call = serde_json::json!({
+            "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+            "params": {"name": "chug_cancel", "arguments": {
+                "cwd": target.path().display().to_string(),
+                "pid": 2_000_000_000u64
+            }}
+        });
+        send(&mut stdin, &call.to_string());
+        // Sent AFTER the dead-pid call: the proof the tool failure did not
+        // kill the server loop.
+        send(&mut stdin, r#"{"jsonrpc":"2.0","id":3,"method":"ping"}"#);
+    }
+
+    let init = next_response(&rx, "initialize response");
+    assert_eq!(init["id"], 1, "{init}");
+
+    let call = next_response(&rx, "dead-pid cancel response");
+    assert_eq!(call["id"], 2, "{call}");
+    assert!(
+        call.get("error").is_none(),
+        "a verification failure is a tool RESULT, not a JSON-RPC error: {call}"
+    );
+    assert_eq!(
+        call["result"]["isError"], true,
+        "the dead pid must land in the isError arm: {call}"
+    );
+    let text = call["result"]["content"][0]["text"]
+        .as_str()
+        .expect("text content block")
+        .to_string();
+    assert!(text.starts_with("chug_cancel:"), "tool-named error: {text}");
+    assert!(text.contains("no such process"), "{text}");
+    assert!(text.contains("nothing signalled"), "{text}");
+
+    // The loop survived: the ping after the refusal answers normally.
+    let ping = next_response(&rx, "ping after the dead-pid refusal");
+    assert_eq!(ping["id"], 3, "{ping}");
+    assert_eq!(ping["result"], serde_json::json!({}), "{ping}");
+
+    close_stdin_and_expect_success_exit(child, "cancel dead-pid leg");
 }
