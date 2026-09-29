@@ -134,14 +134,17 @@ pub fn load(cwd: &Path) -> anyhow::Result<Vec<Todo>> {
 
 /// The one write path: rewrite the store compactly, creating `.chug/` when
 /// missing. Compact (no pretty-print) — jq-mineable, diff-friendly, and the
-/// smallest bytes on disk.
+/// smallest bytes on disk. T136: the write is atomic (temp+rename) — this
+/// store is live state rewritten on every todo_add/todo_update, and a
+/// truncating in-place write destroyed it when a crash landed mid-write.
 fn save(cwd: &Path, todos: &[Todo]) -> anyhow::Result<()> {
     let path = todos_path(cwd);
     if let Some(dir) = path.parent() {
         fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
     }
     let text = serde_json::to_string(todos).context("serializing todos")?;
-    fs::write(&path, text).with_context(|| format!("writing {}", path.display()))
+    crate::fsatomic::write_atomic(&path, text.as_bytes())
+        .with_context(|| format!("writing {}", path.display()))
 }
 
 /// One line per todo: `t3 [in_progress] title` — the rendering shared by
@@ -445,6 +448,46 @@ mod tests {
                 Todo { id: "t2".into(), title: "second".into(), status: Status::InProgress },
             ]
         );
+    }
+
+    /// T136 class sweep: the todo store is live state rewritten on every
+    /// todo_add/todo_update. The save goes through the atomic temp+rename
+    /// helper, so a crash mid-write cannot destroy the store, and no temp
+    /// sibling lingers after a clean save.
+    #[test]
+    fn save_is_atomic_no_temp_leftover_and_survives_a_failed_write() {
+        let tmp = TempDir::new().unwrap();
+        fs::create_dir_all(tmp.path().join(".chug")).unwrap();
+        let r = dispatch(&ctx(tmp.path()), "todo_add", &json!({"title": "first"}));
+        assert!(!r.is_error, "{}", r.content);
+        let before = fs::read_to_string(todos_path(tmp.path())).unwrap();
+        assert!(before.contains("\"first\""));
+
+        // Failure leg: the store path being a directory makes the final
+        // rename fail. The save must propagate the error, leave the target
+        // untouched, and clean its temp file.
+        let store = todos_path(tmp.path());
+        let backup = tmp.path().join("todos.json.bak");
+        fs::rename(&store, &backup).unwrap();
+        fs::create_dir(&store).unwrap();
+        let r = dispatch(&ctx(tmp.path()), "todo_add", &json!({"title": "second"}));
+        assert!(r.is_error, "the failed save surfaces as a tool error");
+        assert!(store.is_dir(), "the target was never touched by the failed write");
+        fs::remove_dir(&store).unwrap();
+        fs::rename(&backup, &store).unwrap();
+
+        // Clean save: content replaced, exactly one file in .chug (the
+        // store itself — no temp sibling).
+        let r = dispatch(&ctx(tmp.path()), "todo_add", &json!({"title": "third"}));
+        assert!(!r.is_error, "{}", r.content);
+        let text = fs::read_to_string(todos_path(tmp.path())).unwrap();
+        assert!(text.contains("\"third\""), "{text}");
+        let entries: Vec<String> = fs::read_dir(tmp.path().join(".chug"))
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(entries, vec!["todos.json".to_string()], "no temp siblings: {entries:?}");
     }
 
     #[test]

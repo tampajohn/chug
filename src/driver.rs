@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, bail};
 use serde_json::{Value, json};
 
-use crate::api::{Client, ContentBlock, Llm, Message, ObsCtx};
+use crate::api::{Client, ContentBlock, KnownBlock, Llm, Message, ObsCtx};
 use crate::archive;
 use crate::driver_lock;
 use crate::eventlog;
@@ -537,12 +537,102 @@ fn run_plan_loop(
 
 /// Load the transcript for a resumed session, trimming it first if it is over
 /// the token budget so an over-large transcript starts compact.
+///
+/// T136 crash recovery: a kill mid-tool-batch leaves the transcript's last
+/// assistant message holding unanswered `tool_use` blocks (the batch's
+/// tool_result user message is appended only after the whole batch
+/// finishes), and a crash mid-append can tear the final JSONL line. Both
+/// shapes made the transcript unresumable — the endpoint rejects a request
+/// whose tool_use blocks carry no tool_result, and a torn line aborted
+/// loading entirely. Here: a torn tail is dropped and physically truncated
+/// (so later appends cannot merge into the torn bytes), and every
+/// unanswered tool_use gets an is_error "interrupted" tool_result, in
+/// memory and on disk. The repaired history is the same shape the loop
+/// itself would have written had the process survived.
 pub fn resume_messages(cwd: &Path) -> anyhow::Result<Vec<Message>> {
-    let mut messages = transcript::load(cwd)?;
+    let (mut messages, torn) = transcript::load_with_torn(cwd)?;
+    if torn {
+        // Physically drop the torn bytes: the next transcript::append would
+        // otherwise write onto the same (newline-less) line, merging two
+        // messages into one unparsable line.
+        transcript::rewrite(cwd, &messages)?;
+    }
+    repair_interrupted_tools(cwd, &mut messages)?;
     if !messages.is_empty() && trim::transcript_trim(&mut messages) {
         transcript::rewrite(cwd, &messages)?;
     }
     Ok(messages)
+}
+
+/// The tool_result content a resumed run receives for a tool whose
+/// execution was interrupted by a crash or kill (T136). The tool may have
+/// changed files before the interrupt — its real result is gone — so the
+/// note routes the model at re-verifying state instead of trusting either
+/// a success or a failure that never landed.
+pub(crate) const INTERRUPTED_TOOL_NOTE: &str = "[interrupted] chug was killed or crashed while \
+this tool was running; its result was never recorded, and any side effects it had already made \
+are unknown. Re-check actual state (files, git status, logs) before continuing.";
+
+/// T136: repair a transcript whose last assistant message carries
+/// `tool_use` blocks that no later message answers (a kill landed between
+/// the assistant append and the post-batch tool_result append). Appends ONE
+/// user message with an is_error tool_result per unanswered id — the exact
+/// shape the loop writes after an intact batch, so the next request never
+/// carries missing tool_results — and persists it to the transcript.
+/// Returns whether a repair was appended. Idempotent: a repaired transcript
+/// has no unanswered ids and is left byte-identical.
+///
+/// Invariant the repair relies on (loop-written transcripts): an assistant
+/// message with tool_use is always immediately followed by the batch's
+/// tool_result user message unless the process died in between — so any
+/// unanswered tool_use sits in the LAST assistant message, and appending at
+/// the end IS the immediately-following user message the endpoint requires.
+pub(crate) fn repair_interrupted_tools(
+    cwd: &Path,
+    messages: &mut Vec<Message>,
+) -> anyhow::Result<bool> {
+    let Some((assistant_idx, use_ids)) = messages.iter().enumerate().rev().find_map(|(i, m)| {
+        if m.role != "assistant" {
+            return None;
+        }
+        let ids: Vec<&str> = m
+            .content
+            .iter()
+            .filter_map(ContentBlock::tool_use)
+            .map(|(id, _, _)| id)
+            .collect();
+        (!ids.is_empty()).then_some((i, ids))
+    }) else {
+        return Ok(false);
+    };
+    // Answered = a tool_result with that id appears in ANY later message.
+    let answered: std::collections::HashSet<&str> = messages[assistant_idx + 1..]
+        .iter()
+        .flat_map(|m| m.content.iter())
+        .filter_map(|b| match b {
+            ContentBlock::Known(KnownBlock::ToolResult { tool_use_id, .. }) => {
+                Some(tool_use_id.as_str())
+            }
+            _ => None,
+        })
+        .collect();
+    let missing: Vec<&str> = use_ids
+        .iter()
+        .copied()
+        .filter(|id| !answered.contains(id))
+        .collect();
+    if missing.is_empty() {
+        return Ok(false);
+    }
+    let repair = Message::user(
+        missing
+            .iter()
+            .map(|id| ContentBlock::tool_result_block(id, INTERRUPTED_TOOL_NOTE.to_string(), true))
+            .collect(),
+    );
+    transcript::append(cwd, &repair)?;
+    messages.push(repair);
+    Ok(true)
 }
 
 /// Run one chat turn: iterate until a natural stop, an accepted

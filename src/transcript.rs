@@ -44,27 +44,66 @@ pub fn append(cwd: &Path, msg: &Message) -> anyhow::Result<()> {
 }
 
 /// Load all messages from the transcript. Empty vec when no transcript exists.
+///
+/// Test-side convenience reader: production resume reads via
+/// [`load_with_torn`] (T136 — the torn-tail flag is what lets the resume
+/// path truncate the torn bytes). The torn-tail tolerance itself is shared,
+/// so every caller sees the same crash-resilient read.
+#[cfg(test)]
 pub fn load(cwd: &Path) -> anyhow::Result<Vec<Message>> {
+    Ok(load_with_torn(cwd)?.0)
+}
+
+/// [`load`]'s production shape, plus a flag: `true` when a malformed
+/// trailing line was dropped as a torn write (T136 — a crash mid-append
+/// tears only the LAST line, so the intact prefix always loads and the
+/// transcript stays resumable; real mid-file corruption stays a loud
+/// error, because that is data loss, not a torn write). The resume path
+/// uses the flag to physically truncate the torn bytes so later appends
+/// cannot merge into them.
+pub fn load_with_torn(cwd: &Path) -> anyhow::Result<(Vec<Message>, bool)> {
     let path = transcript_path(cwd);
     if !path.exists() {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), false));
     }
     let data =
         fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
     let mut messages = Vec::new();
-    for (lineno, line) in data.lines().enumerate() {
+    let mut torn_tail = false;
+    let lines: Vec<&str> = data.lines().collect();
+    let last_content = lines
+        .iter()
+        .rposition(|l| !l.trim().is_empty())
+        .map(|p| p + 1)
+        .unwrap_or(0);
+    for (lineno, line) in lines.iter().enumerate() {
         if line.trim().is_empty() {
             continue;
         }
-        let msg: Message = serde_json::from_str(line).with_context(|| {
-            format!("parsing {} line {}", path.display(), lineno + 1)
-        })?;
+        let msg: Message = match serde_json::from_str(line) {
+            Ok(msg) => msg,
+            Err(_) if lineno + 1 == last_content => {
+                // Torn trailing write (T136): the only line a crash can tear
+                // is the last one. Drop it; keep everything before it.
+                torn_tail = true;
+                continue;
+            }
+            Err(e) => {
+                return Err(e).with_context(|| {
+                    format!("parsing {} line {}", path.display(), lineno + 1)
+                });
+            }
+        };
         messages.push(msg);
     }
-    Ok(messages)
+    Ok((messages, torn_tail))
 }
 
-/// Rewrite the whole transcript file (used only after trimming).
+/// Rewrite the whole transcript file (used after trimming, and by the resume
+/// path when it truncates a torn tail). T136: the write is atomic — a
+/// truncating in-place write destroyed the only active transcript when a
+/// crash or write failure landed mid-rewrite (temp+rename instead; see
+/// [`crate::fsatomic::write_atomic`]).
 pub fn rewrite(cwd: &Path, messages: &[Message]) -> anyhow::Result<()> {
     let dir = cwd.join(".chug");
     fs::create_dir_all(&dir)
@@ -74,7 +113,7 @@ pub fn rewrite(cwd: &Path, messages: &[Message]) -> anyhow::Result<()> {
         out.push_str(&serde_json::to_string(msg).context("serializing transcript message")?);
         out.push('\n');
     }
-    fs::write(transcript_path(cwd), out)
+    crate::fsatomic::write_atomic(&transcript_path(cwd), out.as_bytes())
         .with_context(|| format!("rewriting {}", transcript_path(cwd).display()))?;
     Ok(())
 }
@@ -85,6 +124,130 @@ mod tests {
     use crate::api::{ContentBlock, KnownBlock};
     use crate::archive::Outcome;
     use serde_json::json;
+
+    /// T136 torn-tail leg: a crash mid-append leaves a final line that is
+    /// not valid JSON. Loading must DROP the torn tail and keep the intact
+    /// prefix — aborting made the whole transcript unresumable — while real
+    /// corruption BEFORE the last line stays a loud error (that is data
+    /// loss, not a torn write; silently skipping it would hide a broken
+    /// transcript).
+    #[test]
+    fn load_drops_torn_trailing_line_but_not_mid_file_corruption() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = transcript_path(tmp.path());
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let line = |t: &str| {
+            serde_json::to_string(&Message::user(vec![ContentBlock::text_block(t)])).unwrap()
+        };
+        // Torn LAST line (crash mid-append, no trailing newline): tolerated.
+        fs::write(&path, format!("{}\n{}\n{{\"role\":\"user\",", line("one"), line("two")))
+            .unwrap();
+        let loaded = load(tmp.path()).unwrap();
+        assert_eq!(loaded.len(), 2, "torn tail dropped, intact lines kept");
+        assert_eq!(loaded[0].content[0].text(), Some("one"));
+        assert_eq!(loaded[1].content[0].text(), Some("two"));
+
+        // A torn line that is not last (later lines parse) is REAL
+        // corruption: still a loud error.
+        fs::write(&path, format!("{}\ngarbage{{\n{}\n", line("one"), line("two"))).unwrap();
+        assert!(load(tmp.path()).is_err(), "mid-file corruption stays loud");
+
+        // Whitespace-only trailing lines keep loading (pre-existing rule).
+        fs::write(&path, format!("{}\n{}\n  \n", line("one"), line("two"))).unwrap();
+        assert_eq!(load(tmp.path()).unwrap().len(), 2);
+    }
+
+    /// T136 rewrite destroy leg, deterministically: with RLIMIT_FSIZE capping
+    /// writes below the serialized transcript, the rewrite's write phase
+    /// fails mid-flight (EFBIG — SIGXFSZ ignored so the failure surfaces as
+    /// an error, not process death). The truncating `fs::write` this test
+    /// kills opened the LIVE transcript with O_TRUNC before failing — the
+    /// only active transcript destroyed (load → empty). The temp+rename
+    /// rewrite leaves the previous transcript byte-intact and cleans the
+    /// partial temp file.
+    #[cfg(unix)]
+    #[test]
+    fn rewrite_write_failure_keeps_previous_transcript_intact() {
+        let tmp = tempfile::tempdir().unwrap();
+        let big = "x".repeat(400_000);
+        let original = vec![
+            Message::user(vec![ContentBlock::text_block("Goal: keep me")]),
+            Message::assistant(vec![ContentBlock::text_block(big)]),
+        ];
+        rewrite(tmp.path(), &original).unwrap();
+        assert_eq!(load(tmp.path()).unwrap(), original, "fixture wrote cleanly");
+
+        // Ignore SIGXFSZ so the over-limit write returns EFBIG instead of
+        // killing the test process; the signal is ignored BEFORE the limit
+        // drops so no concurrent test write can hit the default-terminate
+        // window. Both knobs are restored before any assertion runs.
+        unsafe {
+            libc::signal(libc::SIGXFSZ, libc::SIG_IGN);
+        }
+        let mut old = libc::rlimit {
+            rlim_cur: 0,
+            rlim_max: 0,
+        };
+        let rc = unsafe { libc::getrlimit(libc::RLIMIT_FSIZE, &mut old) };
+        assert_eq!(rc, 0, "getrlimit");
+        let capped = libc::rlimit {
+            rlim_cur: 256 * 1024, // below the ~400KB serialized transcript
+            rlim_max: old.rlim_max,
+        };
+        let rc = unsafe { libc::setrlimit(libc::RLIMIT_FSIZE, &capped) };
+        assert_eq!(rc, 0, "setrlimit");
+
+        let result = rewrite(tmp.path(), &original);
+
+        let rc = unsafe { libc::setrlimit(libc::RLIMIT_FSIZE, &old) };
+        assert_eq!(rc, 0, "restore rlimit");
+        unsafe {
+            libc::signal(libc::SIGXFSZ, libc::SIG_DFL);
+        }
+
+        assert!(result.is_err(), "the over-limit write must surface an error");
+        assert_eq!(
+            load(tmp.path()).unwrap(),
+            original,
+            "the failed rewrite left the previous transcript byte-intact"
+        );
+        // No partial temp file lingers next to the transcript.
+        let dir = transcript_path(tmp.path()).parent().unwrap().to_path_buf();
+        let strays: Vec<String> = fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.contains(".tmp"))
+            .collect();
+        assert!(strays.is_empty(), "no temp leftover: {strays:?}");
+        // And the file still appends cleanly (nothing was left truncated
+        // mid-structure).
+        let mut f = fs::OpenOptions::new()
+            .append(true)
+            .open(transcript_path(tmp.path()))
+            .unwrap();
+        writeln!(f, "{}", serde_json::to_string(&original[0]).unwrap()).unwrap();
+        assert_eq!(load(tmp.path()).unwrap().len(), 3, "append lands cleanly");
+    }
+
+    /// T136: the atomic rewrite replaces content wholesale and leaves no
+    /// temp sibling behind (mechanism pin for the temp+rename rewrite).
+    #[test]
+    fn rewrite_replaces_content_and_leaves_no_temp_leftover() {
+        let tmp = tempfile::tempdir().unwrap();
+        let m1 = Message::user(vec![ContentBlock::text_block("first")]);
+        let m2 = Message::user(vec![ContentBlock::text_block("second")]);
+        rewrite(tmp.path(), &[m1.clone(), m2.clone()]).unwrap();
+        rewrite(tmp.path(), std::slice::from_ref(&m2)).unwrap();
+        assert_eq!(load(tmp.path()).unwrap(), vec![m2]);
+        let dir = tmp.path().join(".chug");
+        let entries: Vec<String> = fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(entries, vec!["transcript.jsonl".to_string()], "no temp siblings: {entries:?}");
+    }
 
     #[test]
     fn append_and_load_round_trip() {
