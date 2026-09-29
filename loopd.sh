@@ -230,6 +230,21 @@ while [ ! -f "$STOP" ]; do
     sleep 120
     continue
   fi
+  # T152 — pre-cycle orphan-process reaper. THE ONE SAFE INSTANT: the
+  # single-driver probe just passed, so no driver, no orchestrator, and no
+  # delegate children can legitimately exist — every chug process of a cycle
+  # descends from the driver argv that probe would have matched — so any
+  # leftover loop-artifact process (a T79 mutant leg whose validator died
+  # mid-leg, a test binary that outlived its bash-120s-capped parent, a
+  # removed /tmp/chug-loop-t*/chug-mut-* worktree's spinner) is
+  # definitionally orphaned. The sweep is identity-based and fail-closed —
+  # it never runs mid-cycle, never signals its own process group, never
+  # kills an unresolved identity, SIGTERM only — and bounded to ~64
+  # examinations per cycle; scripts/orphan-reaper.sh carries the doctrine.
+  # Best-effort guard (the eval-digest shape, for the set -e regime): a
+  # reaper failure must never block the launch.
+  LOOP_REAPER_PAGE_FILE="$STATE/reaper-page" scripts/orphan-reaper.sh >> "$LOG" 2>&1 \
+    || echo "$(ts) orphan-reaper: nonzero exit (best-effort, ignored — the cycle proceeds)" >> "$LOG"
   # T137 — the build is a GATE, not a best-effort step. The cycle below
   # launches ./target/release/chug, so a failed build must REFUSE the launch:
   # otherwise a merged change that fails compilation leaves the PREVIOUS
