@@ -150,10 +150,19 @@ enum CliCommand {
         cwd: Option<PathBuf>,
     },
     /// F10 phase 1 (T124): serve chug TO other agents as a stdio MCP server
-    /// (one read-only tool, `chug_status`) until stdin EOF, then exit 0.
-    /// Stdout carries ONLY protocol messages — never run it expecting
-    /// chatty output (a stdio server's stdout IS the wire).
-    McpServe,
+    /// (read-only tools, `chug_status` + `chug_collect`) until stdin EOF,
+    /// then exit 0. Stdout carries ONLY protocol messages — never run it
+    /// expecting chatty output (a stdio server's stdout IS the wire).
+    McpServe {
+        /// F10 phase 2b (T129): advertise and serve the `chug_launch` write
+        /// tool (launch a bounded detached `chug run` in a chug cwd).
+        /// Default OFF: without it the server is byte-identical to the
+        /// read-only phase-1/2a server — `chug_launch` is not advertised in
+        /// `tools/list` and a call for it gets the unknown-tool error. The
+        /// operator who starts the server decides whether writes exist.
+        #[arg(long, default_value_t = false)]
+        allow_launch: bool,
+    },
     /// Start an interactive chat session in the TUI: type a request, chug
     /// works it with tools, returns to idle, repeat.
     Chat {
@@ -240,7 +249,7 @@ fn main() -> ExitCode {
         // dispatches STRAIGHT to the server loop — no banner, no ledger, no
         // driver lock, no events write on this path; stdout carries only
         // protocol messages.
-        CliCommand::McpServe => cmd_mcp_serve(),
+        CliCommand::McpServe { allow_launch } => cmd_mcp_serve(allow_launch),
         CliCommand::Fork { action } => cmd_fork(action),
         CliCommand::Plan {
             goal,
@@ -632,8 +641,10 @@ fn cmd_ledger(cwd: Option<PathBuf>) -> anyhow::Result<i32> {
 }
 
 /// F10 phase 1 (T124): run the stdio MCP server until stdin EOF, then exit 0.
-fn cmd_mcp_serve() -> anyhow::Result<i32> {
-    mcp_serve::serve()?;
+/// T129: `allow_launch` gates the `chug_launch` write tool (default OFF —
+/// the read-only server is byte-identical to pre-T129 without the flag).
+fn cmd_mcp_serve(allow_launch: bool) -> anyhow::Result<i32> {
+    mcp_serve::serve(allow_launch)?;
     Ok(0)
 }
 

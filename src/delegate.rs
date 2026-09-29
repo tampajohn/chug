@@ -277,7 +277,14 @@ fn delegate_resume(input: &Value) -> anyhow::Result<bool> {
 
 /// Spawn a detached `chug run` child and return immediately. Never waits on
 /// the child — no sleeps, no retries, no waiting anywhere in this function.
-fn delegate_launch(input: &Value) -> anyhow::Result<ToolResult> {
+///
+/// T129: `pub(crate)` so the `chug mcp-serve` `chug_launch` tool (flag-gated)
+/// hands its validated params to THIS spawn path instead of inventing a
+/// second spawner — the delegate seams (detached spawn, `process_group(0)` +
+/// SIGHUP-ignore nohup parity, `<cwd>/.chug/delegate.log`, the
+/// `CHUG_DELEGATE_BIN` test seam) are the fleet primitive's one mechanism.
+/// Visibility-only change: behavior byte-identical for the `delegate` tool.
+pub(crate) fn delegate_launch(input: &Value) -> anyhow::Result<ToolResult> {
     let cwd = delegate_cwd(input)?;
     let spec = delegate_spec(input)?;
     let goal = get_str(input, "goal")?;
@@ -1195,5 +1202,9 @@ fn open_append(path: &Path) -> anyhow::Result<fs::File> {
         .with_context(|| format!("opening {}", path.display()))
 }
 
+// T129: `pub(crate)` so the `chug mcp-serve` tests can share THIS module's
+// `CHUG_DELEGATE_BIN` env lock (the env is process-global and cargo runs
+// test threads in parallel) — the delegate test harness stays the single
+// owner of the seam.
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
