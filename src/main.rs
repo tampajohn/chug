@@ -169,12 +169,14 @@ enum CliCommand {
     /// then exit 0. Stdout carries ONLY protocol messages — never run it
     /// expecting chatty output (a stdio server's stdout IS the wire).
     McpServe {
-        /// F10 phase 2b (T129): advertise and serve the `chug_launch` write
-        /// tool (launch a bounded detached `chug run` in a chug cwd).
-        /// Default OFF: without it the server is byte-identical to the
-        /// read-only phase-1/2a server — `chug_launch` is not advertised in
-        /// `tools/list` and a call for it gets the unknown-tool error. The
-        /// operator who starts the server decides whether writes exist.
+        /// F10 phase 2b (T129) + phase 3a (T153): advertise and serve the
+        /// write tools — `chug_launch` (launch a bounded detached `chug
+        /// run` in a chug cwd) and `chug_cancel` (stop one by pid). The
+        /// flag gates the write SURFACE, not individual tools. Default
+        /// OFF: without it the server is byte-identical to the read-only
+        /// phase-1/2a server — neither write tool is advertised in
+        /// `tools/list` and a call for either gets the unknown-tool error.
+        /// The operator who starts the server decides whether writes exist.
         #[arg(long, default_value_t = false)]
         allow_launch: bool,
     },
@@ -670,8 +672,9 @@ fn cmd_ledger(cwd: Option<PathBuf>) -> anyhow::Result<i32> {
 }
 
 /// F10 phase 1 (T124): run the stdio MCP server until stdin EOF, then exit 0.
-/// T129: `allow_launch` gates the `chug_launch` write tool (default OFF —
-/// the read-only server is byte-identical to pre-T129 without the flag).
+/// T129 + T153: `allow_launch` gates the write tools (`chug_launch`,
+/// `chug_cancel`) — default OFF, the read-only server is byte-identical to
+/// pre-T129 without the flag.
 fn cmd_mcp_serve(allow_launch: bool) -> anyhow::Result<i32> {
     mcp_serve::serve(allow_launch)?;
     Ok(0)

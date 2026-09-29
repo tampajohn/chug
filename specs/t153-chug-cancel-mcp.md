@@ -1,6 +1,6 @@
 # T153 — F10 phase 3a: `chug_cancel` MCP tool (flag-gated write leg)
 
-check: cargo test
+check: export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared && cargo test
 
 ## Repo context
 
