@@ -89,7 +89,7 @@ fn loopd_reexecs_at_the_top_of_the_while_body() {
                   LOOP-SPEC.md\"` — pgrep is blind to the launchd-spawned \
                   loopd tree on this host, so a pgrep guard fails OPEN");
     let build = loopd
-        .find("  cargo build --release >> \"$LOG\" 2>&1")
+        .find("CARGO_TARGET_DIR=\"$ROOT/target\" cargo build --release >> \"$LOG\" 2>&1 || build_rc=$?")
         .expect("loopd.sh builds its own binary");
     assert!(
         loop_top < compare && compare < exec && exec < driver_check && exec < build,

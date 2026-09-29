@@ -149,7 +149,7 @@ fn loopd_creates_target_shared_at_supervisor_start() {
     // At supervisor start: before the cycle loop and before the first build,
     // so the shared cache exists for every cycle including the first.
     let first_build = loopd
-        .find("  cargo build --release >> \"$LOG\" 2>&1")
+        .find("CARGO_TARGET_DIR=\"$ROOT/target\" cargo build --release >> \"$LOG\" 2>&1 || build_rc=$?")
         .expect("loopd.sh builds its own binary");
     let loop_start = loopd
         .find("while [ ! -f \"$STOP\" ]")
@@ -192,13 +192,14 @@ fn loopd_prefixes_the_chug_invocation_never_the_supervisor_env() {
     // ./target, which is what `./target/release/chug` resolves to — and the
     // shared-cache prefix applies only to the cycle invocation after it.
     let build = loopd
-        .find("  cargo build --release >> \"$LOG\" 2>&1")
+        .find("CARGO_TARGET_DIR=\"$ROOT/target\" cargo build --release >> \"$LOG\" 2>&1 || build_rc=$?")
         .expect("loopd.sh builds its own binary first");
     assert!(
         build < invocation,
-        "loopd.sh's own `cargo build --release` (into ./target) must precede \
-         the env-prefixed chug invocation — the supervisor's binary cache \
-         stays separate from the shared children's cache (T47)"
+        "loopd.sh's own `cargo build --release` (pinned to ./target, its rc \
+         latched — T137) must precede the env-prefixed chug invocation — the \
+         supervisor's binary cache stays separate from the shared children's \
+         cache (T47)"
     );
 }
 
@@ -654,12 +655,14 @@ fn t57_dir_stays_scoped_to_the_orchestrator_surfaces() {
 #[test]
 fn loopd_builds_and_launches_the_release_binary() {
     let loopd = read("loopd.sh");
-    // (1) The supervisor's own build is the release form, exactly once.
+    // (1) The supervisor's own build is the release form, exactly once —
+    //     gated (rc latched) and pinned to ./target (T137: the launched
+    //     path must be the path just built).
     count_eq(
         &loopd,
-        "  cargo build --release >> \"$LOG\" 2>&1",
+        "CARGO_TARGET_DIR=\"$ROOT/target\" cargo build --release >> \"$LOG\" 2>&1 || build_rc=$?",
         1,
-        "loopd.sh release build line (T78)",
+        "loopd.sh gated release build line (T78 + T137)",
     );
     // (2) The sweep: no debug-binary launch path survives in loopd.sh.
     assert!(
