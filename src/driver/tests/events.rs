@@ -22,6 +22,7 @@
             max_iters: 5,
             max_minutes: 10,
             max_tokens: 0, // no token budget: pre-T15 behavior
+            max_tokens_per_request: crate::api::DEFAULT_MAX_TOKENS,
             resume: false,
             controls,
             risk_gate: false,
@@ -32,7 +33,7 @@
             // T117: a literal test goal — no pack expansion (None wiring leg).
             goal_pack: None,
         };
-        let client = Client::new_without_credentials("test-model").unwrap();
+        let client = Client::new_without_credentials("test-model", crate::api::DEFAULT_MAX_TOKENS).unwrap();
         let mut sink = RecordingSink::default();
         // Noop sink: observability off → the run path must be untouched.
         let code = run_loop(cfg, client, None, &mut sink, &observ::Sink::Noop).unwrap();
@@ -102,6 +103,7 @@
                 max_iters: 5,
                 max_minutes: 10,
                 max_tokens: 0,
+                max_tokens_per_request: crate::api::DEFAULT_MAX_TOKENS,
                 resume: false,
                 // Abort at the first boundary: the startup path (including
                 // run_start) runs, no LLM call is ever made.
@@ -115,7 +117,7 @@
                 mcp_off: true,
                 goal_pack: goal_pack.clone(),
             };
-            let client = Client::new_without_credentials("test-model").unwrap();
+            let client = Client::new_without_credentials("test-model", crate::api::DEFAULT_MAX_TOKENS).unwrap();
             let mut sink = RecordingSink::default();
             run_loop(cfg, client, None, &mut sink, &observ::Sink::Noop).unwrap();
 

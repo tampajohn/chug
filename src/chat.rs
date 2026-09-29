@@ -131,6 +131,10 @@ pub struct ChatConfig {
     pub max_minutes: u64,
     /// Per-turn token budget: cumulative input+output tokens. `0` = unlimited.
     pub max_tokens: u64,
+    /// T143: the per-request output-token cap sent as `max_tokens` on every
+    /// API call (default 32768; `--max-tokens-per-request`/`$CHUG_MAX_TOKENS`
+    /// override). Distinct from the cumulative per-turn `max_tokens` above.
+    pub max_tokens_per_request: u32,
     pub resume: bool,
     pub risk_gate: bool,
     /// Per-command wall-clock budget for the `bash` tool.
@@ -152,7 +156,7 @@ pub struct ChatConfig {
 /// lives for the whole session (spawned at start, killed when the session
 /// ends — including on error return).
 pub fn run_chat(cfg: ChatConfig, sink: &mut dyn EventSink) -> anyhow::Result<i32> {
-    let mut client = Client::new(&cfg.model)?;
+    let mut client = Client::new(&cfg.model, cfg.max_tokens_per_request)?;
     let gate = if cfg.risk_gate {
         Some(RiskGate::new(Box::new(LayaJudge::from_env()?), &cfg.cwd))
     } else {
@@ -195,6 +199,7 @@ fn run_chat_with(
         cfg.max_iters,
         cfg.max_minutes,
         cfg.max_tokens,
+        cfg.max_tokens_per_request,
         crate::build_info::as_pair(&head),
         None,
         None,
@@ -400,6 +405,7 @@ mod tests {
             max_iters: 40,
             max_minutes: 120,
             max_tokens: 0, // no token budget: pre-T15 behavior
+            max_tokens_per_request: crate::api::DEFAULT_MAX_TOKENS,
             resume: false,
             risk_gate: false,
             bash_timeout: Duration::from_secs(crate::tools::BASH_TIMEOUT_SECS),
@@ -681,6 +687,64 @@ mod tests {
         );
     }
 
+    /// T143: chat mode carries the per-request cap both ways — the session's
+    /// run_start line records the configured cap, and a truncated turn's
+    /// advisory gains the raise-the-cap remedy line when the cap is below
+    /// 32768 (the client double reports the lowered cap exactly as the real
+    /// `Client::new(model, cap)` wiring would send it).
+    #[test]
+    fn chat_records_cap_and_adds_remedy_on_truncation_below_default() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut h = harness(
+            &tmp,
+            vec![
+                json!({
+                    "stop_reason": "max_tokens",
+                    "usage": {"input_tokens": 10, "output_tokens": 8192},
+                    "content": [
+                        {"type": "tool_use", "id": "tu_1", "name": "bash", "input": {"command": "true"}}
+                    ],
+                }),
+                text_response("all done"),
+            ],
+        );
+        h.cfg.max_tokens_per_request = 8192;
+        h.llm.max_tokens_per_request = 8192;
+        let (code, _, _, cwd) = run_session(h, |objective_tx, _| {
+            objective_tx.send("write a big file".into()).unwrap();
+        });
+        assert_eq!(code, 0);
+
+        // The session's opening line records the configured per-request cap.
+        let first: serde_json::Value = serde_json::from_str(
+            std::fs::read_to_string(cwd.join(".chug/events.jsonl"))
+                .expect("events.jsonl written")
+                .lines()
+                .next()
+                .expect("run_start line"),
+        )
+        .expect("first line parses");
+        assert_eq!(first["max_tokens_per_request"], 8192);
+
+        // The truncated turn's advisory carries the remedy line.
+        let on_disk = transcript::load(&cwd).unwrap();
+        let remedy = on_disk
+            .iter()
+            .filter_map(|m| {
+                m.content
+                    .iter()
+                    .filter_map(|b| b.text())
+                    .find(|t| t.contains("raise CHUG_MAX_TOKENS"))
+            })
+            .next()
+            .expect("remedy line in the chat transcript");
+        assert!(
+            remedy.starts_with("chug: output truncated"),
+            "the remedy extends the T38 advisory, never replaces it: {remedy}"
+        );
+        assert!(remedy.contains("8192"), "names the cap in effect: {remedy}");
+    }
+
     /// T119 wiring leg (the chat call-site `None→Some` mutant): chat
     /// sessions open goal-less (objectives arrive turn by turn, T113), so
     /// the session's `run_start` records `goal_sha256: null` — with the key
@@ -901,6 +965,7 @@ mod tests {
             max_iters: 40,
             max_minutes: 120,
             max_tokens: 0, // no token budget: pre-T15 behavior
+            max_tokens_per_request: crate::api::DEFAULT_MAX_TOKENS,
             resume: false,
             risk_gate: false,
             bash_timeout: Duration::from_secs(crate::tools::BASH_TIMEOUT_SECS),

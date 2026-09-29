@@ -75,6 +75,12 @@ enum CliCommand {
         /// 0 = unlimited.
         #[arg(long, default_value_t = 0)]
         max_tokens: u64,
+        /// Per-request output-token cap sent as `max_tokens` on every API
+        /// call. GLM thinking blocks share this budget with the response
+        /// content, so low caps truncate large tool calls (T143). Order:
+        /// --max-tokens-per-request, $CHUG_MAX_TOKENS, 32768.
+        #[arg(long)]
+        max_tokens_per_request: Option<u32>,
         /// Resume from <cwd>/.chug/transcript.jsonl.
         #[arg(long)]
         resume: bool,
@@ -125,6 +131,11 @@ enum CliCommand {
         /// 0 = unlimited.
         #[arg(long, default_value_t = 0)]
         max_tokens: u64,
+        /// Per-request output-token cap sent as `max_tokens` on every API
+        /// call (T143). Order: --max-tokens-per-request, $CHUG_MAX_TOKENS,
+        /// 32768.
+        #[arg(long)]
+        max_tokens_per_request: Option<u32>,
     },
     /// Save/list/restore named session fork slots over the live transcript
     /// + LEDGER.md (F6 phase 1): explore two approaches from one state.
@@ -161,6 +172,11 @@ enum CliCommand {
         /// Per-turn token budget: cumulative input+output tokens. 0 = unlimited.
         #[arg(long, default_value_t = 0)]
         max_tokens: u64,
+        /// Per-request output-token cap sent as `max_tokens` on every API
+        /// call (T143). Order: --max-tokens-per-request, $CHUG_MAX_TOKENS,
+        /// 32768.
+        #[arg(long)]
+        max_tokens_per_request: Option<u32>,
         /// Resume from <cwd>/.chug/transcript.jsonl.
         #[arg(long)]
         resume: bool,
@@ -235,8 +251,10 @@ fn main() -> ExitCode {
             max_iters,
             max_minutes,
             max_tokens,
+            max_tokens_per_request,
         } => cmd_plan(
             goal, spec, out, cwd, model, max_iters, max_minutes, max_tokens,
+            max_tokens_per_request,
         ),
         CliCommand::Chat {
             cwd,
@@ -244,6 +262,7 @@ fn main() -> ExitCode {
             max_iters,
             max_minutes,
             max_tokens,
+            max_tokens_per_request,
             resume,
             risk_gate,
             bash_timeout,
@@ -255,6 +274,7 @@ fn main() -> ExitCode {
             max_iters,
             max_minutes,
             max_tokens,
+            max_tokens_per_request,
             resume,
             risk_gate,
             bash_timeout,
@@ -269,6 +289,7 @@ fn main() -> ExitCode {
             max_iters,
             max_minutes,
             max_tokens,
+            max_tokens_per_request,
             resume,
             tui,
             risk_gate,
@@ -283,6 +304,7 @@ fn main() -> ExitCode {
             max_iters,
             max_minutes,
             max_tokens,
+            max_tokens_per_request,
             resume,
             tui,
             risk_gate,
@@ -336,6 +358,41 @@ fn resolve_bash_timeout(flag: Option<u64>) -> anyhow::Result<std::time::Duration
     Ok(std::time::Duration::from_secs(bash_timeout_secs(flag, env.as_deref())?))
 }
 
+/// T143 per-request cap precedence: `--max-tokens-per-request` flag >
+/// `$CHUG_MAX_TOKENS` env > the 32768 default ([`api::DEFAULT_MAX_TOKENS`],
+/// the operator-proven value after the 8192 hardcoded cap let GLM thinking
+/// blocks truncate large tool-call JSON). Pure so the precedence is
+/// unit-testable without touching process env. Rejects zero and unparseable
+/// values from either source (the API needs a positive cap).
+fn max_tokens_per_request(flag: Option<u32>, env: Option<&str>) -> anyhow::Result<u32> {
+    fn parse(source: &str, raw: &str) -> anyhow::Result<u32> {
+        let cap: u32 = raw
+            .parse()
+            .map_err(|_| anyhow!("{source} must be a number of tokens, got {raw:?}"))?;
+        if cap == 0 {
+            anyhow::bail!("{source} must be a positive number of tokens");
+        }
+        Ok(cap)
+    }
+    match flag {
+        Some(cap) => {
+            if cap == 0 {
+                anyhow::bail!("--max-tokens-per-request must be a positive number of tokens");
+            }
+            Ok(cap)
+        }
+        None => match env.map(str::trim).filter(|v| !v.is_empty()) {
+            Some(raw) => parse("$CHUG_MAX_TOKENS", raw),
+            None => Ok(api::DEFAULT_MAX_TOKENS),
+        },
+    }
+}
+
+fn resolve_max_tokens(flag: Option<u32>) -> anyhow::Result<u32> {
+    let env = std::env::var("CHUG_MAX_TOKENS").ok();
+    max_tokens_per_request(flag, env.as_deref())
+}
+
 #[allow(clippy::too_many_arguments)]
 fn cmd_run(
     spec: PathBuf,
@@ -345,6 +402,7 @@ fn cmd_run(
     max_iters: u32,
     max_minutes: u64,
     max_tokens: u64,
+    max_tokens_per_request: Option<u32>,
     resume: bool,
     tui: bool,
     risk_gate: bool,
@@ -354,6 +412,8 @@ fn cmd_run(
 ) -> anyhow::Result<i32> {
     let cwd = resolve_cwd(cwd)?;
     let bash_timeout = resolve_bash_timeout(bash_timeout)?;
+    // T143: resolve the per-request cap here — flag > $CHUG_MAX_TOKENS > 32768.
+    let max_tokens_per_request = resolve_max_tokens(max_tokens_per_request)?;
     // T117: pack expansion happens first — before the spec resolution and
     // every `.chug/` write, so a bad `/name` exits clean.
     let (goal, goal_pack) = expand_goal(&cwd, goal)?;
@@ -374,8 +434,8 @@ fn cmd_run(
 
     if tui {
         run_with_tui(
-            spec, goal, goal_pack, cwd, model, max_iters, max_minutes, max_tokens, resume,
-            risk_gate, bash_timeout, mcp_config, mcp_off,
+            spec, goal, goal_pack, cwd, model, max_iters, max_minutes, max_tokens,
+            max_tokens_per_request, resume, risk_gate, bash_timeout, mcp_config, mcp_off,
         )
     } else {
         let cfg = driver::RunConfig {
@@ -386,6 +446,7 @@ fn cmd_run(
             max_iters,
             max_minutes,
             max_tokens,
+            max_tokens_per_request,
             resume,
             controls: driver::Controls::detached(),
             risk_gate,
@@ -410,6 +471,7 @@ fn run_with_tui(
     max_iters: u32,
     max_minutes: u64,
     max_tokens: u64,
+    max_tokens_per_request: u32,
     resume: bool,
     risk_gate: bool,
     bash_timeout: std::time::Duration,
@@ -429,6 +491,7 @@ fn run_with_tui(
         max_iters,
         max_minutes,
         max_tokens,
+        max_tokens_per_request,
         resume,
         risk_gate,
         bash_timeout,
@@ -480,6 +543,7 @@ fn cmd_chat(
     max_iters: u32,
     max_minutes: u64,
     max_tokens: u64,
+    max_tokens_per_request: Option<u32>,
     resume: bool,
     risk_gate: bool,
     bash_timeout: Option<u64>,
@@ -488,6 +552,8 @@ fn cmd_chat(
 ) -> anyhow::Result<i32> {
     let cwd = resolve_cwd(cwd)?;
     let bash_timeout = resolve_bash_timeout(bash_timeout)?;
+    // T143: flag > $CHUG_MAX_TOKENS > 32768, same resolution as run/plan.
+    let max_tokens_per_request = resolve_max_tokens(max_tokens_per_request)?;
     let model = model
         .filter(|m| !m.trim().is_empty())
         .or_else(|| std::env::var("CHUG_MODEL").ok().filter(|m| !m.trim().is_empty()))
@@ -510,6 +576,7 @@ fn cmd_chat(
         max_iters,
         max_minutes,
         max_tokens,
+        max_tokens_per_request,
         resume,
         risk_gate,
         bash_timeout,
@@ -603,8 +670,11 @@ fn cmd_plan(
     max_iters: u32,
     max_minutes: u64,
     max_tokens: u64,
+    max_tokens_per_request: Option<u32>,
 ) -> anyhow::Result<i32> {
     let cwd = resolve_cwd(cwd)?;
+    // T143: flag > $CHUG_MAX_TOKENS > 32768, same resolution as run/chat.
+    let max_tokens_per_request = resolve_max_tokens(max_tokens_per_request)?;
     // T117: same CLI-boundary expansion as run — before anything writes.
     let (goal, goal_pack) = expand_goal(&cwd, goal)?;
     let spec = match spec {
@@ -630,6 +700,7 @@ fn cmd_plan(
         max_iters,
         max_minutes,
         max_tokens,
+        max_tokens_per_request,
         out_path: out,
         goal_pack,
     };
@@ -703,6 +774,68 @@ mod tests {
     #[test]
     fn resolve_bash_timeout_wraps_secs_in_duration() {
         assert_eq!(resolve_bash_timeout(Some(1)).unwrap(), Duration::from_secs(1));
+    }
+
+    /// T143: per-request cap precedence — the 32768 default, `$CHUG_MAX_TOKENS`
+    /// wins over the default, the flag wins over the env (bash-timeout shape);
+    /// zero/garbage from either source is rejected; a blank env falls through
+    /// to the default. Pinned in the SAME test: T15's cumulative-budget
+    /// `--max-tokens` is unchanged — still present on run/chat/plan with its
+    /// `0` (= unlimited) clap default — and the new
+    /// `--max-tokens-per-request` carries no clap default (its default is the
+    /// resolution const) so the two flags can never collide.
+    #[test]
+    fn max_tokens_per_request_precedence_and_t15_budget_flag_pinned() {
+        use clap::CommandFactory;
+
+        // Precedence (env passed as a parameter — no process-env mutation).
+        assert_eq!(
+            max_tokens_per_request(None, None).unwrap(),
+            32768,
+            "the operator-proven default"
+        );
+        assert_eq!(
+            max_tokens_per_request(None, Some("8192")).unwrap(),
+            8192,
+            "env wins over the default"
+        );
+        assert_eq!(
+            max_tokens_per_request(Some(65536), Some("8192")).unwrap(),
+            65536,
+            "flag wins over the env"
+        );
+        // Blank env falls through to the default (bash-timeout parity).
+        assert_eq!(max_tokens_per_request(None, Some("  ")).unwrap(), 32768);
+        // Zero and garbage are rejected from either source.
+        assert!(max_tokens_per_request(Some(0), Some("8192")).is_err());
+        assert!(max_tokens_per_request(None, Some("0")).is_err());
+        assert!(max_tokens_per_request(None, Some("abc")).is_err());
+
+        // T15's cumulative-budget flag unchanged, in the same breath.
+        let cli = Cli::command();
+        for sub in ["run", "chat", "plan"] {
+            let cmd = cli.find_subcommand(sub).unwrap_or_else(|| panic!("{sub} subcommand"));
+            let t15 = cmd
+                .get_arguments()
+                .find(|a| a.get_id() == "max_tokens")
+                .unwrap_or_else(|| panic!("{sub}: T15 --max-tokens present"));
+            let defaults = t15.get_default_values();
+            assert_eq!(defaults.len(), 1, "{sub}: --max-tokens default present");
+            assert_eq!(
+                defaults[0].to_str(),
+                Some("0"),
+                "{sub}: T15 cumulative budget default (0 = unlimited) unchanged"
+            );
+            let t143 = cmd
+                .get_arguments()
+                .find(|a| a.get_id() == "max_tokens_per_request")
+                .unwrap_or_else(|| panic!("{sub}: T143 --max-tokens-per-request present"));
+            assert!(
+                t143.get_default_values().is_empty(),
+                "{sub}: the per-request cap is Option — its default comes from resolution, not clap"
+            );
+            assert_ne!(t15.get_id(), t143.get_id(), "{sub}: no id collision");
+        }
     }
 
     /// T117: the CLI-boundary seam both `run` and `plan` go through. Hit →

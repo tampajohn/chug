@@ -34,6 +34,7 @@
         Client::with_transport_for_tests(
             Arc::new(ScriptedTransport(std::sync::Mutex::new(responses.into()))),
             "test-model",
+            crate::api::DEFAULT_MAX_TOKENS,
         )
     }
 
@@ -50,6 +51,7 @@
             max_iters: 5,
             max_minutes: 10,
             max_tokens: 0,
+            max_tokens_per_request: crate::api::DEFAULT_MAX_TOKENS,
             resume,
             controls: Controls {
                 abort: Arc::new(AtomicBool::new(false)),

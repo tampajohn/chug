@@ -75,6 +75,7 @@
             max_iters: 5,
             max_minutes: 10,
             max_tokens: 0,
+            max_tokens_per_request: crate::api::DEFAULT_MAX_TOKENS,
             resume: true,
             controls: Controls {
                 abort: Arc::new(AtomicBool::new(false)),
@@ -187,6 +188,7 @@
                 tool_use_response("goal_complete", json!({ "summary": "recovered" })),
             ])),
             "test-model",
+            crate::api::DEFAULT_MAX_TOKENS,
         );
         let mut sink = RecordingSink::default();
         let code = run_loop(
@@ -214,7 +216,7 @@
             text_response("re-checking state after the interrupted tool"),
             tool_use_response("goal_complete", json!({ "summary": "recovered" })),
         ]));
-        let client = Client::with_transport_for_tests(transport.clone(), "test-model");
+        let client = Client::with_transport_for_tests(transport.clone(), "test-model", crate::api::DEFAULT_MAX_TOKENS);
         let mut sink = RecordingSink::default();
         run_loop(
             resumed_run_config(&tmp, &spec),
