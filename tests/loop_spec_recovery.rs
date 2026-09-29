@@ -119,6 +119,30 @@
 //! §6-override paragraph is launch mechanics only and is NOT edited; §6's
 //! budgets, model, verdict shape, and T79 parallel-mutant mandate stay
 //! byte-identical.
+//!
+//! T155 doctrine: T149 (8699a70) raised the validator-child budgets
+//! 50/30 → 60/40 on three surfaces and pinned only the bare numbers — the
+//! step-2 T63-resume echo's "80/35 impl, 60/40 validate" (leg (d) above).
+//! Its kimi validator PASSed with two non-blocking unpinned-text
+//! observations (verdict d1790688874-9): text-revert mutants on (a)
+//! LOOP-SPEC step 4's budget RATIONALE — the census sentence ("4 of the
+//! last 4 validator children died at budget in cycles 66–69") and the
+//! measure clause (">1 of the next 8 validator runs still dies at 60/40 …
+//! trim default mutation-leg counts") — and (b) META-SPEC §6's
+//! validator-template budget argv, stayed full-suite GREEN. The rationale
+//! is the teeth that make the budgets self-governing (the census is the
+//! evidence; the measure clause is the pre-committed remedy), and §6's
+//! argv is the template line every validator actually launches from — a
+//! future edit can currently drop either with every gate green. Legs
+//! (p)–(q) pin both texts in place, extending — never replacing — the
+//! T149 numbers pin: the step-4 tokens are asserted in the SAME paragraph
+//! region as step 4's own `max_iters: 60`, `max_minutes: 40` pair
+//! (adjacency, not two disjoint file-wide greps — the T24 whole-file-grep
+//! non-localizing observation), and the §6 argv is one contiguous
+//! fragment on the kimi launch line. No doctrine text is edited by this
+//! row: LOOP-SPEC.md and META-SPEC.md must stay byte-identical
+//! before/after (any wording drift the pin exposes is reported, not
+//! fixed).
 
 /// The leg's signature phrase: "resume" + the one-attempt cap language in
 /// one contiguous run. Must occur EXACTLY once in LOOP-SPEC.md.
@@ -1032,5 +1056,229 @@ fn cross_tree_write_rule_needles_occur_exactly_once_after_read_sentence() {
         "the write sentence must sit IMMEDIATELY after the cross-tree read \
          sentence (whitespace-only gap) — found in between: {:?}",
         between.trim()
+    );
+}
+
+// ---- T155 — the T149 unpinned-text gaps: step-4 rationale + §6 argv ----
+//
+// T149's kimi verdict (d1790688874-9) carried two non-blocking
+// unpinned-text observations: text-revert mutants on (a) LOOP-SPEC step
+// 4's budget RATIONALE and (b) META-SPEC §6's validator-template budget
+// argv stayed full-suite GREEN, because only the bare numbers were pinned
+// (leg (d), the step-2 T63-resume echo). These legs pin both texts.
+
+/// Step 4's budget numbers — the pair the rationale hangs on, contiguous
+/// as written (backticks, comma-space). Leg (d) pins the step-2
+/// T63-resume echo's budgets ("80/35 impl, 60/40 validate"); THIS needle
+/// pins step 4's own launch bytes as the adjacency anchor for the
+/// census/measure tokens — the first step-4 numbers pin, not a duplicate
+/// of leg (d). Presence is asserted via the in-window find (below), not a
+/// separate file-wide count leg — the numbers are already pinned once and
+/// this row does not duplicate that pin.
+const STEP4_BUDGET_NUMBERS: &str = "`max_iters: 60`, `max_minutes: 40`";
+
+/// The census clause's stable core tokens — the evidence the 60/40 budgets
+/// stand on (four budget deaths in four cycles, 66–69). Contiguous as
+/// written; must occur EXACTLY once in LOOP-SPEC.md.
+const STEP4_CENSUS_NEEDLE: &str = "4 of the last 4 validator children died at budget";
+
+/// The measure clause's census-threshold token — the tripwire that keeps
+/// the budgets self-governing. Contiguous as written; EXACTLY once.
+const STEP4_MEASURE_THRESHOLD_NEEDLE: &str = ">1 of the next 8 validator runs";
+
+/// The measure clause's remedy token — trim default mutation-leg counts.
+/// Byte-identical INCLUDING its wrapped line break (the file wraps between
+/// "mutation-leg" and "counts"; the concat! spells the wrap so a rewrap
+/// cannot silently unpin it — the T47_EXPORT_PREFIX idiom).
+const STEP4_MEASURE_REMEDY_NEEDLE: &str = concat!(
+    "trimming default mutation-leg\n",
+    "   counts"
+);
+
+/// Step 4's heading, matched loosely (the T64 pattern; unique in the file
+/// today) — the rationale must live inside step 4's window, closed by the
+/// pre-existing STEP5_HEADING_LOOSE.
+const STEP4_HEADING_LOOSE: &str = "4. **";
+
+/// (p) T155 — step 4's budget RATIONALE survives beside the numbers it
+/// rationalizes: the census clause and both measure-clause tokens occur
+/// EXACTLY once each in LOOP-SPEC.md, inside step 4's window (the T64
+/// loose-heading scope pattern), AFTER the `max_iters: 60`,
+/// `max_minutes: 40` numbers pair — the same paragraph region (the budget
+/// parenthetical), not a disjoint section (the T24 non-localizing
+/// observation). Delete the rationale text — T149's observed text-revert
+/// mutant — and every needle goes red at count 0 / window-miss; move the
+/// rationale out of step 4 and it dies on the window find; reorder
+/// census/measure and it dies on the ordering assert. Leg (d)'s step-2
+/// echo pin is untouched and stays green under this row's mutants — that
+/// co-green gap is exactly what T149's verdict flagged.
+#[test]
+fn step4_budget_rationale_tokens_occur_once_beside_the_budget_numbers() {
+    // Needle self-checks (T48 idiom): a mangled needle must not let this
+    // pin pass silently.
+    assert!(
+        STEP4_BUDGET_NUMBERS.starts_with("`max_iters: 60`")
+            && STEP4_BUDGET_NUMBERS.ends_with("`max_minutes: 40`"),
+        "the numbers needle must be step 4's contiguous 60/40 pair verbatim"
+    );
+    assert!(
+        STEP4_CENSUS_NEEDLE.starts_with("4 of the last 4")
+            && STEP4_CENSUS_NEEDLE.ends_with("died at budget"),
+        "the census needle must carry the four-deaths evidence verbatim"
+    );
+    assert!(
+        STEP4_MEASURE_THRESHOLD_NEEDLE.starts_with(">1 of the next 8")
+            && STEP4_MEASURE_THRESHOLD_NEEDLE.ends_with("validator runs"),
+        "the measure threshold needle must carry the >1-of-8 tripwire verbatim"
+    );
+    assert!(
+        STEP4_MEASURE_REMEDY_NEEDLE.starts_with("trimming default")
+            && STEP4_MEASURE_REMEDY_NEEDLE.ends_with("counts"),
+        "the measure remedy needle must carry the mutation-leg-counts \
+         remedy verbatim, wrapped line break included"
+    );
+    let spec = loop_spec();
+    for (needle, what) in [
+        (STEP4_CENSUS_NEEDLE, "the step-4 budget census clause"),
+        (
+            STEP4_MEASURE_THRESHOLD_NEEDLE,
+            "the measure clause's >1-of-8 tripwire",
+        ),
+        (
+            STEP4_MEASURE_REMEDY_NEEDLE,
+            "the measure clause's trim-mutation-leg-counts remedy",
+        ),
+    ] {
+        assert_eq!(
+            spec.matches(needle).count(),
+            1,
+            "LOOP-SPEC must state {what} exactly once — zero means the \
+             budget rationale was deleted (or a needle was rewrapped \
+             across a line break), more than one means it is stated twice"
+        );
+    }
+    // Window: step 4 through step 5 (the T64 loose-heading scope
+    // pattern) — the rationale must live in step 4's validation
+    // paragraph, not drift into another step.
+    let start = spec
+        .find(STEP4_HEADING_LOOSE)
+        .expect("step-4 heading (`4. **`) present");
+    let end = start
+        + spec[start..]
+            .find(STEP5_HEADING_LOOSE)
+            .expect("step-5 heading present after step 4's");
+    let window = &spec[start..end];
+    let numbers = window.find(STEP4_BUDGET_NUMBERS).unwrap_or_else(|| {
+        panic!(
+            "step-4 window must carry {STEP4_BUDGET_NUMBERS:?} — the 60/40 \
+             numbers pair was deleted or moved out of step 4 (leg (d)'s \
+             step-2 echo pin is unaffected either way)"
+        )
+    });
+    let census = window.find(STEP4_CENSUS_NEEDLE).unwrap_or_else(|| {
+        panic!(
+            "step-4 window must carry {STEP4_CENSUS_NEEDLE:?} — the census \
+             clause was deleted, or moved out of step 4"
+        )
+    });
+    let threshold = window
+        .find(STEP4_MEASURE_THRESHOLD_NEEDLE)
+        .unwrap_or_else(|| {
+            panic!(
+                "step-4 window must carry {STEP4_MEASURE_THRESHOLD_NEEDLE:?} \
+                 — the measure tripwire was deleted, or moved out of step 4"
+            )
+        });
+    let remedy = window.find(STEP4_MEASURE_REMEDY_NEEDLE).unwrap_or_else(|| {
+        panic!(
+            "step-4 window must carry {STEP4_MEASURE_REMEDY_NEEDLE:?} \
+             (wrapped line break included) — the measure remedy was \
+             deleted, rewrapped, or moved out of step 4"
+        )
+    });
+    assert!(
+        numbers < census && census < threshold && threshold < remedy,
+        "the rationale must sit in the SAME paragraph region as the 60/40 \
+         numbers, reading in the written order — numbers ({numbers}), \
+         census ({census}), measure tripwire ({threshold}), measure remedy \
+         ({remedy})"
+    );
+}
+
+/// (q) T155 — §6's validator launch template keeps its budget argv as ONE
+/// contiguous fragment on the kimi line: `--max-iters 60 --max-minutes
+/// 40`. T149 raised §6's template 40/30 → 60/40 in the same commit as the
+/// LOOP-SPEC numbers, but nothing pinned the template's bytes — reverting
+/// the argv to the pre-T149 `--max-iters 40 --max-minutes 30` stayed
+/// full-suite GREEN. The fragment is asserted contiguously (one
+/// substring, not two separate greps), exactly once in META-SPEC.md,
+/// inside §6's Validate-step window (the T64 loose-heading pattern over
+/// the existing STEP6_VALIDATE_HEADING / STEP7_HEADING bounds), on the
+/// line that carries the kimi model id — the validator's launch line, not
+/// some other template's.
+const META_SPEC_VALIDATOR_ARGV: &str = "--max-iters 60 --max-minutes 40";
+
+/// The kimi model id that must share the argv's line — the fragment pins
+/// the VALIDATOR launch, so it must sit beside the kimi model flag.
+const KIMI_MODEL_ID: &str = "anthropic-system.ai.kimi-k3";
+
+/// (q) T155 — see [`META_SPEC_VALIDATOR_ARGV`].
+#[test]
+fn meta_spec_validator_template_budget_argv_fragment_exactly_once_in_step6() {
+    // Needle self-check (T48 idiom): a mangled needle must not let this
+    // pin pass silently.
+    assert!(
+        META_SPEC_VALIDATOR_ARGV.starts_with("--max-iters 60")
+            && META_SPEC_VALIDATOR_ARGV.ends_with("--max-minutes 40"),
+        "the argv needle must be the contiguous 60/40 fragment verbatim"
+    );
+    assert!(
+        KIMI_MODEL_ID.starts_with("anthropic-system.ai.")
+            && KIMI_MODEL_ID.ends_with("kimi-k3"),
+        "the model-id anchor must be the kimi validator model verbatim"
+    );
+    let spec = meta_spec();
+    assert_eq!(
+        spec.matches(META_SPEC_VALIDATOR_ARGV).count(),
+        1,
+        "META-SPEC §6's validator launch template must state \
+         {META_SPEC_VALIDATOR_ARGV:?} exactly once as one contiguous \
+         fragment — zero means the argv was reverted, split, or rewrapped \
+         (which also breaks the fragment's contiguity), more than one \
+         means it is stated twice"
+    );
+    // Window: §6's Validate step through step 7 (T64 loose-heading scope
+    // pattern, reusing the T126 bounds).
+    let start = spec
+        .find(STEP6_VALIDATE_HEADING)
+        .expect("step-6 Validate heading present");
+    let end = start
+        + spec[start..]
+            .find(STEP7_HEADING)
+            .expect("step-7 heading present after step 6's");
+    let argv = start
+        + spec[start..end]
+            .find(META_SPEC_VALIDATOR_ARGV)
+            .unwrap_or_else(|| {
+                panic!(
+                    "the Validate-step window must carry \
+                     {META_SPEC_VALIDATOR_ARGV:?} (argv reverted to the \
+                     pre-T149 40/30, or moved out of §6?)"
+                )
+            });
+    // Line-scoped localization: the fragment's line must carry the kimi
+    // model id — it pins the VALIDATOR launch line, not another
+    // template's.
+    let line_start = spec[..argv].rfind('\n').map(|i| i + 1).unwrap_or(0);
+    let line_end = argv
+        + spec[argv..]
+            .find('\n')
+            .unwrap_or(spec.len() - argv);
+    let line = &spec[line_start..line_end];
+    assert!(
+        line.contains(KIMI_MODEL_ID),
+        "the budget argv must sit on the kimi validator launch line — the \
+         line carrying {META_SPEC_VALIDATOR_ARGV:?} reads {line:?}, with \
+         no {KIMI_MODEL_ID:?} on it"
     );
 }
