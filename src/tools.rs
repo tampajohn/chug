@@ -743,10 +743,17 @@ fn grep_result(stdout: Vec<u8>, stderr: Vec<u8>, exit_code: Option<i32>) -> Tool
     }
 }
 
+/// `update_ledger` `{content}`: wholesale-replace `<cwd>/LEDGER.md`, the
+/// orchestrator's and every child's external memory. T145: the write goes
+/// through `fsatomic::write_atomic` (same-dir temp + fsync + rename) like
+/// the transcript and todo store (T136) — a crash mid-write must never
+/// leave a torn or empty ledger, and a failed write surfaces as a tool
+/// error (never aborts the run) with the previous ledger byte-intact.
 fn update_ledger(ctx: &ToolCtx, input: &Value) -> anyhow::Result<ToolResult> {
     let content = get_str(input, "content")?;
     let path = ctx.cwd.join("LEDGER.md");
-    fs::write(&path, content).with_context(|| format!("writing {}", path.display()))?;
+    crate::fsatomic::write_atomic(&path, content.as_bytes())
+        .with_context(|| format!("writing {}", path.display()))?;
     Ok(ToolResult {
         content: format!("ledger updated ({} bytes)", content.len()),
         is_error: false,
@@ -2878,5 +2885,121 @@ mod tests {
         );
         assert!(!result.is_error, "{}", result.content);
         assert_eq!(fs::read_to_string(tmp.path().join("f.txt")).unwrap(), "a X c");
+    }
+
+    // ---- T145: update_ledger writes through fsatomic::write_atomic ----
+    //
+    // LEDGER.md is the orchestrator's and every child's external memory,
+    // rewritten wholesale by update_ledger on every bookkeeping step. T136
+    // routed the transcript and the todo store through the atomic
+    // temp+fsync+rename helper but left the ledger on the truncating
+    // `fs::write` — a crash mid-write could leave a torn or empty ledger.
+    // These tests pin the same crash class closed for the ledger, mirroring
+    // the T136 todos.rs test family.
+
+    /// Happy-path regression: the ledger is replaced byte-exactly, the tool
+    /// result text is unchanged, and no temp sibling lingers in cwd.
+    #[test]
+    fn t145_update_ledger_replaces_byte_exactly_and_leaves_no_temp() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ledger = tmp.path().join("LEDGER.md");
+        fs::write(&ledger, "# Ledger\n\n## Done\n- old\n").unwrap();
+        let ctx = ToolCtx {
+            cwd: tmp.path().to_path_buf(),
+            bash_timeout: Duration::from_secs(BASH_TIMEOUT_SECS),
+        };
+        let new = "# Ledger\n\n## Done\n- new\n\n## Next\n- x\n\n## Blockers\n- none\n";
+        let r = dispatch(&ctx, "update_ledger", &json!({"content": new}));
+        assert!(!r.is_error, "{}", r.content);
+        assert_eq!(r.content, format!("ledger updated ({} bytes)", new.len()));
+        assert_eq!(
+            fs::read(&ledger).unwrap(),
+            new.as_bytes(),
+            "the ledger is replaced byte-exactly"
+        );
+        let entries: Vec<String> = fs::read_dir(tmp.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(entries, vec!["LEDGER.md".to_string()], "no temp sibling: {entries:?}");
+    }
+
+    /// RED leg: the write must go through the atomic temp+rename seam. The
+    /// pid-suffixed temp path `LEDGER.md.<pid>.tmp` is obstructed with a
+    /// directory, so write_atomic's temp `File::create` fails while the live
+    /// LEDGER.md itself stays a perfectly writable file — a failure only the
+    /// atomic path can reach (the direct `fs::write` never touches the temp
+    /// name: pre-fix this call succeeded and destroyed the previous bytes).
+    /// The failed atomic write must surface as a tool error and leave the
+    /// PREVIOUS ledger byte-intact — no torn file, no empty file.
+    #[test]
+    fn t145_failed_atomic_write_leaves_previous_ledger_byte_intact() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ledger = tmp.path().join("LEDGER.md");
+        let previous = "# Ledger\n\n## Done\n- previous bytes stay\n";
+        fs::write(&ledger, previous).unwrap();
+        // Obstruct exactly the temp path write_atomic will use.
+        let seam = tmp.path().join(format!("LEDGER.md.{}.tmp", std::process::id()));
+        fs::create_dir(&seam).unwrap();
+        let ctx = ToolCtx {
+            cwd: tmp.path().to_path_buf(),
+            bash_timeout: Duration::from_secs(BASH_TIMEOUT_SECS),
+        };
+        let r = dispatch(&ctx, "update_ledger", &json!({"content": "replacement"}));
+        assert!(
+            r.is_error,
+            "the failed atomic write surfaces as a tool error: {}",
+            r.content
+        );
+        assert_eq!(
+            fs::read(&ledger).unwrap(),
+            previous.as_bytes(),
+            "the failed write left the previous ledger byte-intact"
+        );
+        // The obstructed temp path was never renamed over the target.
+        assert!(seam.is_dir(), "the seam was consumed by a direct write");
+        fs::remove_dir(&seam).unwrap();
+    }
+
+    /// Mirrors the T136 todos.rs error-injection leg: the ledger path being
+    /// a directory makes the write fail; the error propagates as a tool
+    /// error (the call errors, the run never aborts), the target is
+    /// untouched, and after clearing the fault a clean write replaces the
+    /// content with no temp sibling left behind.
+    #[test]
+    fn t145_failed_write_error_surface_and_recovery_match_t136_pattern() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ledger = tmp.path().join("LEDGER.md");
+        fs::write(&ledger, "# Ledger\n\n## Done\n- old\n").unwrap();
+        let backup = tmp.path().join("LEDGER.md.bak");
+        fs::rename(&ledger, &backup).unwrap();
+        fs::create_dir(&ledger).unwrap();
+        let ctx = ToolCtx {
+            cwd: tmp.path().to_path_buf(),
+            bash_timeout: Duration::from_secs(BASH_TIMEOUT_SECS),
+        };
+        let r = dispatch(&ctx, "update_ledger", &json!({"content": "second"}));
+        assert!(r.is_error, "the failed write surfaces as a tool error");
+        assert!(
+            r.content.starts_with("tool error: "),
+            "the error rides the usual tool-error surface: {}",
+            r.content
+        );
+        assert!(ledger.is_dir(), "the target was never touched by the failed write");
+        fs::remove_dir(&ledger).unwrap();
+        fs::rename(&backup, &ledger).unwrap();
+
+        // Recovery: a clean write replaces the previous bytes and leaves
+        // exactly one file in cwd (no temp sibling).
+        let r = dispatch(&ctx, "update_ledger", &json!({"content": "third"}));
+        assert!(!r.is_error, "{}", r.content);
+        assert_eq!(fs::read(&ledger).unwrap(), b"third");
+        let entries: Vec<String> = fs::read_dir(tmp.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(entries, vec!["LEDGER.md".to_string()], "no temp siblings: {entries:?}");
     }
 }
