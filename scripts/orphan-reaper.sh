@@ -18,7 +18,7 @@
 # process of a cycle descends from the driver argv that probe would have
 # matched — so any leftover loop-artifact process is definitionally orphaned.
 #
-# Needle (two legs, either qualifies):
+# Needle (three legs, any qualifies):
 #   • artifact leg: the process's executable path — resolved via
 #     `ps -o comm=`, NEVER the argv[0] text (argv[0] is spoofable; comm is
 #     the path recorded at exec) — is ABSOLUTE and contains both
@@ -26,14 +26,40 @@
 #     target-shared/, target-shared-mut-<k>/, target-shared-validate/, ...).
 #   • removed-worktree leg: the argv contains `/tmp/chug-loop-t` or
 #     `/tmp/chug-mut-` AND the named worktree directory no longer exists.
-# Both legs additionally require the process to be OUTSIDE the reaper's own
+#   • cwd leg (the cycle-72 spec amendment): the process's CURRENT WORKING
+#     DIRECTORY — resolved via `lsof -a -p <pid> -d cwd -Fn` (the portable
+#     probe; macOS ships lsof at /usr/sbin, frequently off PATH, so the
+#     helper resolves the binary itself) — is inside a `/tmp/chug-loop-t*`
+#     or `/tmp/chug-mut*` path, EXISTING OR NOT. The kernel resolves the
+#     cwd, and on macOS /tmp is a symlink to /private/tmp, so the needle
+#     matches the resolved `/private/tmp/...` forms too — a /tmp-form-only
+#     glob would be dead code on this host. This leg exists for the
+#     cycle-72 live evidence: the T151 fix-up child's
+#     `sh -c 'export … & echo launched'` hammer loop survived its budget
+#     death by 1h49m — innocent argv, innocent comm, identified ONLY by its
+#     cwd, spawning fresh cargo/test processes the whole time. The
+#     sweep-point invariant covers the cwd leg's safety: at the pre-cycle
+#     point no legitimate process can have a loop worktree cwd (no
+#     orchestrator and no children exist), so cwd-in-worktree implies
+#     orphaned by construction. (An operator merely inspecting a worktree
+#     at cycle launch is the documented cost of that invariant;
+#     LOOP_REAPER=0 is the opt-out.)
+# All legs additionally require the process to be OUTSIDE the reaper's own
 # process group — the supervisor and everything it could legitimately have
-# spawned share that group, so a candidate inside it is never signalled.
+# spawned share that group, so a candidate inside it is never signalled —
+# and NOT a current-cycle process: none can exist at the sweep point by
+# construction (the sweep-point invariant above), so the group check is the
+# defensive backstop, not the primary guard.
 #
 # Fail-closed: any candidate whose identity cannot be fully resolved (ps
 # failure, non-absolute or unreadable comm, argv needle without a resolvable
-# worktree directory) is SKIPPED and logged `skip pid=<n> (unresolved)` — an
-# ambiguous process is never killed. The kill leg is SIGTERM only, never
+# worktree directory, cwd that cannot be resolved — lsof failure, no cwd
+# record, non-absolute path) is SKIPPED and logged `skip pid=<n> (unresolved)`
+# — an ambiguous process is never killed. If the lsof binary itself cannot
+# be found, the cwd leg is BLIND for that sweep: one logged line, and rows
+# are never cwd-judged (a blind leg cannot kill; per-row cwd failures, where
+# the tool ran and still could not answer, still skip + log). The kill leg
+# is SIGTERM only, never
 # SIGKILL: a TERM-resistant survivor is still identity-matched and the next
 # cycle's sweep re-judges it, while a SIGKILL would be un-undoable and this
 # sweep's whole premise is precision.
@@ -42,7 +68,10 @@
 # EXAMINED per sweep — selected deterministically (rows sorted by pid
 # ascending, windowed by a persisted page offset) — so a pathological table
 # costs a bounded couple of ps calls instead of stalling cycle launch, while
-# every row still gets its page on a later sweep. Pagination state is
+# every row still gets its page on a later sweep. The cwd leg adds at most
+# one lsof call per examined row (only rows not already identified by the
+# first two legs are probed), so the sweep stays inside the same bound.
+# Pagination state is
 # best-effort: a lost page file merely resets to page 1 (coverage, never
 # safety, depends on it).
 #
@@ -129,6 +158,25 @@ if [ "$own_rc" -ne 0 ] || [ -z "$own_pgid" ]; then
   exit 0
 fi
 
+# --- the cwd-leg tool: resolve `lsof` ONCE, PATH-independently ----------------
+# `lsof -a -p <pid> -d cwd -Fn` is the portable cwd probe (macOS + Linux),
+# but /usr/sbin — where macOS ships it — is frequently NOT on PATH (observed
+# on this host), so the standard absolute locations are fallbacks. Absent
+# entirely → the cwd leg is BLIND for this sweep: one logged line, and rows
+# are never cwd-judged (a blind leg cannot kill; legs 1-2 still judge).
+LSOF_BIN="$(command -v lsof 2>/dev/null || true)"
+if [ -z "$LSOF_BIN" ]; then
+  for lsof_cand in /usr/sbin/lsof /usr/bin/lsof /bin/lsof; do
+    if [ -x "$lsof_cand" ]; then
+      LSOF_BIN="$lsof_cand"
+      break
+    fi
+  done
+fi
+if [ -z "$LSOF_BIN" ]; then
+  echo "$(ts) orphan-reaper: cwd leg unavailable (lsof not found — the cwd leg is blind this sweep)"
+fi
+
 # --- the sweep ---------------------------------------------------------------
 examined=0
 killed=0
@@ -179,8 +227,44 @@ while IFS= read -r row; do
           leg="removed-worktree-argv"
           evidence="$wt"
         fi
-        ;; # worktree still exists → a live worktree's process, not a candidate
+        ;; # worktree still exists → not a candidate on THIS leg (leg 3
+           # below may still catch a process whose cwd sits inside it)
     esac
+  fi
+
+  # Identity leg 3 (cwd): the process's CURRENT WORKING DIRECTORY, resolved
+  # via `lsof -a -p <pid> -d cwd -Fn` — the kernel-resolved cwd, `-Fn` the
+  # machine-readable form whose `n` record carries the path. SWEEP-POINT
+  # INVARIANT: at the pre-cycle point no legitimate process can have a loop
+  # worktree cwd — no orchestrator and no children exist (the probe just
+  # passed) — so cwd-in-worktree implies orphaned by construction. The
+  # needle is the worktree family `/tmp/chug-loop-t*` / `/tmp/chug-mut*`,
+  # EXISTING OR NOT (a removed worktree still shows as the process's cwd),
+  # plus the macOS-resolved `/private/tmp/...` forms (lsof reports the
+  # resolved path; /tmp is a symlink to /private/tmp on macOS, so a
+  # /tmp-form-only needle would be dead code on this host). Fail-closed: a
+  # cwd that cannot be resolved (lsof failure, no cwd record — zombie,
+  # other-user, exited-between-enumeration-and-query — or a non-absolute
+  # path) marks the row UNRESOLVED: skip + log, never kill. Only rows not
+  # already identified by legs 1-2 are probed: candidacy is established
+  # there, and the probe costs one lsof per examined row (bounded by MAX).
+  if [ -z "$leg" ] && [ -z "$unresolved" ] && [ -n "$LSOF_BIN" ]; then
+    cwd_rc=0
+    cwd_raw="$("$LSOF_BIN" -a -p "$pid" -d cwd -Fn 2>/dev/null)" || cwd_rc=$?
+    cwd=""
+    while IFS= read -r cwd_line; do
+      case "$cwd_line" in n?*) cwd="${cwd_line#n}" ;; esac
+    done <<<"$cwd_raw"
+    if [ "$cwd_rc" -ne 0 ] || [ -z "$cwd" ] || [ "${cwd#/}" = "$cwd" ]; then
+      unresolved=1
+    else
+      case "$cwd" in
+        /tmp/chug-loop-t*|/private/tmp/chug-loop-t*|/tmp/chug-mut*|/private/tmp/chug-mut*)
+          leg="cwd-in-worktree"
+          evidence="$cwd"
+          ;;
+      esac
+    fi
   fi
 
   # Neither needle → never a candidate, never a judgment (the operator's own

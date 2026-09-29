@@ -16,11 +16,15 @@
 //! the real script/helper, they do not reimplement it, and the sweep is
 //! exercised WITHOUT running the whole supervisor (the helper is loopd's
 //! seam) plus two full-supervisor integration runs through the real
-//! `loopd.sh` in a sandbox. `ps` is stubbed on PATH (the harness pattern):
+//! `loopd.sh` in a sandbox. `ps` and `lsof` are stubbed on PATH (the
+//! harness pattern):
 //! the sweep's enumeration lists ONLY the rows the test names — the host's
 //! real process table is never enumerated, so no foreign process can ever
 //! be signalled by a test — while `comm=`/`pgid=` queries delegate to the
-//! REAL `/bin/ps`, so judgments resolve the fixture's true identity.
+//! stub's env answers, so judgments resolve the fixture's identity
+//! hermetically (the real lsof — the cwd leg's probe — is likewise never
+//! consulted; a loaded host can stall it for minutes, the T151 flake
+//! class).
 //!
 //! Fixtures are real processes spawned by the test itself, in their OWN
 //! process group (`process_group(0)` — the reaper's own-process-group
@@ -102,6 +106,22 @@ fn kill_fixture(child: &mut Child) {
     let _ = child.wait();
 }
 
+/// `spawn_fixture`, but chdir'd into `cwd` — the spec's leg-(c2) shape: argv
+/// and comm are both innocent (a plain `sleep`), the cwd is the ONLY
+/// identifying signal. Same ownership doctrine as `spawn_fixture`: own
+/// process group, the test reaps it.
+fn spawn_fixture_in_cwd(exe: &Path, arg0: Option<&str>, arg: &str, cwd: &Path) -> Child {
+    let mut cmd = Command::new(exe);
+    if let Some(a0) = arg0 {
+        cmd.arg0(a0);
+    }
+    cmd.arg(arg);
+    cmd.current_dir(cwd);
+    cmd.process_group(0);
+    cmd.stdout(Stdio::null()).stderr(Stdio::null());
+    cmd.spawn().expect("spawn fixture in its own process group")
+}
+
 /// The hermetic stub's fixture answers: the fixture pid gets `comm` (the
 /// REAL absolute exec path — the same value the kernel records) and, when
 /// set, its own pgid; everything else gets the unknown-row defaults.
@@ -122,16 +142,28 @@ fn stub(path: &Path, body: &str) {
 }
 
 /// The ps stub (the tests/loopd_stale_binary.rs pattern) — fully HERMETIC:
-/// the real /bin/ps is never consulted (a loaded host can stall it for
-/// minutes — observed on this host, the T151 flake class); every answer
-/// comes from the test's env. Dispatch by argv shape: the sweep's
+/// the real /bin/ps and the real lsof are never consulted (a loaded host can
+/// stall either for minutes — observed on this host, the T151 flake class);
+/// every answer comes from the test's env. The same script is installed as
+/// BOTH `ps` and `lsof` and dispatches by argv shape: the sweep's
 /// enumeration (`-ax -o pid= -o command=`) prints ONLY the rows the test
 /// named (REAPER_STUB_ROWS); the loopd single-driver probe (`-ax -o
 /// command=`) reports no driver (or fails, for the probe-gates-sweep leg);
 /// `comm=`/`pgid=` queries answer for the fixture pid from
 /// REAPER_STUB_COMM_TEXT / REAPER_STUB_FIXTURE_PGID, and for everything
 /// else with the defaults an unknown row would give (empty comm; one shared
-/// pgid, so only the fixture sits outside the reaper's own group).
+/// pgid, so only an explicitly-pinned row sits outside the reaper's own
+/// group). The fixture's pgid defaults to ITS OWN PID — the spawn reality
+/// (every fixture is spawned with `process_group(0)`, so its pgid IS its
+/// pid) — so a direct fixture passes the own-process-group exclusion
+/// without the test pinning anything. `REAPER_STUB_PGID_FAILS` fails the
+/// FIXTURE's pgid query only (the own query must keep succeeding, or the
+/// sweep skips wholesale); `REAPER_STUB_PGID_FAILS_OTHERS` is its inverse
+/// (the sweep-level own-group fail-closed leg). The `-d cwd` invocation is
+/// the reaper's cwd probe: `REAPER_STUB_CWD_TEXT` answers the `n` record
+/// (default `/` — an ordinary daemon cwd that matches no needle),
+/// `REAPER_STUB_LSOF_FAILS` fails the query, `REAPER_STUB_LSOF_EMPTY`
+/// answers with no cwd record at all.
 const PS_STUB: &str = r#"#!/bin/sh
 last_numeric() {
   for arg in "$@"; do
@@ -163,14 +195,34 @@ case "$*" in
     exit 0
     ;;
   *" pgid="*)
-    [ "${REAPER_STUB_PGID_FAILS:-0}" = "1" ] && exit 7
     pid=""
     last_numeric "$@"
-    if [ "$pid" = "${REAPER_STUB_FIXTURE_PID:-}" ] && [ -n "${REAPER_STUB_FIXTURE_PGID:-}" ]; then
-      printf '%s\n' "$REAPER_STUB_FIXTURE_PGID"
+    if [ "${REAPER_STUB_PGID_FAILS:-0}" = "1" ] \
+       && [ "$pid" = "${REAPER_STUB_FIXTURE_PID:-}" ]; then
+      exit 7
+    fi
+    if [ "${REAPER_STUB_PGID_FAILS_OTHERS:-0}" = "1" ] \
+       && [ "$pid" != "${REAPER_STUB_FIXTURE_PID:-}" ]; then
+      exit 7
+    fi
+    if [ "$pid" = "${REAPER_STUB_FIXTURE_PID:-}" ]; then
+      printf '%s\n' "${REAPER_STUB_FIXTURE_PGID:-$pid}"
       exit 0
     fi
     printf '%s\n' "${REAPER_STUB_PGID_TEXT:-777}"
+    exit 0
+    ;;
+  *"-d cwd"*)
+    [ "${REAPER_STUB_LSOF_FAILS:-0}" = "1" ] && exit 7
+    if [ "${REAPER_STUB_LSOF_EMPTY:-0}" = "1" ]; then
+      exit 0
+    fi
+    pid=""
+    last_numeric "$@"
+    # The real lsof's record shape: p<pid>, f<fd>, n<path>.
+    printf 'p%s\n' "$pid"
+    printf 'fcwd\n'
+    printf 'n%s\n' "${REAPER_STUB_CWD_TEXT:-/}"
     exit 0
     ;;
   *)
@@ -199,7 +251,7 @@ exit 0
 "#;
 
 /// The direct harness: the real `scripts/orphan-reaper.sh` copied into a
-/// sandbox with the ps stub first on PATH, run exactly the way loopd runs
+/// sandbox with the ps/lsof stubs first on PATH, run exactly the way loopd runs
 /// it (a child process; stdout captured).
 struct Direct {
     _keep: TempDir,
@@ -217,6 +269,10 @@ impl Direct {
         )
         .expect("copy orphan-reaper.sh");
         stub(&root.join("bin/ps"), PS_STUB);
+        // The cwd leg's probe is lsof — stubbed by the SAME script (it
+        // dispatches on `-d cwd`), installed beside ps so the helper's
+        // `command -v lsof` resolves the hermetic stub, never the real one.
+        stub(&root.join("bin/lsof"), PS_STUB);
         Direct { _keep: keep, root }
     }
 
@@ -273,6 +329,8 @@ impl Sandbox {
         }
         fs::create_dir_all(root.join("bin")).expect("bin dir");
         stub(&root.join("bin/ps"), PS_STUB);
+        // Same hermetic lsof stub as Direct (the cwd leg's probe).
+        stub(&root.join("bin/lsof"), PS_STUB);
         stub(&root.join("bin/cargo"), GREEN_BUILD);
         // site-sync must NEVER leave the sandbox (a live site dir on this
         // host would get synced from fixture garbage): point the env default
@@ -315,14 +373,34 @@ impl Sandbox {
 
     /// Poll the supervisor log until ANY of `needles` appears, then kill the
     /// loop and return the log (the tests/loopd_stale_binary.rs pattern).
+    /// A match SETTLES before returning: the needle can land while the
+    /// supervisor is still writing the sibling lines the caller asserts on
+    /// (the sweep's summary line trails its judgment line by one write; the
+    /// build gate's output trails the sweep by one step), and under the
+    /// parallel-test load of this suite a stub-fast pipeline can stretch
+    /// well past any fixed nap — so the settle waits for the log to stop
+    /// GROWING (quiescence), capped, and returns the settled snapshot.
     fn wait_for_any(&self, child: &mut Child, needles: &[&str]) -> String {
         let deadline = Instant::now() + Duration::from_secs(30);
         loop {
             let content = self.read_log();
             if needles.iter().any(|n| content.contains(n)) {
+                let settle_deadline = Instant::now() + Duration::from_secs(8);
+                let mut settled = content;
+                let mut stable_reads = 0u32;
+                while Instant::now() < settle_deadline && stable_reads < 3 {
+                    std::thread::sleep(Duration::from_millis(150));
+                    let next = self.read_log();
+                    if next.len() == settled.len() {
+                        stable_reads += 1;
+                    } else {
+                        stable_reads = 0;
+                        settled = next;
+                    }
+                }
                 let _ = child.kill();
                 let _ = child.wait();
-                return content;
+                return settled;
             }
             if Instant::now() > deadline {
                 let _ = child.kill();
@@ -487,6 +565,222 @@ fn neither_needle_is_never_a_candidate() {
 }
 
 // ---------------------------------------------------------------------------
+// Spec test leg (c2): the cwd leg (the cycle-72 spec amendment).
+// ---------------------------------------------------------------------------
+
+/// A test-created `/tmp/chug-loop-t`-prefixed worktree + a fixture CHDIR'D
+/// into it, argv and comm both innocent (a plain `sleep`): candidate via the
+/// cwd leg. Two arms. (1) The directory EXISTS (the test created it to chdir
+/// into) and the stub answers the kernel-RESOLVED path — on macOS /tmp is a
+/// symlink to /private/tmp and lsof reports the resolved cwd, so the needle
+/// must match the `/private/tmp/...` form or the leg is dead code on this
+/// host. (2) The stub answers a literal `/tmp/chug-mut-*` cwd whose
+/// directory does NOT exist — leg (c) fires "existing or not", which is
+/// exactly the removed-worktree orphan shape (and unlike leg (b), which
+/// requires the ABSENCE of the directory named in the argv). DRY_RUN
+/// throughout: identified, never signalled; cleanup is the test's duty.
+#[test]
+fn cwd_in_loop_worktree_identifies_the_cwd_leg() {
+    // pid-unique, digits-only suffix: matches the loop's real
+    // /tmp/chug-loop-t<N> naming and cannot collide with a concurrent run.
+    let wt = format!("/tmp/chug-loop-t{}1", std::process::id());
+    fs::create_dir_all(&wt).expect("create the fixture worktree");
+    let wt_text = fs::canonicalize(&wt)
+        .expect("canonicalize the fixture worktree")
+        .to_string_lossy()
+        .into_owned();
+    let direct = Direct::new();
+
+    // Arm 1: a real chdir; the stub answers the resolved (existing) worktree.
+    let mut fixture = spawn_fixture_in_cwd(Path::new("/bin/sleep"), None, "120", Path::new(&wt));
+    let pid = fixture.id();
+    let out = direct.run(
+        &format!("{pid} sleep 120"),
+        &fixture_env(
+            pid,
+            "/bin/sleep",
+            &[
+                ("REAPER_STUB_CWD_TEXT", wt_text.as_str()),
+                ("LOOP_REAPER_DRY_RUN", "1"),
+            ],
+        ),
+    );
+    let line = line_for(&out, "would-term", pid)
+        .unwrap_or_else(|| panic!("the cwd-leg fixture must be identified:\n{out}"));
+    assert!(
+        line.contains("cwd-in-worktree") && line.contains(wt_text.as_str()),
+        "the judgment must name the cwd leg with the RESOLVED worktree cwd \
+         as evidence:\n{out}"
+    );
+    assert!(
+        line_for(&out, "term", pid).is_none(),
+        "DRY_RUN must never signal — only would-term judgments may appear:\n{out}"
+    );
+    assert!(
+        fixture.try_wait().expect("poll fixture").is_none(),
+        "the dry-run sweep must have left the fixture alive:\n{out}"
+    );
+    kill_fixture(&mut fixture);
+
+    // Arm 2: an ABSENT worktree in the literal /tmp form — "existing or not".
+    let ghost = format!("/tmp/chug-mut-t{}-gone", std::process::id());
+    let mut fixture2 = spawn_fixture(Path::new("/bin/sleep"), None, "120");
+    let pid2 = fixture2.id();
+    let out = direct.run(
+        &format!("{pid2} sleep 120"),
+        &fixture_env(
+            pid2,
+            "/bin/sleep",
+            &[
+                ("REAPER_STUB_CWD_TEXT", ghost.as_str()),
+                ("LOOP_REAPER_DRY_RUN", "1"),
+            ],
+        ),
+    );
+    let line = line_for(&out, "would-term", pid2)
+        .unwrap_or_else(|| panic!("an absent-worktree cwd must still be identified:\n{out}"));
+    assert!(
+        line.contains("cwd-in-worktree") && line.contains(ghost.as_str()),
+        "the cwd leg must fire on the absent worktree too:\n{out}"
+    );
+    kill_fixture(&mut fixture2);
+
+    let _ = fs::remove_dir(&wt);
+}
+
+/// The negative half of the cwd leg: an ordinary cwd (a real directory
+/// outside the worktree family) is never a candidate — the leg must not
+/// fire on every process whose cwd merely resolves, and the summary must
+/// show the row was examined and judged a non-candidate.
+#[test]
+fn an_ordinary_cwd_is_never_a_candidate() {
+    let direct = Direct::new();
+    let mut fixture = spawn_fixture(Path::new("/bin/sleep"), None, "120");
+    let pid = fixture.id();
+    let cwd = direct.root.to_string_lossy().into_owned();
+    let out = direct.run(
+        &format!("{pid} sleep 120"),
+        &fixture_env(
+            pid,
+            "/bin/sleep",
+            &[
+                ("REAPER_STUB_CWD_TEXT", cwd.as_str()),
+                ("LOOP_REAPER_DRY_RUN", "1"),
+            ],
+        ),
+    );
+    assert_no_judgment_for(&out, pid);
+    assert!(
+        out.contains("done (examined=1 would-term=0 skipped=0)"),
+        "the summary must show the row was examined and judged a \
+         non-candidate:\n{out}"
+    );
+    kill_fixture(&mut fixture);
+}
+
+/// Fail-closed cwd, three variants: (i) the lsof query fails outright;
+/// (ii) lsof answers but reports NO cwd record (the zombie / other-user /
+/// exited-between-enumeration-and-query shape); (iii) the record resolves
+/// but is non-absolute. In every variant the row is SKIPPED with the
+/// spec-pinned `(unresolved)` line and never signalled (dry-run on top: even
+/// a would-term would fail this test).
+#[test]
+fn unresolvable_cwd_is_skipped_never_signalled() {
+    let direct = Direct::new();
+    let mut fixture = spawn_fixture(Path::new("/bin/sleep"), None, "120");
+    let pid = fixture.id();
+
+    // (i) the query fails.
+    let out = direct.run(
+        &format!("{pid} sleep 120"),
+        &fixture_env(
+            pid,
+            "/bin/sleep",
+            &[
+                ("LOOP_REAPER_DRY_RUN", "1"),
+                ("REAPER_STUB_LSOF_FAILS", "1"),
+            ],
+        ),
+    );
+    let line = line_for(&out, "skip", pid)
+        .unwrap_or_else(|| panic!("a failing lsof must be logged as an unresolved skip:\n{out}"));
+    assert!(
+        line.contains("(unresolved)"),
+        "the skip line must carry the spec-pinned (unresolved) marker:\n{out}"
+    );
+    assert!(
+        line_for(&out, "would-term", pid).is_none(),
+        "an unresolvable cwd must never reach a signal (not even \
+         would-term):\n{out}"
+    );
+
+    // (ii) no cwd record at all.
+    let out = direct.run(
+        &format!("{pid} sleep 120"),
+        &fixture_env(
+            pid,
+            "/bin/sleep",
+            &[
+                ("LOOP_REAPER_DRY_RUN", "1"),
+                ("REAPER_STUB_LSOF_EMPTY", "1"),
+            ],
+        ),
+    );
+    assert!(
+        line_for(&out, "skip", pid).is_some(),
+        "a row with no resolvable cwd record must be skipped as unresolved:\n{out}"
+    );
+    assert!(
+        line_for(&out, "would-term", pid).is_none(),
+        "a missing cwd record must never reach a signal:\n{out}"
+    );
+
+    // (iii) a non-absolute cwd record.
+    let out = direct.run(
+        &format!("{pid} sleep 120"),
+        &fixture_env(
+            pid,
+            "/bin/sleep",
+            &[
+                ("LOOP_REAPER_DRY_RUN", "1"),
+                ("REAPER_STUB_CWD_TEXT", "chug-loop-t-relative"),
+            ],
+        ),
+    );
+    assert!(
+        line_for(&out, "skip", pid).is_some(),
+        "a non-absolute cwd record must be skipped as unresolved:\n{out}"
+    );
+    assert!(
+        line_for(&out, "would-term", pid).is_none(),
+        "a non-absolute cwd record must never reach a signal:\n{out}"
+    );
+
+    kill_fixture(&mut fixture);
+}
+
+/// The sweep-level cwd fail-closed leg: the reaper's OWN process group
+/// cannot be resolved → the whole sweep skips (unknown fails closed) and
+/// judges nothing, even with a needle-matching row in the table.
+#[test]
+fn an_unresolvable_own_process_group_fails_closed() {
+    let direct = Direct::new();
+    let out = direct.run(
+        "424242 /tmp/chug-mut-t779-1/spin 120",
+        &fixture_env(424242, "", &[("REAPER_STUB_PGID_FAILS_OTHERS", "1")]),
+    );
+    assert!(
+        out.contains("sweep skipped (cannot resolve own process group — fail-closed)"),
+        "an unresolvable own process group must fail the whole sweep \
+         closed:\n{out}"
+    );
+    assert!(
+        !out.contains("pid="),
+        "a sweep that cannot trust its own group must judge nothing:\n{out}"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Spec test leg (d): unresolved identity → skip, never kill.
 // ---------------------------------------------------------------------------
 
@@ -581,7 +875,20 @@ fn own_process_group_is_never_signalled() {
     let direct = Direct::new();
     let out = direct.run(
         &format!("{pid} /tmp/chug-mut-t666-1/spin 120"),
-        &fixture_env(pid, "/bin/sleep", &[("LOOP_REAPER_DRY_RUN", "1")]),
+        &fixture_env(
+            pid,
+            "/bin/sleep",
+            &[
+                ("LOOP_REAPER_DRY_RUN", "1"),
+                // The stub answers pgid==pid for the fixture (the
+                // process_group(0) spawn reality), but this row's "fixture"
+                // is the TEST BINARY itself, which shares the helper's
+                // process group — pin it to the stub's shared default so
+                // the own-process-group EXCLUSION comparison is what's
+                // under test, not the fixture default.
+                ("REAPER_STUB_FIXTURE_PGID", "777"),
+            ],
+        ),
     );
     let line = line_for(&out, "skip", pid)
         .unwrap_or_else(|| panic!("the reaper's own process group must be skipped:\n{out}"));
@@ -729,10 +1036,16 @@ fn the_reaper_terms_an_orphan_through_loopd_before_the_build() {
         // default — so the exclusion passes the fixture.
         ("REAPER_STUB_FIXTURE_PGID", pid.to_string()),
     ]);
-    // Either the reaper terms the orphan (good) or the cycle launches
-    // anyway (the bug) — first needle wins, so the RED leg fails fast with
-    // the supervisor's own words.
-    let log = sandbox.wait_for_any(&mut child, &["orphan-reaper: term pid=", "cycle OK:"]);
+    // Either the reaper terms the orphan (good) or the cycle launches anyway
+    // (the bug). Wait for the pipeline to REACH THE CYCLE either way — a
+    // needle on the term line itself would return a mid-pipeline snapshot
+    // (under this suite's parallel-test load the supervisor's next steps can
+    // stall seconds behind the judgment), while "cycle start" / a build
+    // failure guarantee the log holds the whole sweep → build → cycle
+    // sequence the asserts below order. A RED leg (no sweep, no term) still
+    // reaches the cycle, and the term-line expect below fails with the
+    // supervisor's own words.
+    let log = sandbox.wait_for_any(&mut child, &["cycle start", "build FAILED"]);
     let term_line = line_for(&log, "term", pid)
         .unwrap_or_else(|| panic!("the orphan must be reaped through loopd:\n{log}"));
     assert!(
@@ -801,6 +1114,57 @@ fn a_failing_driver_probe_means_no_sweep() {
         "the fixture must survive a skipped cycle untouched:\n{log}"
     );
     kill_fixture(&mut fixture);
+}
+
+/// The cwd leg through the REAL supervisor: probe passes → sweep → a plain
+/// `sleep` orphan (innocent argv, innocent comm, cwd in a test-created
+/// `/tmp/chug-loop-t` worktree — the cycle-72 hammer shape) is IDENTIFIED
+/// before the build gate runs. DRY_RUN: the judgment is a would-term, the
+/// fixture survives, and the harness reaps it.
+#[test]
+fn the_cwd_leg_identifies_an_orphan_through_loopd() {
+    let sandbox = Sandbox::new();
+    let wt = format!("/tmp/chug-loop-t{}2", std::process::id());
+    fs::create_dir_all(&wt).expect("create the fixture worktree");
+    let wt_text = fs::canonicalize(&wt)
+        .expect("canonicalize the fixture worktree")
+        .to_string_lossy()
+        .into_owned();
+    let mut fixture = spawn_fixture_in_cwd(Path::new("/bin/sleep"), None, "300", Path::new(&wt));
+    let pid = fixture.id();
+    let mut child = sandbox.run_loopd(&[
+        ("REAPER_STUB_ROWS", format!("{pid} sleep 300")),
+        ("REAPER_STUB_FIXTURE_PID", pid.to_string()),
+        ("REAPER_STUB_COMM_TEXT", "/bin/sleep".to_string()),
+        ("REAPER_STUB_CWD_TEXT", wt_text.clone()),
+        // The fixture sits in its OWN process group (pgid == pid — the stub
+        // answers that by default, pinned here to match the explicit
+        // harness style of the artifact-leg supervisor run); the helper
+        // itself shares the test's group, so the exclusion passes the
+        // fixture.
+        ("REAPER_STUB_FIXTURE_PGID", pid.to_string()),
+        ("LOOP_REAPER_DRY_RUN", "1".to_string()),
+    ]);
+    // Either the cwd leg identifies the orphan (good) or the cycle launches
+    // anyway (the bug) — first needle wins, so a RED leg fails fast with the
+    // supervisor's own words.
+    let log = sandbox.wait_for_any(&mut child, &["orphan-reaper: would-term pid=", "cycle OK:"]);
+    let line = line_for(&log, "would-term", pid)
+        .unwrap_or_else(|| panic!("the cwd-leg orphan must be identified through loopd:\n{log}"));
+    assert!(
+        line.contains("cwd-in-worktree") && line.contains(wt_text.as_str()),
+        "the judgment must name the cwd leg with the resolved worktree cwd:\n{log}"
+    );
+    assert!(
+        line_for(&log, "term", pid).is_none(),
+        "DRY_RUN must never signal:\n{log}"
+    );
+    assert!(
+        fixture.try_wait().expect("poll fixture").is_none(),
+        "the dry-run sweep must have left the fixture alive:\n{log}"
+    );
+    kill_fixture(&mut fixture);
+    let _ = fs::remove_dir(&wt);
 }
 
 // ---------------------------------------------------------------------------
@@ -880,6 +1244,36 @@ fn pin_the_reaper_wiring_and_doctrine() {
             && !helper.contains("ps -ax -o pid= -o command= |"),
         "the enumeration must be captured, never a ps-to-X pipeline (the T137 \
          house rule)"
+    );
+
+    // The cwd leg (the cycle-72 spec amendment): the leg name, the spec's
+    // probe, the invariant that makes it safe, the macOS-resolved needle
+    // form, and the blind-leg degradation.
+    assert!(
+        helper.contains("cwd-in-worktree"),
+        "the cwd leg must exist (the cycle-72 plain-`sh` hammer, identified \
+         ONLY by its cwd — innocent argv, innocent comm)"
+    );
+    assert!(
+        helper.contains("-d cwd"),
+        "the cwd probe must be the spec's `lsof -a -p <pid> -d cwd`"
+    );
+    assert!(
+        helper.contains("no legitimate process can have a loop worktree cwd"),
+        "the cwd leg's safety rests on the sweep-point invariant — at the \
+         pre-cycle point cwd-in-worktree implies orphaned by construction — \
+         and the helper must state it"
+    );
+    assert!(
+        helper.contains("/private/tmp/chug-loop-t*"),
+        "the cwd needle must cover the macOS-resolved /private/tmp form: \
+         lsof reports the kernel-resolved cwd and /tmp is a symlink to \
+         /private/tmp on this host, so a /tmp-form-only glob is dead code"
+    );
+    assert!(
+        helper.contains("cwd leg unavailable"),
+        "a missing lsof binary must degrade to a logged blind leg — never a \
+         kill, never a silent gap"
     );
 
     // The README sentence: the reaper exists, where it runs, the opt-out.
