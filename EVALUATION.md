@@ -261,6 +261,26 @@ audit.**
 
 ### Cycle 71 (2026-09-29) — routine glm freshness-skip (queue non-empty, eval fresh) — T147 landed
 
+**T150 — todo-row spec estimate pin (92f987a, merge of loop-t150:
+3f5a99a).** The T110 filing-time estimate ceiling now has a mechanical
+guard: every `todo`-status TODO row's named spec must carry an
+`estimate: ~<number>` line (filing time only — 121/141 legacy specs
+predate the rule and are exempt history). Tests-only +195/-25 in
+tests/todo_consistency.rs with the T8 row parsing lifted into shared
+helpers (behavior-identical). Pure function over (table text,
+spec-reader closure) — repo-live leg plus 4 synthetic legs + a
+fail-closed unreadable leg. The child RED-proved 4 mutants (flag-arm
+suppressed, always-fires, status-filter dropped, ~N requirement dropped)
+with sha-verified byte restores; the orchestrator independently re-ran
+the vacuous-guard mutant — both must-flag legs RED. kimi SKIPPED per the
+spec's own routing (tests-only tooling guard). Process note: the child
+ABORTED on the 35-min TIME budget at 48/80 AFTER committing the work —
+the final full-suite gates chased the documented default-parallelism
+load-flake class; the committed-work variant of the budget-death recipe
+applied (orchestrator review + gates + merge, routing
+d1790691515-11, no resume burned). Gates 1135/1135 nextest --release
+worktree + main. QUEUE NOW EMPTY.
+
 **T149 — validator budgets 60/40, doctrine (8699a70, merge of loop-t149:
 10b6f6a).** The validator-side T102: after 4 validator budget deaths in 4
 cycles (T134/T138/T142 at 50/50, T137 MINUTES-bound at 30m08s with the
