@@ -677,7 +677,14 @@ typed the command, and single-driver safety is the child's own
 `.chug/driver.lock` (a conflicting launch fails fast child-side and
 surfaces via `chug_status`/`chug_collect`). Launch failures are `isError`
 results; nothing else about the server changes, and no error kills the
-loop.
+loop. Wire-level e2e coverage (T148): `tests/mcp_serve.rs` spawns the REAL
+`chug mcp-serve` over real stdio with the `CHUG_DELEGATE_BIN` stub-child
+seam and pins the full launch conversation deadline-bounded — the
+`--allow-launch` happy path (advertised ⇔ callable, the pid/log/events
+payload, the exact child argv carrying the wire's spec/goal/model/budgets),
+the above-ceiling refusal's `isError` arm (received value named, nothing
+spawned, loop alive), and the default-deny boundary (`chug_launch`
+unadvertised, its call answered by the unknown-tool error).
 
 Phase 2 (the read tools plus the flag-gated write leg) is CLOSED. Phase 3
 (server log file, cancellation, resources) is deferred.
