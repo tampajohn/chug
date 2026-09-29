@@ -21,7 +21,7 @@
 //! (pinned structurally by the grep test below).
 //!
 //! Read-only by default (phases 1–2a): no process spawning, no writes
-//! anywhere. T129 adds the ONE write verb, `chug_launch` (F10 phase 2b),
+//! anywhere. T129 adds the FIRST write verb, `chug_launch` (F10 phase 2b),
 //! and gates it on the `--allow-launch` server flag — the flag is the
 //! policy boundary: without it the server is byte-for-byte the read-only
 //! one (`chug_launch` is not advertised in `tools/list` and a call for it
@@ -31,6 +31,13 @@
 //! quoting code). The server adds no bypass: the spawned child is an
 //! ordinary `chug run` in the target cwd, subject to that cwd's own
 //! permissions/hooks/risk-gate chain and its own `.chug/driver.lock`.
+//! T153 adds the SECOND write verb, `chug_cancel` (F10 phase 3a), behind
+//! the SAME `--allow-launch` boundary: the fleet's stop button, re-deriving
+//! the target's ownership fail-closed from process identity on every call
+//! (alive → own process-group leader → command line names `chug run`)
+//! before SIGTERM-ing the whole detached process group with one bounded
+//! SIGKILL escalation.
+//!
 //! `chug_status` reads `<cwd>/.chug/events.jsonl` through the
 //! delegate seams and renders a COMPACT summary; `chug_collect` answers
 //! the structured-result question over the SAME file — the latest
@@ -42,8 +49,10 @@
 //! the delegate `render_status`/`render_collect` texts are byte-pinned by
 //! the delegate tests and are deliberately NOT reused.
 //!
-//! Deferred (F10 phase 3): a server log file, `tools/listChanged`,
-//! cancellation, resources/prompts.
+//! Deferred (F10 phase 3b): a server log file, `tools/listChanged`,
+//! notifications, resources/prompts — no consumer pulls MCP-spec
+//! completeness surfaces (the cycle-72 EVALUATION §4 reason). Cancellation
+//! SHIPPED in phase 3a (T153, [`CHUG_CANCEL_TOOL`]).
 
 use std::fs;
 use std::io::{BufRead, Write};
@@ -73,6 +82,21 @@ const CHUG_COLLECT_TOOL: &str = "chug_collect";
 /// was started with `--allow-launch` — the flag is the policy boundary
 /// (default OFF: a read-only deployment cannot be surprised into spawning).
 const CHUG_LAUNCH_TOOL: &str = "chug_launch";
+
+/// The phase-3a write tool (T153): stop a previously launched detached
+/// `chug run` — SIGTERM to its whole process GROUP with one bounded SIGKILL
+/// escalation. Advertised and callable ONLY under `--allow-launch`: the
+/// flag gates the write SURFACE, not individual tools, so the second write
+/// leg rides the same policy boundary as [`CHUG_LAUNCH_TOOL`].
+const CHUG_CANCEL_TOOL: &str = "chug_cancel";
+
+/// T153: the one escalation grace — how long a TERM'd process group has to
+/// empty before the group is SIGKILLed. Polled at
+/// [`CHUG_CANCEL_POLL_MS`]; `~5 s` per the spec.
+const CHUG_CANCEL_GRACE_MS: u64 = 5_000;
+
+/// T153: the escalation poll cadence (≤100 ms per the spec).
+const CHUG_CANCEL_POLL_MS: u64 = 50;
 
 /// T129: the `chug_launch` iteration-budget ceiling — loopd's own ceiling.
 /// A `max_iters` above it is REJECTED (never clamped) naming the received
@@ -201,14 +225,16 @@ fn initialize_result() -> Value {
     })
 }
 
-/// The `tools/list` tool set. Capability honesty (T129): `chug_launch` is
-/// advertised ONLY when the server was started with `--allow-launch` — the
-/// same boolean feeds `tools/call`, so advertised ⇔ callable by
-/// construction.
+/// The `tools/list` tool set. Capability honesty (T129, carried by T153):
+/// the write legs are advertised ONLY when the server was started with
+/// `--allow-launch` — the same boolean feeds `tools/call`, so advertised ⇔
+/// callable by construction. The flag gates the write surface, not
+/// individual tools: both `chug_launch` and `chug_cancel` ride it.
 fn tools_list(allow_launch: bool) -> Vec<Value> {
     let mut tools = vec![chug_status_schema(), chug_collect_schema()];
     if allow_launch {
         tools.push(chug_launch_schema());
+        tools.push(chug_cancel_schema());
     }
     tools
 }
@@ -340,6 +366,46 @@ fn chug_launch_schema() -> Value {
     })
 }
 
+/// The `chug_cancel` listing entry (T153): the second write leg, behind the
+/// SAME `--allow-launch` policy boundary as `chug_launch`. Two required
+/// params: the chug cwd (validated like every tool's) and the pid to stop.
+fn chug_cancel_schema() -> Value {
+    json!({
+        "name": CHUG_CANCEL_TOOL,
+        "description":
+            "Stop a previously launched detached `chug run` (the write leg; \
+             requires the server to be started with --allow-launch). Before \
+             any signal the ownership of <pid> is re-derived fail-closed: \
+             the pid must be alive, must be its own process-group leader \
+             (the delegate detached-spawn fingerprint), and its command \
+             line must name a `chug run` invocation — the first failed leg \
+             is an isError result and NOTHING is signalled. On pass: \
+             SIGTERM to the process group (the whole detached tree dies, \
+             not just the driver), up to ~5 s grace, then SIGKILL to the \
+             group if it is still alive.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "cwd": {
+                    "type": "string",
+                    "description":
+                        "Absolute path to the chug working directory the \
+                         child was launched in (must exist and contain \
+                         .chug/)"
+                },
+                "pid": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description":
+                        "The child pid to cancel — the pid returned by \
+                         chug_launch"
+                }
+            },
+            "required": ["cwd", "pid"]
+        }
+    })
+}
+
 /// Dispatch `tools/call`. A known tool's OWN failure (bad cwd, unreadable
 /// events, refused launch) is a tool RESULT with `isError: true` — not a
 /// JSON-RPC error — so the caller sees the tool ran and failed, the shape
@@ -349,7 +415,8 @@ fn chug_launch_schema() -> Value {
 /// `allow_launch` its name falls through to the unknown-tool arm — the
 /// SAME `-32602` a never-existing tool gets, so a read-only deployment
 /// cannot be probed into revealing that a launch tool exists behind a
-/// flag (and no error kills the loop).
+/// flag (and no error kills the loop). T153: `chug_cancel` rides the
+/// same arm — the second write leg is equally invisible flagless.
 fn call_tool(id: Value, req: &Map<String, Value>, allow_launch: bool) -> String {
     let params = req.get("params").cloned().unwrap_or(Value::Null);
     let Some(name) = params.get("name").and_then(Value::as_str) else {
@@ -360,6 +427,7 @@ fn call_tool(id: Value, req: &Map<String, Value>, allow_launch: bool) -> String 
         CHUG_STATUS_TOOL => chug_status(&arguments),
         CHUG_COLLECT_TOOL => chug_collect(&arguments),
         CHUG_LAUNCH_TOOL if allow_launch => chug_launch(&arguments),
+        CHUG_CANCEL_TOOL if allow_launch => chug_cancel(&arguments),
         other => {
             return error_response(id, -32602, &format!("unknown tool: {other}"));
         }
@@ -646,6 +714,328 @@ fn parse_launch_budgets(args: &Value) -> Result<(Option<u64>, Option<u64>), Stri
     let max_iters = parse_launch_budget(args, "max_iters", CHUG_LAUNCH_MAX_ITERS_CEILING)?;
     let max_minutes = parse_launch_budget(args, "max_minutes", CHUG_LAUNCH_MAX_MINUTES_CEILING)?;
     Ok((max_iters, max_minutes))
+}
+
+// ---------------------------------------------------------------------------
+// T153: the second write leg — chug_cancel (flag-gated)
+// ---------------------------------------------------------------------------
+
+/// `chug_cancel` (T153): stop a previously launched detached `chug run`.
+///
+/// **Ownership is re-derived per call, never remembered.** The server is
+/// stateless across requests — it keeps no launch registry and no
+/// server-side state of any kind (out of scope by design) — so "is this
+/// pid mine to signal?" is answered fresh from PROCESS IDENTITY on every
+/// call, never from a server-side launch log. All three legs must hold or
+/// the result is an `isError` naming the FIRST failed leg and NO signal is
+/// sent; an unresolvable leg fails closed (skip, name the leg). A wrong
+/// cancel is un-undoable; a refused one is retryable.
+///
+/// On pass: SIGTERM to the process GROUP (negative-pid kill — the whole
+/// detached tree dies, not just the driver), then ONE bounded escalation:
+/// up to [`CHUG_CANCEL_GRACE_MS`] (polled at [`CHUG_CANCEL_POLL_MS`]) for
+/// the group to empty, then SIGKILL to the group. Payload: `pid`,
+/// `signaled: "term"|"kill"`, `waited_ms` — `"term"` when the group
+/// emptied within the grace, `"kill"` when the escalation fired.
+///
+/// Serial-loop note: the escalation wait can hold the single-threaded
+/// dispatch for up to the grace. A cancel is rare and bounded, so phase 3a
+/// adds no concurrency.
+fn chug_cancel(args: &Value) -> (String, bool) {
+    // cwd: the SAME fail-fast validator every tool serves — validated (the
+    // caller names the chug cwd the child was launched in) but otherwise
+    // unused: the pid is the kill target, the cwd is the address space the
+    // driver is talking about.
+    let Some(raw_cwd) = args.get("cwd").and_then(Value::as_str) else {
+        return (
+            format!("{CHUG_CANCEL_TOOL}: missing required argument: cwd (an absolute path to a chug working directory)"),
+            true,
+        );
+    };
+    if let Err(message) = validate_chug_cwd(CHUG_CANCEL_TOOL, raw_cwd) {
+        return (message, true);
+    }
+    // pid: a positive integer. Non-integer / non-positive / missing is the
+    // validation-chain error naming what was RECEIVED (the T129
+    // received-value honesty pattern).
+    let Some(pid_value) = args.get("pid") else {
+        return (
+            format!(
+                "{CHUG_CANCEL_TOOL}: missing required argument: pid (a positive \
+                 integer — the child pid returned by chug_launch) — nothing \
+                 signalled"
+            ),
+            true,
+        );
+    };
+    let Some(pid) = pid_value.as_u64() else {
+        return (
+            format!(
+                "{CHUG_CANCEL_TOOL}: `pid` must be a positive integer, got \
+                 {pid_value} — nothing signalled"
+            ),
+            true,
+        );
+    };
+    if pid == 0 {
+        return (
+            format!(
+                "{CHUG_CANCEL_TOOL}: `pid` must be a positive integer, got 0 — \
+                 nothing signalled"
+            ),
+            true,
+        );
+    }
+    if pid > i32::MAX as u64 {
+        return (
+            format!(
+                "{CHUG_CANCEL_TOOL}: `pid` must be a valid pid (at most {}), \
+                 got {pid} — nothing signalled",
+                i32::MAX
+            ),
+            true,
+        );
+    }
+    #[cfg(unix)]
+    {
+        cancel_unix(pid)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = pid;
+        (
+            format!(
+                "{CHUG_CANCEL_TOOL}: not supported on this platform (process \
+                 groups and signals are unix-only) — nothing signalled"
+            ),
+            true,
+        )
+    }
+}
+
+/// The unix ownership + signal legs (T153). Every failure leg is an
+/// `isError` text naming the FIRST failed leg and stating that nothing was
+/// signalled; the server loop survives every leg (the T129 refusal
+/// posture — a tool failure is never a JSON-RPC error, never fatal).
+#[cfg(unix)]
+fn cancel_unix(pid: u64) -> (String, bool) {
+    let pid_i = pid as i32;
+    // Leg (a) — alive: `kill(pid, 0)` through the T28 zombie-reap seam (an
+    // exited child of THIS server is reaped first, so a zombie never reads
+    // as a live target). ESRCH → the honest "no such process" refusal, not
+    // a crash; any other leg shape fails closed too.
+    match crate::delegate::reap_and_alive(pid) {
+        Some(true) => {}
+        Some(false) => {
+            return (
+                format!(
+                    "{CHUG_CANCEL_TOOL}: pid {pid} is not alive (no such \
+                     process) — nothing signalled"
+                ),
+                true,
+            );
+        }
+        None => {
+            return (
+                format!(
+                    "{CHUG_CANCEL_TOOL}: pid {pid} liveness could not be \
+                     probed — fail-closed, nothing signalled"
+                ),
+                true,
+            );
+        }
+    }
+    // Leg (b) — the pid is its OWN process-group leader: the delegate
+    // detached-spawn fingerprint (`process_group(0)` makes the child the
+    // leader, so pgid == pid). A pid that is not a group leader was not
+    // launched through the delegate path. Unresolvable → fail closed.
+    // SAFETY: getpgid(2) on one bounded pid — a pure query, no side effects.
+    let pgid = unsafe { libc::getpgid(pid_i) };
+    if pgid < 0 {
+        return (
+            format!(
+                "{CHUG_CANCEL_TOOL}: pid {pid} process group could not be \
+                 resolved — fail-closed, nothing signalled"
+            ),
+            true,
+        );
+    }
+    if pgid != pid_i {
+        return (
+            format!(
+                "{CHUG_CANCEL_TOOL}: pid {pid} is not its own process-group \
+                 leader (pgid {pgid} != pid) — not a delegate-detached child, \
+                 nothing signalled"
+            ),
+            true,
+        );
+    }
+    // Leg (c) — the command line names a `chug run` invocation, resolved
+    // via `ps -o command=` (the driver-lock precedent: ps, NEVER pgrep).
+    // Unresolvable → fail closed (skip, name the leg).
+    let Some(command) = ps_command_line(pid) else {
+        return (
+            format!(
+                "{CHUG_CANCEL_TOOL}: pid {pid} command line could not be \
+                 resolved — fail-closed, nothing signalled"
+            ),
+            true,
+        );
+    };
+    if !command_names_chug_run(&command) {
+        return (
+            format!(
+                "{CHUG_CANCEL_TOOL}: pid {pid} command line is not a `chug \
+                 run` invocation ({command:?}) — nothing signalled"
+            ),
+            true,
+        );
+    }
+    // All legs hold: SIGTERM the whole process GROUP (negative-pid kill —
+    // the detached tree dies, not just the driver).
+    // SAFETY: kill(2) with SIGTERM on a negated, resolved pgid.
+    if unsafe { libc::kill(-pgid, libc::SIGTERM) } != 0 {
+        let err = std::io::Error::last_os_error();
+        return (
+            format!(
+                "{CHUG_CANCEL_TOOL}: signalling process group {pgid} failed \
+                 ({err}) — nothing signalled"
+            ),
+            true,
+        );
+    }
+    // ONE bounded escalation: wait (polled) for the group to empty, then
+    // SIGKILL if it is still alive.
+    let started = std::time::Instant::now();
+    let deadline = started + std::time::Duration::from_millis(CHUG_CANCEL_GRACE_MS);
+    loop {
+        if group_gone(pid_i, pgid) {
+            let waited_ms = started.elapsed().as_millis() as u64;
+            return (
+                format!(
+                    "{CHUG_CANCEL_TOOL}: pid {pid}\nsignaled: term\nwaited_ms: \
+                     {waited_ms}"
+                ),
+                false,
+            );
+        }
+        if std::time::Instant::now() >= deadline {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(CHUG_CANCEL_POLL_MS));
+    }
+    // Still alive after the grace: SIGKILL the group.
+    // SAFETY: kill(2) with SIGKILL on a negated, resolved pgid.
+    let kill_rc = unsafe { libc::kill(-pgid, libc::SIGKILL) };
+    let waited_ms = started.elapsed().as_millis() as u64;
+    if kill_rc != 0 {
+        let err = std::io::Error::last_os_error();
+        return (
+            format!(
+                "{CHUG_CANCEL_TOOL}: pid {pid} survived the \
+                 {CHUG_CANCEL_GRACE_MS} ms grace and the escalation kill of \
+                 group {pgid} failed ({err}) — the group was TERM-signalled \
+                 at {waited_ms} ms"
+            ),
+            true,
+        );
+    }
+    (
+        format!(
+            "{CHUG_CANCEL_TOOL}: pid {pid}\nsignaled: kill\nwaited_ms: \
+             {waited_ms}"
+        ),
+        false,
+    )
+}
+
+/// Has the process group emptied? The T153 fix-up predicate: ONLY a probe
+/// that FAILED with ESRCH means the group emptied — `rc == 0` (a live,
+/// signallable member) and every other rc/errno (EPERM, EINVAL, …) mean
+/// NOT gone: fail-safe, keep waiting inside the bounded grace (the SIGKILL
+/// escalation remains the backstop for a TERM-ignoring fixture).
+///
+/// The zombie caveat, with the empirical host behavior the T153 forensics
+/// pinned: the pre-fix comment claimed "a zombie group leader keeps a bare
+/// `kill(-pgid, 0)` green forever" — FALSE on macOS. A group whose SOLE
+/// member is THIS server's own unreaped zombie child answers
+/// `kill(-pgid, 0)` with **-1/EPERM**, while per-pid `kill(zombie_pid, 0)`
+/// on that same zombie answers 0 — the group and pid probes DISAGREE, and
+/// the pre-fix shape (`rc != 0` → gone) misread the EPERM as "the group
+/// emptied", returning `signaled: term` with the leader an unreaped
+/// zombie (the wire happy path's dead-poll timeout, solo-flaky 12/30). So
+/// each tick still offers the leader a non-blocking wait FIRST (the T28
+/// reap, best-effort: a foreign pid just yields ECHILD) — a zombie child
+/// is immediately reapable, so the NEXT tick's reap clears it and the
+/// probe turns ESRCH: the loop converges deterministically instead of
+/// returning early on a zombie.
+#[cfg(unix)]
+fn group_gone(pid: i32, pgid: i32) -> bool {
+    let mut status: libc::c_int = 0;
+    // SAFETY: WNOHANG waitpid on one pid with a valid status pointer — it
+    // can only reap a child of THIS process, never blocks, and any other
+    // errno is irrelevant to the probe below.
+    unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
+    // SAFETY: kill(2) with signal 0 on a negated pgid — an existence probe
+    // that delivers no signal.
+    let krc = unsafe { libc::kill(-pgid, 0) };
+    // The errno is only meaningful when the probe FAILED (rc == -1) —
+    // reading it beside a successful rc is the stale-errno trap the T153
+    // forensics flagged (a stale errno text printed beside a `killleader=0`
+    // rc sent the first read of the evidence down the wrong path).
+    let errno = if krc == -1 {
+        std::io::Error::last_os_error().raw_os_error()
+    } else {
+        None
+    };
+    group_gone_rc(krc, errno)
+}
+
+/// The probe-predicate seam (T153 fix-up, pure so the predicate-table test
+/// can pin it): ONLY a failed probe whose errno is ESRCH means the group
+/// emptied. `rc == 0` — a live, signallable member — and every other
+/// rc/errno (EPERM: macOS's answer for our own unreaped zombie sole
+/// member; EINVAL; an errno-less failure) mean NOT gone.
+#[cfg(unix)]
+fn group_gone_rc(rc: i32, errno: Option<i32>) -> bool {
+    rc == -1 && errno == Some(libc::ESRCH)
+}
+
+/// The pid's current command line, via `ps -o command= -p <pid>` — the
+/// driver-lock precedent (ps, NEVER pgrep: cycle-24 eval I1 found pgrep
+/// persistently missing macOS process trees that ps sees). Any failure leg
+/// — ps missing, spawn failure, non-zero exit, empty output — is `None`:
+/// the caller fails closed (an unresolvable command line is never judged).
+#[cfg(unix)]
+fn ps_command_line(pid: u64) -> Option<String> {
+    let out = std::process::Command::new("ps")
+        .args(["-o", "command=", "-p", &pid.to_string()])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if text.is_empty() {
+        return None;
+    }
+    Some(text)
+}
+
+/// Does a resolved command line name a `chug run` invocation? The needle is
+/// the ADJACENT token pair `run --spec` — `--spec` is a REQUIRED argument
+/// of the `run` subcommand, so EVERY `chug run` invocation (a human's or
+/// the delegate launch path's `<binary> run --spec … --goal … --model …`)
+/// carries it, in either the `--spec p` and `--spec=p` spellings, at any
+/// position (a `sh -c '…' chug run --spec …` wrapper shape matches too).
+/// Token adjacency, not substring: `--special` or a path containing "run"
+/// must not match.
+#[cfg(unix)]
+fn command_names_chug_run(command: &str) -> bool {
+    let words: Vec<&str> = command.split_whitespace().collect();
+    words.windows(2).any(|pair| {
+        pair[0] == "run" && (pair[1] == "--spec" || pair[1].starts_with("--spec="))
+    })
 }
 
 /// The compact, self-describing summary — the MCP-side renderer. Deliberately

@@ -643,7 +643,8 @@ until stdin EOF, then exits 0. Claude Code-compatible client config:
 {"mcpServers": {"chug": {"command": "chug", "args": ["mcp-serve"]}}}
 ```
 
-Two read-only tools ship. `chug_status`: input
+Two read-only tools ship (the write legs below are separately
+flag-gated). `chug_status`: input
 `{"cwd": "<absolute path>"}`, output a compact self-describing summary of
 that chug cwd's latest `.chug/events.jsonl` run segment (state,
 last_iteration vs max_iters, goal/abort/budget-low flags, abort reason).
@@ -670,6 +671,30 @@ it), plus optional `max_iters` (1..=200) and `max_minutes` (1..=240) — a
 value above a ceiling is rejected, not clamped; budgets absent fall back
 to the delegate defaults (40 iterations / 35 minutes).
 
+The second write leg `chug_cancel` (T153) lives behind the SAME
+`--allow-launch` boundary — advertised ⇔ callable beside `chug_launch`,
+and invisible without the flag (a call gets the unknown-tool `-32602`,
+nothing probed). Input: `{"cwd": "<absolute path>", "pid": <positive
+int>}` — the pid a `chug_launch` result carried. Before ANY signal the
+ownership of the pid is re-derived fail-closed: the server is stateless
+across requests and keeps no launch registry, so every call re-proves,
+in order, (a) the pid is alive (`kill(pid, 0)` — an exited child of the
+server is reaped first, so a zombie never reads as live), (b) the pid is
+its OWN process-group leader (`pgid == pid`, the delegate
+detached-spawn fingerprint), and (c) the pid's command line
+(`ps -o command=`) names a `chug run` invocation (the adjacent
+`run --spec` pair — `--spec` is a required argument of `run`). The FIRST
+failed leg is an `isError` result naming the pid and the leg — "no such
+process", "not its own process-group leader", "not a `chug run`
+invocation" — and NOTHING is signalled; an unresolvable leg (ps failure,
+no group record) also fails closed. On pass the whole process GROUP is
+SIGTERM'd (negative-pid kill — the detached tree dies, not just the
+driver), the call waits up to ~5 s (50 ms poll) for the group to empty,
+and a still-alive group is SIGKILLed once. Success payload: `pid` +
+`signaled: term|kill` (`term` = the group emptied within the grace,
+`kill` = the escalation fired) + `waited_ms`. Failures are `isError`
+tool results — never JSON-RPC errors, never fatal.
+
 **Launch safety**: the spawned child is an ordinary `chug run` in the
 target cwd — it runs that cwd's OWN policy chain (`.chug/permissions.json`
 deny rules, `.chug/hooks.json` vetoes, risk gate) exactly as if a human
@@ -686,8 +711,10 @@ the above-ceiling refusal's `isError` arm (received value named, nothing
 spawned, loop alive), and the default-deny boundary (`chug_launch`
 unadvertised, its call answered by the unknown-tool error).
 
-Phase 2 (the read tools plus the flag-gated write leg) is CLOSED. Phase 3
-(server log file, cancellation, resources) is deferred.
+Phase 2 (the read tools plus `chug_launch`) is CLOSED, and phase 3a —
+cancellation, `chug_cancel` — has landed (T153). Phase 3b (resources,
+notifications, a server log) is still deferred: no consumer pulls
+MCP-spec-completeness surfaces (the cycle-72 EVALUATION §4 reason).
 
 **stdout purity**: a stdio MCP server's stdout IS the wire — `chug
 mcp-serve` prints nothing but protocol messages (no banner, no log

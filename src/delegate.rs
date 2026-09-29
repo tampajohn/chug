@@ -767,6 +767,17 @@ impl DelegateSummary {
 /// This is the FALLBACK leg only — [`reap_and_alive`] layers the zombie reap
 /// (T28) on top for the `status` poll. It stays standalone so its semantics
 /// are exactly the pre-T28 ones: alive / not-alive / EPERM-means-alive.
+///
+/// T153 class-sweep adjudication (kill(2)-rc probes): this site already
+/// implements the class rule the `group_gone` fix pinned — EPERM is NOT
+/// conflated with ESRCH. Empirically pinned on this macOS host: from uid
+/// 502, `kill(1, 0)` on the LIVE root-owned launchd fails with -1/EPERM
+/// (verified via os.kill), so the EPERM→`Some(true)` leg is LIVE behavior,
+/// not vestigial — a live root-owned pid renders alive, never dead — and
+/// it is pinned by `delegate_status_foreign_pid_keeps_probe_semantics`.
+/// The zombie-after-reap semantics live in [`reap_and_alive`]: an exited
+/// own child is reaped by the waitpid leg BEFORE this probe, so it
+/// answers `Some(false)` (ESRCH) instead of the zombie's misleading rc 0.
 fn process_alive(pid: u64) -> Option<bool> {
     #[cfg(unix)]
     {
