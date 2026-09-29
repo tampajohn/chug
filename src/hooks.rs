@@ -485,6 +485,12 @@ fn run_hook(
         .stderr(Stdio::piped());
     #[cfg(unix)]
     cmd.process_group(0);
+    // T144: hooks are driver-spawned shells too — the same invariant as
+    // run_shell. An operator hook that runs cargo must build its own
+    // checkout's `<cwd>/target`, never an inherited shared dir other
+    // checkouts also write; an in-command prefix inside the hook command
+    // still selects one.
+    crate::tools::scrub_target_dir_vars(&mut cmd);
     let mut child = cmd
         .spawn()
         .map_err(|e| format!("spawning `sh -c {command}`: {e}"))?;

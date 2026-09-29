@@ -1014,6 +1014,34 @@ pub struct ShellOutcome {
 /// blocking the driver is not.
 const READER_GRACE: Duration = Duration::from_secs(5);
 
+/// The target-dir variables scrubbed from every driver-spawned child
+/// environment (T144): `CARGO_TARGET_DIR` and its `CARGO_BUILD_TARGET_DIR`
+/// alias. loopd.sh prefixes every orchestrator with a SHARED cache dir, and
+/// the driver's full inherited env reaches `run_shell`'s `sh -c` (the bash
+/// tool AND the goal-gate check), hook commands, and the delegate launch's
+/// child chug binary. Cargo's artifact filename excludes the checkout path
+/// (the T52 lesson), so a shared dir is last-builder-wins — a worktree's
+/// goal gate could execute a FOREIGN worktree's test binary. After the
+/// scrub a bare `cargo …` in a spawned shell builds `<cwd>/target`,
+/// content-correct by construction; an explicit `CARGO_TARGET_DIR=… `
+/// prefix inside the command string (the goal-carried `export …`) is
+/// unaffected — the child's own shell sets it after spawn, it is never
+/// inherited.
+pub(crate) const TARGET_DIR_VARS: [&str; 2] = ["CARGO_TARGET_DIR", "CARGO_BUILD_TARGET_DIR"];
+
+/// Remove [`TARGET_DIR_VARS`] from the environment `cmd`'s child inherits.
+/// The one scrub mechanism for every driver-side spawn that passes the
+/// inherited env through: the `sh -c` wrapper ([`run_shell`] — shared by
+/// the bash tool and the goal-gate check), hook commands
+/// ([`crate::hooks::run_hook`]), and the delegate launch's child chug
+/// binary ([`crate::delegate::delegate_launch`]). `Command::env_remove`
+/// wins over the inherited value; nothing else about the env changes.
+pub(crate) fn scrub_target_dir_vars(cmd: &mut Command) {
+    for var in TARGET_DIR_VARS {
+        cmd.env_remove(var);
+    }
+}
+
 /// Run `sh -c <command>` in `cwd`, capturing stdout+stderr and the exit code.
 /// Drains both pipes on background threads to avoid pipe-buffer deadlock.
 ///
@@ -1022,6 +1050,12 @@ const READER_GRACE: Duration = Duration::from_secs(5);
 /// `cargo: command not found` themselves). An existing PATH is inherited
 /// verbatim — the prepend never removes or reorders entries, and a PATH that
 /// already contains `~/.cargo/bin` is left untouched.
+///
+/// T144: the inherited environment arrives with `CARGO_TARGET_DIR` and
+/// `CARGO_BUILD_TARGET_DIR` removed ([`TARGET_DIR_VARS`]) — a bare
+/// `cargo …` here builds `<cwd>/target`, never a shared dir other checkouts
+/// also write. An explicit `CARGO_TARGET_DIR=… ` prefix inside the command
+/// string still selects one (the goal-carried `export …` warm path).
 ///
 /// The shell runs in its own process group; when `timeout` elapses the whole
 /// group is SIGKILLed (a plain `child.kill()` would orphan grandchildren that
@@ -1045,6 +1079,13 @@ pub fn run_shell(cwd: &Path, command: &str, timeout: Duration) -> anyhow::Result
         let inherited = std::env::var_os("PATH").unwrap_or_default();
         shell_cmd.env("PATH", child_path(&inherited, &cargo_bin));
     }
+    // T144: the driver's inherited env can carry a SHARED target dir (the
+    // orchestrator's per-invocation `CARGO_TARGET_DIR` prefix). A shell that
+    // inherits it builds/tests into a dir other checkouts also write — and
+    // cargo artifact filenames exclude the checkout path, so the goal gate
+    // could execute a foreign worktree's binary. Scrub both spellings (see
+    // [`TARGET_DIR_VARS`]); an explicit prefix inside `command` still wins.
+    scrub_target_dir_vars(&mut shell_cmd);
     let mut child = shell_cmd
         .spawn()
         .with_context(|| format!("spawning sh -c {command}"))?;
@@ -1964,6 +2005,93 @@ mod tests {
         // run_shell returns the raw combined output (the bash tool wrapper
         // appends the exit-code line); stdout keeps its trailing newline.
         assert_eq!(outcome.output, "hi\n");
+    }
+
+    // ---- T144: driver-spawned shells must not inherit CARGO_TARGET_DIR ----
+
+    /// The legs below seed the process-global `CARGO_TARGET_DIR` /
+    /// `CARGO_BUILD_TARGET_DIR` (the loopd.sh per-invocation prefix shape),
+    /// so they serialize on the one lock that already owns process-global
+    /// env mutation in this test binary — `DELEGATE_ENV_LOCK` (T129 made it
+    /// pub(crate) for exactly this cross-module sharing; the delegate-launch
+    /// env leg in delegate::tests seeds the same two variables).
+    ///
+    /// The invariant (specs/t144-check-harness-target-dir-scrub.md): a shell
+    /// the driver spawns must never inherit a target dir other checkouts
+    /// also write. Cargo's artifact filename excludes the checkout path, so
+    /// an inherited shared dir is last-builder-wins — a worktree's goal gate
+    /// can execute a FOREIGN worktree's test binary. The scrub lives in
+    /// `run_shell`, the one spawn point shared by the bash tool and the
+    /// goal-gate check.
+    #[test]
+    fn run_shell_scrubs_cargo_target_dir_and_its_alias() {
+        let _guard = crate::delegate::tests::DELEGATE_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let tmp = tempfile::tempdir().unwrap();
+        // SAFETY: serialized by DELEGATE_ENV_LOCK (one env, one lock); both
+        // process values restored before the asserts (a panic below must not
+        // leak the seed into sibling tests).
+        let saved_target = std::env::var_os("CARGO_TARGET_DIR");
+        let saved_alias = std::env::var_os("CARGO_BUILD_TARGET_DIR");
+        unsafe {
+            std::env::set_var("CARGO_TARGET_DIR", "/tmp/t144-foreign-shared-target");
+            std::env::set_var("CARGO_BUILD_TARGET_DIR", "/tmp/t144-foreign-alias-target");
+        }
+        let outcome = run_shell(
+            tmp.path(),
+            "printf '%s|%s' \"${CARGO_TARGET_DIR:-UNSET}\" \"${CARGO_BUILD_TARGET_DIR:-UNSET}\"",
+            Duration::from_secs(10),
+        )
+        .unwrap();
+        restore_var("CARGO_TARGET_DIR", saved_target);
+        restore_var("CARGO_BUILD_TARGET_DIR", saved_alias);
+        assert!(!outcome.timed_out);
+        assert_eq!(outcome.exit_code, Some(0));
+        // Both spellings arrive unset: after the scrub a bare `cargo test`
+        // in the gate builds `<cwd>/target` — content-correct by
+        // construction.
+        assert_eq!(outcome.output, "UNSET|UNSET");
+    }
+
+    /// The explicit in-command prefix must still win: the scrub removes the
+    /// INHERITED variable at the spawn boundary and never touches a
+    /// `CARGO_TARGET_DIR=… ` prefix inside the command string — the
+    /// goal-carried `export …` / per-command prefix is the warm shared-cache
+    /// mechanism (T52/T57 role-keyed dirs) and must keep working.
+    ///
+    /// `printenv`, not `echo`: a POSIX shell expands `$VAR` before a leading
+    /// assignment of the same simple command takes effect, so
+    /// `CARGO_TARGET_DIR=x echo $CARGO_TARGET_DIR` prints the stale value in
+    /// ANY shell. printenv reads the exec'd child's real environment —
+    /// exactly the level the scrub acts on.
+    #[test]
+    fn run_shell_explicit_in_command_target_dir_prefix_still_wins() {
+        let _guard = crate::delegate::tests::DELEGATE_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let tmp = tempfile::tempdir().unwrap();
+        // SAFETY: serialized by DELEGATE_ENV_LOCK; restored before the asserts.
+        let saved_target = std::env::var_os("CARGO_TARGET_DIR");
+        unsafe { std::env::set_var("CARGO_TARGET_DIR", "/tmp/t144-process-env-value") };
+        let outcome = run_shell(
+            tmp.path(),
+            "CARGO_TARGET_DIR=/tmp/t144-explicit-prefix printenv CARGO_TARGET_DIR",
+            Duration::from_secs(10),
+        )
+        .unwrap();
+        restore_var("CARGO_TARGET_DIR", saved_target);
+        assert_eq!(outcome.exit_code, Some(0));
+        assert_eq!(outcome.output, "/tmp/t144-explicit-prefix\n");
+    }
+
+    /// Restore one process env var to its pre-leg value (the T144 legs'
+    /// shared undo half — set_var/remove_var are unsafe in edition 2024).
+    fn restore_var(key: &str, saved: Option<std::ffi::OsString>) {
+        match saved {
+            Some(v) => unsafe { std::env::set_var(key, v) },
+            None => unsafe { std::env::remove_var(key) },
+        }
     }
 
     /// T69 doc pins (T41/T63 convention): the README delegate paragraph names

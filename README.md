@@ -70,7 +70,11 @@ chug ledger          # print current LEDGER.md
 ```
 
 Put a `check: <shell command>` line in your spec — `goal_complete` is only
-accepted when the check exits 0.
+accepted when the check exits 0. The check (like every shell chug spawns)
+runs with `CARGO_TARGET_DIR`/`CARGO_BUILD_TARGET_DIR` scrubbed from its
+environment, so a bare `cargo test` builds the run cwd's own `target/` —
+set the variable inside the `check:` line itself if you want a shared build
+cache (an explicit choice, never an inheritance accident).
 
 ## Interactive mode (`chug chat`)
 
