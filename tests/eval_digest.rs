@@ -473,3 +473,64 @@ fn golden_section_pins_the_digest_output_skeleton() {
     assert_line_shape(staleness, "- corpus age at generation: ", "- corpus age at generation: *", "corpus age");
     assert_line_shape(staleness, "- events-moved-during-generation: ", "- events-moved-during-generation: no", "events-moved-during-generation");
 }
+
+// --- T131: the reader staleness check excludes the reader's own live stream --
+//
+// loopd regenerates the digest immediately before launching a cycle, so the
+// newest .chug/events*.jsonl — the evaluating cycle's own live stream, rotating
+// and appending continuously — is ALWAYS newer than the digest; the T46 check
+// (`find -newer ... | grep -q . && echo STALE`) therefore printed STALE within
+// the first minute of every cycle (observed live at the cycle-65 eval) and the
+// "regenerate if stale" doctrine was literally unsatisfiable mid-cycle. The
+// rendered check must instead drop the single newest events file — the
+// reader's own live stream, picked by `ls -t ... | head -1` and excluded via
+// `grep -vx` — and render BOTH verdicts, so STALE means a file OTHER than the
+// reader's own stream postdates the digest (foreign/new corpus: a harvested
+// stream landing, another process writing archives).
+
+#[test]
+fn reader_staleness_check_excludes_the_own_live_stream() {
+    let tmp = tempfile::tempdir().unwrap();
+    let chug = tmp.path().join(".chug");
+    std::fs::create_dir_all(&chug).unwrap();
+    write_archive(&chug, "events.jsonl", &fixture_events(2, false));
+
+    let digest = run_digest(tmp.path(), "2026-09-26T00:00:00Z");
+
+    // The two rendered mechanical-check lines pin byte-exact (golden-pin
+    // style): they carry no volatile values — the `$(ls -t ... | head -1)` is
+    // the literal rendered command, not its output — so there is nothing to
+    // wildcard; labels/punctuation stay exact.
+    let lines: Vec<&str> = digest.lines().collect();
+    let at = lines
+        .iter()
+        .position(|l| l.trim_start().starts_with("find .chug -maxdepth 1"))
+        .unwrap_or_else(|| panic!("mechanical check `find` line present:\n{digest}"));
+    assert_eq!(
+        lines[at],
+        "  find .chug -maxdepth 1 -name 'events*.jsonl' -newer .chug/eval-digest.md \\",
+        "-newer base pipeline keeps its shape and hands off with a line continuation"
+    );
+    assert_eq!(
+        lines[at + 1],
+        "    | grep -vx \"$(ls -t .chug/events*.jsonl | head -1)\" | grep -q . && echo STALE || echo FRESH",
+        "the newest events file (the reader's own live stream) is excluded via ls -t + \
+         grep -vx, and BOTH verdicts render"
+    );
+
+    // The explanatory sentence, whitespace-normalized (it wraps across lines):
+    // WHY the newest file is excluded, and what STALE now means.
+    let flat: String = digest.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(
+        flat.contains(
+            "The newest events file is excluded because it is the evaluating \
+             cycle's own live stream (loopd regenerates the digest immediately \
+             pre-launch, so it is fresh at cycle start)",
+        ),
+        "exclusion-rationale sentence present:\n{digest}"
+    );
+    assert!(
+        flat.contains("STALE now means a file OTHER than your own stream postdates the digest"),
+        "STALE-redefinition sentence present:\n{digest}"
+    );
+}

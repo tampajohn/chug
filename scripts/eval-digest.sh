@@ -12,7 +12,10 @@
 # Staleness (T46 req 4): the digest records generated-at and the newest
 # events mtime, flags events that moved DURING generation (write race), and
 # carries the reader-side check command (find -newer) that detects a digest
-# that has gone stale since it was written.
+# that has gone stale since it was written. T131: the check excludes the
+# single newest events file — the reader's own live stream (loopd regenerates
+# the digest immediately pre-launch) — so STALE means a file OTHER than the
+# reader's own stream postdates the digest.
 #
 # Usage:
 #   scripts/eval-digest.sh [ROOT]     # default ROOT: the repo (script/..)
@@ -284,9 +287,14 @@ REL_NEWEST="${POST_NEWEST_PATH#"$ROOT"/}"
   fi
   printf -- '- corpus age at generation: %s\n' "$AGE_TXT"
   printf -- '- events-moved-during-generation: %s\n' "$MOVED"
-  printf -- '- reader staleness check: if any .chug/events*.jsonl mtime > generated-at, this\n'
-  printf -- '  digest is stale — regenerate with scripts/eval-digest.sh. Mechanical check:\n'
-  printf -- '  find .chug -maxdepth 1 -name '"'"'events*.jsonl'"'"' -newer .chug/eval-digest.md | grep -q . && echo STALE\n'
+  printf -- '- reader staleness check: if any .chug/events*.jsonl OTHER than your own live\n'
+  printf -- '  stream has an mtime > generated-at, this digest is stale — regenerate it with\n'
+  printf -- '  scripts/eval-digest.sh. The newest events file is excluded because it is the\n'
+  printf -- "  evaluating cycle's own live stream (loopd regenerates the digest immediately\n"
+  printf -- '  pre-launch, so it is fresh at cycle start); STALE now means a file OTHER than\n'
+  printf -- '  your own stream postdates the digest. Mechanical check (paste both lines):\n'
+  printf -- '  find .chug -maxdepth 1 -name '"'"'events*.jsonl'"'"' -newer .chug/eval-digest.md \\\n'
+  printf -- '    | grep -vx "$(ls -t .chug/events*.jsonl | head -1)" | grep -q . && echo STALE || echo FRESH\n'
 } > "$OUT"
 
 # --- one-line stdout summary (loopd logs it) ---------------------------------
