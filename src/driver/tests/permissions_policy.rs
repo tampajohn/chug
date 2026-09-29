@@ -4,17 +4,6 @@
     use super::*; // the shared harness (driver::tests) + driver's own imports
     // ---------- T90: .chug/permissions.json deny-list ----------
 
-    /// Write a permissions.json deny config into `cwd/.chug/`.
-    fn write_permissions_json(cwd: &Path, deny: Value) {
-        let dir = cwd.join(".chug");
-        fs::create_dir_all(&dir).unwrap();
-        fs::write(
-            permissions::permissions_path(cwd),
-            json!({"permissions": {"deny": deny}}).to_string(),
-        )
-        .unwrap();
-    }
-
     fn write_permissions_raw(cwd: &Path, text: &str) {
         let dir = cwd.join(".chug");
         fs::create_dir_all(&dir).unwrap();

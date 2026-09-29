@@ -26,6 +26,7 @@
     mod plan;
     mod preview;
     mod resume;
+    mod spec_check_gate;
     mod steering;
     mod stuck;
     mod truncated;
@@ -217,6 +218,18 @@ for line in sys.stdin:
             obs: &observ::Sink::Noop,
             plan_out,
         }
+    }
+
+    /// Write a permissions.json deny config into `cwd/.chug/` (T90; shared
+    /// since T139 — the spec-check gate family denies bash the same way).
+    fn write_permissions_json(cwd: &Path, deny: Value) {
+        let dir = cwd.join(".chug");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            permissions::permissions_path(cwd),
+            json!({"permissions": {"deny": deny}}).to_string(),
+        )
+        .unwrap();
     }
 
     /// Write a hooks.json configuring one PreToolUse entry and one
