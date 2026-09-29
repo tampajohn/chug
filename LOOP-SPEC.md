@@ -146,7 +146,7 @@ impl, never 2 impls):
    incomplete work, the FIRST recovery is ONE `delegate` relaunch in the
    SAME worktree with `resume: true` — same spec, same goal (the goal
    re-carries the T47 `CARGO_TARGET_DIR` export), same model, same
-   budgets (80/35 impl, 50/30 validate) — which continues the child's
+   budgets (80/35 impl, 60/40 validate) — which continues the child's
    prior transcript in that worktree instead of starting cold. Resume
    works because the worktree is never removed pre-harvest (T19), so the
    child's untracked `.chug/` transcript persists, and `delegate status`
@@ -254,9 +254,14 @@ impl, never 2 impls):
    model orchestrates (T81 family independence: glm implements, so a
    glm-orchestrated cycle never lets glm validate glm — a routine cycle
    still launches this child on kimi) — with
-   `max_iters: 50`, `max_minutes: 30` (§6's budgets with T21-class
-   widened iterations, passed explicitly — minutes is 30, not
-   delegate's 35 default), and §6's goal text
+   `max_iters: 60`, `max_minutes: 40` (§6's budgets, passed explicitly —
+   minutes is 40, still ABOVE delegate's 35 default. 60/40, not 50/30:
+   4 of the last 4 validator children died at budget in cycles 66–69 —
+   T134/T138/T142 at 50/50 with work in flight, T137 minutes-bound at
+   30m08s with its verdict already written but unannounced. Measure: if
+   >1 of the next 8 validator runs still dies at 60/40 with the verdict
+   unannounced, the next eval considers trimming default mutation-leg
+   counts instead of further raises), and §6's goal text
    verbatim except its export line, which becomes
    `export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-validate`
    before every cargo command — ALWAYS, never conditionally (T52 role-keyed
