@@ -259,6 +259,39 @@ audit.**
 
 ## Outcomes (filled at cycle wrap — LOOP-SPEC Phase 3)
 
+### Cycle 70 (2026-09-29) — kimi fresh-eval cycle (queue was empty) — 7 rows filed, T144 landed
+
+Eval commit c802934: T144-T150 filed (bug T144 pri 1; T145 crash-safety;
+T146 F2-2a roadmap pull; T147 survivor pins; T148 wire e2e; T149
+validator budgets doctrine; T150 estimate pin), 13 rejected candidates,
+20 eval-triage records, README audit third consecutive clean.
+
+**T144 — goal-gate check + driver-spawned shells must not inherit
+CARGO_TARGET_DIR (pri 1 bug, landed 8cabc79 ff-merge).** The cycle-66/67
+infra finding promoted to a row: `goal_complete` checks executed a
+FOREIGN worktree's test binary twice (d1790632587-1, d1790640546-3) —
+and the fix's own validator reproduced it a THIRD time when its first
+gate attempt (running the pre-T144 main binary, which still inherited
+`target-shared`) hit the 600s check timeout under its own mutation-build
+load with zero test failures. Fix: `tools::scrub_target_dir_vars`
+removes both spellings at every driver-side spawn passing the inherited
+env — `run_shell` (bash tool + goal-gate check), `hooks::run_hook`,
+`delegate_launch`; explicit in-command prefixes keep the warm role-keyed
+path (pinned green). Spawn-site sweep in the commit message (mcp N/A via
+T138 env_clear; git/ps/rg fixed-argv). glm impl 73/80 one segment. kimi
+REQUIRED PASS (d1790668684-21/d1790670698-22): gates 1110/1110
+independent; mutants M1 (run_shell-scrub revert), M2 (alias dropped),
+M3 (delegate-scrub revert), M6b (over-scrub breaking in-command prefix)
+ALL DIED on named legs; non-blocking survivors M4 (general env
+passthrough unpinned — broader isolation class, out of scope) + M5
+(the beyond-spec hooks.rs scrub has no test of its own) carried to the
+next eval. The `delegate_launch_stub_then_status_reports_summary_and_
+liveness` full-suite load flake (one sighting) assessed by the
+validator: 2 O(1) env_remove calls pre-spawn, timing window not widened.
+Post-merge nextest 1110/1110. Watch for next cycle: children now run
+the scrubbed binary — first goal gates build worktree-local
+(impl-measured 85s vs the 600s cap).
+
 ### Cycle 69 (2026-09-29) — routine glm freshness-skip (queue non-empty: T129/T131 deferred from cycle 68, eval fresh) — the deferrals worked first
 
 **T129 — F10 phase 2b: chug_launch MCP write leg (pri 2 feature, landed
