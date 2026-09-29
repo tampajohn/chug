@@ -259,6 +259,26 @@ audit.**
 
 ## Outcomes (filled at cycle wrap — LOOP-SPEC Phase 3)
 
+### Cycle 71 (2026-09-29) — routine glm freshness-skip (queue non-empty, eval fresh) — T147 landed
+
+**T147 — 4 carried survivor pins, tests-only (6b217c3, merge of loop-t147:
+b08e909).** The cycle-70 80/80 budget death recovered by ONE T63 resume in
+the standing worktree: child finished at 26/80 with the goal accepted,
+gates green (build, clippy -D warnings, 1126/1126). All four carried
+survivors now RED-proven pinned: T128 M4 (both collect-liveness arms + None
+leg), T135 M2 (release must spend its 50×10ms budget on a held .chug flock)
++ F2 (lock absence + observe-seam first-attempt acquire), T138 plan-guard
+(pending flag-writing mcp.json registry through the REAL plan loop — no
+flag, no server; the prod empty-registry construction was the mask), T141
+M1 (message_stop-masked open-block rejector — the mutant synthesized an
+executable goal_complete). kimi SKIPPED per routing d1790681505-2
+(tests-only, T130 precedent); the orchestrator independently re-ran all 5
+mutants at review (T79 throwaway worktrees + role-keyed target dirs) — ALL
+5 RED, 0 survivors (verdict d1790681871-3); post-merge nextest 1126/1126 in
+target-shared-main. One launch slip caught by read-back: the first mutant
+legs ran with cwd=main (no per-leg cd) — killed, relaunched with subshell
+cds, main tree untouched. Carried weak-pin debt (cycles 65-70) CLOSED.
+
 ### Cycle 70 (2026-09-29) — kimi fresh-eval cycle (queue was empty) — 7 rows filed, T144 landed
 
 Eval commit c802934: T144-T150 filed (bug T144 pri 1; T145 crash-safety;
