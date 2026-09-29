@@ -288,6 +288,41 @@ filed** — the second consecutive clean audit after T127's catch.
 
 ### Cycle 67 (2026-09-28/29) — routine (freshness-skip) — codex-intake pri-2 queue
 
+**CYCLE-67 CYCLE-LEVEL NOTES (wrap).** TWO items landed (T135, T136 —
+both pri-2 codex-review §1 crash/concurrency rows, both through full
+kimi REQUIRED rounds); T137 reached impl+fix-up complete but its merge
+is BLOCKED on the round-2 re-validation (detached, verdict lands after
+this wrap); T138 impl #1 budget-died and is parked with a
+resume-ready worktree. The T63 resume recipe went 3-for-3 this cycle
+(T135 impl error-death, T136 impl 80/80, T137 impl error-death — all
+resumed children finished their arcs). Server-side truncated-SSE
+malformed-tool-JSON error-deaths: 2 sightings (T135#1, T137#1, both
+glm at iteration 7, both instant with no abort event) — reliability
+finding for the next eval: T141 made clean-EOF truncation retryable as
+Connection class, but a stream truncated mid tool-input still reaches
+the tool-input parser as a FATAL "LLM request failed: malformed tool_use
+input JSON" and kills the run; remedy candidate: classify that error
+shape retryable too, or survive one LLM failure with a bounded retry.
+The cycle-66 infra finding d1790632587-1 (goal_complete check harness
+runs cargo test WITHOUT a role-keyed target dir → cross-loop artifact
+collision) REPRODUCED live: T135's validator was goal-rejected by it
+while T136's impl built concurrently; the verdict was taken from the
+validator's LEDGER read-back. Remedy candidate stands: role-key the
+check env (validate dir for validators) or serialize checks across
+loops. Pipeline overlap ran twice clean (T135-val‖T136-impl,
+T137-val‖T138-impl — disjoint file sets, serial merges, T137's merge
+still respects queue order over T138's). Routing ids: T135
+d1790639671-2/d1790640546-3; T136 d1790642217-6/d1790643172-7; T137
+d1790645926-10/d1790647780-11; recoveries d1790637275-1, d1790641323-5,
+d1790643743-9, d1790647876-12. Carried survivors/findings for the next
+eval: T135 M2 (drop-sweep mutant, no release-side regression test) + F1
+(latent non-unix const-gating break, unix-only ship); T136's 3
+non-blocking (update_ledger wholesale write, legacy chat-shape repair
+gap, write_atomic dir-fsync/tmp-reap nits); T128 M4 + T141 M1 (older).
+Release: 2 items since v0.4.0, no FEATURES check-off — NO tag this
+wrap. Next cycle's cold input: T137 verdict collect → merge; T138
+resume; then T139, T129 (feature), T131.
+
 **T136 — crash mid-tool-batch leaves an unresumable transcript (pri 2,
 landed bf672b6, d67d434 rebased ff).** The review's second §1 HIGH
 crash-safety item: tool results were persisted only after a whole tool
