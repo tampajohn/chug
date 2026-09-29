@@ -579,6 +579,15 @@ its calls without killing the run; a remote server that refuses connection
 retries 3× (1s, 2s, 4s) then returns a tool error. Timeouts mirror stdio:
 connect 10s, first-byte 30s, per-call total 60s.
 
+Spawn timing and environment (T138): servers are NOT spawned at startup —
+each starts only after `.chug/permissions.json` has loaded, and a whole-tool
+`bash` deny, an `mcp__*` deny, or a per-server `mcp__<name>__*` deny in that
+config prevents the spawn entirely (a repository-controlled `mcp.json` must
+not execute its command before permission enforcement). A spawned stdio
+server does not inherit the process environment: it gets a minimal baseline
+(`PATH`, `HOME`, `TMPDIR`, `LANG`) plus exactly the entry's `env` map —
+pass secrets explicitly per entry, never through ambient inheritance.
+
 Remote specifics (SPEC-9): JSON-RPC over POST; `Mcp-Session-Id` captured and
 replayed; notifications expect `202`; SSE response streams are read until the
 matching-id response; a server-pushed request gets a JSON-RPC

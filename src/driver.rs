@@ -746,6 +746,15 @@ pub(crate) fn drive_loop(
     // plan mode is not structurally excluded the way hooks are — denying
     // `read_file *.key` inside a plan session is exactly the point.
     let permissions = permissions::Permissions::load(ctx.cwd, sink);
+    // T138: MCP servers spawn only AFTER permissions load (a repo-controlled
+    // mcp.json used to execute its command before the policy layer existed),
+    // gated on the deny rules — a whole-tool `bash` deny or an
+    // `mcp__*`/`mcp__<server>__*` deny prevents the startup execution. Plan
+    // mode is structurally read-only (the plan gate rejects every `mcp__`
+    // name before dispatch), so it never spawns MCP servers at all.
+    if ctx.mode != Mode::Plan {
+        mcp.start(&permissions);
+    }
     // T73 plan mode: EXACTLY the five-tool read-only surface, and never an
     // MCP extension (an empty registry would be a no-op anyway, but the plan
     // branch makes the "no other schema advertised" guarantee structural).

@@ -1573,6 +1573,9 @@ pub(crate) mod tests {
         std::fs::write(tmp.path().join("mcp.json"), cfg.to_string()).unwrap();
 
         let mut reg = McpRegistry::new(tmp.path(), false, None).unwrap();
+        // T138: spawn (and the HTTP handshake) is deferred to start(),
+        // gated on permissions.
+        reg.start(&crate::permissions::Permissions::empty());
         let schemas = reg.tool_schemas();
         assert_eq!(schemas.len(), 1);
         assert_eq!(schemas[0]["name"], "mcp__remote__echo");
@@ -1620,7 +1623,9 @@ pub(crate) mod tests {
             "headers": {"Authorization": "Bearer ${CHUG_TEST_TOKEN}"}
         }}});
         std::fs::write(tmp.path().join("mcp.json"), cfg.to_string()).unwrap();
-        let reg = McpRegistry::new(tmp.path(), false, None).unwrap();
+        let mut reg = McpRegistry::new(tmp.path(), false, None).unwrap();
+        // T138: the handshake is deferred to start(), gated on permissions.
+        reg.start(&crate::permissions::Permissions::empty());
         assert!(reg.tool_schemas().is_empty());
         stub.join().unwrap();
     }
@@ -2004,7 +2009,9 @@ pub(crate) mod tests {
         let tmp = TempDir::new().unwrap();
         let cfg = json!({"mcpServers": {"remote": {"url": url}}});
         std::fs::write(tmp.path().join("mcp.json"), cfg.to_string()).unwrap();
-        let reg = McpRegistry::new(tmp.path(), false, None).unwrap();
+        let mut reg = McpRegistry::new(tmp.path(), false, None).unwrap();
+        // T138: the handshake is deferred to start(), gated on permissions.
+        reg.start(&crate::permissions::Permissions::empty());
         assert!(reg.tool_schemas().is_empty());
         stub.join().unwrap();
     }
