@@ -3,8 +3,9 @@
 // module; every test here lives in exactly one family file.
 // T109 req 4 count-pin anchor (see mod.rs's pin): this family's
 // #[test] fn count — a dropped `mod launch;` line fails the pin's
-// reference to this const to compile.
-pub(super) const TEST_COUNT: usize = 14;
+// reference to this const to compile. (T144 added the launch-scrub
+// env leg: 14 → 15.)
+pub(super) const TEST_COUNT: usize = 15;
     use super::*; // the shared harness (delegate::tests) + delegate's own imports
 
     /// End-to-end with a stub binary: `CHUG_DELEGATE_BIN` points at a script
@@ -804,3 +805,106 @@ pub(super) const TEST_COUNT: usize = 14;
         unsafe { std::env::remove_var("CHUG_DELEGATE_BIN") };
     }
 
+
+    /// T144: the delegate launch scrub. The child chug binary must NOT
+    /// inherit `CARGO_TARGET_DIR`/`CARGO_BUILD_TARGET_DIR` from the driver
+    /// process env — loopd.sh hands every orchestrator the shared cache as a
+    /// per-invocation prefix, and that env is exactly what reaches the child
+    /// through this spawn. Without the scrub, a delegate child that forgets
+    /// its goal-carried `export CARGO_TARGET_DIR=<role-keyed>` builds into
+    /// the shared dir and collides with other checkouts (last-builder-wins;
+    /// the same class the check harness gets, one level down). Both
+    /// spellings must arrive unset; an in-command `export`/prefix inside the
+    /// child's own goal text is unaffected (it is not inherited, it is set
+    /// by the child's shell after spawn).
+    #[cfg(unix)]
+    #[test]
+    fn delegate_launch_child_does_not_inherit_target_dir_vars() {
+        use std::os::unix::fs::PermissionsExt;
+        let _guard = DELEGATE_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let child_dir = tempfile::tempdir().unwrap();
+        let ctx_cwd = tempfile::tempdir().unwrap();
+
+        // The stub records both spellings of the var exactly as its exec'd
+        // environment presents them (same `${VAR:-UNSET}` probe shape as the
+        // run_shell legs), then sleeps so the pid-group kill cleans it up.
+        let stub = ctx_cwd.path().join("chug-env-stub.sh");
+        fs::write(
+            &stub,
+            concat!(
+                "#!/bin/sh\n",
+                "printf 'ctd=%s\\ncbtd=%s\\n' \"${CARGO_TARGET_DIR:-UNSET}\" \"${CARGO_BUILD_TARGET_DIR:-UNSET}\" > env.txt\n",
+                "sleep 60\n",
+            ),
+        )
+        .unwrap();
+        fs::set_permissions(&stub, fs::Permissions::from_mode(0o755)).unwrap();
+        // SAFETY: serialized by DELEGATE_ENV_LOCK; no other test reads this var.
+        unsafe { std::env::set_var("CHUG_DELEGATE_BIN", &stub) };
+        ensure_spec_file("/tmp/chug-stub-spec.md");
+        // Seed BOTH spellings the way loopd.sh's per-invocation prefix does —
+        // the driver process env is what the launch inherits from.
+        // SAFETY: serialized by DELEGATE_ENV_LOCK; both restored before return.
+        let saved_target = std::env::var_os("CARGO_TARGET_DIR");
+        let saved_alias = std::env::var_os("CARGO_BUILD_TARGET_DIR");
+        unsafe {
+            std::env::set_var("CARGO_TARGET_DIR", "/tmp/t144-foreign-shared-target");
+            std::env::set_var("CARGO_BUILD_TARGET_DIR", "/tmp/t144-foreign-alias-target");
+        }
+
+        let launch = dispatch(
+            &delegate_ctx(ctx_cwd.path()),
+            "delegate",
+            &json!({
+                "action": "launch",
+                "cwd": child_dir.path(),
+                "spec": "/tmp/chug-stub-spec.md",
+                "goal": "t144 stub goal",
+                "model": "stub-model",
+            }),
+        );
+        assert!(!launch.is_error, "{}", launch.content);
+        let pid: u32 = launch
+            .content
+            .lines()
+            .find_map(|l| l.strip_prefix("launched: pid "))
+            .expect("pid in launch output")
+            .trim()
+            .parse()
+            .expect("pid parses");
+
+        // The stub's env dump, polled like argv.txt (launch returns at
+        // spawn; `cbtd=` guards the tail so a partial write re-polls).
+        let env_path = child_dir.path().join("env.txt");
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let dump = loop {
+            if let Ok(text) = fs::read_to_string(&env_path)
+                && text.contains("cbtd=")
+            {
+                break text;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "stub never wrote {}",
+                env_path.display()
+            );
+            thread::sleep(Duration::from_millis(25));
+        };
+
+        kill_pid_group(pid);
+        // SAFETY: serialized by DELEGATE_ENV_LOCK; restore the seam and both
+        // process values (a panic above must not leak the seed).
+        unsafe { std::env::remove_var("CHUG_DELEGATE_BIN") };
+        match saved_target {
+            Some(v) => unsafe { std::env::set_var("CARGO_TARGET_DIR", v) },
+            None => unsafe { std::env::remove_var("CARGO_TARGET_DIR") },
+        }
+        match saved_alias {
+            Some(v) => unsafe { std::env::set_var("CARGO_BUILD_TARGET_DIR", v) },
+            None => unsafe { std::env::remove_var("CARGO_BUILD_TARGET_DIR") },
+        }
+        assert_eq!(
+            dump, "ctd=UNSET\ncbtd=UNSET\n",
+            "delegate child must not inherit either target-dir spelling"
+        );
+    }

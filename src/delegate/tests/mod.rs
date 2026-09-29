@@ -30,6 +30,9 @@
     ///
     /// T129: `pub(crate)` so the `chug mcp-serve` stub-spawn legs (same test
     /// binary, same env var) take the SAME lock — one env, one lock.
+    /// T144: the target-dir scrub legs (`run_shell`, delegate launch, the
+    /// goal-gate check) also seed/remove `CARGO_TARGET_DIR` and
+    /// `CARGO_BUILD_TARGET_DIR` — same process-global env, same lock.
     pub(crate) static DELEGATE_ENV_LOCK: Mutex<()> = Mutex::new(());
 
     // ---- T29: status wait_secs long-poll ----
@@ -199,7 +202,7 @@
             total += actual;
         }
         assert_eq!(
-            total, 87,
+            total, 88,
             "delegate test count drifted — recount and update the count pin"
         );
     }

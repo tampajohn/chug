@@ -327,6 +327,14 @@ pub(crate) fn delegate_launch(input: &Value) -> anyhow::Result<ToolResult> {
         // stdout AND stderr append to one log file.
         .stdout(Stdio::from(open_append(&log_path)?))
         .stderr(Stdio::from(open_append(&log_path)?));
+    // T144: the child inherits THIS process's env, which is how loopd.sh's
+    // per-invocation `CARGO_TARGET_DIR=<shared>` prefix reaches chug
+    // children at all. Scrub both spellings so a child that forgets its
+    // goal-carried `export CARGO_TARGET_DIR=<role-keyed>` builds into its
+    // own `<cwd>/target` instead of colliding with other checkouts
+    // (last-builder-wins); an in-command `export`/prefix inside the child's
+    // own goal text is unaffected — the child's shell sets it after spawn.
+    crate::tools::scrub_target_dir_vars(&mut cmd);
     // Detached, `nohup … &` parity: the child gets its own process group and
     // ignores SIGHUP, so it survives both the orchestrator exiting and a
     // terminal hangup. Both are unix-only; non-unix falls back to a plain

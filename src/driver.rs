@@ -1556,13 +1556,20 @@ fn goal_check_blocked_message(block: &str) -> String {
 /// symlink to make cargo resolvable). Environment literals are derived from
 /// the same constants the shell wrapper uses, so the note cannot drift from
 /// reality: [`tools::CARGO_BIN_REL`] and [`tools::CHECK_TIMEOUT_SECS`].
+/// T144: the note also names the target-dir scrub — the check runs with
+/// `CARGO_TARGET_DIR`/`CARGO_BUILD_TARGET_DIR` removed, so a shared build
+/// cache is an explicit in-`check:` choice, not an inheritance accident.
 fn goal_rejected_message(output: &str) -> String {
     format!(
         "goal_complete rejected: the spec check command failed. Output:\n\n{output}\n\n\
          Fix the failure and try again. Update the ledger to reflect the current state.\n\n\
          Environment note: the check ran via the same shell wrapper as your bash tool \
          (`sh -c` in the run cwd, `~/{CARGO_BIN_REL}` prepended to PATH when that \
-         directory exists, {CHECK_TIMEOUT_SECS}s timeout). If the check fails on a \
+         directory exists, {CHECK_TIMEOUT_SECS}s timeout). The check also ran with \
+         `CARGO_TARGET_DIR` (and its alias `CARGO_BUILD_TARGET_DIR`) removed from its \
+         environment: set a shared build cache inside the `check:` line itself if you \
+         want one — that is your explicit choice, not an inheritance accident. \
+         If the check fails on a \
          missing tool that works in your bash tool, suspect the check command itself — \
          do NOT create or modify files outside the run cwd to make the check pass.",
         CARGO_BIN_REL = tools::CARGO_BIN_REL,
