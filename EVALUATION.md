@@ -317,6 +317,32 @@ indistinguishable, skipped per spec; two non-blocking nits (124 vs ~60
 estimate — informational; rename-replaces-inode symlink nit). Post-merge
 nextest 1113/1113.
 
+**T146 — F2 phase 2a: `chug run --approve plan.md` + web_fetch in plan
+mode (pri 2 FEATURE, the mandatory roadmap pull; landed 55d59c3 merge of
+8ea88e8 + d7d7aa0).** Retires the oldest Tier-1 deferral (34 cycles —
+cycle-36's 50-iteration budget reason obsolete). Surface 1: the clap
+flag exists on `run` only (plan/chat are clap errors);
+`driver::load_approved_plan` refuses missing/unreadable/empty/escaping
+legs with named-leg messages BEFORE any `.chug/` write (the T117
+ordering); on success the approval sentence + plan text prepend the
+first message with the goal undisplaced; `run_start` gains
+always-present null-able `approve` + `plan_sha256` (new
+`eventlog::sha256_hex`, the T117 honesty shape). Surface 2: web_fetch
+joins plan mode's read-only set across all five enumeration sites
+(six-tool contract, cardinality pinned). glm impl died 80/80 at a NEW
+pace class (~5s/iteration, 6m41s for the whole budget — flash models
+make iteration counts, not minutes, the binding constraint) and finished
+on the T63 resume (impl recovery d1790674063-31; validator recovery
+d1790677504-33). kimi REQUIRED PASS across two segments (validator died
+50/50 mid mutation wave 2 — the 5th validator budget death in 5 cycles,
+more T149 census — resumed and goal-accepted at iteration 4; verdict
+d1790677901-34): independent gates 1118/1118; all 4 spec-named mutants
+(before-.chug ordering, null-fields shape, approve-on-plan clap,
+web_fetch enumeration) killed + 2 extras (injection-order, empty-check);
+2 stale five-tool comments fixed on-branch pre-merge (d7d7aa0), 4
+cosmetic nits carried. Post-merge nextest 1121/1121. FEATURES.md F2
+annotated phase-2a landed, 2b deferred with refreshed reason.
+
 ### Cycle 69 (2026-09-29) — routine glm freshness-skip (queue non-empty: T129/T131 deferred from cycle 68, eval fresh) — the deferrals worked first
 
 **T129 — F10 phase 2b: chug_launch MCP write leg (pri 2 feature, landed
