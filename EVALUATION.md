@@ -475,6 +475,41 @@ field-drop mutants killed, 8/9 mutants (m9 observ-sink survivor
 non-blocking, outside spec surface, carried) + 3 minor coverage
 observations. Post-merge nextest 1084/1084 (target-shared-main).
 
+**T139 — editable spec check bypassed bash deny + risk gate (pri 2,
+landed b5f1fa0+bb02823 ff-merge).** The codex review's §2 HIGH
+self-modification item: goal_complete's spec `check:` command executed
+via run_shell DIRECTLY (driver.rs:822/1390), outside permissions, hooks,
+and the risk gate — deny bash + permit file editing let the model edit
+its own spec to an arbitrary `check:` shell command and execute it the
+next iteration. Fix (impl b5f1fa0, glm, 101/80 across two segments after
+a T63 resume): verify() now routes the check through the SAME gate chain
+as an ordinary bash call, in dispatch order — permissions.check deny →
+PreToolUse hook veto → risk gate (fail-open judge + allow-destructive
+override unchanged) → run_shell — and fails CLOSED: a blocked check
+never executes AND never verifies (new VerifyOutcome::Blocked, the goal
+rejected with "check command blocked by policy", blocked≠failed in the
+model message); PostToolUse intentionally not fired (T83's advisory
+follows dispatched tools only); the legit path is preserved (default
+permissions still gate `check: cargo test`). Class swept: exactly two
+production run_shell callers exist (tools.rs:582 the gated bash tool,
+driver.rs verify()), and every sibling candidate (hooks = operator
+config, mcp argv = T138-gated, delegate/git/ps = fixed argv) carries no
+model-controlled shell string. RED proven END-TO-END (deny bash + edited
+spec + goal_complete executed the attacker command; the trigger test
+failed at the right assert on parent e56979d). kimi round-1 FAIL
+d1790658499-14 — NOT a code bug: the production chain verified correct
+in every leg, but the REORDER mutants M4 (risk-gate-before-permissions)
+and M11 (hooks-before-permissions) survived the family AND the full
+suite, violating the spec's own "a mutant that reorders or drops a leg
+must be caught" bar. Fix-up bb02823 (test-only, +246, driver.rs
+byte-identical) pins ALL THREE adjacent gate-chain pairs with
+RED-proven killing tests — the sweep-the-class remedy from the cycle-33
+lesson closed in ONE round what one-leg-at-a-time would have spread over
+three. kimi round-2 PASS d1790660325-15: M4/M11/M12 all die on their
+order-signal pins (RecordingAllowJudge consultation flag), gates
+1092/1092 zero flakes. Post-merge nextest 1092/1092
+(target-shared-main).
+
 ### Cycle 66 (2026-09-28) — routine (reconciled cycle-65 divergence first) — codex-intake queue T134–T142
 
 **CYCLE-66 CYCLE-LEVEL NOTES (wrap).** FOUR items landed (T140,
