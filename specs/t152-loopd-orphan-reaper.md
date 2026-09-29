@@ -35,15 +35,27 @@ estimate: ~160 changed lines (loopd.sh ~50, tests/loopd_*.rs legs ~110)
    single-driver probe passes and BEFORE `cargo build --release` (the
    T137 gate). It logs every judgment (killed / skipped-with-reason) one
    line each to the cycle log via the existing `ts` logger.
-2. **Needle (precise, two legs, either qualifies).** A process is a
+2. **Needle (precise, three legs, any qualifies).** A process is a
    reaper candidate ONLY if (a) its executable path (not argv[0] text —
    resolve via `ps -o comm=` and require an absolute path containing
    `/target-shared` + `/deps/`) matches the loop's test/binary artifact
    shape, OR (b) its argv contains `/tmp/chug-loop-t` or `/tmp/chug-mut-`
-   AND the named worktree directory no longer exists. Both legs require
-   the process to NOT be the reaper's own process group and NOT a
-   current cycle process (none can exist at the sweep point by
-   construction — state this invariant in a comment).
+   AND the named worktree directory no longer exists, OR (c) its
+   CURRENT WORKING DIRECTORY (resolved via `lsof -a -p <pid> -d cwd` or
+   the platform equivalent, fail-closed when unresolvable) is inside a
+   `/tmp/chug-loop-t*` or `/tmp/chug-mut*` path — existing or not. Leg
+   (c) exists for the cycle-72 live evidence: the T151 fix-up child's
+   `sh -c 'export … & echo launched'` hammer loop survived its budget
+   death by 1h49m (pids reaped manually mid-cycle) — a plain `sh`
+   matching neither (a) nor (b), identified ONLY by its cwd, and
+   spawning fresh cargo/test processes the whole time (feeds the T151
+   flake load). The sweep-point invariant covers (c)'s safety: at the
+   pre-cycle point NO legitimate process can have a loop worktree cwd
+   (no orchestrator children exist), so cwd-in-worktree ⇒ orphaned by
+   construction. All legs require the process to NOT be the reaper's
+   own process group and NOT a current cycle process (none can exist at
+   the sweep point by construction — state this invariant in a
+   comment).
 3. **Fail-closed judgment.** For every candidate: if ANY identity leg
    cannot be resolved (ps failure, non-absolute comm, unreadable),
    SKIP and log `orphan-reaper: skip pid=<n> (unresolved)` — never kill
@@ -65,6 +77,10 @@ estimate: ~160 changed lines (loopd.sh ~50, tests/loopd_*.rs legs ~110)
    (b) a fixture whose comm is an absolute path under a
    `target-shared*/deps/` shape → candidate;
    (c) a fixture with neither needle → NOT a candidate;
+   (c2) a fixture process whose CWD is chdir'd into a
+   `/tmp/chug-loop-t`-prefixed dir created by the test (argv and comm
+   both innocent — e.g. a plain `sh`/`sleep`) → candidate via the cwd
+   leg;
    (d) unresolved-identity leg → skip, no kill;
    (e) `LOOP_REAPER=0` → zero judgments logged.
    Prefer testing the reaper as a SOURCED shell function or a small
