@@ -1,6 +1,6 @@
 # T156 — LOOP-SPEC T63 doctrine: name the complete+committed budget-death variant
 
-check: cargo test
+check: cd /private/tmp/chug-loop-t156 && export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared && cargo test --test loop_spec_recovery 2>&1 | tail -3
 
 ## Repo context
 
