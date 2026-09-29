@@ -182,6 +182,24 @@ today).
   from the seed (`--resume` keeps it, chat sessions share it)
 - **Verification** — `goal_complete` re-runs the spec's `check:` command;
   failure rejects the claim and the loop continues
+- **Approved plan (`--approve plan.md`)** — plan first, execute only against
+  an operator-approved plan (Claude Code plan-mode parity). The plan becomes
+  the run's execution contract: one user-side preamble block is prepended to
+  the first message — "The operator approved this implementation plan;
+  implement it, then satisfy your goal's check." plus the plan text verbatim —
+  while `--goal` still names the objective and the spec's `check:` line still
+  governs acceptance (the plan constrains HOW, the goal names WHAT, the check
+  decides DONE). The run refuses to start unless the file exists, is a
+  readable regular file, and is non-empty — the refusal exits nonzero with a
+  stderr message naming the path and the failed leg (missing / not a readable
+  regular file / empty / outside the working directory) BEFORE any `.chug/`
+  write, so a rejected launch leaves no session state behind; relative paths
+  resolve against the run cwd and must stay inside it (an approved plan is
+  repo-local input, not a path into $HOME). The run's `run_start` events line
+  records the path as typed (`approve`) and the SHA-256 of the file bytes
+  (`plan_sha256`) — always-present fields, `null` when the flag is absent.
+  Accepted on `chug run` only: `chug plan` produces plans, `chug chat` is
+  interactive (both reject the flag)
 - **Stuck tripwire** — 3 identical consecutive tool errors → abort, ledger
   intact, resumable
 - **Budget-low warning** — when ≤8 iterations, ≤5 minutes, or ≤50,000 tokens
@@ -246,7 +264,10 @@ today).
   `.chug/commands/` pack, `null` otherwise, field always present; when
   `goal_pack` is non-null the hash is over the EXPANDED body, so it will not
   match a parent's delegate-launch echo of the literal `/name args` argv —
-  the expansion, not a transmission garble), one line
+  the expansion, not a transmission garble — plus `approve` +
+  `plan_sha256`, the operator-approved plan's path as typed and its
+  file-bytes SHA-256 when the run launched with `--approve`, both `null`
+  (fields present) otherwise), one line
   per iteration with cumulative tokens, tool results (ok/is_error/duration_ms, ≤200-char
   previews — error results keep a tail-anchored ≤2000-char window, so the
   failing test's name or error block at the end of the output is on record),
@@ -298,9 +319,11 @@ mode; chug's twist is that it also serves the autonomous loop — dispatch a
 plan child into a worktree (e.g. via `delegate`) to draft an approach before
 burning an implementation child.
 
-- **Read-only contract** — the tool list advertised to the API is EXACTLY five
-  tools: `read_file`, `grep`, `glob`, `list_dir`, and `submit_plan`. No
-  `write_file`, `edit_file`, `bash`, `delegate`, `web_fetch`, `update_ledger`,
+- **Read-only contract** — the tool list advertised to the API is EXACTLY six
+  tools: `read_file`, `grep`, `glob`, `list_dir`, `web_fetch` (read-only by
+  design — GET-only, http/https, size-capped — so planning can research docs
+  mid-plan), and `submit_plan`. No
+  `write_file`, `edit_file`, `bash`, `delegate`, `update_ledger`,
   `todo_add`/`todo_update`/`todo_list`,
   `goal_complete`, `decision_log`, and no MCP tools
 - **Defense in depth** — the schemas are filtered AND dispatch rejects every
@@ -325,9 +348,8 @@ chug plan --goal "add a --version flag" --spec SPEC.md --out plan.md --model cla
 ```
 
 `--spec` is optional (same resolution as `run`); `--out` is optional and
-cwd-sandboxed. Not yet in plan mode: a `/plan` chat slash command, an
-`--approve plan.md` gate for `chug run`, and `web_fetch` (planned phase-2
-work).
+cwd-sandboxed. Not yet in plan mode: a `/plan` chat slash command (deferred
+phase 2b).
 
 ## TUI (`--tui`)
 
@@ -363,7 +385,7 @@ credentials included) — treat model-issued bash as running with chug's
 own privileges. It runs in its own process group —
 timeouts SIGKILL the whole group, so orphaned grandchildren can't wedge the
 driver (120s default; `--bash-timeout` / `CHUG_BASH_TIMEOUT` overrides).
-`chug plan` runs the same `read_file`/`grep`/`glob`/`list_dir` tools plus `submit_plan` (its only write and exit path) — plan mode advertises no other tool (the bookkeeping tools `update_ledger`, `decision_log`, and the todo tools included), so the registry surfaces below are run/chat surfaces.
+`chug plan` runs the same `read_file`/`grep`/`glob`/`list_dir`/`web_fetch` tools plus `submit_plan` (its only write and exit path) — plan mode advertises no other tool (the bookkeeping tools `update_ledger`, `decision_log`, and the todo tools included), so the registry surfaces below are run/chat surfaces.
 
 `decision_log` is the loop's bookkeeping surface next to `update_ledger`:
 structured decision records to `.chug/decisions.jsonl` (append-only,
@@ -491,8 +513,7 @@ child has its own; no search chain, no CLI flag):
 
 `match` is a glob on the tool name (`*`/`?`; `mcp__*` matches MCP tools by
 their registered `mcp__<name>__<tool>` name like any other). Runs in run and
-chat mode; **plan mode never fires hooks** (its tool contract is exactly the
-five read-only tools). Each hook runs `sh -c <command>` in its own process
+chat mode; **plan mode never fires hooks** (its tool contract is exactly the six read-only tools, submit_plan included). Each hook runs `sh -c <command>` in its own process
 group, cwd = the run cwd, with a JSON payload on stdin:
 `{"event","tool","input","cwd"}` (+ `"is_error"` for PostToolUse).
 
@@ -558,7 +579,7 @@ A rule match **fails closed**: it always denies, recording one
 
 Surfaces: run, chat, and plan mode (an in-process policy can only restrict
 further — denying `read_file *.key` inside a plan session is exactly the
-point; the five-tool plan contract is unchanged). Phase 2, deferred with
+point; the six-tool plan contract is unchanged). Phase 2, deferred with
 reasons: allow-rules that short-circuit the risk gate (needs risk-gate
 plumbing of its own — that is the leg that makes `--risk-gate` one policy
 source among several), ask-mode (a chat/TUI interactive prompt),

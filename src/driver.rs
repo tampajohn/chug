@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, bail};
+use anyhow::{Context, anyhow, bail};
 use serde_json::{Value, json};
 
 use crate::api::{Client, ContentBlock, KnownBlock, Llm, Message, ObsCtx};
@@ -130,6 +130,65 @@ pub struct RunConfig {
     /// `run_start` line (`goal_pack`, always present) so a harvested stream
     /// shows the goal's provenance alongside its hash.
     pub goal_pack: Option<String>,
+    /// F2 phase 2a (T146): the operator-approved implementation plan loaded
+    /// at the CLI boundary by [`load_approved_plan`] — `None` when
+    /// `--approve` is absent. The plan is the run's execution contract: its
+    /// text is prepended to the first user message, and its path + byte hash
+    /// ride the `run_start` line (`approve`/`plan_sha256`, always present).
+    pub approve: Option<ApprovedPlan>,
+}
+
+/// T146 (F2 phase 2a): an operator-approved plan file, loaded and validated
+/// at the CLI boundary — before any `.chug/` write (the T117 ordering: a bad
+/// input exits clean, with no housekeeping side effects).
+pub struct ApprovedPlan {
+    /// The path exactly as the operator passed `--approve` (recorded on the
+    /// `run_start` line as `approve` — provenance, not resolution).
+    pub path: String,
+    /// SHA-256 (lowercase hex) of the file's raw bytes, recorded on the
+    /// `run_start` line as `plan_sha256`.
+    pub sha256: String,
+    /// The plan text, verbatim — prepended to the run's first user message.
+    pub text: String,
+}
+
+/// Load and validate `chug run --approve <plan.md>` (F2 phase 2a, T146).
+///
+/// The file must exist, be a readable regular file, and be non-empty after
+/// trim; the path must stay inside the run cwd (the read_file cwd-sandbox
+/// rule — an approved plan is repo-local input, not a path into $HOME; the
+/// same lexical + symlink + metachar confinement `write_file` enforces).
+/// Every failed leg refuses the run with an error naming the path and the
+/// leg that failed. This runs BEFORE any `.chug/` write, so a refused run
+/// leaves the working directory untouched.
+pub fn load_approved_plan(cwd: &Path, approve: &Path) -> anyhow::Result<ApprovedPlan> {
+    let given = approve.display().to_string();
+    // Sandbox leg first: an existing file outside the cwd reports the
+    // sandbox rule, not a missing-file leg (and a symlinked escape dies
+    // here with it).
+    let resolved = tools::resolve_safe(cwd, &given).map_err(|e| {
+        anyhow!(
+            "--approve {given}: {e}; an approved plan is repo-local input — \
+             give a path inside the working directory"
+        )
+    })?;
+    let meta = fs::metadata(&resolved)
+        .with_context(|| format!("--approve {given}: not found (no such file)"))?;
+    if !meta.is_file() {
+        bail!("--approve {given}: not a readable regular file");
+    }
+    let bytes =
+        fs::read(&resolved).with_context(|| format!("--approve {given}: not readable"))?;
+    let text = String::from_utf8(bytes)
+        .map_err(|_| anyhow!("--approve {given}: not valid UTF-8 text"))?;
+    if text.trim().is_empty() {
+        bail!("--approve {given}: the plan file is empty (nothing to approve)");
+    }
+    Ok(ApprovedPlan {
+        path: given,
+        sha256: crate::eventlog::sha256_hex(text.as_bytes()),
+        text,
+    })
 }
 
 /// Operator controls the driver honors at each iteration boundary:
@@ -352,10 +411,23 @@ fn run_loop(
         Vec::new()
     };
     if messages.is_empty() {
-        let first = Message::user(vec![ContentBlock::text_block(format!(
-            "Goal: {}\n\nThe spec, goal, and ledger are in your system prompt. Start working.",
-            cfg.goal
-        ))]);
+        // T146 (F2 phase 2a): an approved plan is the run's execution
+        // contract — one user-side preamble block prepended to the first
+        // context. The plan constrains HOW, the goal names WHAT, and the
+        // spec's `check:` line still decides DONE (goal_complete re-runs it).
+        let first_text = match &cfg.approve {
+            Some(plan) => format!(
+                "The operator approved this implementation plan; implement it, then \
+                 satisfy your goal's check.\n\n{}\n\nGoal: {}\n\nThe spec, goal, and \
+                 ledger are in your system prompt. Start working.",
+                plan.text, cfg.goal
+            ),
+            None => format!(
+                "Goal: {}\n\nThe spec, goal, and ledger are in your system prompt. Start working.",
+                cfg.goal
+            ),
+        };
+        let first = Message::user(vec![ContentBlock::text_block(first_text)]);
         transcript::append(&cfg.cwd, &first)?;
         messages.push(first);
     }
@@ -404,6 +476,11 @@ fn run_loop(
         crate::build_info::as_pair(&head),
         Some(&cfg.goal),
         cfg.goal_pack.as_deref(),
+        // T146: the approved-plan provenance rides the opening line — the
+        // path as the operator typed it plus the file-bytes hash; both null
+        // when --approve is absent (the T117 honesty shape).
+        cfg.approve.as_ref().map(|a| a.path.as_str()),
+        cfg.approve.as_ref().map(|a| a.sha256.as_str()),
     );
     match drive_loop(
         &ctx,
@@ -454,7 +531,7 @@ pub fn run_plan(cfg: PlanConfig, sink: &mut dyn EventSink) -> anyhow::Result<i32
     let mut client = Client::new(&cfg.model, cfg.max_tokens_per_request)?;
     // Plan mode never initializes MCP servers: the registry is the empty one
     // (mcp_off), and drive_loop's plan branch never extends the advertised
-    // five-tool list with it. The registry rides the signature (like `&mut
+    // six-tool list with it. The registry rides the signature (like `&mut
     // dyn Llm`) so tests can drive the REAL loop with a non-empty registry
     // and pin the no-extension guarantee at the loop level.
     let mcp = McpRegistry::new(&cfg.cwd, true, None)?;
@@ -535,6 +612,10 @@ fn run_plan_loop(
         crate::build_info::as_pair(&head),
         Some(&cfg.goal),
         cfg.goal_pack.as_deref(),
+        // T146: plan mode never carries an approved plan (--approve is a run
+        // flag; the fields stay present-null here like chat's).
+        None,
+        None,
     );
     let trace = obs.trace_started(
         &cfg.goal,
@@ -802,7 +883,7 @@ pub(crate) fn drive_loop(
     if ctx.mode != Mode::Plan {
         mcp.start(&permissions);
     }
-    // T73 plan mode: EXACTLY the five-tool read-only surface, and never an
+    // T73 plan mode: EXACTLY the six-tool read-only surface (T146 added web_fetch), and never an
     // MCP extension (an empty registry would be a no-op anyway, but the plan
     // branch makes the "no other schema advertised" guarantee structural).
     let tool_schemas = match ctx.mode {
@@ -1093,7 +1174,8 @@ pub(crate) fn drive_loop(
             let tool_start = std::time::SystemTime::now();
             let tool_t0 = Instant::now();
             // T73 plan mode: every call goes through the plan gate — the
-            // read-only four execute; submit_plan is the write/exit path;
+            // read-only five execute (T146 added web_fetch); submit_plan is
+            // the write/exit path;
             // ANY other name (all the run/chat tools, and any mcp__ import)
             // is rejected with a tool error naming the allowed set, never
             // executed, and the loop continues.

@@ -238,7 +238,7 @@
     /// PLAN MODE surfaces the deny (spec req 6): an in-process policy can
     /// only restrict further, so a `read_file *.key` rule denies that read
     /// inside a plan session while the other read-only tools keep working
-    /// and the session still ends via submit_plan (the five-tool contract
+    /// and the session still ends via submit_plan (the six-tool contract
     /// is unchanged).
     #[test]
     fn plan_mode_permission_deny_restricts_read_file_others_work() {

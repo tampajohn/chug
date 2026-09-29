@@ -101,9 +101,18 @@ enum CliCommand {
         /// Disable MCP servers even if config exists.
         #[arg(long, default_value_t = false)]
         mcp_off: bool,
+        /// Path to an operator-approved implementation plan (F2 phase 2a).
+        /// The plan becomes the run's execution contract: its text is
+        /// prepended to the first message ("implement it, then satisfy your
+        /// goal's check"), and `run_start` records the path + file hash. The
+        /// file must exist, be a readable regular file, and be non-empty —
+        /// otherwise the run refuses to start before any `.chug/` write.
+        /// The path must stay inside the working directory.
+        #[arg(long)]
+        approve: Option<PathBuf>,
     },
     /// Read-only planning session: explore the repo, draft an implementation
-    /// plan, end with `submit_plan`. Exactly five tools; no other write path.
+    /// plan, end with `submit_plan`. Exactly six tools (T146 added web_fetch); no other write path.
     Plan {
         /// Goal text: what the plan should accomplish.
         #[arg(long)]
@@ -305,6 +314,7 @@ fn main() -> ExitCode {
             bash_timeout,
             mcp_config,
             mcp_off,
+            approve,
         } => cmd_run(
             spec,
             goal,
@@ -320,6 +330,7 @@ fn main() -> ExitCode {
             bash_timeout,
             mcp_config,
             mcp_off,
+            approve,
         ),
     }));
     observ::shutdown_global();
@@ -418,6 +429,7 @@ fn cmd_run(
     bash_timeout: Option<u64>,
     mcp_config: Option<PathBuf>,
     mcp_off: bool,
+    approve: Option<PathBuf>,
 ) -> anyhow::Result<i32> {
     let cwd = resolve_cwd(cwd)?;
     let bash_timeout = resolve_bash_timeout(bash_timeout)?;
@@ -426,6 +438,14 @@ fn cmd_run(
     // T117: pack expansion happens first — before the spec resolution and
     // every `.chug/` write, so a bad `/name` exits clean.
     let (goal, goal_pack) = expand_goal(&cwd, goal)?;
+    // T146: the approved plan is validated at the CLI boundary too — same
+    // ordering discipline (before the spec resolution and every `.chug/`
+    // write), so a bad `--approve` path refuses the run without touching
+    // the working directory's session state.
+    let approve = match approve {
+        Some(path) => Some(driver::load_approved_plan(&cwd, &path)?),
+        None => None,
+    };
     let spec = spec
         .canonicalize()
         .with_context(|| format!("spec file {} not found", spec.display()))?;
@@ -443,7 +463,7 @@ fn cmd_run(
 
     if tui {
         run_with_tui(
-            spec, goal, goal_pack, cwd, model, max_iters, max_minutes, max_tokens,
+            spec, goal, goal_pack, approve, cwd, model, max_iters, max_minutes, max_tokens,
             max_tokens_per_request, resume, risk_gate, bash_timeout, mcp_config, mcp_off,
         )
     } else {
@@ -463,6 +483,7 @@ fn cmd_run(
             mcp_config,
             mcp_off,
             goal_pack,
+            approve,
         };
         let mut sink = events::ConsoleSink::new(cfg.cwd.clone());
         driver::run(cfg, &mut sink)
@@ -475,6 +496,7 @@ fn run_with_tui(
     spec: PathBuf,
     goal: String,
     goal_pack: Option<String>,
+    approve: Option<driver::ApprovedPlan>,
     cwd: PathBuf,
     model: String,
     max_iters: u32,
@@ -507,6 +529,7 @@ fn run_with_tui(
         mcp_config,
         mcp_off,
         goal_pack,
+        approve,
         controls: driver::Controls {
             abort: Arc::clone(&abort),
             steering_rx: steer_rx,
@@ -1036,5 +1059,138 @@ mod tests {
             err.to_string().contains("--goal"),
             "missing --goal must be rejected: {err}"
         );
+    }
+
+    // ---------- T146: `chug run --approve <plan.md>` ----------
+
+    /// clap legs: `--approve` parses on `run` ONLY — `chug plan` produces
+    /// plans and `chug chat` is interactive, so either receiving the flag is
+    /// a clap error (an approve-accepted-on-plan/chat mutant dies here).
+    #[test]
+    fn approve_flag_parses_on_run_and_is_a_clap_error_on_plan_and_chat() {
+        let cli = Cli::try_parse_from([
+            "chug",
+            "run",
+            "--spec",
+            "s.md",
+            "--goal",
+            "g",
+            "--approve",
+            "plan.md",
+        ])
+        .expect("--approve parses on run");
+        let CliCommand::Run { approve, .. } = cli.command else {
+            panic!("expected the run subcommand");
+        };
+        assert_eq!(approve, Some(PathBuf::from("plan.md")));
+
+        for args in [
+            vec!["chug", "plan", "--goal", "g", "--approve", "plan.md"],
+            vec!["chug", "chat", "--approve", "plan.md"],
+        ] {
+            let err = Cli::try_parse_from(args).map(|_| ()).unwrap_err();
+            assert!(
+                err.to_string().contains("--approve"),
+                "plan/chat must reject --approve: {err}"
+            );
+        }
+    }
+
+    /// Refusal legs (T146): a missing file, an unreadable (directory) path,
+    /// an empty file, and a path escaping the cwd — each leg refuses at the
+    /// CLI boundary BEFORE any `.chug/` write, exits nonzero with a message
+    /// naming the path and the leg that failed.
+    #[test]
+    fn approve_refusals_name_the_leg_and_never_touch_chug() {
+        let tmp = tempfile::tempdir().unwrap();
+        let spec = tmp.path().join("s.md");
+        std::fs::write(&spec, "spec text\ncheck: true\n").unwrap();
+        std::fs::write(tmp.path().join("empty.md"), "   \n\t\n").unwrap();
+        std::fs::create_dir(tmp.path().join("dir.md")).unwrap();
+
+        // (path, expected-leg substrings)
+        let legs: Vec<(PathBuf, Vec<&str>)> = vec![
+            (
+                PathBuf::from("missing.md"),
+                vec!["--approve missing.md", "not found"],
+            ),
+            (
+                PathBuf::from("dir.md"),
+                vec!["--approve dir.md", "not a readable regular file"],
+            ),
+            (
+                PathBuf::from("empty.md"),
+                vec!["--approve empty.md", "empty"],
+            ),
+            // Relative `..` traversal …
+            (
+                PathBuf::from("../approved-outside.md"),
+                vec!["--approve ../approved-outside.md", "path escapes cwd"],
+            ),
+            // … and an absolute path outside cwd (with the file EXISTING
+            // there, so the sandbox leg fires before any missing-file leg).
+            (
+                tmp.path().parent().unwrap().join("approved-outside.md"),
+                vec!["path escapes cwd", "inside the working directory"],
+            ),
+        ];
+        std::fs::write(
+            tmp.path().parent().unwrap().join("approved-outside.md"),
+            "# real plan outside\n",
+        )
+        .unwrap();
+
+        for (path, needles) in legs {
+            let err = cmd_run(
+                spec.clone(),
+                "g".into(),
+                Some(tmp.path().to_path_buf()),
+                Some("test-model".into()),
+                5,
+                10,
+                0,
+                None,
+                false,
+                false,
+                false,
+                None,
+                None,
+                true,
+                Some(path.clone()),
+            )
+            .unwrap_err();
+            let message = err.to_string();
+            for needle in needles {
+                assert!(
+                    message.contains(needle),
+                    "{path:?}: refusal must name the leg ({needle}): {message}"
+                );
+            }
+            // The refusal happened BEFORE any `.chug/` write: the run cwd is
+            // untouched (no events log, no driver lock, no ledger seed).
+            assert!(
+                !tmp.path().join(".chug").exists(),
+                "{path:?}: a refused run must not create .chug/"
+            );
+        }
+    }
+
+    /// The loader's success shape: the path is recorded as typed, the hash
+    /// is over the file bytes (the same hex `shasum -a 256` gives), and the
+    /// text is verbatim.
+    #[test]
+    fn approve_loader_returns_path_hash_and_verbatim_text() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("plan.md");
+        std::fs::write(&path, "# Plan\n\n1. add the flag\n").unwrap();
+        let plan = driver::load_approved_plan(tmp.path(), &path).unwrap();
+        assert_eq!(plan.path, path.display().to_string());
+        // The hash is over the file's bytes — the same hex `shasum -a 256`
+        // gives (the shared sha256_hex primitive behind goal_sha256).
+        assert_eq!(
+            plan.sha256,
+            crate::eventlog::goal_sha256("# Plan\n\n1. add the flag\n")
+        );
+        assert_eq!(plan.text, "# Plan\n\n1. add the flag\n");
     }
 }

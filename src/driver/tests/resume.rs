@@ -30,6 +30,7 @@
             mcp_off: true,
             // T117: a literal test goal — no pack expansion.
             goal_pack: None,
+            approve: None,
         }
     }
 
