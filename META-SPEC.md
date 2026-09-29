@@ -133,7 +133,7 @@ check: cd /Users/jadams/workspace/chug && cargo test
              worktree must be byte-clean before the verdict; findings
              reference mutant names, not leg dirs. End with a verdict line
              VERDICT: PASS or VERDICT: FAIL plus a numbered findings list." \
-     --model anthropic-system.ai.kimi-k3 --max-iters 40 --max-minutes 30 \
+     --model anthropic-system.ai.kimi-k3 --max-iters 60 --max-minutes 40 \
      > /tmp/chug-round-N-validate.log 2>&1 & echo "validator pid: $!"
    ```
    Read the verdict. PASS → merge. FAIL → round N+1 with the findings pasted
