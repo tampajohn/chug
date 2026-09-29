@@ -292,6 +292,31 @@ Post-merge nextest 1110/1110. Watch for next cycle: children now run
 the scrubbed binary — first goal gates build worktree-local
 (impl-measured 85s vs the 600s cap).
 
+**T145 — update_ledger writes through fsatomic::write_atomic (pri 2
+robustness, landed 52a0abf ff-merge).** T136's crash-safety sweep had
+left the ledger — the file every child reads first — on a truncating
+`fs::write` (validator carry d1790643172-7). Now routed through the
+shared same-dir-temp+fsync+rename primitive; happy path byte-identical,
+a failed write errors the tool call with the previous ledger intact.
+RED leg obstructs the pid-suffixed temp path (chosen over a second
+RLIMIT_FSIZE leg to dodge process-wide rlimit flake against
+transcript.rs's T136 test in the same binary — the validator assessed
+the choice SOUND). Sweep verdicts in the commit message: update_ledger
+CONVERTED; ensure_seeded / fork save+restore / archive::rotate /
+generic write tools EXCLUDED with reasons. glm impl 62/80; its two
+goal-gate rejections were the pre-existing load-sensitive mcp_http
+dead-port race (T31/T59/T66 class, both legs 8/8 isolated, different
+test each run) — aggravated by a 9.8-HOUR orphaned spinning test binary
+from the t134 validation era (99% CPU, 590 min burned), which the
+orchestrator found and killed mid-arc; see the cycle notes for the
+orphaned-process finding. kimi REQUIRED PASS (d1790673125-26 /
+d1790673939-27): independent gates 1113/1113; mutants M1
+(revert-to-direct-write) DIED on the RED leg, M3 (wrong-dir temp) no
+silent pass, M4 (error-swallow) DIED on both failure legs; fsync-drop
+indistinguishable, skipped per spec; two non-blocking nits (124 vs ~60
+estimate — informational; rename-replaces-inode symlink nit). Post-merge
+nextest 1113/1113.
+
 ### Cycle 69 (2026-09-29) — routine glm freshness-skip (queue non-empty: T129/T131 deferred from cycle 68, eval fresh) — the deferrals worked first
 
 **T129 — F10 phase 2b: chug_launch MCP write leg (pri 2 feature, landed
