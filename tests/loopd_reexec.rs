@@ -37,9 +37,17 @@ const REEXEC_LOG: &str = "loopd: script changed on disk — re-exec (pid $$)";
 /// The single-driver check (T53): ps-based, because pgrep persistently fails
 /// to enumerate the launchd-spawned loopd tree on this host (pgrep -f/-l/-P
 /// all miss a live in-tree driver; ps sees it every time — cycle-24 eval I1),
-/// so a pgrep-based guard fails OPEN. The `[c]hug` bracket excludes the grep
-/// pipeline's own argv from the match.
-const DRIVER_CHECK: &str = "ps -ax -o command= | grep -q \"[c]hug run --spec LOOP-SPEC.md\"";
+/// so a pgrep-based guard fails OPEN. The listing is CAPTURED and the match
+/// greps the capture (T137 fix-up, validator F1: the old ps-to-grep pipeline
+/// flipped FAIL-OPEN under `set -o pipefail` — grep -q exits at the first
+/// match, the still-writing ps leg SIGPIPEs, and that 141 became the
+/// pipeline's rc, so a LIVE driver read as "no driver"). The `[c]hug`
+/// bracket excludes the grep's own argv from the match.
+const DRIVER_CHECK: &str = "grep -q \"[c]hug run --spec LOOP-SPEC.md\" <<<\"$ps_out\"";
+/// The capture the match greps — the probe's rc is latched, so a failing
+/// enumeration fails CLOSED (skip + log), never open and never a set -e
+/// supervisor death (T137 fix-up sweep).
+const DRIVER_CAPTURE: &str = "ps_out=\"$(ps -ax -o command=)\" || ps_rc=$?";
 
 #[test]
 fn loopd_fingerprints_itself_before_the_cycle_loop() {
@@ -84,10 +92,11 @@ fn loopd_reexecs_at_the_top_of_the_while_body() {
         .expect("loopd.sh has a supervisor loop");
     let driver_check = loopd
         .find(DRIVER_CHECK)
-        .expect("loopd.sh has the ps-based single-driver check (T53): \
-                  `ps -ax -o command= | grep -q \"[c]hug run --spec \
-                  LOOP-SPEC.md\"` — pgrep is blind to the launchd-spawned \
-                  loopd tree on this host, so a pgrep guard fails OPEN");
+        .expect("loopd.sh has the ps-based single-driver check (T53): the \
+                  ps listing is captured and the match greps the capture — \
+                  pgrep is blind to the launchd-spawned loopd tree on this \
+                  host, so a pgrep guard fails OPEN, and under pipefail a \
+                  ps-to-grep pipeline flips FAIL-OPEN (T137 fix-up)");
     let build = loopd
         .find("CARGO_TARGET_DIR=\"$ROOT/target\" cargo build --release >> \"$LOG\" 2>&1 || build_rc=$?")
         .expect("loopd.sh builds its own binary");
@@ -166,9 +175,46 @@ fn loopd_single_driver_check_does_not_use_pgrep() {
     );
     assert!(
         loopd.contains(DRIVER_CHECK),
-        "loopd.sh must detect an active driver with the ps pipeline \
-         ({DRIVER_CHECK}) — the only enumeration that sees the \
-         launchd-spawned loopd tree on this host (T53, cycle-24 eval I1)"
+        "loopd.sh must detect an active driver by grepping the CAPTURED ps \
+         listing ({DRIVER_CHECK}) — ps is the only enumeration that sees the \
+         launchd-spawned loopd tree on this host (T53, cycle-24 eval I1), and \
+         the capture (not a pipeline) is what survives pipefail (T137 fix-up)"
+    );
+}
+
+/// T137 fix-up (validator F1): the probe must CAPTURE then grep, never
+/// pipeline. Under `set -o pipefail` the old ps-to-grep pipeline flipped
+/// FAIL-OPEN — grep -q exits at the FIRST match, the still-writing ps leg
+/// gets SIGPIPE, and the 141 became the pipeline's rc, so a LIVE driver read
+/// as "no driver" (EARLY-MATCH-FLIPPED-FALSE, proven behaviorally in
+/// tests/loopd_stale_binary.rs). The capture's rc is latched so a failing
+/// enumeration fails CLOSED (skip + log), never open and never a set -e
+/// supervisor death.
+#[test]
+fn loopd_single_driver_probe_captures_then_greps_never_pipelines() {
+    let loopd = read("loopd.sh");
+    let capture = loopd
+        .find(DRIVER_CAPTURE)
+        .expect("the single-driver probe must capture the ps listing with \
+                  its rc latched — a failing enumeration must fail CLOSED \
+                  (skip), never open and never a set -e supervisor death \
+                  (T137 fix-up, validator F1)");
+    let grep = loopd
+        .find(DRIVER_CHECK)
+        .expect("the single-driver match must grep the CAPTURED listing — \
+                  under pipefail a ps-to-grep pipeline flips FAIL-OPEN when \
+                  grep -q's early exit SIGPIPEs the ps leg \
+                  (EARLY-MATCH-FLIPPED-FALSE, T137 fix-up validator F1)");
+    assert!(
+        capture < grep,
+        "the capture must precede the grep — the match reads what the probe \
+         captured, in that order (T137 fix-up)"
+    );
+    assert!(
+        !loopd.contains("ps -ax -o command= | grep"),
+        "the ps-to-grep pipeline must stay dead — under `set -o pipefail` it \
+         flips a live driver into 'no driver' when grep -q's early exit \
+         SIGPIPEs the ps leg (T137 fix-up, validator F1)"
     );
 }
 

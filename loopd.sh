@@ -19,6 +19,14 @@ set -euo pipefail
 # verdict greps) may neither kill the supervisor mid-success nor flip its
 # verdict. Every deliberately-best-effort command below carries its own
 # `|| …` guard — the ones that don't are load-bearing and MUST fail loudly.
+# T137 fix-up pipeline sweep (validator F1 class: pipeline legs whose rc
+# semantics change under `set -o pipefail`) — every pipeline audited:
+#   • single-driver probe   → DE-PIPELINED (captured, then grepped; rc latched)
+#   • verdict marker        → DE-PIPELINED (herestring grep, no pipe)
+#   • summary + status `ls` → rc-masked `|| true`; data survives because
+#     `head -1` reads its line before any writer can die (proofs inline)
+#   • eval-digest, site-sync, build, cycle → not pipelines; rc latched or
+#     best-effort-guarded line by line.
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 cd "$ROOT"
 STATE=.chug/loopd
@@ -107,6 +115,12 @@ case "${1:-run}" in
     # to report" and must never trip `set -e` (a missing log/cycle file is
     # normal on a fresh install, `[ -f ] && echo` is nonzero without HALTED,
     # and under pipefail a no-match `ls` glob fails the pipeline).
+    # T137 fix-up sweep: the ls-to-head pipeline below is rc-insensitive by
+    # design — `|| true` masks EVERY leg's rc (the no-match glob's rc 2 AND
+    # a SIGPIPE when `head -1` stops reading a long history early), and the
+    # data survives because head has already read the first line (the newest
+    # log) before any writer can die: SIGPIPE only strikes a write made
+    # after the reader is gone. The report stays correct.
     [ -f "$STATE/HALTED" ] && echo "HALTED: $(cat "$STATE/HALTED")" || true
     echo "--- recent:"
     tail -5 "$LOG" 2>/dev/null || true
@@ -184,10 +198,34 @@ while [ ! -f "$STOP" ]; do
   # launchd-spawned loopd tree — pgrep -f/-l/-P all miss a live in-tree
   # driver while ps -ax lists it every time (argv intact) — so a pgrep-based
   # guard fails OPEN and duplicate drivers become possible (cycle-24 eval
-  # I1). The [c]hug bracket keeps the grep pipeline's own argv out of the
-  # match; the supervisor's own argv (`bash .../loopd.sh`) holds no needle
-  # and `chug chat` must not match by design.
-  if ps -ax -o command= | grep -q "[c]hug run --spec LOOP-SPEC.md"; then
+  # I1). The [c]hug bracket keeps the grep's own argv out of the match; the
+  # supervisor's own argv (`bash .../loopd.sh`) holds no needle and
+  # `chug chat` must not match by design.
+  # T137 fix-up (validator F1): the listing is CAPTURED, then the capture is
+  # grepped — never a ps-to-grep pipeline. Under `set -o pipefail` that
+  # pipeline fails OPEN on a real driver: grep -q exits at the FIRST match,
+  # the still-writing ps leg gets SIGPIPE, and pipefail makes the writer's
+  # 141 the pipeline's rc — so a LIVE driver read as "no driver" and a
+  # second driver would launch (EARLY-MATCH-FLIPPED-FALSE, proven by the
+  # validator with real 83KB ps output on this host and behaviorally by
+  # tests/loopd_stale_binary.rs; T135's flock only degrades-with-warning).
+  # Grepping the capture (the verdict-marker pattern below) has no pipe and
+  # no SIGPIPE leg: the match alone decides.
+  ps_rc=0
+  ps_out="$(ps -ax -o command=)" || ps_rc=$?
+  # T137 fix-up sweep: the capture's own rc is load-bearing, so it is
+  # latched, never sailed past. Under set -e a bare capture would kill the
+  # whole supervisor the first time ps hiccuped; swallowing it (`|| true`)
+  # would read as "no driver" — both wrong. An unknown enumeration must
+  # fail CLOSED: skip the cycle, say why, retry. This does not count toward
+  # the 3-strikes guard — a transient ps failure must not HALT a healthy
+  # supervisor, it must merely refuse to risk a duplicate driver.
+  if [ "$ps_rc" -ne 0 ]; then
+    echo "$(ts) driver probe FAILED (ps rc=$ps_rc) — enumeration unknown; refusing to risk a duplicate driver, skipping" >> "$LOG"
+    sleep 120
+    continue
+  fi
+  if grep -q "[c]hug run --spec LOOP-SPEC.md" <<<"$ps_out"; then
     echo "$(ts) another LOOP-SPEC driver active; skipping" >> "$LOG"
     sleep 120
     continue
@@ -296,6 +334,13 @@ while [ ! -f "$STOP" ]; do
     # T137 pipefail sweep: `head -1` closes the pipe early — under
     # pipefail+set -e a second `summary:` line would SIGPIPE grep and kill
     # the supervisor mid-success. Best-effort by design, so guard it.
+    # T137 fix-up sweep: the `|| true` masks EVERY leg's rc — a writer
+    # SIGPIPE when head stops reading after the first match, and grep's own
+    # no-match rc 1 — and the DATA survives (head has already read the first
+    # summary line before any writer can die); a no-match degrades to an
+    # empty summary exactly as it did before pipefail existed. rc-masked and
+    # data-insensitive by design; the verdict itself is decided by the
+    # herestring grep above, never by this extraction.
     summary=$(printf '%s\n' "$chug_out" | grep "^summary:" | head -1 | cut -c1-200 || true)
     echo "$(ts) cycle OK: $summary" >> "$LOG"
     # T98: best-effort site stats sync — one line, failure-tolerant. The

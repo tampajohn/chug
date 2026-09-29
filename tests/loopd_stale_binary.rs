@@ -67,6 +67,14 @@ const STALE_CHUG: &str = concat!(
 
 impl Sandbox {
     fn new(cargo_body: &str) -> Sandbox {
+        Self::with_ps("#!/bin/sh\nexit 0\n", cargo_body)
+    }
+
+    /// `ps_body` plays the T53 single-driver probe. The default is a
+    /// SUCCESSFUL probe reporting no processes — the realistic "no driver"
+    /// answer (a ps rc of 0 with empty output). A failing probe is its own
+    /// scenario: `a_failing_driver_probe_must_fail_closed_not_open`.
+    fn with_ps(ps_body: &str, cargo_body: &str) -> Sandbox {
         let keep = tempfile::tempdir().expect("sandbox tempdir");
         let root = keep.path().to_path_buf();
         // The real script + its scripts/ helpers, byte-for-byte.
@@ -77,13 +85,13 @@ impl Sandbox {
             let entry = entry.expect("scripts entry");
             fs::copy(entry.path(), scripts.join(entry.file_name())).expect("copy script");
         }
-        // PATH stubs: `ps` reports no processes (single-driver guard passes),
-        // `cargo` plays the scenario's build (failing, or succeeding into
-        // whatever CARGO_TARGET_DIR it is handed — a real cargo honors the
-        // var, which is exactly the inherited-env leg).
+        // PATH stubs: `ps` plays the scenario's single-driver probe (the
+        // T53 enumeration — never a REAL driver, e.g. the outer run
+        // executing this very test, or the sandbox loopd would skip its
+        // cycle), `cargo` plays the scenario's build behavior.
         let bin = root.join("bin");
         fs::create_dir_all(&bin).expect("bin dir");
-        stub(&bin.join("ps"), "#!/bin/sh\nexit 1\n");
+        stub(&bin.join("ps"), ps_body);
         stub(&bin.join("cargo"), cargo_body);
         // The PREVIOUS release binary, still installed at the launch path.
         let chug_dir = root.join("target/release");
@@ -324,13 +332,110 @@ fn three_consecutive_failed_builds_halt_the_supervisor() {
     );
 }
 
+/// Validator F1 (T137 fix-up) — the single-driver probe must survive
+/// EARLY-MATCH-FLIPPED-FALSE. Pre-fix the probe was a ps-to-grep PIPELINE:
+/// under `set -o pipefail`, `grep -q` exits at the FIRST match while the
+/// still-writing ps leg keeps filling the pipe, gets SIGPIPE, and pipefail
+/// makes that 141 the pipeline's rc — so a LIVE driver read as "no driver"
+/// and a second driver launched (T135's flock only degrades-with-warning).
+/// The validator proved the flip with real 83KB ps output on this host. The
+/// fix greps the CAPTURED listing: no pipe, no SIGPIPE leg, the match alone
+/// decides.
+///
+/// The stub ps prints the driver argv FIRST (grep -q exits HERE) and then
+/// ~2.4MB of filler — far beyond any pipe buffer — so the writer must
+/// SIGPIPE after the early exit. The writer must BE the probe process
+/// (`exec awk`, exactly one process like the real ps): a wrapper script
+/// that continues after its writer child dies would swallow the SIGPIPE
+/// into its own `exit 0` and never flip. Pre-fix this flips the guard OPEN
+/// and the stale binary "completes" the cycle; post-fix the guard must log
+/// the active driver and skip.
+#[test]
+fn an_early_driver_match_must_survive_a_sigpoled_ps_leg() {
+    let ps_body = concat!(
+        "#!/bin/sh\n",
+        // The live driver: the needle sits on line 1, so `grep -q` exits at
+        // the very first read — the pre-condition of the flip. `exec` makes
+        // awk the probe process itself, so when grep -q exits and awk's
+        // blocked write fails, the SIGPIPE death (rc 141) is the probe
+        // leg's rc — mimicking the single-process real ps.
+        "exec awk 'BEGIN { printf \"%s\\n\", \
+         \"/Users/op/chug/target/release/chug run --spec LOOP-SPEC.md --goal live-driver\";",
+        " for (i = 0; i < 40000; i++)",
+        " printf \"filler %05d xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\\n\", i }'\n",
+    );
+    // A GREEN build: the RED signal pre-fix is the LAUNCHED cycle, not a
+    // build refusal — the flip defeats the driver guard, the build gate is
+    // irrelevant here.
+    let sandbox = Sandbox::with_ps(ps_body, "#!/bin/sh\nexit 0\n");
+    let mut child = sandbox.run_loopd();
+    // Either the guard skips (good) or the cycle launches (the bug) — first
+    // needle wins, so the RED leg fails fast with the supervisor's own words.
+    let log = sandbox.wait_for_any(&mut child, &["another LOOP-SPEC driver active", "cycle OK:"]);
+    assert!(
+        log.contains("another LOOP-SPEC driver active; skipping"),
+        "a live driver must be reported as ACTIVE even when the process \
+         listing dwarfs a pipe buffer — the pre-fix probe pipeline flipped \
+         FAIL-OPEN under pipefail (grep -q's early exit SIGPIPEs the ps leg; \
+         the 141 became the pipeline rc and a real match read as 'no \
+         driver'):\n{log}"
+    );
+    assert!(
+        !sandbox.root.join("stale-launched.txt").exists(),
+        "the guard must SKIP the cycle while a driver is active — no second \
+         driver may launch (T135's flock only degrades-with-warning):\n{log}"
+    );
+    assert!(
+        sandbox.cycle_logs().is_empty(),
+        "no cycle may be logged while a driver is active: {:?}",
+        sandbox.cycle_logs()
+    );
+}
+
+/// The sweep's other leg (T137 fix-up): the probe FAILING must fail CLOSED.
+/// Pre-fix the pipeline's rc came from grep alone, so an erroring ps leg was
+/// silently ignored and the guard proceeded on an UNKNOWN enumeration —
+/// fail-open. A post-fix bare capture would be equally wrong from the other
+/// side: under `set -e` it kills the whole supervisor the first time ps
+/// hiccups. The latched shape treats an unknown enumeration as "assume a
+/// driver": skip, say why, retry.
+#[test]
+fn a_failing_driver_probe_must_fail_closed_not_open() {
+    let sandbox = Sandbox::with_ps(
+        "#!/bin/sh\necho 'ps: stub boom' >&2\nexit 7\n",
+        "#!/bin/sh\nexit 0\n",
+    );
+    let mut child = sandbox.run_loopd();
+    // Either the probe failure is latched (good) or the cycle launches (the
+    // fail-open bug) — first needle wins.
+    let log = sandbox.wait_for_any(&mut child, &["driver probe FAILED", "cycle OK:"]);
+    assert!(
+        log.contains("driver probe FAILED"),
+        "a failing ps probe must be latched and logged — an UNKNOWN \
+         enumeration must fail CLOSED (skip the cycle), not sail into a \
+         launch and not kill the supervisor under set -e:\n{log}"
+    );
+    assert!(
+        !sandbox.root.join("stale-launched.txt").exists(),
+        "a failing probe must NOT launch a cycle — the enumeration is \
+         unknown and a duplicate driver is the one unrecoverable \
+         outcome:\n{log}"
+    );
+    assert!(
+        sandbox.cycle_logs().is_empty(),
+        "no cycle may be logged when the driver enumeration failed: {:?}",
+        sandbox.cycle_logs()
+    );
+}
+
 /// Static pins (the tests/loopd_reexec.rs pattern): deliberately brittle, so
 /// a revert of the gate fails even if the behavioral stubs above are ever
 /// loosened. The class swept: the build's exit status is latched and gated,
 /// the build is pinned to ./target (never an export), and the `set -euo
-/// pipefail` regime's two pre-existing pipelines — the verdict marker grep
-/// and the summary extraction — are pipefail-safe (a SIGPIPE/short-circuit
-/// there must never flip a verdict or kill the supervisor).
+/// pipefail` regime's pipelines — the single-driver probe, the verdict
+/// marker grep, and the summary/status extraction — are pipefail-safe (a
+/// SIGPIPE/short-circuit there must never flip a verdict, defeat the driver
+/// guard, or kill the supervisor).
 #[test]
 fn pin_the_build_gate_and_the_pipefail_regime() {
     let loopd = fs::read_to_string(repo_root().join("loopd.sh")).expect("read loopd.sh");
@@ -405,6 +510,31 @@ fn pin_the_build_gate_and_the_pipefail_regime() {
         "eval-digest.sh is best-effort — under set -e an unguarded nonzero \
          exit would kill the supervisor before the cycle; the guard's \
          degradation line must carry it (T137 sweep)"
+    );
+    // pipefail sweep (4, T137 fix-up validator F1): the single-driver probe
+    // must grep a CAPTURED ps listing, never a ps-to-grep pipeline — grep -q
+    // exits at the first match, the still-writing ps leg SIGPIPEs, and under
+    // pipefail that 141 flips a LIVE driver into "no driver" (fail-open
+    // duplicate drivers; T135's flock only degrades-with-warning). The
+    // probe's rc is latched so a failing enumeration fails CLOSED.
+    assert!(
+        loopd.contains("ps_out=\"$(ps -ax -o command=)\" || ps_rc=$?")
+            && loopd.contains("grep -q \"[c]hug run --spec LOOP-SPEC.md\" <<<\"$ps_out\""),
+        "the single-driver probe must capture the ps listing (rc latched) and \
+         grep the capture — under pipefail a ps-to-grep pipeline flips \
+         FAIL-OPEN when grep -q's early exit SIGPIPEs the ps leg \
+         (EARLY-MATCH-FLIPPED-FALSE, T137 fix-up validator F1)"
+    );
+    assert!(
+        loopd.contains("driver probe FAILED"),
+        "a failing ps probe must fail CLOSED (log + skip) — never open and \
+         never a silent set -e supervisor death (T137 fix-up sweep)"
+    );
+    assert!(
+        !loopd.contains("ps -ax -o command= | grep"),
+        "the ps-to-grep pipeline must stay dead — under pipefail it flips a \
+         live driver into 'no driver' when grep -q's early exit SIGPIPEs the \
+         ps leg (EARLY-MATCH-FLIPPED-FALSE, T137 fix-up validator F1)"
     );
     // The sleep seams exist so behavioral tests can bound the loop.
     assert!(

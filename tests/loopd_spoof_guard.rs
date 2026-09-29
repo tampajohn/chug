@@ -56,11 +56,16 @@ impl Sandbox {
             let entry = entry.expect("scripts entry");
             fs::copy(entry.path(), scripts.join(entry.file_name())).expect("copy script");
         }
-        // PATH stubs: `ps` reports no processes (single-driver guard passes),
-        // `cargo` builds instantly (the build is T-high's subject, not ours).
+        // PATH stubs: `ps` reports no processes (single-driver guard passes
+        // via a SUCCESSFUL probe with empty output — the realistic "no
+        // driver" answer; a failing ps must NOT be simulated here, because
+        // since the T137 fix-up an unknown enumeration fails CLOSED and the
+        // sandbox would skip its cycle instead of reaching the verdict under
+        // test), `cargo` builds instantly (the build is T-high's subject,
+        // not ours).
         let bin = root.join("bin");
         fs::create_dir_all(&bin).expect("bin dir");
-        stub(&bin.join("ps"), "#!/bin/sh\nexit 1\n");
+        stub(&bin.join("ps"), "#!/bin/sh\nexit 0\n");
         stub(&bin.join("cargo"), "#!/bin/sh\nexit 0\n");
         // The cycle child: chug's shape at ./target/release/chug, spoof
         // behavior injected by the scenario.
