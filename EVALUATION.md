@@ -284,6 +284,40 @@ filed** — the second consecutive clean audit after T127's catch.
 
 ## Outcomes (filled at cycle wrap — LOOP-SPEC Phase 3)
 
+### Cycle 69 (2026-09-29) — routine glm freshness-skip (queue non-empty: T129/T131 deferred from cycle 68, eval fresh) — the deferrals worked first
+
+**T129 — F10 phase 2b: chug_launch MCP write leg (pri 2 feature, landed
+2b4490b ff-merge).** The fleet primitive's actual verb, held one cycle by
+the cycle-68 wall-clock defer, landed first-try: `chug mcp-serve
+--allow-launch` (default OFF — the flag is the policy boundary; the
+flagless server is byte-identical read-only and a `chug_launch` call gets
+the unknown-tool `-32602`, so a read-only deployment cannot probe the
+flag into revealing the tool exists). One boolean feeds both `tools/list`
+and `tools/call` (advertised ⇔ callable by construction); the full
+validation chain (shared `validate_chug_cwd` with error-text parity,
+absolute readable-file spec, non-empty-trim goal, pass-through model,
+budgets 1..=200/240 reject-above naming the received value + ceiling);
+spawn hands off to the ONE `delegate_launch` path (`pub(crate)`
+visibility-only — no second spawner, `CHUG_DELEGATE_BIN` seam reused,
+`DELEGATE_ENV_LOCK` shared for the stub legs); launch failures are
+`isError` results and no error kills the server loop; 13 bin-internal
+legs; README params + safety paragraph + phase 2 CLOSED. The estimate
+line's descope clause FIRED (all-in diff 814 > ~500): the optional
+flag-ON wire e2e dropped to a follow-up, zero validation legs trimmed
+(child descope record d1790662565-1). glm impl 77/80 first-try
+(budget-low@8 fired, accepted before the ceiling — T21 headroom held).
+kimi REQUIRED (routing d1790663037-1) VERDICT PASS (verdict
+d1790664201-2): 8 mutants, M1–M6 killed (flag guard, advertise gate,
+ceiling boundary, goal trim, spec-absolute, budget argv pass-through);
+M7 (`--allow-launch` CLI plumbing) + M8 (launch-failure isError arm)
+SURVIVED as non-blocking "correct code, test gap" findings — M7 is
+exactly the descoped e2e's pin, M8 wants a spawn-failure leg; carried to
+the next eval. Gates 1105/1105 + clippy clean independently; post-merge
+nextest 1105/1105 (target-shared-main). Pipeline overlap ran once clean
+(T129-validator ‖ T131-impl — disjoint file sets, strictly serial
+merges). FEATURES.md F10 updated at the row flip (phase 2b LANDED, phase
+2 CLOSED).
+
 ### Cycle 67 (2026-09-28/29) — routine glm freshness-skip (queue non-empty, eval fresh) — codex-review pri-2 rows
 
 ### Cycle 67 (2026-09-28/29) — routine (freshness-skip) — codex-intake pri-2 queue
