@@ -397,6 +397,34 @@ build's artifacts: the cycle-66 infra finding d1790632587-1
 REPRODUCED live; verdict taken from the validator LEDGER read-back.
 Post-merge nextest 1044/1044 (target-shared-main).
 
+### Cycle 68 (2026-09-29) — routine glm freshness-skip (queue non-empty, eval fresh) — codex-intake pri-2 queue (T137 merge pickup + T138 resume + T139)
+
+**T137 — loopd launches stale binary after a failed build (pri 2, landed
+3c0e403+8a823ae rebased ff from cbfa952+f827659).** The codex review's
+§1 HIGH supervisor item: loopd.sh never checked `cargo build`'s status,
+so a broken merge relaunched the previous release binary all cycle. The
+round-1 validator FAILED it on the real class the fix created: with
+`set -euo pipefail`, the pipelined `ps | grep -q` single-driver guard
+flipped FAIL-OPEN under a SIGPIPE'd ps leg (the 83KB-ps
+EARLY-MATCH-FLIPPED-FALSE proof) — a live driver would no longer block a
+second launch. Fix-up 8a823ae de-pipelines that guard (rc-latched ps
+capture + herestring grep; probe failure fails CLOSED) and sweeps the
+class (all remaining pipelines enumerated). Round-2 kimi PASS
+d1790651023-2: F1 re-probed byte-exact BOTH directions (fixed shape
+skips a live driver under the 2.6MB early-needle attack; reverting the
+shape re-opens it — attack teeth confirmed), class sweep independently
+re-enumerated complete (:127/:344 masked, probe+verdict de-pipelined),
+full pipefail leg audit clean incl. a SHELLOPTS non-export probe, 4/4
+prescribed mutants died (M-A pipeline-revert killed twice rc 101, M-B
+|| true-swallow 0.87s, M-C bare-capture set -e death signature, M-D
+HALT-threshold — covering round-1's unexecuted M6 path). 3 non-blocking
+findings carried (validator leg-harness rc-echo inversion; bash≥4
+SHELLOPTS inheritance note; hardcoded sleep 120 observation).
+Post-merge nextest 1064/1064 (target-shared-main). Cross-cycle lesson
+confirmed: a fix that hardens one guard can silently break another —
+adversarial round 2 on the FIX-UP (not just the feature) is what caught
+F1.
+
 ### Cycle 66 (2026-09-28) — routine (reconciled cycle-65 divergence first) — codex-intake queue T134–T142
 
 **CYCLE-66 CYCLE-LEVEL NOTES (wrap).** FOUR items landed (T140,
