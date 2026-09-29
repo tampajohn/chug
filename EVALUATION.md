@@ -284,6 +284,41 @@ filed** — the second consecutive clean audit after T127's catch.
 
 ## Outcomes (filled at cycle wrap — LOOP-SPEC Phase 3)
 
+### Cycle 67 (2026-09-28/29) — routine glm freshness-skip (queue non-empty, eval fresh) — codex-review pri-2 rows
+
+**T135 — driver.lock acquisition race (pri 2, landed 611916e ff-merge).**
+The cycle's first pri-2 codex-review item: acquire's read-absent →
+write → verify sequence was not atomic, so two simultaneous starters
+could both decide from the same absent lock and both proceed into
+transcript housekeeping. Fix: the whole critical section (loop
+iterations included) now runs under an exclusive advisory `flock` on
+the `.chug` directory fd — a stable inode, unlike `driver.lock` itself,
+which Guard::drop unlinks (a file-mutex would swap inodes under
+unlink+recreate and stop excluding). LOCK_NB + bounded retries
+(300×10ms acquire / 50×10ms release); unobtainable mutex degrades to
+the pre-T135 best-effort path with a stderr warning — T20 never-fail,
+no new abort/hang legs. Guard::drop's compare-then-delete swept under
+the same mutex (same read-then-act shape). The review's missing test
+leg pinned: `simultaneous_starters_only_one_decides_from_an_absent_lock`
+— two racers, injectable pids beyond every pid_max, synchronized AFTER
+both read the absent lock via an observe seam on the new
+`acquire_with`; RED pre-fix (both decided absent), GREEN post-fix,
+20/20 stable. glm impl 66/80 — first try died at iter 7 on a
+SERVER-side failure (truncated SSE → malformed tool_use input JSON,
+T141-adjacent; transcript clean) → T63 resume d1790637275-1 (mechanism
+extended to error-deaths, not just budget) finished in 59 more iters.
+kimi REQUIRED PASS: routing d1790639671-2, verdict d1790640546-3 —
+M1/M3/M8 killed (M1 mutex-removal = the exact RED proof), M2
+release-side sweep mutant SURVIVED (no drop-side regression test —
+carried), F1 latent non-unix compile break carried (cfg(unix) consts
+used ungated; project ships unix-only), F3 informational
+(threads-vs-processes leg shape). The validator's chug-level
+goal_complete was REJECTED — its `cargo test` check ran without a
+role-keyed target dir and collided with the in-flight T136 impl
+build's artifacts: the cycle-66 infra finding d1790632587-1
+REPRODUCED live; verdict taken from the validator LEDGER read-back.
+Post-merge nextest 1044/1044 (target-shared-main).
+
 ### Cycle 66 (2026-09-28) — routine (reconciled cycle-65 divergence first) — codex-intake queue T134–T142
 
 **CYCLE-66 CYCLE-LEVEL NOTES (wrap).** FOUR items landed (T140,
