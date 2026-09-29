@@ -12,7 +12,13 @@
 #
 # State lives in .chug/loopd/ (gitignored): loopd.pid, loopd.log,
 # cycle-<timestamp>.log per cycle, HALTED if it gave up.
-set -u
+set -euo pipefail
+# T137 — the -e/pipefail half of "failed builds do not prevent running an old
+# binary": no command's failure may silently sail past the launch of
+# ./target/release/chug, and a failing pipeline member (eval-digest, the
+# verdict greps) may neither kill the supervisor mid-success nor flip its
+# verdict. Every deliberately-best-effort command below carries its own
+# `|| …` guard — the ones that don't are load-bearing and MUST fail loudly.
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 cd "$ROOT"
 STATE=.chug/loopd
@@ -97,11 +103,18 @@ case "${1:-run}" in
     else
       echo "loopd NOT running"
     fi
-    [ -f "$STATE/HALTED" ] && echo "HALTED: $(cat "$STATE/HALTED")"
+    # T137: status is a report, not a gate — every leg degrades to "nothing
+    # to report" and must never trip `set -e` (a missing log/cycle file is
+    # normal on a fresh install, `[ -f ] && echo` is nonzero without HALTED,
+    # and under pipefail a no-match `ls` glob fails the pipeline).
+    [ -f "$STATE/HALTED" ] && echo "HALTED: $(cat "$STATE/HALTED")" || true
     echo "--- recent:"
-    tail -5 "$LOG" 2>/dev/null
-    latest=$(ls -t "$STATE"/cycle-*.log 2>/dev/null | head -1)
-    [ -n "$latest" ] && { echo "--- latest cycle ($latest):"; tail -3 "$latest"; }
+    tail -5 "$LOG" 2>/dev/null || true
+    latest=$(ls -t "$STATE"/cycle-*.log 2>/dev/null | head -1 || true)
+    if [ -n "$latest" ]; then
+      echo "--- latest cycle ($latest):"
+      tail -3 "$latest" || true
+    fi
     exit 0
     ;;
   run) ;;
@@ -179,7 +192,31 @@ while [ ! -f "$STOP" ]; do
     sleep 120
     continue
   fi
-  cargo build --release >> "$LOG" 2>&1
+  # T137 — the build is a GATE, not a best-effort step. The cycle below
+  # launches ./target/release/chug, so a failed build must REFUSE the launch:
+  # otherwise a merged change that fails compilation leaves the PREVIOUS
+  # release binary in ./target/release/chug and the supervisor keeps running
+  # cycles, pushing, and syncing site stats on code the merge never changed.
+  # The rc is latched (`|| build_rc=$?` — the T142 house style; both `if !`
+  # and command substitution would mask the real rc), and the build PINS
+  # CARGO_TARGET_DIR="$ROOT/target": an inherited CARGO_TARGET_DIR must not
+  # send a successful build elsewhere while the launch still execs the fixed
+  # ./target/release/chug path (the same per-invocation-prefix rule T47
+  # established for the cycle's shared cache).
+  build_rc=0
+  CARGO_TARGET_DIR="$ROOT/target" cargo build --release >> "$LOG" 2>&1 || build_rc=$?
+  if [ "$build_rc" -ne 0 ]; then
+    echo "$(ts) build FAILED (rc=$build_rc) — refusing to launch: ./target/release/chug is the stale previous release; not starting a cycle on it" >> "$LOG"
+    fails=$((fails + 1))
+    if [ "$fails" -ge 3 ]; then
+      echo "3 consecutive build failures — refusing to launch a stale binary; fix the tree or stop the loop (last build rc=$build_rc)" > "$STATE/HALTED"
+      echo "$(ts) HALTED after 3 consecutive build failures" >> "$LOG"
+      exit 1
+    fi
+    echo "$(ts) build failure counts toward the consecutive-failure guard ($fails/3); will retry" >> "$LOG"
+    sleep "${LOOPD_SLEEP_FAIL:-300}"
+    continue
+  fi
   # T78: the loop runs the RELEASE binary — this build produces
   # ./target/release/chug, the cycle invocation below launches it, delegate
   # children re-launch the orchestrator's own executable (current_exe), and
@@ -189,8 +226,11 @@ while [ ! -f "$STOP" ]; do
   # this lands pays a cold release build here AND into the shared cache;
   # every later one is warm.
   # T46: refresh the Phase-1 corpus digest so every cycle's evaluation reads
-  # .chug/eval-digest.md instead of re-mining raw events archives.
-  scripts/eval-digest.sh >> "$LOG" 2>&1
+  # .chug/eval-digest.md instead of re-mining raw events archives. T137:
+  # best-effort — a nonzero exit must not kill the supervisor under set -e;
+  # the cycle degrades to reading the previous digest.
+  scripts/eval-digest.sh >> "$LOG" 2>&1 \
+    || echo "$(ts) eval-digest: nonzero exit (best-effort, ignored — the cycle reads the previous digest)" >> "$LOG"
   cycle_log="$STATE/cycle-$(date -u +%Y%m%d-%H%M%S).log"
   # T81: route THIS cycle before launch — the freshness predicate (the same
   # mechanical rule LOOP-SPEC Phase 1 gives the orchestrator) picks the
@@ -216,8 +256,12 @@ while [ ! -f "$STOP" ]; do
   # land in target-shared, and never refresh ./target/release/chug (stale
   # supervisor binary). The prefix is visible only to this cycle's
   # orchestrator process and the delegate children that inherit its launch
-  # env; the supervisor's own build above always stays in ./target, so
-  # ./target/release/chug keeps resolving to a freshly built binary.
+  # env; the supervisor's own build always stays in ./target, so
+  # ./target/release/chug keeps resolving to a freshly built binary. T137
+  # now ENFORCES that invariant: the build itself pins
+  # CARGO_TARGET_DIR="$ROOT/target" as a per-invocation prefix, so an
+  # inherited CARGO_TARGET_DIR can send a successful build elsewhere while
+  # the supervisor still launches the fixed ./target/release/chug path.
   # T142: the cycle verdict is the child's EXIT STATUS, never a log grep.
   # Model text reaches the cycle log verbatim (raw stderr deltas, the F7
   # raw-bytes doctrine), so a run that died on verification or budget while
@@ -244,8 +288,15 @@ while [ ! -f "$STOP" ]; do
   else
     echo "[loopd $(ts)] verdict: no goal complete (rc=$chug_rc)" >> "$cycle_log"
   fi
-  if [ "$chug_rc" -eq 0 ] && printf '%s\n' "$chug_out" | grep -q "chug: goal complete"; then
-    summary=$(printf '%s\n' "$chug_out" | grep "^summary:" | head -1 | cut -c1-200)
+  # T137 pipefail sweep: the marker is grepped from the captured stdout
+  # DIRECTLY, not through a `printf | grep -q` pipeline — under pipefail a
+  # writer SIGPIPE (large stdout, grep -q exits at the match) would flip a
+  # real goal-complete verdict into a failure.
+  if [ "$chug_rc" -eq 0 ] && grep -q "chug: goal complete" <<<"$chug_out"; then
+    # T137 pipefail sweep: `head -1` closes the pipe early — under
+    # pipefail+set -e a second `summary:` line would SIGPIPE grep and kill
+    # the supervisor mid-success. Best-effort by design, so guard it.
+    summary=$(printf '%s\n' "$chug_out" | grep "^summary:" | head -1 | cut -c1-200 || true)
     echo "$(ts) cycle OK: $summary" >> "$LOG"
     # T98: best-effort site stats sync — one line, failure-tolerant. The
     # script itself never fails a cycle (missing clone / rejected push /
@@ -254,7 +305,9 @@ while [ ! -f "$STOP" ]; do
     scripts/site-sync.sh >> "$LOG" 2>&1 \
       || echo "$(ts) site-sync: nonzero exit (best-effort, ignored)" >> "$LOG"
     fails=0
-    sleep 60
+    # T137: LOOPD_SLEEP_OK is a test seam (the CHUG_ROUTINE_TODAY pattern) —
+    # production default 60, unchanged.
+    sleep "${LOOPD_SLEEP_OK:-60}"
   else
     fails=$((fails + 1))
     echo "$(ts) cycle ended WITHOUT goal complete (consecutive failures: $fails)" >> "$LOG"
@@ -263,7 +316,7 @@ while [ ! -f "$STOP" ]; do
       echo "$(ts) HALTED after 3 consecutive failures" >> "$LOG"
       exit 1
     fi
-    sleep 300
+    sleep "${LOOPD_SLEEP_FAIL:-300}"
   fi
 done
 echo "$(ts) stop file present — clean exit" >> "$LOG"

@@ -347,17 +347,21 @@ fn one_cycle_ok_line_per_ok_cycle_even_when_the_forged_summary_names_it() {
 fn pin_cycle_verdict_comes_from_the_child_exit_status() {
     let loopd = fs::read_to_string(repo_root().join("loopd.sh")).expect("read loopd.sh");
     // The child's stdout is captured apart from the stderr cycle log, and the
-    // failure status is latched (`|| chug_rc=$?` — command substitution would
-    // otherwise mask it in `set -u` arithmetic later).
+    // failure status is latched (`|| chug_rc=$?` — the assignment would
+    // otherwise mask the nonzero rc and kill the script under `set -e`).
     assert!(
         loopd.contains("2>> \"$cycle_log\")\" || chug_rc=$?"),
         "loopd.sh must capture the cycle child's stdout separately from the \
          stderr cycle log and latch its exit status (T142)"
     );
     // The verdict gate: rc first, marker only from the child's stdout stream.
+    // (T137 pipefail sweep: the marker is grepped straight from the captured
+    // stdout — the old `printf '%s\n' "$chug_out" | grep -q` pipeline could
+    // SIGPIPE the writer on a large stdout and flip a real verdict under
+    // `set -o pipefail`. Same semantics, no pipeline.)
     assert!(
         loopd.contains(
-            "[ \"$chug_rc\" -eq 0 ] && printf '%s\\n' \"$chug_out\" | grep -q \"chug: goal complete\""
+            "[ \"$chug_rc\" -eq 0 ] && grep -q \"chug: goal complete\" <<<\"$chug_out\""
         ),
         "cycle OK must require exit status 0 AND the marker on the child's \
          stdout — never a grep of the mixed cycle log (T142)"
