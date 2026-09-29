@@ -701,8 +701,13 @@ kimi-k3) and `LOOP_ROUTINE_MODEL` (default glm-5-3-flash) — setting
 `LOOP_ROUTINE_MODEL=anthropic-system.ai.kimi-k3` restores single-model
 operation.
 The supervisor builds the release binary (`cargo build --release`) before
-each cycle and the loop runs on it — delegate children re-launch that same
-executable, and the bounded review/validation gates run the nextest-first
+each cycle and the loop runs on it — and since the T137 build gate, a
+FAILED build aborts the cycle instead of relaunching the previous
+release binary (a broken merge can no longer silently keep driving on
+stale code), with `set -euo pipefail` guarding the whole supervisor
+loop and the single-driver probe failing closed. Delegate children
+re-launch that same executable, and the bounded review/validation gates
+run the nextest-first
 gate runner (T82): `cargo nextest run --release` when `cargo nextest` is on
 PATH — a host tool, not a crate dependency — falling back unconditionally
 to `cargo test --release` when it is absent (never a hard dependency; the
