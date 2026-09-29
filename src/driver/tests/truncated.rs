@@ -34,6 +34,17 @@
         tmp: &tempfile::TempDir,
         responses: Vec<Value>,
     ) -> (ScriptedLlm, Vec<Event>, Vec<Value>) {
+        run_t38_with_cap(tmp, responses, crate::api::DEFAULT_MAX_TOKENS)
+    }
+
+    /// T143 variant: same run with the LLM double reporting a lowered
+    /// per-request cap — reproduces the GLM 8192 shape the remedy line
+    /// targets.
+    fn run_t38_with_cap(
+        tmp: &tempfile::TempDir,
+        responses: Vec<Value>,
+        cap: u32,
+    ) -> (ScriptedLlm, Vec<Event>, Vec<Value>) {
         let (_utx, urx) = mpsc::channel::<SlashUpdate>();
         let controls = Controls::detached();
         let ctx = ctx_for(tmp, Mode::Autonomous, &controls, &urx, None, &observ::Sink::Noop);
@@ -44,6 +55,7 @@
         // recent injection before the next call).
         let mut knobs = knobs_with(20);
         let mut llm = ScriptedLlm::new(responses);
+        llm.max_tokens_per_request = cap;
         let mut gate = None;
         let mut messages = Vec::new();
         let mut sink = RecordingSink::default();
@@ -362,3 +374,102 @@
         );
     }
 
+
+    /// T143: when the per-request cap in effect is below 32768, the T38
+    /// advisory gains the raise-the-cap remedy line — the model hears BOTH
+    /// the chunking advice and that the cap itself is the fixable truncation
+    /// cause (the GLM 8192 shape: a thinking block plus a ~7KB write_file
+    /// cannot fit; raising the cap fixes it outright).
+    #[test]
+    fn truncation_below_default_cap_adds_the_raise_remedy_line() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (llm, events, lines) = run_t38_with_cap(
+            &tmp,
+            vec![
+                truncated_tool_use_response(
+                    "write_file",
+                    json!({"path": "src/big.rs", "content": "…"}),
+                ),
+                tool_use_response("goal_complete", json!({"summary": "done"})),
+            ],
+            8192,
+        );
+        assert_eq!(llm.calls.len(), 2);
+        // The next call ends with the base advisory EXTENDED by the remedy —
+        // never the bare advisory alone.
+        let last_text = llm.calls[1].1.last().unwrap().content[0].text().unwrap();
+        assert!(last_text.starts_with(T38_ADVISORY), "{last_text}");
+        assert!(
+            last_text.contains("raise CHUG_MAX_TOKENS"),
+            "the remedy must name the env knob: {last_text}"
+        );
+        assert!(
+            last_text.contains("8192"),
+            "the remedy names the cap in effect: {last_text}"
+        );
+        assert_ne!(last_text, T38_ADVISORY);
+
+        // Transcript on disk carries the same extended text (counted zero by
+        // the bare-advisory matcher on purpose: the remedy text is a
+        // DIFFERENT message).
+        let on_disk = transcript::load(tmp.path()).unwrap();
+        assert_eq!(advisory_count(&on_disk), 0);
+        let expected: &str = last_text;
+        assert!(on_disk
+            .iter()
+            .any(|m| m.content.iter().any(|b| b.text() == Some(expected))));
+
+        // Event + log shape unchanged: one output_truncated record.
+        assert_eq!(
+            events
+                .iter()
+                .filter(|e| matches!(e, Event::OutputTruncated))
+                .count(),
+            1
+        );
+        assert_eq!(
+            lines
+                .iter()
+                .filter(|l| l["type"] == "output_truncated")
+                .count(),
+            1
+        );
+    }
+
+    /// T143 control: at the 32768 default (and anything at/above the
+    /// threshold) the advisory is byte-identical to the T38 text — no remedy
+    /// line. Pins the threshold boundary from both sides via the pure
+    /// builder plus one full scripted run at the exact default.
+    #[test]
+    fn truncation_at_or_above_default_cap_keeps_the_bare_advisory() {
+        // Pure builder: the boundary and the two sides.
+        assert_eq!(
+            crate::driver::truncation_advisory(32768),
+            crate::driver::OUTPUT_TRUNCATED_ADVISORY
+        );
+        assert_eq!(
+            crate::driver::truncation_advisory(u32::MAX),
+            crate::driver::OUTPUT_TRUNCATED_ADVISORY
+        );
+        assert_ne!(crate::driver::truncation_advisory(32767), crate::driver::OUTPUT_TRUNCATED_ADVISORY);
+
+        // Full scripted run at the exact default: the last message is the
+        // bare advisory (the existing T38 tests pin the same shape with the
+        // double's default; this re-pins it through the cap parameter).
+        let tmp = tempfile::tempdir().unwrap();
+        let (llm, _events, _lines) = run_t38_with_cap(
+            &tmp,
+            vec![
+                truncated_tool_use_response(
+                    "write_file",
+                    json!({"path": "src/big.rs", "content": "…"}),
+                ),
+                tool_use_response("goal_complete", json!({"summary": "done"})),
+            ],
+            32768,
+        );
+        assert_eq!(
+            llm.calls[1].1.last().unwrap().content[0].text(),
+            Some(T38_ADVISORY)
+        );
+    }

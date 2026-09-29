@@ -171,6 +171,7 @@
             max_iters,
             max_minutes: 20,
             max_tokens: 0,
+            max_tokens_per_request: crate::api::DEFAULT_MAX_TOKENS,
             out_path: out,
             // T117: a literal test goal — no pack expansion.
             goal_pack: None,

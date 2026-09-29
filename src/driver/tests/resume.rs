@@ -18,6 +18,7 @@
             max_iters: 5,
             max_minutes: 10,
             max_tokens: 0, // no token budget: pre-T15 behavior
+            max_tokens_per_request: crate::api::DEFAULT_MAX_TOKENS,
             resume,
             controls: Controls {
                 abort: Arc::new(AtomicBool::new(true)),
@@ -59,7 +60,7 @@
         )
         .unwrap();
 
-        let client = Client::new_without_credentials("test-model").unwrap();
+        let client = Client::new_without_credentials("test-model", crate::api::DEFAULT_MAX_TOKENS).unwrap();
         let mut sink = RecordingSink::default();
         let code = run_loop(
             aborted_run_config(&tmp, &spec, false),
@@ -91,7 +92,7 @@
         let spec = write_spec(&tmp);
         std::fs::write(tmp.path().join("LEDGER.md"), ledger::SEED).unwrap();
 
-        let client = Client::new_without_credentials("test-model").unwrap();
+        let client = Client::new_without_credentials("test-model", crate::api::DEFAULT_MAX_TOKENS).unwrap();
         let mut sink = RecordingSink::default();
         run_loop(
             aborted_run_config(&tmp, &spec, false),
@@ -113,7 +114,7 @@
         let foreign = "# Ledger\n\n## Done\n- previous run state\n";
         std::fs::write(tmp.path().join("LEDGER.md"), foreign).unwrap();
 
-        let client = Client::new_without_credentials("test-model").unwrap();
+        let client = Client::new_without_credentials("test-model", crate::api::DEFAULT_MAX_TOKENS).unwrap();
         let mut sink = RecordingSink::default();
         run_loop(
             aborted_run_config(&tmp, &spec, true),
@@ -142,7 +143,7 @@
         std::fs::create_dir(tmp.path().join(".chug")).unwrap();
         std::fs::set_permissions(tmp.path(), std::fs::Permissions::from_mode(0o555)).unwrap();
 
-        let client = Client::new_without_credentials("test-model").unwrap();
+        let client = Client::new_without_credentials("test-model", crate::api::DEFAULT_MAX_TOKENS).unwrap();
         let mut sink = RecordingSink::default();
         let result = run_loop(
             aborted_run_config(&tmp, &spec, false),
@@ -183,7 +184,7 @@
         let old = Message::user(vec![ContentBlock::text_block("Goal: OLD SESSION")]);
         transcript::append(tmp.path(), &old).unwrap();
 
-        let client = Client::new_without_credentials("test-model").unwrap();
+        let client = Client::new_without_credentials("test-model", crate::api::DEFAULT_MAX_TOKENS).unwrap();
         let mut sink = RecordingSink::default();
         run_loop(
             aborted_run_config(&tmp, &spec, false),
@@ -223,7 +224,7 @@
         let old = Message::user(vec![ContentBlock::text_block("Goal: OLD SESSION")]);
         transcript::append(tmp.path(), &old).unwrap();
 
-        let client = Client::new_without_credentials("test-model").unwrap();
+        let client = Client::new_without_credentials("test-model", crate::api::DEFAULT_MAX_TOKENS).unwrap();
         let mut sink = RecordingSink::default();
         run_loop(
             aborted_run_config(&tmp, &spec, true),

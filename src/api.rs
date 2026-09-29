@@ -7,7 +7,16 @@ use anyhow::{Context, bail};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-const MAX_TOKENS: u32 = 8192;
+/// T143: the per-request output-token ceiling sent as `max_tokens` on every
+/// Messages API call. Default 32768 — the operator-proven value from the
+/// 2026-09-28 glm-5-3-flash session, where the old hardcoded 8192 let GLM
+/// thinking blocks (which consume the SAME budget as the response content)
+/// push a ~7KB `write_file` JSON past the cap, truncating it mid-stream.
+/// Configurable per invocation: `$CHUG_MAX_TOKENS` env, then the
+/// `--max-tokens-per-request` CLI flag (resolution in main.rs — flag > env >
+/// this default). NOT the T15 cumulative budget (`--max-tokens`), which sums
+/// usage across every response of a run.
+pub(crate) const DEFAULT_MAX_TOKENS: u32 = 32768;
 const READ_TIMEOUT_SECS: u64 = 600;
 /// Abort an attempt when the response body delivers no bytes for this long
 /// (T2: a stalled connection is distinct from the 600s total read timeout).
@@ -521,6 +530,10 @@ pub struct Client {
     api_key: Option<String>,
     auth_token: Option<String>,
     model: String,
+    /// T143: the per-request output-token cap baked into every request body
+    /// (`max_tokens`) and the generation events. Fixed per client; see
+    /// [`DEFAULT_MAX_TOKENS`] for the default and the GLM truncation story.
+    max_tokens: u32,
     /// F7 phase 1: the live model-text delta hook (see
     /// [`Llm::set_text_delta_hook`]). `RefCell` because `complete` takes
     /// `&self` and the hook fires during the body read.
@@ -542,6 +555,7 @@ impl Clone for Client {
             api_key: self.api_key.clone(),
             auth_token: self.auth_token.clone(),
             model: self.model.clone(),
+            max_tokens: self.max_tokens,
             // The hook is per-call transient state (the driver arms it around
             // each `complete`); clones start clean.
             text_delta_hook: std::cell::RefCell::new(None),
@@ -1058,6 +1072,14 @@ pub trait Llm {
     /// The model id subsequent `complete` calls will use (T12: abort output
     /// names it, so chat `/model` switches are reflected immediately).
     fn model(&self) -> &str;
+    /// T143: the per-request output-token cap this client sends as
+    /// `max_tokens` on every request. Default: [`DEFAULT_MAX_TOKENS`] —
+    /// test doubles that never build a request inherit it, so the T38
+    /// truncation advisory (which keys off this cap, req 3) behaves exactly
+    /// as in production unless a test lowers it deliberately.
+    fn max_tokens_per_request(&self) -> u32 {
+        DEFAULT_MAX_TOKENS
+    }
     /// F7 phase 1: install (`Some`) or clear (`None`) the live model-text
     /// delta hook. The hook receives each text piece as it arrives DURING a
     /// streamed `complete` call, synchronously on the thread that called
@@ -1101,6 +1123,7 @@ impl Llm for Client {
                 crate::observ::global(),
                 trace_id,
                 &self.model,
+                self.max_tokens,
                 resp,
                 start,
                 SystemTime::now(),
@@ -1116,6 +1139,10 @@ impl Llm for Client {
 
     fn model(&self) -> &str {
         &self.model
+    }
+
+    fn max_tokens_per_request(&self) -> u32 {
+        self.max_tokens
     }
 
     fn set_text_delta_hook(&mut self, hook: Option<TextDeltaHook>) {
@@ -1206,10 +1233,12 @@ fn usage_from(body: &Value) -> crate::observ::Usage {
 /// SPEC-8: hand one LLM response to the sink as a generation — model,
 /// usage (incl. `cache_read_input_tokens`), start/end latency, stop reason,
 /// iteration. A no-op on a disabled sink.
+#[allow(clippy::too_many_arguments)] // one line per field, sink-generation shape
 pub(crate) fn emit_generation(
     sink: &crate::observ::Sink,
     trace_id: &str,
     model: &str,
+    max_tokens: u32,
     resp: &Response,
     start: SystemTime,
     end: SystemTime,
@@ -1218,7 +1247,7 @@ pub(crate) fn emit_generation(
     sink.generation(
         trace_id,
         model,
-        MAX_TOKENS,
+        max_tokens,
         &resp.usage(),
         start,
         end,
@@ -1228,7 +1257,7 @@ pub(crate) fn emit_generation(
 }
 
 impl Client {
-    pub fn new(model: &str) -> anyhow::Result<Self> {
+    pub fn new(model: &str, max_tokens_per_request: u32) -> anyhow::Result<Self> {
         // Endpoint + credentials: process env first, then the `env` block of
         // ~/.claude/settings.json, then the api.anthropic.com default
         // (base URL only). Resolution lives in auth.rs.
@@ -1243,6 +1272,7 @@ impl Client {
             api_key: ep.api_key,
             auth_token: ep.auth_token,
             model: model.to_string(),
+            max_tokens: max_tokens_per_request,
             text_delta_hook: std::cell::RefCell::new(None),
             fallback_latch: std::cell::Cell::new(FallbackLatch::Fresh),
         })
@@ -1251,7 +1281,7 @@ impl Client {
     /// Test-only constructor that skips credential checks (no network is ever
     /// attempted by the constructor itself).
     #[cfg(test)]
-    pub fn new_without_credentials(model: &str) -> anyhow::Result<Self> {
+    pub fn new_without_credentials(model: &str, max_tokens_per_request: u32) -> anyhow::Result<Self> {
         Ok(Self {
             transport: Arc::new(ReqwestTransport {
                 http: build_http_client()?,
@@ -1262,6 +1292,7 @@ impl Client {
             api_key: None,
             auth_token: None,
             model: model.to_string(),
+            max_tokens: max_tokens_per_request,
             text_delta_hook: std::cell::RefCell::new(None),
             fallback_latch: std::cell::Cell::new(FallbackLatch::Fresh),
         })
@@ -1274,6 +1305,7 @@ impl Client {
     pub(crate) fn with_transport_for_tests(
         transport: Arc<dyn Transport>,
         model: &str,
+        max_tokens_per_request: u32,
     ) -> Self {
         Self {
             transport,
@@ -1282,6 +1314,7 @@ impl Client {
             api_key: None,
             auth_token: None,
             model: model.to_string(),
+            max_tokens: max_tokens_per_request,
             text_delta_hook: std::cell::RefCell::new(None),
             fallback_latch: std::cell::Cell::new(FallbackLatch::Fresh),
         }
@@ -1314,7 +1347,7 @@ impl Client {
         let streaming = streaming_enabled();
         let mut body = json!({
             "model": self.model,
-            "max_tokens": MAX_TOKENS,
+            "max_tokens": self.max_tokens,
             "system": system,
             "messages": messages,
             "tools": tools,
@@ -1501,6 +1534,11 @@ pub struct ScriptedLlm {
     pub responses: std::collections::VecDeque<Value>,
     pub calls: Vec<(String, Vec<Message>)>,
     pub model: String,
+    /// T143: the per-request cap this double reports. Defaults to
+    /// [`DEFAULT_MAX_TOKENS`] (production parity — the T38 remedy line stays
+    /// silent at/above 32768); truncation-remedy tests lower it to reproduce
+    /// the GLM 8192 shape.
+    pub max_tokens_per_request: u32,
     /// When set, every `complete` call raises this flag before returning —
     /// lets tests trigger a deterministic mid-turn operator interrupt.
     pub abort_on_call: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
@@ -1513,6 +1551,7 @@ impl ScriptedLlm {
             responses: responses.into(),
             calls: Vec::new(),
             model: "scripted-model".to_string(),
+            max_tokens_per_request: DEFAULT_MAX_TOKENS,
             abort_on_call: None,
         }
     }
@@ -1545,6 +1584,10 @@ impl Llm for ScriptedLlm {
     fn model(&self) -> &str {
         &self.model
     }
+
+    fn max_tokens_per_request(&self) -> u32 {
+        self.max_tokens_per_request
+    }
 }
 
 #[cfg(test)]
@@ -1567,6 +1610,18 @@ mod tests {
         assert_eq!(
             ACTIVITY_TIMEOUT_SECS, 180u64,
             "ACTIVITY_TIMEOUT_SECS drifted from 180 (T2 body watchdog)"
+        );
+    }
+
+    /// T143: the per-request cap default is value-pinned to the
+    /// operator-proven 32768 (2026-09-28 glm-5-3-flash session: 8192 let a
+    /// thinking block plus a ~7KB write_file truncate the tool-call JSON).
+    /// A const-only edit must fail here.
+    #[test]
+    fn max_tokens_default_is_value_pinned() {
+        assert_eq!(
+            DEFAULT_MAX_TOKENS, 32768u32,
+            "DEFAULT_MAX_TOKENS drifted from the operator-proven 32768"
         );
     }
 
@@ -1675,6 +1730,7 @@ mod tests {
             &sink,
             "chug-test0001",
             "scripted-model",
+            DEFAULT_MAX_TOKENS,
             &resp,
             SystemTime::UNIX_EPOCH,
             SystemTime::now(),
@@ -1688,7 +1744,7 @@ mod tests {
         assert_eq!(event["type"], "generation-create");
         assert_eq!(event["body"]["traceId"], "chug-test0001");
         assert_eq!(event["body"]["model"], "scripted-model");
-        assert_eq!(event["body"]["modelParameters"]["maxTokens"], MAX_TOKENS);
+        assert_eq!(event["body"]["modelParameters"]["maxTokens"], DEFAULT_MAX_TOKENS);
         assert_eq!(event["body"]["usage"]["input"], 10);
         assert_eq!(event["body"]["usage"]["output"], 5);
         assert_eq!(event["body"]["usage"]["total"], 15);
@@ -1699,7 +1755,8 @@ mod tests {
 
     #[test]
     fn set_model_swaps_the_model_id() {
-        let mut client = Client::new_without_credentials("first-model").unwrap();
+        let mut client =
+            Client::new_without_credentials("first-model", DEFAULT_MAX_TOKENS).unwrap();
         assert_eq!(client.model(), "first-model");
         client.set_model("second-model");
         assert_eq!(client.model(), "second-model");
@@ -1786,6 +1843,7 @@ mod tests {
             api_key: None,
             auth_token: None,
             model: "test-model".to_string(),
+            max_tokens: DEFAULT_MAX_TOKENS,
             text_delta_hook: std::cell::RefCell::new(None),
             fallback_latch: std::cell::Cell::new(FallbackLatch::Fresh),
         }
@@ -1797,6 +1855,86 @@ mod tests {
             &[Message::user(vec![ContentBlock::text_block("hi")])],
             &[],
         )
+    }
+
+    /// Test transport that records every request body handed to it — the
+    /// no-network seam for request-shape assertions (T143).
+    struct BodyCapturingTransport {
+        responses: std::sync::Mutex<std::collections::VecDeque<Result<RawResponse, TransportError>>>,
+        bodies: std::sync::Mutex<Vec<String>>,
+    }
+
+    impl BodyCapturingTransport {
+        fn new(responses: Vec<Result<RawResponse, TransportError>>) -> Arc<Self> {
+            Arc::new(BodyCapturingTransport {
+                responses: std::sync::Mutex::new(responses.into()),
+                bodies: std::sync::Mutex::new(Vec::new()),
+            })
+        }
+
+        fn bodies(&self) -> Vec<String> {
+            self.bodies.lock().unwrap().clone()
+        }
+    }
+
+    impl Transport for BodyCapturingTransport {
+        fn send(
+            &self,
+            _url: &str,
+            _headers: &[(String, String)],
+            body: &str,
+        ) -> Result<RawResponse, TransportError> {
+            self.bodies.lock().unwrap().push(body.to_string());
+            self.responses
+                .lock()
+                .unwrap()
+                .pop_front()
+                .expect("capturing transport script exhausted")
+        }
+    }
+
+    /// T143: the per-request `max_tokens` cap lands in the request body.
+    /// RED against the old hardcoded 8192: GLM thinking blocks consume the
+    /// SAME budget as the response content, so a ~7KB `write_file` plus a
+    /// thinking block overflowed the 8192 cap and truncated the tool-call
+    /// JSON mid-stream (operator session 2026-09-28, glm child died at
+    /// iteration 9 on an unparseable write_file). The default is the
+    /// operator-proven 32768; a configured value (env/CLI) replaces it.
+    #[test]
+    fn request_body_carries_the_configured_max_tokens() {
+        let transport = BodyCapturingTransport::new(vec![ok_raw(json!({
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 1, "output_tokens": 1},
+            "content": [{"type": "text", "text": "ok"}],
+        }))]);
+
+        // Default: the operator-proven 32768.
+        let client = Client::with_transport_for_tests(
+            transport.clone(),
+            "test-model",
+            DEFAULT_MAX_TOKENS,
+        );
+        run_complete(&client).unwrap();
+        let bodies = transport.bodies();
+        assert_eq!(bodies.len(), 1);
+        let body: Value = serde_json::from_str(&bodies[0]).unwrap();
+        assert_eq!(
+            body["max_tokens"], 32768,
+            "the old hardcoded 8192 truncated GLM thinking + ~7KB writes"
+        );
+
+        // A configured cap (what main.rs resolves from flag/env) replaces the
+        // default in the request body.
+        let transport2 = BodyCapturingTransport::new(vec![ok_raw(json!({
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 1, "output_tokens": 1},
+            "content": [{"type": "text", "text": "ok"}],
+        }))]);
+        let client2 =
+            Client::with_transport_for_tests(transport2.clone(), "test-model", 4096);
+        run_complete(&client2).unwrap();
+        let body2: Value = serde_json::from_str(&transport2.bodies()[0]).unwrap();
+        assert_eq!(body2["max_tokens"], 4096);
     }
 
     /// T1: connection resets retry; the run survives once the endpoint comes

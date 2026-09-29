@@ -191,12 +191,21 @@ today).
   a `chug: output truncated …` user message naming the chunking remedy
   (write_file the first chunk, then append with `edit_file` or a bash
   heredoc). Fires on every truncation — no one-shot latch — and each
-  injection records one `output_truncated` line in the events log
+  injection records one `output_truncated` line in the events log. When the
+  per-request cap is below 32768 the advisory gains a remedy line naming
+  `CHUG_MAX_TOKENS` — thinking models (GLM) spend the same per-request
+  budget on thinking blocks and the response, so a low cap truncates large
+  tool calls that a raised cap fits
 - **Token budget** — `--max-tokens N` (run and chat) caps the run's
   cumulative input+output tokens — the axis iteration/wall-clock budgets can
   miss (a cheap watch-and-wait loop burns neither while racking up tokens).
   Crossing the ceiling aborts at the loop top naming the exhausted budget
-  (`budget: N tokens`)
+  (`budget: N tokens`). Distinct from it: `--max-tokens-per-request`
+  (run/plan/chat, or `$CHUG_MAX_TOKENS`) sets the per-request output cap
+  sent as `max_tokens` on every API call — default 32768 (the old hardcoded
+  8192 let GLM thinking blocks plus a ~7KB write truncate mid-JSON); the
+  run's `run_start` events line records the configured cap as
+  `max_tokens_per_request`
 - **Driver lock** — a `chug run` refuses to start in a cwd a live run
   already drives: it names the holding pid on stderr and exits non-zero; if
   you know that run is gone, remove `.chug/driver.lock` and start again. A

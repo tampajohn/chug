@@ -69,6 +69,33 @@ const WARN_REMAINING_TOKENS: u64 = 50_000;
 /// remedy naming `write_file` + `edit_file`) are pinned by tests.
 pub(crate) const OUTPUT_TRUNCATED_ADVISORY: &str = "chug: output truncated — the previous response hit the API output-token ceiling (stop_reason=max_tokens). If you were writing a file, split it: write_file the first chunk, then append with edit_file (or bash heredoc) in smaller pieces.";
 
+/// T143: the cap at or above which a truncation gets NO extra remedy line —
+/// at the operator-proven 32768 the chunking advice above is the whole story.
+/// Below it, the advisory gains the raise-the-cap remedy: the 2026-09-28 glm
+/// session proved 8192 (and anything in that class) cannot hold a GLM
+/// thinking block PLUS a large `write_file`, and that raising the cap fixes
+/// it outright.
+pub(crate) const TRUNCATION_REMEDY_THRESHOLD: u32 = crate::api::DEFAULT_MAX_TOKENS;
+
+/// T143: the truncation advisory the next call should see, given the
+/// per-request cap in effect. At/above [`TRUNCATION_REMEDY_THRESHOLD`] this
+/// is the base T38 advisory byte-identical (pinned by the literal tests);
+/// below it, one remedy line naming the knob is appended — the model should
+/// hear BOTH "split the write" and "the cap is raisable" when the cap itself
+/// is the proven truncation cause.
+pub(crate) fn truncation_advisory(max_tokens_per_request: u32) -> String {
+    if max_tokens_per_request >= TRUNCATION_REMEDY_THRESHOLD {
+        OUTPUT_TRUNCATED_ADVISORY.to_string()
+    } else {
+        format!(
+            "{OUTPUT_TRUNCATED_ADVISORY}\nchug: remedy: the per-request max_tokens cap is \
+             {max_tokens_per_request} (below {TRUNCATION_REMEDY_THRESHOLD}) — raise \
+             CHUG_MAX_TOKENS (or pass --max-tokens-per-request) so thinking blocks plus \
+             large tool calls fit in one response."
+        )
+    }
+}
+
 pub struct RunConfig {
     pub cwd: PathBuf,
     pub spec_path: PathBuf,
@@ -80,6 +107,11 @@ pub struct RunConfig {
     /// over every API response. `0` = unlimited (the default; no ceiling,
     /// no warning leg — pre-T15 behavior exactly).
     pub max_tokens: u64,
+    /// T143: the per-request output-token cap sent as `max_tokens` on every
+    /// API call (default 32768, `--max-tokens-per-request`/`$CHUG_MAX_TOKENS`
+    /// to override). A DIFFERENT knob from [`RunConfig::max_tokens`] above:
+    /// that one is the T15 cumulative budget across the whole run.
+    pub max_tokens_per_request: u32,
     pub resume: bool,
     /// Shared controls checked at every iteration boundary.
     pub controls: Controls,
@@ -215,7 +247,7 @@ enum VerifyOutcome {
 }
 
 pub fn run(cfg: RunConfig, sink: &mut dyn EventSink) -> anyhow::Result<i32> {
-    let client = Client::new(&cfg.model)?;
+    let client = Client::new(&cfg.model, cfg.max_tokens_per_request)?;
     let gate = if cfg.risk_gate {
         Some(RiskGate::new(Box::new(LayaJudge::from_env()?), &cfg.cwd))
     } else {
@@ -359,6 +391,7 @@ fn run_loop(
         cfg.max_iters,
         cfg.max_minutes,
         cfg.max_tokens,
+        cfg.max_tokens_per_request,
         crate::build_info::as_pair(&head),
         Some(&cfg.goal),
         cfg.goal_pack.as_deref(),
@@ -391,6 +424,10 @@ pub struct PlanConfig {
     /// Cumulative token budget across the session (`0` = unlimited), same
     /// shape as run/chat (T15 parity).
     pub max_tokens: u64,
+    /// T143: the per-request output-token cap sent as `max_tokens` on every
+    /// API call (default 32768; `--max-tokens-per-request`/`$CHUG_MAX_TOKENS`
+    /// override). Distinct from the cumulative `max_tokens` above.
+    pub max_tokens_per_request: u32,
     /// Where `submit_plan` writes the plan; `None` → the plan surfaces on
     /// stdout. Resolved through the cwd sandbox at write time.
     pub out_path: Option<PathBuf>,
@@ -405,7 +442,7 @@ pub struct PlanConfig {
 /// writes LEDGER.md), no MCP, no risk gate (there is no bash), and a
 /// `run_start` event naming mode "plan".
 pub fn run_plan(cfg: PlanConfig, sink: &mut dyn EventSink) -> anyhow::Result<i32> {
-    let mut client = Client::new(&cfg.model)?;
+    let mut client = Client::new(&cfg.model, cfg.max_tokens_per_request)?;
     // Plan mode never initializes MCP servers: the registry is the empty one
     // (mcp_off), and drive_loop's plan branch never extends the advertised
     // five-tool list with it. The registry rides the signature (like `&mut
@@ -485,6 +522,7 @@ fn run_plan_loop(
         cfg.max_iters,
         cfg.max_minutes,
         cfg.max_tokens,
+        cfg.max_tokens_per_request,
         crate::build_info::as_pair(&head),
         Some(&cfg.goal),
         cfg.goal_pack.as_deref(),
@@ -1229,7 +1267,7 @@ pub(crate) fn drive_loop(
                 // cut short (there is no next call this turn).
                 messages.push(assistant);
                 if truncated {
-                    inject_truncation_advisory(ctx.cwd, messages, sink)?;
+                    inject_truncation_advisory(ctx.cwd, messages, client, sink)?;
                 }
                 return Ok(DriveOutcome::TurnEnded(TurnEndReason::Completed));
             }
@@ -1337,7 +1375,7 @@ pub(crate) fn drive_loop(
         // accepted goal above, an abort) have no next call to advise and get
         // none.
         if truncated {
-            inject_truncation_advisory(ctx.cwd, messages, sink)?;
+            inject_truncation_advisory(ctx.cwd, messages, client, sink)?;
         }
 
         iteration += 1;
@@ -1394,13 +1432,18 @@ fn append_steering_notes(
 /// memory, the same steering-note mechanism as the T13/T17 notices — and put
 /// the injection on the events record (one [`Event::OutputTruncated`] per
 /// call, no latch). Telemetry only: console/TUI sinks render nothing (T17
-/// precedent).
+/// precedent). T143: the text gains the raise-the-cap remedy line when the
+/// per-request cap in effect is below [`TRUNCATION_REMEDY_THRESHOLD`] — the
+/// cap that actually truncated is the client's, so it is read off the client.
 fn inject_truncation_advisory(
     cwd: &Path,
     messages: &mut Vec<Message>,
+    client: &dyn Llm,
     sink: &mut dyn EventSink,
 ) -> anyhow::Result<()> {
-    let msg = Message::user(vec![ContentBlock::text_block(OUTPUT_TRUNCATED_ADVISORY)]);
+    let msg = Message::user(vec![ContentBlock::text_block(truncation_advisory(
+        client.max_tokens_per_request(),
+    ))]);
     transcript::append(cwd, &msg)?;
     messages.push(msg);
     sink.emit(Event::OutputTruncated);

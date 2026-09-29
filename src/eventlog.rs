@@ -89,6 +89,12 @@ pub(crate) fn goal_sha256(goal: &str) -> String {
 /// names the worktree it ran in, not just the binary's build commit. Both
 /// are `null` when the identity couldn't be resolved (not a repo, git
 /// missing) — null means unresolved, never a phantom string.
+///
+/// T143: `max_tokens_per_request` records the configured per-request output
+/// cap (always present — the default 32768 applies even when unconfigured),
+/// distinct from the cumulative `max_tokens` budget beside it. A post-hoc
+/// `jq` pass can now ask whether a truncating run was riding the old 8192
+/// shape.
 #[allow(clippy::too_many_arguments)] // one line per field, same shape as the banner
 pub fn run_start(
     cwd: &Path,
@@ -98,6 +104,7 @@ pub fn run_start(
     max_iters: u32,
     max_minutes: u64,
     max_tokens: u64,
+    max_tokens_per_request: u32,
     head: Option<(&str, &str)>,
     goal: Option<&str>,
     goal_pack: Option<&str>,
@@ -118,6 +125,7 @@ pub fn run_start(
             "max_iters": max_iters,
             "max_minutes": max_minutes,
             "max_tokens": (max_tokens > 0).then_some(max_tokens),
+            "max_tokens_per_request": max_tokens_per_request,
             "goal_sha256": goal.map(goal_sha256),
             "goal_pack": goal_pack,
         }),
@@ -388,6 +396,7 @@ mod tests {
             40,
             120,
             0,
+            crate::api::DEFAULT_MAX_TOKENS,
             None,
             // T115: the base-shape pin keeps the goal-less leg (null), so the
             // other fields' byte-identical representation is pinned both ways.
@@ -430,11 +439,33 @@ mod tests {
     #[test]
     fn run_start_records_token_budget_when_set() {
         let tmp = tempfile::tempdir().unwrap();
-        run_start(tmp.path(), "run", None, "m", 8, 35, 250_000, None, None, None);
+        run_start(tmp.path(), "run", None, "m", 8, 35, 250_000, crate::api::DEFAULT_MAX_TOKENS, None, None, None);
         let lines = read_lines(tmp.path());
         assert_eq!(lines[0]["max_iters"], 8);
         assert_eq!(lines[0]["max_minutes"], 35);
         assert_eq!(lines[0]["max_tokens"], 250_000);
+    }
+
+    /// T143: the configured per-request output cap rides the opening line —
+    /// always present (the default 32768 applies even when unconfigured) and
+    /// distinct from the cumulative `max_tokens` budget beside it (T15), so a
+    /// post-hoc jq pass can tell a truncation-prone low cap from a run's
+    /// total token budget.
+    #[test]
+    fn run_start_records_per_request_max_tokens_cap() {
+        let tmp = tempfile::tempdir().unwrap();
+        run_start(tmp.path(), "run", None, "m", 8, 35, 250_000, 8192, None, None, None);
+        let lines = read_lines(tmp.path());
+        assert_eq!(lines[0]["max_tokens_per_request"], 8192);
+        assert_eq!(
+            lines[0]["max_tokens"], 250_000,
+            "the T15 cumulative budget is a different knob and must stay independent"
+        );
+        let obj = lines[0].as_object().expect("run_start is an object");
+        assert!(
+            obj.contains_key("max_tokens_per_request"),
+            "the field must be PRESENT even at the default: {lines:?}"
+        );
     }
 
     /// T20: when the caller resolved the cwd's checkout HEAD, the two
@@ -451,6 +482,7 @@ mod tests {
             5,
             120,
             0,
+            crate::api::DEFAULT_MAX_TOKENS,
             Some(("loop-t20", "9056c78")),
             None,
             None,
@@ -492,6 +524,7 @@ mod tests {
             8,
             35,
             0,
+            crate::api::DEFAULT_MAX_TOKENS,
             None,
             Some("hello world"),
             None,
@@ -510,7 +543,7 @@ mod tests {
     #[test]
     fn run_start_goal_sha256_null_but_always_present_without_goal() {
         let tmp = tempfile::tempdir().unwrap();
-        run_start(tmp.path(), "chat", None, "m", 8, 35, 0, None, None, None);
+        run_start(tmp.path(), "chat", None, "m", 8, 35, 0, crate::api::DEFAULT_MAX_TOKENS, None, None, None);
         let lines = read_lines(tmp.path());
         assert!(
             lines[0]["goal_sha256"].is_null(),
@@ -536,6 +569,7 @@ mod tests {
             8,
             35,
             0,
+            crate::api::DEFAULT_MAX_TOKENS,
             None,
             Some("the expanded body"),
             Some("smoke"),
@@ -550,7 +584,7 @@ mod tests {
     #[test]
     fn run_start_goal_pack_null_but_always_present_on_a_plain_goal() {
         let tmp = tempfile::tempdir().unwrap();
-        run_start(tmp.path(), "run", None, "m", 8, 35, 0, None, Some("plain"), None);
+        run_start(tmp.path(), "run", None, "m", 8, 35, 0, crate::api::DEFAULT_MAX_TOKENS, None, Some("plain"), None);
         let lines = read_lines(tmp.path());
         assert!(
             lines[0]["goal_pack"].is_null(),
@@ -590,6 +624,7 @@ mod tests {
             8,
             35,
             0,
+            crate::api::DEFAULT_MAX_TOKENS,
             None,
             Some(&expanded),
             Some("smoke"),
@@ -673,7 +708,7 @@ mod tests {
     #[test]
     fn rotate_fresh_archives_non_empty_events_log() {
         let tmp = tempfile::tempdir().unwrap();
-        run_start(tmp.path(), "run", None, "m", 5, 120, 0, None, None, None);
+        run_start(tmp.path(), "run", None, "m", 5, 120, 0, crate::api::DEFAULT_MAX_TOKENS, None, None, None);
 
         let out = rotate_fresh(tmp.path());
         let Outcome::Archived(dst) = out else {
@@ -929,7 +964,7 @@ mod tests {
             model: "m".into(),
             budget: None,
         });
-        run_start(tmp.path(), "run", None, "m", 5, 120, 0, None, None, None);
+        run_start(tmp.path(), "run", None, "m", 5, 120, 0, crate::api::DEFAULT_MAX_TOKENS, None, None, None);
     }
 
     /// T91: an ImageDegraded event serializes as one jq-mineable
