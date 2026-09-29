@@ -2,6 +2,8 @@
 
 check: cargo test
 
+estimate: ~450 lines (2 verbs + gates + e2e)
+
 ## Concern
 
 Operator 2026-09-29: "think about write mcp tools." F10 phase 2 proved
