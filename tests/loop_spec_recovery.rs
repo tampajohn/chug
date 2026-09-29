@@ -143,6 +143,31 @@
 //! row: LOOP-SPEC.md and META-SPEC.md must stay byte-identical
 //! before/after (any wording drift the pin exposes is reported, not
 //! fixed).
+//!
+//! T156 doctrine: cycle 71 practiced a THIRD budget-death variant the T63
+//! paragraph did not name — T150-impl died on the 35-minute MINUTES
+//! budget at 48/80 with the work complete AND committed (3f5a99a) but the
+//! goal unaccepted, and the orchestrator applied orchestrator-finish
+//! directly (review the branch, run the gates, merge if green — NO
+//! resume burned; routing d1790691515-11). A resume for a fully-committed
+//! child is waste (the resumed child re-verifies work already committed),
+//! and a paragraph that names only "uncommitted" work for the finish
+//! recipe invites the wrong first recovery. The T63 paragraph now carries
+//! ONE routing sentence immediately after the resume-first rule, naming
+//! the three-way routing with its discriminating test: work INCOMPLETE
+//! (uncommitted or partial) takes the ONE resume relaunch (the standing
+//! rule, unchanged); work complete and committed but goal unaccepted goes
+//! to orchestrator-finish directly (T150-impl precedent, cycle 71,
+//! alongside T55); resume-exhausted or unrecoverable goes to next-cycle
+//! recovery with a recipe on the row (T28 precedent). The sentence
+//! loosens nothing: the ONE-resume cap and the standing recipes it
+//! supplements are pinned unchanged AFTER it (leg (s)), and the
+//! never-remove-unmerged-work rule (T19's pre-harvest guard, leg (d)) is
+//! untouched. Legs (r)–(t) pin the sentence's stable tokens exactly-once
+//! inside step 2 (the T64 window pattern), its placement between the
+//! resume-first rule and the ONE-cap/standing-recipes sentences, and the
+//! standing recipes' bytes — the T55/T28 fallback list the sentence
+//! extends, never rewrites.
 
 /// The leg's signature phrase: "resume" + the one-attempt cap language in
 /// one contiguous run. Must occur EXACTLY once in LOOP-SPEC.md.
@@ -1280,5 +1305,207 @@ fn meta_spec_validator_template_budget_argv_fragment_exactly_once_in_step6() {
         "the budget argv must sit on the kimi validator launch line — the \
          line carrying {META_SPEC_VALIDATOR_ARGV:?} reads {line:?}, with \
          no {KIMI_MODEL_ID:?} on it"
+    );
+}
+
+// ---- T156 — the T63 committed-variant routing sentence ----
+//
+// Cycle 71's T150-impl budget death — work complete AND committed, goal
+// unaccepted, orchestrator-finish with NO resume burned — was practiced
+// and logged (routing d1790691515-11) but the T63 paragraph named only
+// the "incomplete work" resume rule and the two standing recipes. The
+// paragraph now carries ONE routing sentence immediately after the
+// resume-first rule; these legs pin the sentence's tokens, its placement,
+// and the neighbors it must not rewrite.
+
+/// The routing sentence's stable tokens — the three-way routing's
+/// discriminating vocabulary, each contiguous as written and asserted
+/// EXACTLY once in LOOP-SPEC.md plus inside step 2's window. Bare words
+/// that pre-date the row are deliberately NOT pinned alone
+/// ("orchestrator-finish" already names the standing recipes and the
+/// decision-log sentence; "next-cycle recovery" the fallback list) — the
+/// tokens below are unique to the NEW sentence.
+const ROUTING_TOKENS: [&str; 9] = [
+    "routing discriminator",
+    "work INCOMPLETE",
+    "(uncommitted or partial)",
+    "complete and committed",
+    "orchestrator-finish directly",
+    "NO resume burned",
+    "T150-impl",
+    "cycle 71",
+    "d1790691515-11",
+];
+
+/// (r) T156 — the routing sentence exists, exactly once, inside step 2:
+/// every stable token occurs exactly once in LOOP-SPEC.md and inside the
+/// polling-paragraph window (STEP2_ANCHOR .. STEP3_HEADING, the T64
+/// loose-heading scope pattern). Delete the sentence — the text-revert
+/// mutant — and every token goes red at count 0; move the sentence out of
+/// step 2 and the window check dies; reword one token and that token goes
+/// red while its neighbors stay green (the per-token diagnosis).
+#[test]
+fn routing_sentence_tokens_exactly_once_inside_step_2() {
+    // Needle self-checks (T48 idiom): a mangled needle must not let this
+    // pin pass silently.
+    assert!(
+        ROUTING_TOKENS.contains(&"complete and committed")
+            && ROUTING_TOKENS.iter().any(|t| t.contains("INCOMPLETE")),
+        "the token set must carry both routing arms' discriminating phrases"
+    );
+    assert!(
+        ROUTING_TOKENS.contains(&"T150-impl")
+            && ROUTING_TOKENS.iter().any(|t| t.starts_with("d179")),
+        "the token set must carry the T150-impl precedent and its routing id"
+    );
+    let spec = loop_spec();
+    let anchor = spec
+        .find(STEP2_ANCHOR)
+        .expect("step-2 polling anchor present");
+    let step3 = spec
+        .find(STEP3_HEADING)
+        .expect("step-3 heading present");
+    let window = &spec[anchor..step3];
+    for token in ROUTING_TOKENS {
+        assert_eq!(
+            spec.matches(token).count(),
+            1,
+            "LOOP-SPEC must state the routing token {token:?} exactly once — \
+             zero means the routing sentence was deleted or the token \
+             reworded (the T156 text-revert mutant), more than one means it \
+             is stated twice"
+        );
+        assert!(
+            window.contains(token),
+            "the routing token {token:?} must sit inside step 2's window \
+             (anchor {anchor}..step3 {step3}) — the routing sentence \
+             drifted out of the T63 polling paragraph"
+        );
+    }
+}
+
+/// The routing sentence's adjacency to the resume-first rule — one
+/// contiguous fragment spanning the rule's terminator, the sentence's
+/// first two words, and the wrap between them (the T47_EXPORT_PREFIX
+/// idiom: the wrap is spelled so a rewrap cannot silently unpin it). This
+/// is the "immediately after the resume-first rule" placement, byte-exact.
+const ROUTING_ADJACENCY: &str = concat!(
+    "instead of starting cold. The\n",
+    "   routing discriminator"
+);
+
+/// The T19 rationale's stable core — the never-remove-unmerged-work guard
+/// must still read BETWEEN the routing sentence and the ONE-resume cap
+/// (leg (d) pins its tokens inside the window; this leg pins its slot).
+const T19_RATIONALE: &str = "works because the worktree is never removed pre-harvest";
+
+/// The standing recipes' T55/T28 fallback anchors, contiguous as written.
+/// "row, " disambiguates the T28 anchor from the routing sentence's own
+/// "(T28 precedent)" mention; each must occur EXACTLY once.
+const T55_FALLBACK: &str = "T55 precedent";
+const T28_FALLBACK: &str = "row, T28 precedent";
+
+/// (s) T156 — placement, and the not-loosening leg: the routing sentence
+/// sits IMMEDIATELY after the resume-first rule (the adjacency fragment
+/// above, byte-exact including the wrap) and BEFORE the T19 rationale,
+/// the ONE-resume cap, the standing recipes, the nohup fallback, and
+/// step 3's heading, reading in the written order. The committed-variant
+/// routing adds a SHORTCUT past the resume for already-committed work; it
+/// neither raises the ONE-resume cap (still stated once, still after the
+/// sentence) nor removes the T55/T28 fallback (still byte-identical after
+/// the cap — leg (t) pins its bytes), and the T19 pre-harvest guard still
+/// stands between them.
+#[test]
+fn routing_sentence_sits_after_resume_first_rule_before_cap_and_fallback() {
+    // Needle self-check (T48 idiom).
+    assert!(
+        ROUTING_ADJACENCY.starts_with("instead of starting cold.")
+            && ROUTING_ADJACENCY.ends_with("routing discriminator"),
+        "the adjacency needle must span the resume-first rule's terminator \
+         and the routing sentence's first two words"
+    );
+    let spec = loop_spec();
+    assert_eq!(
+        spec.matches(ROUTING_ADJACENCY).count(),
+        1,
+        "the routing sentence must open IMMEDIATELY after the resume-first \
+         rule's terminator (\"instead of starting cold.\" + wrap + \"The \
+         routing discriminator\"), exactly once — zero means the sentence \
+         moved, was deleted, or was rewrapped away from the rule"
+    );
+    let routing = spec
+        .find("routing discriminator")
+        .expect("the routing sentence's opener present (leg (r) covers its tokens)");
+    let t19 = spec.find(T19_RATIONALE).unwrap_or_else(|| {
+        panic!(
+            "the T19 rationale present (leg (d) pins its tokens) — the \
+             never-remove-unmerged-work guard must survive the T156 edit"
+        )
+    });
+    let cap = spec
+        .find(RESUME_CAP)
+        .expect("the ONE-resume cap present (leg (a) pins its count)");
+    let t55 = spec
+        .find(T55_FALLBACK)
+        .expect("the T55 fallback anchor present");
+    let t28 = spec
+        .find(T28_FALLBACK)
+        .expect("the T28 fallback anchor present");
+    let fallback = spec
+        .find(NOHUP_FALLBACK)
+        .expect("the nohup fallback present (leg (c) pins its bytes)");
+    let step3 = spec
+        .find(STEP3_HEADING)
+        .expect("step-3 heading present");
+    assert!(
+        routing < t19
+            && t19 < cap
+            && cap < t55
+            && t55 < t28
+            && t28 < fallback
+            && fallback < step3,
+        "after the routing sentence the paragraph must read in the written \
+         order — T19 rationale, ONE-resume cap, standing recipes (T55 then \
+         T28), nohup fallback, step 3 (routing {routing}, t19 {t19}, cap \
+         {cap}, t55 {t55}, t28 {t28}, fallback {fallback}, step3 {step3}) — \
+         the sentence supplements the resume-first rule, never rewrites the \
+         cap or the fallback list"
+    );
+}
+
+/// The standing-recipes sentence the routing sentence extends —
+/// BYTE-IDENTICAL INCLUDING its wrapped line breaks (the
+/// T47_EXPORT_PREFIX idiom): the new sentence names the same T55/T28
+/// precedents but must not rewrite the fallback list they anchor (the
+/// ONE-resume cap's fallback stays intact for resume-exhausted deaths).
+const STANDING_RECIPES: &str = concat!(
+    "the standing recipes (orchestrator-finish for complete-but-uncommitted\n",
+    "   work, T55 precedent; next-cycle recovery with a recipe written on the\n",
+    "   row, T28 precedent)."
+);
+
+/// (t) T156 — the standing-recipes sentence survives BYTE-IDENTICAL
+/// (wrapped line breaks included) exactly once: the routing sentence
+/// supplements the fallback list, never rewrites it. Mutate any byte of
+/// the list — e.g. rewording "complete-but-uncommitted" toward the new
+/// sentence's "complete and committed" — and this goes red while legs
+/// (r)/(s) stay green (they pin different bytes).
+#[test]
+fn standing_recipes_sentence_survives_byte_identical() {
+    // Needle self-check (T48 idiom).
+    assert!(
+        STANDING_RECIPES.contains("complete-but-uncommitted")
+            && STANDING_RECIPES.ends_with("row, T28 precedent)."),
+        "the needle must be the standing-recipes sentence verbatim, \
+         wrapping included"
+    );
+    let spec = loop_spec();
+    assert_eq!(
+        spec.matches(STANDING_RECIPES).count(),
+        1,
+        "the standing-recipes sentence must survive byte-identical \
+         (wrapping included) exactly once — the T156 routing sentence \
+         supplements the T55/T28 fallback list, never rewrites or rewraps \
+         it"
     );
 }
