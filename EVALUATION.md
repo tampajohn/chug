@@ -510,6 +510,36 @@ order-signal pins (RecordingAllowJudge consultation flag), gates
 1092/1092 zero flakes. Post-merge nextest 1092/1092
 (target-shared-main).
 
+**CYCLE-68 CYCLE-LEVEL NOTES (wrap).** FOUR items landed (T137,
+T138, T143, T139 — three codex-review pri-2 HIGHs + one operator pri-1
+report), three through full kimi REQUIRED rounds and T139 through the
+era's cleanest FAIL→fix-up→PASS arc (round-1 FAIL was a TEST gap, the
+code verified correct; the sweep-the-class fix-up closed all three
+gate-order adjacencies in ONE round). Release: v0.4.1 tagged at wrap
+(4 items since v0.4.0, no FEATURES check-off → PATCH). T63 resumes went
+4-for-4 this cycle (T138 impl, T138 validator, T143 impl, T139 impl —
+all resumed children finished their arcs; era total 8-for-8). Iteration
+economics: 2 of the last 4 impl children died at 80/80 with the work
+done (T143 seg-1 in 4m45s of fast small steps; T139 seg-1 pre-commit
+with green tests) — the T110 measure clause trips again; the remedy
+stands (filing-time ~500-line estimate ceiling, META-META spec-quality
+bar), no further iteration raises. Harvest hygiene: one mislabel caught
+BEFORE worktree removal by the T19 read-back practice (T137's "024850
+validate2" copy was the fix-up stream dup; the real round-2 stream was
+the worktree's live events.jsonl — re-harvested correctly; both old
+files removed). Origin divergence reconciled at cycle start (operator
+intake 1257b05 rebased cleanly; T137's flip re-hashed
+3c0e403+8a823ae→08f0a39+46ec1a9 — row refs corrected in c3f2568).
+T129 (feature pri 2) + T131 (pri 4) deferred on wall-clock — bugs
+outrank features, queue order held; T129's spec is ready, next cycle
+works it FIRST. Carried to the next eval: T138 M1 (drop-2nd-probe
+mutant, availability-only delta), T143 m9 (observ-sink generation
+maxTokens unpinned at non-default caps) + 3 coverage observations,
+T137's 3 non-blocking (leg-harness rc-echo inversion, bash≥4 SHELLOPTS
+note, hardcoded sleep 120), T135 M2 + F1, T136's 3 non-blocking
+(update_ledger wholesale write, legacy chat-shape repair gap,
+write_atomic dir-fsync/tmp-reap nits), T128 M4, T141 M1.
+
 ### Cycle 66 (2026-09-28) — routine (reconciled cycle-65 divergence first) — codex-intake queue T134–T142
 
 **CYCLE-66 CYCLE-LEVEL NOTES (wrap).** FOUR items landed (T140,
