@@ -351,7 +351,12 @@
     fn plan_loop_advertises_exactly_five_tools_with_a_live_mcp_registry() {
         let tmp = tempfile::tempdir().unwrap();
         write_echo_server(tmp.path());
-        let mcp = McpRegistry::new(tmp.path(), false, None).expect("live fake registry");
+        let mut mcp = McpRegistry::new(tmp.path(), false, None).expect("live fake registry");
+        // T138: spawn is deferred to start(); plan mode never starts MCP
+        // servers, so this test starts the registry explicitly to keep its
+        // premise (a LIVE non-empty registry) while the loop must still
+        // never extend the five-tool list with mcp schemas.
+        mcp.start(&crate::permissions::Permissions::empty());
         assert!(
             !mcp.tool_schemas().is_empty(),
             "leg premise: the registry must be non-empty (fake server must be up)"

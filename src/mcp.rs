@@ -12,6 +12,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
+use crate::permissions::Permissions;
 use crate::tools::{ToolResult, kill_process_group};
 
 pub(crate) const PROTOCOL_VERSION: &str = "2025-06-18";
@@ -209,18 +210,34 @@ impl Drop for McpServer {
 
 pub struct McpRegistry {
     servers: Vec<Box<dyn McpBackend>>,
+    /// T138: entries parsed from the config but NOT yet spawned. Spawning
+    /// waits for [`McpRegistry::start`], which the driver calls only after
+    /// `.chug/permissions.json` has loaded and only for servers the deny
+    /// rules allow to start — a repository-controlled mcp.json must not
+    /// execute its command before permission enforcement.
+    pending: Vec<PendingServer>,
+}
+
+/// One parsed-and-validated config entry awaiting its spawn (T138).
+struct PendingServer {
+    cwd: PathBuf,
+    name: String,
+    raw: McpServerConfigRaw,
 }
 
 impl McpRegistry {
-    /// Build the registry for a run/chat session: discover config, spawn every
-    /// configured server, complete the handshake, register tools. No config
-    /// anywhere, or `mcp_off`, yields an empty registry and zero behavior
-    /// change. An explicitly named (`--mcp-config`) config that does not exist
-    /// is a user error and fails loudly; discovered-config problems (missing,
-    /// unreadable, malformed) fail soft with a warning.
+    /// Build the registry for a run/chat session: discover config, read and
+    /// validate it — and NOTHING else. No process is spawned, no network
+    /// connection is opened: that happens in [`McpRegistry::start`], which
+    /// the driver calls after permissions load (T138: a repo-controlled
+    /// mcp.json used to spawn its command before the policy layer existed).
+    /// No config anywhere, or `mcp_off`, yields an empty registry and zero
+    /// behavior change. An explicitly named (`--mcp-config`) config that
+    /// does not exist is a user error and fails loudly; discovered-config
+    /// problems (missing, unreadable, malformed) fail soft with a warning.
     pub fn new(cwd: &Path, mcp_off: bool, mcp_config_path: Option<PathBuf>) -> anyhow::Result<Self> {
         if mcp_off {
-            return Ok(Self { servers: Vec::new() });
+            return Ok(Self { servers: Vec::new(), pending: Vec::new() });
         }
         let config_path = match mcp_config_path {
             Some(p) => {
@@ -232,7 +249,7 @@ impl McpRegistry {
             None => find_config(cwd),
         };
         let Some(config_path) = config_path else {
-            return Ok(Self { servers: Vec::new() });
+            return Ok(Self { servers: Vec::new(), pending: Vec::new() });
         };
         let text = match fs::read_to_string(&config_path) {
             Ok(t) => t,
@@ -241,7 +258,7 @@ impl McpRegistry {
                     "chug: warning: mcp config unreadable {}: {e}",
                     config_path.display()
                 );
-                return Ok(Self { servers: Vec::new() });
+                return Ok(Self { servers: Vec::new(), pending: Vec::new() });
             }
         };
         let config: McpConfig = match serde_json::from_str(&text) {
@@ -251,10 +268,10 @@ impl McpRegistry {
                     "chug: warning: malformed mcp config at {}: {e}",
                     config_path.display()
                 );
-                return Ok(Self { servers: Vec::new() });
+                return Ok(Self { servers: Vec::new(), pending: Vec::new() });
             }
         };
-        let mut servers: Vec<Box<dyn McpBackend>> = Vec::new();
+        let mut pending: Vec<PendingServer> = Vec::new();
         for (name, raw) in config.mcp_servers {
             if !is_valid_name(&name) {
                 eprintln!("chug: warning: invalid mcp server name {name}");
@@ -267,11 +284,35 @@ impl McpRegistry {
                 eprintln!("chug: warning: mcp server {name} config error: {msg}");
                 continue;
             }
+            pending.push(PendingServer { cwd: cwd.to_path_buf(), name, raw });
+        }
+        Ok(Self { servers: Vec::new(), pending })
+    }
+
+    /// T138: spawn + handshake every entry parsed at `new` time — called by
+    /// the driver AFTER `.chug/permissions.json` has loaded, so a
+    /// repository-controlled mcp.json never executes its command before
+    /// permission enforcement. Each spawn is gated by
+    /// [`Permissions::mcp_spawn_block_reason`]: a whole-tool `bash` deny or
+    /// an `mcp__*`/`mcp__<server>__*` deny skips the spawn (fail-soft warn,
+    /// like any other spawn failure). Fail-soft per server: any spawn or
+    /// handshake error skips that server; the run continues.
+    pub fn start(&mut self, permissions: &Permissions) {
+        for PendingServer { cwd, name, raw } in std::mem::take(&mut self.pending) {
+            let is_stdio = raw.url.is_none();
+            if let Some(reason) = permissions.mcp_spawn_block_reason(&name, is_stdio) {
+                let log = cwd.join(".chug").join(format!("mcp-{}.log", name));
+                let detail =
+                    format!("chug: mcp server {name} not started: denied by permissions ({reason})");
+                log_line(&log, &detail);
+                eprintln!("chug: warning: {detail}");
+                continue;
+            }
             // Remote entry: streamable-HTTP transport. Fail-soft like stdio:
             // any handshake error skips this server, the run continues.
-            if raw.url.is_some() {
-                match spawn_remote(cwd, &name, &raw) {
-                    Ok(srv) => servers.push(Box::new(srv)),
+            if !is_stdio {
+                match spawn_remote(&cwd, &name, &raw) {
+                    Ok(srv) => self.servers.push(Box::new(srv)),
                     Err(e) => {
                         let log = cwd.join(".chug").join(format!("mcp-{name}.log"));
                         log_line(&log, &format!("chug: mcp server {name} failed to start: {e:#}"));
@@ -280,11 +321,11 @@ impl McpRegistry {
                 }
                 continue;
             }
-            match McpServer::spawn(cwd, &name, raw).and_then(|mut s| {
+            match McpServer::spawn(&cwd, &name, raw).and_then(|mut s| {
                 s.initialize()?;
                 Ok(s)
             }) {
-                Ok(srv) => servers.push(Box::new(srv)),
+                Ok(srv) => self.servers.push(Box::new(srv)),
                 Err(e) => {
                     let log = cwd.join(".chug").join(format!("mcp-{name}.log"));
                     log_line(&log, &format!("chug: mcp server {name} failed to start: {e:#}"));
@@ -292,7 +333,6 @@ impl McpRegistry {
                 }
             }
         }
-        Ok(Self { servers })
     }
 
     /// MCP tool schemas merged into the tools array. NOTE: MCP tools bypass
@@ -459,6 +499,27 @@ pub struct McpServerConfigRaw {
     pub headers: Option<HashMap<String, String>>,
 }
 
+/// T138 (credentials leg): the environment a spawned stdio MCP server
+/// inherits — a fixed key allowlist read from the parent, NOT the parent
+/// environment itself. The parent env carries credentials (API keys,
+/// tokens); a repository-controlled mcp.json must not receive them just by
+/// naming a command. The config entry's `env` map opts specific variables
+/// back in per server. Keys are chosen so `"command": "python3"` resolves
+/// and interpreters with a profile-dir expectation still run.
+fn baseline_env() -> Vec<(&'static str, std::ffi::OsString)> {
+    #[cfg(windows)]
+    const BASELINE_KEYS: &[&str] = &[
+        "PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "SystemRoot", "TEMP", "TMP",
+        "USERPROFILE", "APPDATA", "LOCALAPPDATA",
+    ];
+    #[cfg(not(windows))]
+    const BASELINE_KEYS: &[&str] = &["PATH", "HOME", "TMPDIR", "LANG", "LC_ALL"];
+    BASELINE_KEYS
+        .iter()
+        .filter_map(|k| std::env::var_os(k).map(|v| (*k, v)))
+        .collect()
+}
+
 impl McpServer {
     fn spawn(cwd: &Path, name: &str, cfg_raw: McpServerConfigRaw) -> anyhow::Result<Self> {
         let log_path = cwd.join(".chug").join(format!("mcp-{}.log", name));
@@ -469,6 +530,16 @@ impl McpServer {
         let mut cmd = Command::new(command);
         if let Some(args) = cfg_raw.args {
             cmd.args(args);
+        }
+        // T138 (credentials leg): a repository-controlled mcp.json must not
+        // receive the parent environment by default — it carries API keys
+        // and tokens the spawned process could exfiltrate. Spawn with a
+        // fixed minimal baseline (PATH/HOME/... so interpreters resolve)
+        // plus exactly the `env` map the entry configures; everything else
+        // stays out unless the config names it explicitly.
+        cmd.env_clear();
+        for (key, value) in baseline_env() {
+            cmd.env(key, value);
         }
         if let Some(env) = cfg_raw.env {
             for (k, v) in env {
@@ -788,7 +859,9 @@ for line in sys.stdin:
         let flag_path = tmp.path().join("flag-mcp.json");
         fs::write(&flag_path, flag_cfg.to_string()).unwrap();
 
-        let reg = McpRegistry::new(tmp.path(), false, Some(flag_path)).unwrap();
+        let mut reg = McpRegistry::new(tmp.path(), false, Some(flag_path)).unwrap();
+        // T138: spawn is deferred to start(), gated on permissions.
+        reg.start(&Permissions::empty());
         assert_eq!(reg.servers.len(), 1);
         assert_eq!(reg.servers[0].name(), "flagserver");
         assert!(reg.tool_schemas()[0]["name"] == "mcp__flagserver__echo");
@@ -857,6 +930,8 @@ for line in sys.stdin:
         let tmp = TempDir::new().unwrap();
         write_mcp_json(tmp.path(), "fake", echo_server_body());
         let mut reg = McpRegistry::new(tmp.path(), false, None).unwrap();
+        // T138: spawn is deferred to start(), gated on permissions.
+        reg.start(&Permissions::empty());
         assert_eq!(reg.servers.len(), 1);
 
         let schemas = reg.tool_schemas();
@@ -880,6 +955,8 @@ for line in sys.stdin:
         let tmp = TempDir::new().unwrap();
         write_mcp_json(tmp.path(), "fake", echo_server_body());
         let mut reg = McpRegistry::new(tmp.path(), false, None).unwrap();
+        // T138: spawn is deferred to start(), gated on permissions.
+        reg.start(&Permissions::empty());
 
         let res = reg.dispatch("mcp__nosuch__echo", json!({}));
         assert!(res.is_error);
@@ -1259,7 +1336,9 @@ for line in sys.stdin:
         });
         fs::write(tmp.path().join("mcp.json"), serde_json::to_string(&cfg_json).unwrap()).unwrap();
 
-        let reg = McpRegistry::new(tmp.path(), false, None).unwrap();
+        let mut reg = McpRegistry::new(tmp.path(), false, None).unwrap();
+        // T138: spawn is deferred to start(), gated on permissions.
+        reg.start(&Permissions::empty());
         // remote skipped due to missing env var, stdio loaded
         assert_eq!(reg.servers.len(), 1);
         assert_eq!(reg.servers[0].name(), "stdio-srv");
@@ -1286,7 +1365,9 @@ for line in sys.stdin:
         });
         fs::write(tmp.path().join("mcp.json"), serde_json::to_string(&cfg_json).unwrap()).unwrap();
 
-        let reg = McpRegistry::new(tmp.path(), false, None).unwrap();
+        let mut reg = McpRegistry::new(tmp.path(), false, None).unwrap();
+        // T138: spawn is deferred to start(), gated on permissions.
+        reg.start(&Permissions::empty());
         assert_eq!(reg.servers.len(), 1);
         assert_eq!(reg.servers[0].name(), "stdio-srv");
         let log_path = tmp.path().join(".chug").join("mcp-remote-srv.log");
@@ -1298,7 +1379,165 @@ for line in sys.stdin:
     fn stdio_only_config_unchanged() {
         let tmp = TempDir::new().unwrap();
         write_mcp_json(tmp.path(), "fake", echo_server_body());
-        let reg = McpRegistry::new(tmp.path(), false, None).unwrap();
+        let mut reg = McpRegistry::new(tmp.path(), false, None).unwrap();
+        // T138: spawn is deferred to start(), gated on permissions.
+        reg.start(&Permissions::empty());
         assert_eq!(reg.servers.len(), 1);
+    }
+
+    // ---------- T138: spawn gating + env baseline ----------
+
+    struct NoSink;
+    impl crate::events::EventSink for NoSink {
+        fn emit(&mut self, _e: crate::events::Event) {}
+    }
+
+    /// Write a permissions.json deny config into `cwd/.chug/` (same shape
+    /// the driver loads) and return the loaded Permissions.
+    fn load_denies(cwd: &Path, deny: Value) -> Permissions {
+        let dir = cwd.join(".chug");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("permissions.json"),
+            json!({"permissions": {"deny": deny}}).to_string(),
+        )
+        .unwrap();
+        Permissions::load(cwd, &mut NoSink)
+    }
+
+    /// Echo server body prefixed with a flag write: the flag file appears
+    /// the instant the COMMAND executes, before any handshake.
+    fn flag_body(flag: &Path) -> String {
+        format!(
+            "import pathlib\npathlib.Path({flag:?}).write_text(\"ran\")\n{}",
+            echo_server_body()
+        )
+    }
+
+    /// THE DEFERRAL PIN: `new()` alone must not execute anything (no flag,
+    /// no server); `start()` with zero deny rules then spawns + handshakes
+    /// normally (flag exists, schemas registered).
+    #[test]
+    fn t138_new_defers_execution_and_start_spawns_when_allowed() {
+        let tmp = TempDir::new().unwrap();
+        let flag = tmp.path().join("t138-flag");
+        write_mcp_json(tmp.path(), "fake", &flag_body(&flag));
+        let mut reg = McpRegistry::new(tmp.path(), false, None).unwrap();
+        assert!(reg.servers.is_empty(), "new() must not spawn");
+        assert!(!flag.exists(), "new() must not execute the command");
+        assert!(reg.tool_schemas().is_empty());
+
+        reg.start(&Permissions::empty());
+        assert_eq!(reg.servers.len(), 1);
+        assert!(flag.exists(), "start() with no deny rules must spawn");
+        assert_eq!(reg.tool_schemas()[0]["name"], "mcp__fake__echo");
+    }
+
+    /// A whole-tool bash deny prevents the startup execution: the command
+    /// never runs, no server registers.
+    #[test]
+    fn t138_deny_bash_blocks_stdio_spawn() {
+        let tmp = TempDir::new().unwrap();
+        let flag = tmp.path().join("t138-flag");
+        write_mcp_json(tmp.path(), "fake", &flag_body(&flag));
+        let mut reg = McpRegistry::new(tmp.path(), false, None).unwrap();
+        reg.start(&load_denies(tmp.path(), json!([{"tool": "bash"}])));
+        assert!(!flag.exists(), "a bash deny must prevent the mcp.json command");
+        assert!(reg.servers.is_empty());
+        assert!(reg.tool_schemas().is_empty());
+    }
+
+    /// A whole-namespace `mcp__*` deny prevents the startup execution too.
+    #[test]
+    fn t138_deny_mcp_star_blocks_stdio_spawn() {
+        let tmp = TempDir::new().unwrap();
+        let flag = tmp.path().join("t138-flag");
+        write_mcp_json(tmp.path(), "fake", &flag_body(&flag));
+        let mut reg = McpRegistry::new(tmp.path(), false, None).unwrap();
+        reg.start(&load_denies(tmp.path(), json!([{"tool": "mcp__*"}])));
+        assert!(!flag.exists(), "an mcp__* deny must prevent the mcp.json command");
+        assert!(reg.servers.is_empty());
+        assert!(reg.tool_schemas().is_empty());
+    }
+
+    /// A server-scoped deny (`mcp__fake__*`) blocks only that server: the
+    /// sibling server (different name, same config file) still spawns.
+    #[test]
+    fn t138_deny_server_scoped_blocks_only_that_server() {
+        let tmp = TempDir::new().unwrap();
+        let fake_flag = tmp.path().join("t138-fake-flag");
+        let other_flag = tmp.path().join("t138-other-flag");
+        let py_fake = tmp.path().join("fake_srv.py");
+        let py_other = tmp.path().join("other_srv.py");
+        fs::write(&py_fake, fake_server_script(&flag_body(&fake_flag))).unwrap();
+        fs::write(&py_other, fake_server_script(&flag_body(&other_flag))).unwrap();
+        let cfg_json = json!({
+            "mcpServers": {
+                "fake": {"command": "python3", "args": [py_fake.to_string_lossy()]},
+                "other": {"command": "python3", "args": [py_other.to_string_lossy()]},
+            }
+        });
+        fs::write(
+            tmp.path().join("mcp.json"),
+            serde_json::to_string(&cfg_json).unwrap(),
+        )
+        .unwrap();
+        let mut reg = McpRegistry::new(tmp.path(), false, None).unwrap();
+        reg.start(&load_denies(tmp.path(), json!([{"tool": "mcp__fake__*"}])));
+        assert!(!fake_flag.exists(), "the denied server must not have run");
+        assert!(other_flag.exists(), "the sibling server must still run");
+        assert_eq!(reg.servers.len(), 1);
+        assert_eq!(reg.servers[0].name(), "other");
+    }
+
+    /// start() is idempotent: a second call is a no-op (the pending list is
+    /// consumed by the first), never a double spawn.
+    #[test]
+    fn t138_start_is_idempotent() {
+        let tmp = TempDir::new().unwrap();
+        write_mcp_json(tmp.path(), "fake", echo_server_body());
+        let mut reg = McpRegistry::new(tmp.path(), false, None).unwrap();
+        reg.start(&Permissions::empty());
+        reg.start(&Permissions::empty());
+        assert_eq!(reg.servers.len(), 1);
+    }
+
+    /// THE CREDENTIALS LEG: a spawned stdio server must NOT inherit the
+    /// parent environment (API keys et al.). It sees the baseline (PATH) and
+    /// exactly the `env` map the entry configures — nothing else.
+    #[test]
+    fn t138_stdio_spawn_does_not_inherit_parent_env() {
+        let tmp = TempDir::new().unwrap();
+        let dump = tmp.path().join("env-dump.json");
+        let py = tmp.path().join("env_srv.py");
+        let body = format!(
+            "import os, pathlib, sys, json\npathlib.Path({dump:?}).write_text(json.dumps({{k: os.environ.get(k) for k in (\"T138_SECRET\", \"T138_OK\", \"PATH\")}}))\n{}",
+            echo_server_body()
+        );
+        fs::write(&py, fake_server_script(&body)).unwrap();
+        let cfg_json = json!({
+            "mcpServers": {
+                "envy": {
+                    "command": "python3",
+                    "args": [py.to_string_lossy()],
+                    "env": {"T138_OK": "via-config"}
+                }
+            }
+        });
+        fs::write(
+            tmp.path().join("mcp.json"),
+            serde_json::to_string(&cfg_json).unwrap(),
+        )
+        .unwrap();
+        unsafe { std::env::set_var("T138_SECRET", "hunter2") };
+        let mut reg = McpRegistry::new(tmp.path(), false, None).unwrap();
+        reg.start(&Permissions::empty());
+        unsafe { std::env::remove_var("T138_SECRET") };
+        assert_eq!(reg.servers.len(), 1, "server must spawn for the env dump");
+        let seen: HashMap<String, Option<String>> =
+            serde_json::from_str(&fs::read_to_string(&dump).unwrap()).unwrap();
+        assert_eq!(seen["T138_SECRET"], None, "credentials must not leak: {seen:?}");
+        assert_eq!(seen["T138_OK"].as_deref(), Some("via-config"), "config env must pass: {seen:?}");
+        assert!(seen["PATH"].is_some(), "baseline PATH must survive: {seen:?}");
     }
 }

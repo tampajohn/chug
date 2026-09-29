@@ -8,7 +8,10 @@
         write_echo_server(tmp.path());
         let mut mcp =
             McpRegistry::new(tmp.path(), false, None).expect("registry with fake server");
-        assert!(!mcp.tool_schemas().is_empty(), "fake server must register tools");
+        // T138: spawn is deferred — nothing runs before drive_loop loads
+        // permissions and starts the allowed servers, so the pre-turn tool
+        // list is empty. The post-turn assertions below pin the merge.
+        assert!(mcp.tool_schemas().is_empty());
 
         let mut client = ToolRecordingLlm::new(vec![
             json!({

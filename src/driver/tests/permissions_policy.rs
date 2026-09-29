@@ -512,3 +512,159 @@
         );
     }
 
+    // ---------- T138: repo-controlled mcp.json vs permission enforcement ----------
+
+    /// Write an mcp.json into `dir` whose stdio command TOUCHES A FLAG FILE
+    /// the moment it executes, then serves the standard fake echo handshake
+    /// (so the allowed-spawn control leg still registers schemas).
+    fn write_flag_spawning_mcp_server(dir: &Path) {
+        let py = dir.join("flag_srv.py");
+        let flag = dir.join("mcp-startup-flag");
+        let body = r#"
+import sys, json, pathlib
+pathlib.Path("__FLAG__").write_text("ran")
+def send(o):
+    sys.stdout.write(json.dumps(o) + "\n"); sys.stdout.flush()
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    req = json.loads(line)
+    if "method" not in req or "id" not in req:
+        continue
+    m, i = req["method"], req["id"]
+    if m == "initialize":
+        send({"jsonrpc": "2.0", "id": i, "result": {"protocolVersion": "2025-06-18", "capabilities": {"tools": {}}, "serverInfo": {"name": "fake", "version": "0"}}})
+    elif m == "tools/list":
+        send({"jsonrpc": "2.0", "id": i, "result": {"tools": [{"name": "echo", "description": "Echo the arguments back", "inputSchema": {"type": "object", "properties": {"text": {"type": "string"}}}}]}})
+    elif m == "tools/call":
+        send({"jsonrpc": "2.0", "id": i, "result": {"content": [{"type": "text", "text": "echo"}], "isError": False}})
+"#
+        .replace("__FLAG__", &flag.display().to_string());
+        std::fs::write(&py, body).unwrap();
+        let cfg = json!({
+            "mcpServers": {
+                "fake": {"command": "python3", "args": [py.to_string_lossy()]}
+            }
+        });
+        std::fs::write(dir.join("mcp.json"), cfg.to_string()).unwrap();
+    }
+
+    /// T138 (codex review §2 HIGH): a repository-controlled mcp.json
+    /// discovered in the cwd must not execute its command before permission
+    /// enforcement. Denying `bash` outright must prevent the startup spawn —
+    /// an MCP stdio entry IS arbitrary command execution from the checkout,
+    /// and the flag file proves the command ran if the gate is missing.
+    #[test]
+    fn denied_bash_prevents_repo_mcp_json_startup_execution() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_flag_spawning_mcp_server(tmp.path());
+        write_permissions_json(tmp.path(), json!([{"tool": "bash"}]));
+        let (_utx, urx) = mpsc::channel::<SlashUpdate>();
+        let controls = Controls::detached();
+        let ctx = ctx_for(&tmp, Mode::Chat, &controls, &urx, None, &observ::Sink::Noop);
+        let mut knobs = knobs_with(5);
+        // No tool call needed: the spawn used to happen before iteration 1.
+        let mut llm = ScriptedLlm::new(vec![text_only_response("no tools needed")]);
+        let mut gate = None;
+        let mut messages = Vec::new();
+        let mut sink = RecordingSink::default();
+        let mut mcp = McpRegistry::new(tmp.path(), false, None).unwrap();
+        drive_loop(
+            &ctx,
+            &mut knobs,
+            &mut llm,
+            &mut gate,
+            &mut messages,
+            None,
+            &mut sink,
+            &mut mcp,
+        )
+        .unwrap();
+        // THE assertion: the command never executed.
+        assert!(
+            !tmp.path().join("mcp-startup-flag").exists(),
+            "repo-controlled mcp.json executed its command despite the bash deny"
+        );
+        assert!(
+            mcp.tool_schemas().is_empty(),
+            "a denied server must not register tools"
+        );
+    }
+
+    /// T38 sibling deny shape: denying every `mcp__*` tool must equally
+    /// prevent the startup execution (the review's second named deny).
+    #[test]
+    fn denied_mcp_star_prevents_repo_mcp_json_startup_execution() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_flag_spawning_mcp_server(tmp.path());
+        write_permissions_json(tmp.path(), json!([{"tool": "mcp__*"}]));
+        let (_utx, urx) = mpsc::channel::<SlashUpdate>();
+        let controls = Controls::detached();
+        let ctx = ctx_for(&tmp, Mode::Chat, &controls, &urx, None, &observ::Sink::Noop);
+        let mut knobs = knobs_with(5);
+        let mut llm = ScriptedLlm::new(vec![text_only_response("no tools needed")]);
+        let mut gate = None;
+        let mut messages = Vec::new();
+        let mut sink = RecordingSink::default();
+        let mut mcp = McpRegistry::new(tmp.path(), false, None).unwrap();
+        drive_loop(
+            &ctx,
+            &mut knobs,
+            &mut llm,
+            &mut gate,
+            &mut messages,
+            None,
+            &mut sink,
+            &mut mcp,
+        )
+        .unwrap();
+        assert!(
+            !tmp.path().join("mcp-startup-flag").exists(),
+            "repo-controlled mcp.json executed its command despite the mcp__* deny"
+        );
+        assert!(
+            mcp.tool_schemas().is_empty(),
+            "a denied server must not register tools"
+        );
+    }
+
+    /// Control leg (kills the never-spawn mutant): an UNRELATED deny
+    /// (`write_file`) must not block the spawn — the gate is deny-specific,
+    /// not a blanket MCP ban. The flag file proves the command ran and the
+    /// handshake completed.
+    #[test]
+    fn unrelated_deny_still_spawns_repo_mcp_server() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_flag_spawning_mcp_server(tmp.path());
+        write_permissions_json(tmp.path(), json!([{"tool": "write_file"}]));
+        let (_utx, urx) = mpsc::channel::<SlashUpdate>();
+        let controls = Controls::detached();
+        let ctx = ctx_for(&tmp, Mode::Chat, &controls, &urx, None, &observ::Sink::Noop);
+        let mut knobs = knobs_with(5);
+        let mut llm = ScriptedLlm::new(vec![text_only_response("no tools needed")]);
+        let mut gate = None;
+        let mut messages = Vec::new();
+        let mut sink = RecordingSink::default();
+        let mut mcp = McpRegistry::new(tmp.path(), false, None).unwrap();
+        drive_loop(
+            &ctx,
+            &mut knobs,
+            &mut llm,
+            &mut gate,
+            &mut messages,
+            None,
+            &mut sink,
+            &mut mcp,
+        )
+        .unwrap();
+        assert!(
+            tmp.path().join("mcp-startup-flag").exists(),
+            "an unrelated deny must not block the mcp.json spawn"
+        );
+        assert!(
+            mcp.tool_schemas().iter().any(|t| t["name"] == "mcp__fake__echo"),
+            "the allowed server must register its tools"
+        );
+    }
+

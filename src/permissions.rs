@@ -246,6 +246,56 @@ impl Permissions {
         self.deny.is_empty()
     }
 
+    /// T138 spawn gate: why a not-yet-spawned MCP server must not start,
+    /// judged from the deny rules alone (no tool list exists before the
+    /// spawn — that is the point). `Some(reason)` = do not spawn (the
+    /// reason names the matching rule, warn-line shape); `None` = the spawn
+    /// may proceed.
+    ///
+    /// Three shapes block a spawn, in first-match config order:
+    /// - a whole-tool rule that denies EVERY `mcp__<server>__<tool>` name
+    ///   (e.g. `{"tool": "mcp__*"}`) — no MCP server may start, remote or
+    ///   stdio;
+    /// - a whole-tool rule that denies every tool of THIS server (e.g.
+    ///   `{"tool": "mcp__github__*"}`) — starting it would offer only
+    ///   denied tools, and the spawn itself is the execution risk;
+    /// - stdio only: a whole-tool rule that denies `bash` (e.g.
+    ///   `{"tool": "bash"}`). An MCP stdio entry is arbitrary command
+    ///   execution from the checkout — the same class a whole-tool bash
+    ///   deny exists to forbid — so it may not start behind that deny. A
+    ///   rule carrying an arg matcher (`command`/`path`/`url`) denies only
+    ///   specific inputs, never the whole tool, and never blocks a spawn.
+    ///
+    /// Whole-namespace/server judgments are probed with synthetic tool
+    /// names (`mcp__<server>__denyprobe`, two distinct synthetic servers
+    /// for the namespace leg) so a single-tool glob (`mcp__gh__create_issue`)
+    /// or a single-server glob does not read as "deny everything".
+    pub fn mcp_spawn_block_reason(&self, server: &str, is_stdio: bool) -> Option<String> {
+        for rule in &self.deny {
+            // A rule with an arg matcher judges inputs, not tool existence.
+            if rule.matcher.is_some() {
+                continue;
+            }
+            // Namespace leg: the glob must match EVERY mcp tool name —
+            // probed with two distinct synthetic servers so a
+            // server-specific glob (`mcp__gh__*`) does not qualify.
+            if glob_matches(&rule.tool_glob, "mcp__denyprobe-a__probe1")
+                && glob_matches(&rule.tool_glob, "mcp__denyprobe-b__probe2")
+            {
+                return Some(rule.summary());
+            }
+            // Server leg: the glob matches every tool of this server.
+            if glob_matches(&rule.tool_glob, &format!("mcp__{server}__denyprobe")) {
+                return Some(rule.summary());
+            }
+            // Bash leg (stdio only): the glob matches the bash tool itself.
+            if is_stdio && glob_matches(&rule.tool_glob, "bash") {
+                return Some(rule.summary());
+            }
+        }
+        None
+    }
+
     /// The deny check, run per tool call BEFORE the PreToolUse hook check —
     /// a denied call fires no hooks, never reaches the plan gate / MCP /
     /// risk gate, and never executes. `Some(message)` = denied: the tool
@@ -647,6 +697,96 @@ mod tests {
             "[permission denied] deny mcp__fs__* path \"*.env\""
         );
         assert!(verdict(&permissions, "mcp__fs__read", json!({"path": "ok.txt"}), &mut sink).is_none());
+    }
+
+    // ---------- T138 spawn gate (mcp_spawn_block_reason) ----------
+
+    /// The three blocking shapes: a whole-tool `mcp__*` deny blocks every
+    /// server (stdio and remote); a server-scoped `mcp__gh__*` deny blocks
+    /// only that server; a whole-tool `bash` deny blocks only stdio.
+    #[test]
+    fn spawn_gate_whole_tool_denies_block_spawns() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_config(tmp.path(), json!({"permissions": {"deny": [{"tool": "mcp__*"}]}}));
+        let mut sink = RecordingSink::default();
+        let permissions = load(tmp.path(), &mut sink);
+        let reason = permissions
+            .mcp_spawn_block_reason("gh", true)
+            .expect("mcp__* deny blocks stdio spawn");
+        assert_eq!(reason, "deny mcp__*");
+        assert_eq!(
+            permissions.mcp_spawn_block_reason("gh", false).unwrap(),
+            "deny mcp__*",
+            "mcp__* deny blocks remote spawn too"
+        );
+    }
+
+    #[test]
+    fn spawn_gate_server_scoped_deny_blocks_only_that_server() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_config(
+            tmp.path(),
+            json!({"permissions": {"deny": [{"tool": "mcp__gh__*"}]}}),
+        );
+        let mut sink = RecordingSink::default();
+        let permissions = load(tmp.path(), &mut sink);
+        assert_eq!(
+            permissions.mcp_spawn_block_reason("gh", true).unwrap(),
+            "deny mcp__gh__*",
+            "server-scoped deny blocks that server"
+        );
+        assert!(
+            permissions.mcp_spawn_block_reason("fs", true).is_none(),
+            "server-scoped deny must not block a different server"
+        );
+        assert!(
+            permissions.mcp_spawn_block_reason("fs", false).is_none(),
+            "server-scoped deny must not block a different remote server"
+        );
+    }
+
+    #[test]
+    fn spawn_gate_bash_deny_blocks_stdio_only() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_config(tmp.path(), json!({"permissions": {"deny": [{"tool": "bash"}]}}));
+        let mut sink = RecordingSink::default();
+        let permissions = load(tmp.path(), &mut sink);
+        assert_eq!(
+            permissions.mcp_spawn_block_reason("gh", true).unwrap(),
+            "deny bash",
+            "whole-tool bash deny blocks the stdio spawn (command execution)"
+        );
+        assert!(
+            permissions.mcp_spawn_block_reason("gh", false).is_none(),
+            "whole-tool bash deny must not block a remote server (no command runs)"
+        );
+    }
+
+    /// Non-blocking shapes, pinned: a rule with an arg matcher denies only
+    /// specific inputs (never the whole tool), a single-tool glob is not
+    /// "every tool of the server", a command-filtered bash deny still
+    /// allows spawns, and zero rules block nothing.
+    #[test]
+    fn spawn_gate_input_rules_and_single_tool_globs_never_block() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_config(
+            tmp.path(),
+            json!({"permissions": {"deny": [
+                {"tool": "mcp__fs__*", "path": "*.env"},
+                {"tool": "mcp__gh__create_issue"},
+                {"tool": "bash", "command": "*rm -rf*"}
+            ]}}),
+        );
+        let mut sink = RecordingSink::default();
+        let permissions = load(tmp.path(), &mut sink);
+        assert!(permissions.mcp_spawn_block_reason("fs", true).is_none());
+        assert!(permissions.mcp_spawn_block_reason("fs", false).is_none());
+        assert!(permissions.mcp_spawn_block_reason("gh", true).is_none());
+        assert!(permissions.mcp_spawn_block_reason("gh", false).is_none());
+        // Zero rules block nothing.
+        let empty = Permissions::empty();
+        assert!(empty.mcp_spawn_block_reason("gh", true).is_none());
+        assert!(empty.mcp_spawn_block_reason("gh", false).is_none());
     }
 
     // ---------- matcher legs (the deny path) ----------
