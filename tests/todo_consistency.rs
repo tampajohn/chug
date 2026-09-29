@@ -10,6 +10,45 @@ use std::collections::HashSet;
 
 const STATUSES: [&str; 4] = ["todo", "in-progress", "blocked", "done"];
 
+/// Cells of one TODO.md table row, or `None` for anything that is not a
+/// data row: non-`|` lines, the header row, and the dash separator. Shared
+/// by both guards (T8 structural, T150 estimate) so their row parsing
+/// cannot drift apart.
+fn table_cells(raw: &str) -> Option<Vec<&str>> {
+    let line = raw.trim();
+    if !line.starts_with('|') {
+        return None;
+    }
+    let cells: Vec<&str> = line
+        .trim_start_matches('|')
+        .trim_end_matches('|')
+        .split('|')
+        .map(str::trim)
+        .collect();
+    // Header row.
+    if cells.first() == Some(&"id") {
+        return None;
+    }
+    // Separator row (all-dash cells).
+    if cells
+        .iter()
+        .all(|c| !c.is_empty() && c.chars().all(|ch| ch == '-'))
+    {
+        return None;
+    }
+    Some(cells)
+}
+
+/// Human-readable label naming a violated row: `row N`, or `row N (T<n>)`
+/// when the id cell is non-empty.
+fn row_label(row: usize, id: &str) -> String {
+    if id.is_empty() {
+        format!("row {row}")
+    } else {
+        format!("row {row} ({id})")
+    }
+}
+
 /// Validate every data row of a TODO.md table. `spec_exists` resolves a
 /// spec-cell path (`specs/t<N>-<slug>.md`) to whether the file is on disk.
 /// Returns one human-readable problem per violation, each naming its row by
@@ -19,32 +58,12 @@ fn validate_todo_table(md: &str, spec_exists: impl Fn(&str) -> bool) -> Vec<Stri
     let mut problems = Vec::new();
     let mut seen_ids: HashSet<u64> = HashSet::new();
     for (idx, raw) in md.lines().enumerate() {
-        let line = raw.trim();
-        if !line.starts_with('|') {
-            continue;
-        }
-        let cells: Vec<&str> = line
-            .trim_start_matches('|')
-            .trim_end_matches('|')
-            .split('|')
-            .map(str::trim)
-            .collect();
-        // Header row.
-        if cells.first() == Some(&"id") {
-            continue;
-        }
-        // Separator row (all-dash cells).
-        if cells
-            .iter()
-            .all(|c| !c.is_empty() && c.chars().all(|ch| ch == '-'))
-        {
-            continue;
-        }
-        let row = idx + 1; // 1-based, names the row in TODO.md
-        let name = match cells.first().copied().unwrap_or("") {
-            "" => format!("row {row}"),
-            id => format!("row {row} ({id})"),
+        let cells = match table_cells(raw) {
+            Some(cells) => cells,
+            None => continue,
         };
+        let row = idx + 1; // 1-based, names the row in TODO.md
+        let name = row_label(row, cells.first().copied().unwrap_or(""));
         if cells.len() != 6 {
             problems.push(format!(
                 "{name}: expected exactly 6 cells, got {}",
@@ -284,4 +303,155 @@ fn metameta_doctrine_pins_no_library_targets_rule() {
          invoke `cargo test --lib` — binary-only crate, `--lib` exits 101 `no library targets \
          found` at the goal gate (use plain `cargo test` or `cargo test --bin chug`)"
     );
+}
+
+// ---------------------------------------------------------------------------
+// T150 — every `todo`-status TODO row's spec carries an `estimate:` line.
+//
+// META-META-SPEC's spec-quality bar requires every specs/t<N>-*.md to carry
+// an `estimate: ~N changed lines` line — the T110 filing-time ceiling
+// (~500 hard, ~400 should-split) reads it. The cycle-65 codex intake filed
+// 10 rows (T134–T143) whose specs carried NO estimate line, and 4 of those
+// 10 rows died 80/80 mid-work; doctrine existed, nothing enforced it at
+// filing time. A retroactive pin over the whole corpus is infeasible (121
+// of 141 spec files predate the rule), so the pin binds exactly where it
+// matters: specs named by `todo`-status rows — every row files as `todo`,
+// and done rows are exempt history. At an empty queue the repo-live leg is
+// vacuously green; the synthetic legs below keep the guard non-vacuous.
+
+/// Does one line carry the estimate shape? Leading `#`s and whitespace are
+/// stripped first (mirroring the T67 check-line reader, so col-0 and
+/// heading forms both count), the line must name `estimate:`, and the tail
+/// after that token must contain `~` immediately followed by an ASCII
+/// digit — `estimate: ~70 changed lines` qualifies; a bare `estimate:` or
+/// `estimate: pending` does not (a bare word is not an estimate). Byte
+/// scanning is UTF-8-safe: `~` and ASCII digits never occur inside a
+/// multi-byte character's encoding.
+fn line_carries_estimate(raw: &str) -> bool {
+    let line = raw.trim_start().trim_start_matches('#').trim_start();
+    let Some((_before, tail)) = line.split_once("estimate:") else {
+        return false;
+    };
+    tail.as_bytes()
+        .windows(2)
+        .any(|w| w[0] == b'~' && w[1].is_ascii_digit())
+}
+
+/// T150 — validate every `todo`-status row's spec for an estimate line.
+/// Pure over (table text, spec-reader closure): `spec_reader` resolves a
+/// spec-cell path to the file's text, `None` = missing/unreadable (flagged
+/// fail-closed; the T8 guard separately reports the missing file).
+/// Returns one human-readable problem per violating row, named exactly the
+/// way `validate_todo_table` names them. Only well-formed 6-cell rows are
+/// judged (the T8 guard owns structural drift) and only the `todo` status
+/// is checked (filing time; done/in-progress/blocked rows are exempt).
+fn validate_todo_estimate_lines(
+    md: &str,
+    spec_reader: impl Fn(&str) -> Option<String>,
+) -> Vec<String> {
+    let mut problems = Vec::new();
+    for (idx, raw) in md.lines().enumerate() {
+        let Some(cells) = table_cells(raw) else {
+            continue;
+        };
+        if cells.len() != 6 {
+            continue; // malformed row — the T8 guard reports the cell count
+        }
+        let [id, _title, spec, _pri, status, _notes]: [&str; 6] =
+            cells.try_into().expect("length checked above");
+        if status != "todo" {
+            continue; // history exempt: the pin binds rows still in the queue
+        }
+        match spec_reader(spec) {
+            None => problems.push(format!(
+                "{}: spec file '{spec}' unreadable — estimate line unverifiable",
+                row_label(idx + 1, id)
+            )),
+            Some(text) if !text.lines().any(line_carries_estimate) => problems.push(format!(
+                "{}: spec '{spec}' carries no `estimate: ~<number>` line — \
+                 META-META-SPEC's spec bar requires one at filing time (the T110 ceiling reads it)",
+                row_label(idx + 1, id)
+            )),
+            Some(_) => {}
+        }
+    }
+    problems
+}
+
+#[test]
+fn todo_rows_specs_carry_estimate_lines_on_disk() {
+    // T48: resolve the repo root at runtime — cargo runs test binaries with
+    // cwd = the package root (compile-time env! paths break under the T47
+    // shared cache).
+    let root = std::env::current_dir().expect("cargo sets the test cwd to the package root");
+    let md = std::fs::read_to_string(root.join("TODO.md")).expect("TODO.md readable");
+    let problems = validate_todo_estimate_lines(&md, |spec| {
+        std::fs::read_to_string(root.join(spec)).ok()
+    });
+    assert!(
+        problems.is_empty(),
+        "todo-status rows whose specs lack an `estimate: ~<number>` line:\n{}",
+        problems.join("\n")
+    );
+}
+
+#[test]
+fn todo_row_spec_without_estimate_line_is_flagged() {
+    let md = table(&row("T150", "specs/t150-estimate-less.md", "3", "todo"));
+    let problems = validate_todo_estimate_lines(&md, |_| {
+        Some("# T150 — a spec\n\n## Repo context\n\nNo estimate marker in this body.\n".into())
+    });
+    assert_eq!(problems.len(), 1, "{problems:?}");
+    assert!(
+        problems[0].contains("row 5 (T150)")
+            && problems[0].contains("specs/t150-estimate-less.md")
+            && problems[0].contains("estimate: ~<number>"),
+        "{problems:?}"
+    );
+}
+
+#[test]
+fn todo_row_spec_with_estimate_line_is_clean() {
+    let md = table(&row("T150", "specs/t150-estimated.md", "3", "todo"));
+    let problems = validate_todo_estimate_lines(&md, |_| {
+        Some("# T150 — a spec\n\nestimate: ~120 changed lines\n\n## Repo context\n".into())
+    });
+    assert!(problems.is_empty(), "{problems:?}");
+    // Heading form counts too (mirrors the T67 check-line reader).
+    let problems = validate_todo_estimate_lines(&md, |_| {
+        Some("## Heading\n\n## estimate: ~120 changed lines\n".into())
+    });
+    assert!(problems.is_empty(), "{problems:?}");
+}
+
+#[test]
+fn done_row_spec_without_estimate_line_is_not_flagged() {
+    // History exempt: done rows predate the rule (121/141 legacy specs).
+    let md = table(&row("T8", "specs/t8-todo-spec-guard.md", "2", "done"));
+    let problems = validate_todo_estimate_lines(&md, |_| Some("no estimate in this one\n".into()));
+    assert!(problems.is_empty(), "{problems:?}");
+}
+
+#[test]
+fn estimate_line_without_a_number_is_flagged() {
+    let md = table(&row("T150", "specs/t150-bare-estimate.md", "3", "todo"));
+    let problems = validate_todo_estimate_lines(&md, |_| {
+        Some("estimate: pending\n\nestimate:\n\nthe estimate: is high ~ but no digits follow\n".into())
+    });
+    assert_eq!(problems.len(), 1, "{problems:?}");
+    assert!(
+        problems[0].contains("row 5 (T150)")
+            && problems[0].contains("specs/t150-bare-estimate.md"),
+        "{problems:?}"
+    );
+}
+
+#[test]
+fn unreadable_todo_spec_is_flagged_fail_closed() {
+    // A missing/unreadable spec cannot be verified — flagged fail-closed
+    // (the T8 guard separately reports the missing file itself).
+    let md = table(&row("T150", "specs/t150-gone.md", "3", "todo"));
+    let problems = validate_todo_estimate_lines(&md, |_| None);
+    assert_eq!(problems.len(), 1, "{problems:?}");
+    assert!(problems[0].contains("unreadable"), "{problems:?}");
 }
