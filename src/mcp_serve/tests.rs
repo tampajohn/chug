@@ -712,10 +712,11 @@
             .as_array()
             .expect("tools array")
             .clone();
-        assert_eq!(tools.len(), 3, "two read-only tools + the write leg: {tools:?}");
+        assert_eq!(tools.len(), 4, "two read-only tools + two write legs: {tools:?}");
         assert_eq!(tools[0]["name"], "chug_status");
         assert_eq!(tools[1]["name"], "chug_collect");
         assert_eq!(tools[2]["name"], "chug_launch");
+        assert_eq!(tools[3]["name"], "chug_cancel");
         let schema = &tools[2]["inputSchema"];
         // The required list is EXACT: cwd, spec, goal, model.
         assert_eq!(schema["required"], json!(["cwd", "spec", "goal", "model"]));
@@ -1074,6 +1075,506 @@
         std::thread::sleep(Duration::from_millis(50));
         // SAFETY: serialized by the delegate env lock.
         unsafe { std::env::remove_var("CHUG_DELEGATE_BIN") };
+    }
+
+    // ---------- chug_cancel (T153) ----------
+
+    /// Route a `chug_cancel` tools/call through the FULL dispatch with the
+    /// given flag, returning (text, isError) — the launch_call mirror. A
+    /// routed call must always be a tool RESULT (a JSON-RPC error would
+    /// mean the tool was not routable at all).
+    fn cancel_call(allow_launch: bool, arguments: &Value) -> (String, Option<bool>) {
+        let req = json!({
+            "jsonrpc": "2.0", "id": 153, "method": "tools/call",
+            "params": {"name": "chug_cancel", "arguments": arguments}
+        });
+        let line = handle_message_with(&req.to_string(), allow_launch).expect("responds");
+        let (_, id, _, error) = parts(&line);
+        assert_eq!(id, Some(json!(153)), "id echoed: {line}");
+        assert!(
+            error.is_none(),
+            "a routed cancel call is a tool result, not a JSON-RPC error: {line}"
+        );
+        tool_result(&line)
+    }
+
+    /// The success payload's `signaled:` and `waited_ms:` fields.
+    #[cfg(unix)]
+    fn cancel_payload(text: &str) -> (String, u64) {
+        let mut signaled = None;
+        let mut waited_ms = None;
+        for line in text.lines() {
+            if let Some(v) = line.strip_prefix("signaled: ") {
+                signaled = Some(v.to_string());
+            }
+            if let Some(v) = line.strip_prefix("waited_ms: ") {
+                waited_ms = v.parse().ok();
+            }
+        }
+        (
+            signaled.expect("signaled field in the cancel payload"),
+            waited_ms.expect("waited_ms field in the cancel payload"),
+        )
+    }
+
+    /// Spawn a fixture the test OWNS: `sh -c SCRIPT argv…` with
+    /// `process_group(0)` — the same detached seam the delegate launch uses
+    /// (`process_group(0)` is the pgid == pid fingerprint) — with the ps
+    /// command line shaped by `argv`. While-loop scripts keep it alive on
+    /// an internal `sleep`, so it responds to a group TERM within ~one
+    /// sleep tick.
+    #[cfg(unix)]
+    fn spawn_group_leader_fixture(script: &str, argv: &[&str]) -> std::process::Child {
+        use std::os::unix::process::CommandExt;
+        std::process::Command::new("sh")
+            .arg("-c")
+            .arg(script)
+            .args(argv)
+            .process_group(0)
+            .spawn()
+            .expect("spawn fixture")
+    }
+
+    /// Kills + reaps the fixture on drop (success or assertion failure) —
+    /// a leaked while-loop fixture would outlive the test binary (the T152
+    /// orphan family), so cleanup is RAII, never a tail call. `group_kill`
+    /// is TRUE only for fixtures the test made its own group leader via
+    /// `process_group(0)`; a fixture that joined THIS test's process group
+    /// must never be group-killed (that would signal the test binary).
+    #[cfg(unix)]
+    struct FixtureGuard {
+        pid: u32,
+        group_kill: bool,
+        child: std::process::Child,
+    }
+
+    #[cfg(unix)]
+    impl Drop for FixtureGuard {
+        fn drop(&mut self) {
+            if self.group_kill {
+                crate::tools::kill_pid_group(self.pid);
+            } else {
+                // SAFETY: SIGKILL to one owned pid (never a group — the
+                // group is the test binary's own).
+                unsafe { libc::kill(self.pid as i32, libc::SIGKILL) };
+            }
+            // Already-reaped (the cancel poll reaps our own children) is
+            // fine — the error is deliberately ignored.
+            let _ = self.child.wait();
+        }
+    }
+
+    /// Bounded poll for the fixture's trap record (a TERM that landed is
+    /// recorded by the fixture BEFORE it exits, and the cancel call only
+    /// returns after the group emptied — but the poll stays bounded).
+    #[cfg(unix)]
+    fn wait_for_record(path: &Path) -> String {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            if let Ok(text) = fs::read_to_string(path)
+                && !text.trim().is_empty()
+            {
+                return text;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "fixture never wrote {}",
+                path.display()
+            );
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+    }
+
+    /// Bounded poll until the fixture's identity has SETTLED. Two real
+    /// early-life races make an immediate cancel measure the race, not the
+    /// tool: a young macOS process briefly answers `ps` with the `(comm)`
+    /// fallback (proc args not yet readable — production correctly fails
+    /// closed on that), and a script's `trap` arms a beat after exec. Real
+    /// drivers cancel settled children; the tests wait for the same — via
+    /// a fixture-side ready file (proof the script is past its trap) or the
+    /// readable ps command line.
+    #[cfg(unix)]
+    fn wait_for_settled_fixture(pid: u32, ready_file: Option<&Path>) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            let settled = match ready_file {
+                Some(path) => path.is_file(),
+                None => ps_command_line(pid as u64)
+                    .map(|command| command.contains("sleep"))
+                    .unwrap_or(false),
+            };
+            if settled {
+                return;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "fixture {pid} never settled (ready file: {ready_file:?})"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+    }
+
+    #[test]
+    fn chug_cancel_flagless_call_is_the_unknown_tool_error() {
+        // Without the flag the second write leg DOES NOT EXIST: the
+        // unknown-tool error, the same -32602 a never-existing tool gets.
+        let line = handle_message(
+            r#"{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"chug_cancel","arguments":{}}}"#,
+        )
+        .expect("responds");
+        let (_, id, _, error) = parts(&line);
+        assert_eq!(id, Some(json!(5)), "{line}");
+        let error = error.expect("error object");
+        assert_eq!(error["code"], -32602, "{line}");
+        let message = error["message"].as_str().unwrap();
+        assert!(message.contains("chug_cancel"), "{line}");
+        assert!(message.contains("unknown tool"), "{line}");
+        // And the flagless tools/list does not advertise it — the read-only
+        // tool set is byte-identical to pre-T129.
+        let list = handle_message(r#"{"jsonrpc":"2.0","id":6,"method":"tools/list"}"#)
+            .expect("responds");
+        let (_, _, result, _) = parts(&list);
+        let tools = result.expect("result")["tools"]
+            .as_array()
+            .expect("tools array")
+            .clone();
+        let names: Vec<&str> = tools.iter().filter_map(|t| t["name"].as_str()).collect();
+        assert_eq!(names, ["chug_status", "chug_collect"], "{list}");
+    }
+
+    #[test]
+    fn chug_cancel_flag_on_advertised_with_the_exact_schema() {
+        let line = handle_message_with(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#, true)
+            .expect("responds");
+        let (_, _, result, _) = parts(&line);
+        let tools = result.expect("result")["tools"]
+            .as_array()
+            .expect("tools array")
+            .clone();
+        assert_eq!(tools.len(), 4, "two read-only tools + two write legs: {tools:?}");
+        assert_eq!(tools[3]["name"], "chug_cancel");
+        let schema = &tools[3]["inputSchema"];
+        // The required list is EXACT: cwd + pid.
+        assert_eq!(schema["required"], json!(["cwd", "pid"]));
+        let props = schema["properties"].as_object().expect("properties object");
+        assert_eq!(props.len(), 2, "cwd + pid: {props:?}");
+        assert_eq!(props["cwd"]["type"], "string", "{props:?}");
+        assert_eq!(props["pid"]["type"], "integer", "{props:?}");
+        assert_eq!(props["pid"]["minimum"], 1, "a positive pid: {props:?}");
+    }
+
+    #[test]
+    fn chug_cancel_input_contract_legs_are_is_error_results() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join(".chug")).unwrap();
+        let cwd = tmp.path().display().to_string();
+        // Missing cwd; missing pid; non-integer pid; non-positive pid —
+        // every leg names what was RECEIVED (the T129 honesty pattern).
+        for (args, needle) in [
+            (json!({}), "missing required argument: cwd"),
+            (json!({ "cwd": cwd.clone() }), "missing required argument: pid"),
+            (
+                json!({ "cwd": cwd.clone(), "pid": "abc" }),
+                "`pid` must be a positive integer, got \"abc\"",
+            ),
+            (
+                json!({ "cwd": cwd.clone(), "pid": 7.5 }),
+                "`pid` must be a positive integer, got 7.5",
+            ),
+            (
+                json!({ "cwd": cwd.clone(), "pid": -3 }),
+                "`pid` must be a positive integer, got -3",
+            ),
+            (
+                json!({ "cwd": cwd.clone(), "pid": 0 }),
+                "`pid` must be a positive integer, got 0",
+            ),
+        ] {
+            let (text, is_error) = cancel_call(true, &args);
+            assert_eq!(is_error, Some(true), "{args}: {text}");
+            assert!(text.contains(needle), "{args}: expected {needle:?} in {text}");
+            assert!(text.starts_with("chug_cancel:"), "tool-named error: {text}");
+        }
+        // A relative cwd is refused by the SAME shared validator, naming
+        // the received string — and nothing is probed or signalled.
+        let (text, is_error) = cancel_call(true, &json!({ "cwd": "relative/cwd", "pid": 1 }));
+        assert_eq!(is_error, Some(true), "{text}");
+        assert!(text.contains("\"relative/cwd\""), "{text}");
+        assert!(text.contains("must be an absolute directory"), "{text}");
+    }
+
+    /// Leg (i) of the ownership matrix: a LIVE group-leader fixture whose
+    /// argv names `chug run` (spawned via the same detached seam, argv
+    /// shaped by the test) → SIGTERM lands, the fixture's trap records it,
+    /// the payload is `signaled: term`, and the fixture is gone afterwards.
+    #[cfg(unix)]
+    #[test]
+    fn chug_cancel_live_group_leader_chug_run_fixture_gets_sigterm_payload_term() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join(".chug")).unwrap();
+        let record = tmp.path().join("fixture-record.txt");
+        let ready = tmp.path().join("fixture-ready.txt");
+        let script = format!(
+            "trap 'echo term > {}; exit 0' TERM; : > {}; while :; do sleep 0.2; done",
+            record.display(),
+            ready.display()
+        );
+        let child = spawn_group_leader_fixture(
+            &script,
+            &[
+                "chug",
+                "run",
+                "--spec",
+                "/tmp/t153-fake-spec.md",
+                "--goal",
+                "g",
+                "--model",
+                "m",
+            ],
+        );
+        let pid = child.id();
+        let _guard = FixtureGuard {
+            pid,
+            group_kill: true,
+            child,
+        };
+        let pid = pid as u64;
+        // SAFETY: kill(pid, 0) — a pure liveness probe.
+        assert_eq!(unsafe { libc::kill(pid as i32, 0) }, 0, "fixture up");
+        // Wait for a SETTLED fixture (trap armed, ps readable) — an
+        // immediate cancel races the fixture's early life.
+        wait_for_settled_fixture(pid as u32, Some(&ready));
+
+        let (text, is_error) = cancel_call(
+            true,
+            &json!({ "cwd": tmp.path().display().to_string(), "pid": pid }),
+        );
+        assert_eq!(is_error, Some(false), "{text}");
+        assert_eq!(
+            text.lines().next(),
+            Some(format!("chug_cancel: pid {pid}").as_str()),
+            "the payload names the cancelled pid: {text}"
+        );
+        let (signaled, waited_ms) = cancel_payload(&text);
+        assert_eq!(signaled, "term", "exited within the grace: {text}");
+        assert!(waited_ms < 5_000, "exited within the grace: {waited_ms} ms");
+        // SIGTERM landed: the fixture's trap recorded it before exiting.
+        let recorded = wait_for_record(&record);
+        assert_eq!(recorded.trim(), "term", "the trap saw the TERM: {recorded}");
+        // And the fixture is GONE (the poll's reap leg cleared the zombie).
+        assert_ne!(
+            unsafe { libc::kill(pid as i32, 0) },
+            0,
+            "the fixture did not survive the cancel"
+        );
+    }
+
+    /// Leg (ii): a live fixture that is NOT its own process-group leader
+    /// (spawned WITHOUT `process_group(0)` — it joined this test's group,
+    /// the non-delegate shape) → `isError` naming the pgid leg, and the
+    /// fixture is provably UNSIGNALLED (still alive after the call).
+    #[cfg(unix)]
+    #[test]
+    fn chug_cancel_non_group_leader_fixture_is_refused_at_the_pgid_leg_unsignalled() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join(".chug")).unwrap();
+        // NOT process_group(0): pgid is the TEST binary's, not the pid.
+        let child = std::process::Command::new("sh")
+            .arg("-c")
+            .arg("while :; do sleep 0.5; done")
+            .spawn()
+            .expect("spawn non-group-leader fixture");
+        let pid = child.id();
+        let _guard = FixtureGuard {
+            pid,
+            group_kill: false,
+            child,
+        };
+        let pid = pid as u64;
+        assert_eq!(unsafe { libc::kill(pid as i32, 0) }, 0, "fixture up");
+
+        let (text, is_error) = cancel_call(
+            true,
+            &json!({ "cwd": tmp.path().display().to_string(), "pid": pid }),
+        );
+        assert_eq!(is_error, Some(true), "{text}");
+        assert!(text.starts_with("chug_cancel:"), "tool-named error: {text}");
+        assert!(text.contains("not its own process-group leader"), "{text}");
+        assert!(text.contains("nothing signalled"), "{text}");
+        // PROOF nothing was signalled: the fixture is STILL ALIVE after
+        // the call.
+        assert_eq!(
+            unsafe { libc::kill(pid as i32, 0) },
+            0,
+            "a pgid-leg refusal must not signal the fixture"
+        );
+    }
+
+    /// Leg (iii): a dead pid → `isError` naming the ESRCH class ("no such
+    /// process"), not a crash. The pid is 2_000_000_000 — above every
+    /// kernel pid ceiling (macOS caps at 99999, Linux at 2^22) yet within
+    /// i32, so it is ESRCH BY CONSTRUCTION: no process can ever hold it,
+    /// and no parallel test's spawn can recycle it into a flake.
+    #[cfg(unix)]
+    #[test]
+    fn chug_cancel_dead_pid_names_no_such_process() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join(".chug")).unwrap();
+        let dead_pid: u64 = 2_000_000_000;
+        assert_ne!(
+            unsafe { libc::kill(dead_pid as i32, 0) },
+            0,
+            "the over-ceiling pid is dead by construction"
+        );
+        let (text, is_error) = cancel_call(
+            true,
+            &json!({ "cwd": tmp.path().display().to_string(), "pid": dead_pid }),
+        );
+        assert_eq!(is_error, Some(true), "{text}");
+        assert!(text.starts_with("chug_cancel:"), "tool-named error: {text}");
+        assert!(text.contains("not alive (no such process)"), "{text}");
+        assert!(text.contains("nothing signalled"), "{text}");
+    }
+
+    /// Leg (iv): a LIVE group-leader fixture whose argv does NOT name a
+    /// `chug run` invocation (`sleep`) → `isError` naming the command-line
+    /// leg, and the fixture is provably UNSIGNALLED.
+    #[cfg(unix)]
+    #[test]
+    fn chug_cancel_group_leader_non_chug_run_argv_is_refused_at_the_command_line_leg() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join(".chug")).unwrap();
+        let child = {
+            use std::os::unix::process::CommandExt;
+            std::process::Command::new("sleep")
+                .arg("30")
+                .process_group(0)
+                .spawn()
+                .expect("spawn sleep fixture")
+        };
+        let pid = child.id();
+        let _guard = FixtureGuard {
+            pid,
+            group_kill: true,
+            child,
+        };
+        let pid = pid as u64;
+        assert_eq!(unsafe { libc::kill(pid as i32, 0) }, 0, "fixture up");
+        // Wait for the readable command line (settled identity).
+        wait_for_settled_fixture(pid as u32, None);
+
+        let (text, is_error) = cancel_call(
+            true,
+            &json!({ "cwd": tmp.path().display().to_string(), "pid": pid }),
+        );
+        assert_eq!(is_error, Some(true), "{text}");
+        assert!(text.starts_with("chug_cancel:"), "tool-named error: {text}");
+        assert!(
+            text.contains("command line is not a `chug run` invocation"),
+            "{text}"
+        );
+        assert!(text.contains("nothing signalled"), "{text}");
+        // Unsignalled: the fixture is STILL ALIVE after the call.
+        assert_eq!(
+            unsafe { libc::kill(pid as i32, 0) },
+            0,
+            "a command-line-leg refusal must not signal the fixture"
+        );
+    }
+
+    /// Leg (v): the escalation — a fixture that IGNORES SIGTERM (`trap ''
+    /// TERM`, inherited by its children) survives the whole bounded grace,
+    /// so the group is SIGKILLed and the payload is `signaled: kill`.
+    /// Total leg wall < ~8 s (the 5 s grace plus spawn/parse slack); the
+    /// fixture is reaped by the test's guard.
+    #[cfg(unix)]
+    #[test]
+    fn chug_cancel_term_ignoring_fixture_escalates_to_sigkill_payload_kill() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join(".chug")).unwrap();
+        let ready = tmp.path().join("fixture-ready.txt");
+        let script = format!(
+            "trap '' TERM; : > {}; while :; do sleep 0.2; done",
+            ready.display()
+        );
+        let child = spawn_group_leader_fixture(
+            &script,
+            &[
+                "chug",
+                "run",
+                "--spec",
+                "/tmp/t153-fake-spec.md",
+                "--goal",
+                "g",
+                "--model",
+                "m",
+            ],
+        );
+        let pid = child.id();
+        let guard = FixtureGuard {
+            pid,
+            group_kill: true,
+            child,
+        };
+        let pid = pid as u64;
+        assert_eq!(unsafe { libc::kill(pid as i32, 0) }, 0, "fixture up");
+        // Wait for a SETTLED fixture — the trap must be ARMED before the
+        // TERM arrives, or the fixture dies at the default disposition and
+        // the test measures the race, not the escalation.
+        wait_for_settled_fixture(pid as u32, Some(&ready));
+
+        let started = std::time::Instant::now();
+        let (text, is_error) = cancel_call(
+            true,
+            &json!({ "cwd": tmp.path().display().to_string(), "pid": pid }),
+        );
+        let wall = started.elapsed();
+        assert_eq!(is_error, Some(false), "{text}");
+        let (signaled, waited_ms) = cancel_payload(&text);
+        assert_eq!(signaled, "kill", "the escalation fired: {text}");
+        assert!(
+            (4_500..=6_500).contains(&waited_ms),
+            "the full ~5 s grace elapsed: {waited_ms} ms"
+        );
+        assert!(
+            wall < std::time::Duration::from_secs(8),
+            "the leg stays under the ~8 s wall: {wall:?}"
+        );
+        // The SIGKILLed fixture is a zombie until the test reaps it — drop
+        // the guard (kill is a no-op on the dead group; wait reaps), then
+        // assert the pid is fully gone.
+        drop(guard);
+        assert_ne!(
+            unsafe { libc::kill(pid as i32, 0) },
+            0,
+            "the SIGKILLed fixture is fully reaped"
+        );
+    }
+
+    /// The pure needle: the adjacent `run --spec` token pair matches every
+    /// `chug run` spelling (--spec is REQUIRED) and nothing else.
+    #[test]
+    fn chug_cancel_command_line_needle_matches_only_chug_run_invocations() {
+        for (command, expected) in [
+            // The delegate launch shape.
+            ("/Users/x/target/debug/chug run --spec /tmp/s.md --goal g --model m", true),
+            // A human's equals-form spelling.
+            ("chug run --spec=/tmp/s.md --goal g", true),
+            // A sh -c wrapper shape.
+            ("/bin/sh -c 'exec chug run' chug run --spec /tmp/s.md", true),
+            // A binary whose PATH merely contains "run".
+            ("/opt/something/grunt --special run", false),
+            ("/bin/sleep 30", false),
+            ("vim /notes/run --spec-notes.txt", false),
+            ("chug status --spec /tmp/s.md", false),
+            ("chug run --goal g", false),
+        ] {
+            assert_eq!(
+                command_names_chug_run(command),
+                expected,
+                "needle over {command:?}"
+            );
+        }
     }
 
     // ---------- structural stdout purity ----------
