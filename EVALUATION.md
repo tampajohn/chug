@@ -400,7 +400,7 @@ Post-merge nextest 1044/1044 (target-shared-main).
 ### Cycle 68 (2026-09-29) — routine glm freshness-skip (queue non-empty, eval fresh) — codex-intake pri-2 queue (T137 merge pickup + T138 resume + T139)
 
 **T137 — loopd launches stale binary after a failed build (pri 2, landed
-3c0e403+8a823ae rebased ff from cbfa952+f827659).** The codex review's
+08f0a39+46ec1a9 rebased ff; orig 3c0e403+f827659, cbfa952+f827659 pre-cycle-68-rebase).** The codex review's
 §1 HIGH supervisor item: loopd.sh never checked `cargo build`'s status,
 so a broken merge relaunched the previous release binary all cycle. The
 round-1 validator FAILED it on the real class the fix created: with
