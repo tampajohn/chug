@@ -286,6 +286,49 @@ filed** — the second consecutive clean audit after T127's catch.
 
 ### Cycle 67 (2026-09-28/29) — routine glm freshness-skip (queue non-empty, eval fresh) — codex-review pri-2 rows
 
+### Cycle 67 (2026-09-28/29) — routine (freshness-skip) — codex-intake pri-2 queue
+
+**T136 — crash mid-tool-batch leaves an unresumable transcript (pri 2,
+landed bf672b6, d67d434 rebased ff).** The review's second §1 HIGH
+crash-safety item: tool results were persisted only after a whole tool
+batch finished, so a kill mid-batch left the transcript's last assistant
+message holding unanswered `tool_use` blocks the endpoint rejects on
+resume — and earlier tools in the batch may already have changed files
+with no persisted record. Fix (impl d67d434, glm, 98/80 iters across
+two segments): `resume_messages` — the single choke point shared by run
+and chat resume — calls new `repair_interrupted_tools`, which appends
+one user message with an is_error "[interrupted] … effects unknown"
+`tool_result` per unanswered id, in memory AND on disk, idempotently
+(the exact shape the loop writes after an intact batch, so the endpoint
+pairing rule is satisfied and the model is routed at re-verifying real
+state instead of trusting a result that never landed). Swept legs:
+`transcript::load_with_torn` drops a torn trailing JSONL line (crash
+mid-append) and physically truncates it so later appends can't merge
+into the torn bytes (mid-file corruption still errors loudly);
+`transcript::rewrite` (the transcript.rs:77 truncating-rewrite destroy
+leg) and the same-shape `todos::save` now go through new
+`fsatomic::write_atomic` (same-dir pid-suffixed temp + fsync + atomic
+rename, temp cleaned on failure). Validation: 6 RED-proven tests
+pre-fix incl. a deterministic RLIMIT_FSIZE destroy-leg test and a
+recorded-transport test simulating the endpoint's tool_use/tool_result
+pairing rule over resumed request bodies. kimi REQUIRED PASS round 1
+(d1790643172-7): 6/6 mutants killed with zero survivors, the 6 RED legs
+independently reproduced at base, gates re-run 1056/1056 + clippy -D
+warnings clean, and the load-bearing invariant verified (unanswered
+tool_use only ever sits at the transcript tail, so append-at-end repair
+IS the immediately-following user message; `transcript::load` demoted
+to cfg(test) so no production bypass compiles). Non-blocking findings
+carried for the next eval: `update_ledger` (tools.rs:749) still does a
+wholesale truncating write of LEDGER.md (same shape, bounded impact);
+append-at-end repair cannot rescue pre-fix-damaged chat transcripts
+where user messages piled up after the unanswered assistant;
+`write_atomic` doesn't fsync the parent directory after rename and
+never reaps crash-orphaned `*.tmp` siblings. Recovery note: the impl
+child died 80/80 mid-work (iteration budget) and the ONE T63 resume
+(d1790641323-5) finished in 18 more iterations — the resume recipe's
+third consecutive success (T134 fix-up, T135 impl error-death, T136
+impl budget-death). Post-merge nextest 1057/1057.
+
 **T135 — driver.lock acquisition race (pri 2, landed 611916e ff-merge).**
 The cycle's first pri-2 codex-review item: acquire's read-absent →
 write → verify sequence was not atomic, so two simultaneous starters
