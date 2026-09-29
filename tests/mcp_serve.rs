@@ -784,6 +784,16 @@ fn write_cancel_spec_and_stub(scratch: &std::path::Path) -> (std::path::PathBuf,
 }
 
 /// Bounded poll (~5 s, the T148 cadence) until `probe(pid)` turns true.
+///
+/// T153 class-sweep note: this is a kill(2)-rc interpretation site —
+/// `kill(pid, 0) == 0` reads "alive", so ANY non-zero rc (EPERM included)
+/// reads "dead", conflating EPERM with ESRCH. Unchanged deliberately: the
+/// probe's targets are children THIS test process spawned (same uid, so
+/// EPERM is unreachable for a live one), and on the one path where the
+/// conflation could bite — a same-uid zombie — the rc is 0 (a zombie
+/// answers the per-pid probe), which the want_alive=false spin correctly
+/// waits out until the producer reaps. See src/mcp_serve.rs `group_gone`
+/// for the fixed product-side shape (ESRCH-only).
 #[cfg(unix)]
 fn poll_pid_state(pid: u32, want_alive: bool, what: &str) {
     let deadline = Instant::now() + LAUNCH_RECORD_DEADLINE;

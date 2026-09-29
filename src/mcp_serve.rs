@@ -949,12 +949,26 @@ fn cancel_unix(pid: u64) -> (String, bool) {
     )
 }
 
-/// Has the process group emptied? The zombie caveat first: an exited child
-/// of THIS server is reaped by nobody else — a zombie group leader keeps a
-/// bare `kill(-pgid, 0)` green forever — so each tick offers the leader a
-/// non-blocking wait (the T28 reap, best-effort: a foreign pid just yields
-/// ECHILD) and only then probes the group. Any live member keeps the group
-/// alive; ESRCH means it emptied.
+/// Has the process group emptied? The T153 fix-up predicate: ONLY a probe
+/// that FAILED with ESRCH means the group emptied — `rc == 0` (a live,
+/// signallable member) and every other rc/errno (EPERM, EINVAL, …) mean
+/// NOT gone: fail-safe, keep waiting inside the bounded grace (the SIGKILL
+/// escalation remains the backstop for a TERM-ignoring fixture).
+///
+/// The zombie caveat, with the empirical host behavior the T153 forensics
+/// pinned: the pre-fix comment claimed "a zombie group leader keeps a bare
+/// `kill(-pgid, 0)` green forever" — FALSE on macOS. A group whose SOLE
+/// member is THIS server's own unreaped zombie child answers
+/// `kill(-pgid, 0)` with **-1/EPERM**, while per-pid `kill(zombie_pid, 0)`
+/// on that same zombie answers 0 — the group and pid probes DISAGREE, and
+/// the pre-fix shape (`rc != 0` → gone) misread the EPERM as "the group
+/// emptied", returning `signaled: term` with the leader an unreaped
+/// zombie (the wire happy path's dead-poll timeout, solo-flaky 12/30). So
+/// each tick still offers the leader a non-blocking wait FIRST (the T28
+/// reap, best-effort: a foreign pid just yields ECHILD) — a zombie child
+/// is immediately reapable, so the NEXT tick's reap clears it and the
+/// probe turns ESRCH: the loop converges deterministically instead of
+/// returning early on a zombie.
 #[cfg(unix)]
 fn group_gone(pid: i32, pgid: i32) -> bool {
     let mut status: libc::c_int = 0;
@@ -964,7 +978,27 @@ fn group_gone(pid: i32, pgid: i32) -> bool {
     unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
     // SAFETY: kill(2) with signal 0 on a negated pgid — an existence probe
     // that delivers no signal.
-    unsafe { libc::kill(-pgid, 0) != 0 }
+    let krc = unsafe { libc::kill(-pgid, 0) };
+    // The errno is only meaningful when the probe FAILED (rc == -1) —
+    // reading it beside a successful rc is the stale-errno trap the T153
+    // forensics flagged (a stale errno text printed beside a `killleader=0`
+    // rc sent the first read of the evidence down the wrong path).
+    let errno = if krc == -1 {
+        std::io::Error::last_os_error().raw_os_error()
+    } else {
+        None
+    };
+    group_gone_rc(krc, errno)
+}
+
+/// The probe-predicate seam (T153 fix-up, pure so the predicate-table test
+/// can pin it): ONLY a failed probe whose errno is ESRCH means the group
+/// emptied. `rc == 0` — a live, signallable member — and every other
+/// rc/errno (EPERM: macOS's answer for our own unreaped zombie sole
+/// member; EINVAL; an errno-less failure) mean NOT gone.
+#[cfg(unix)]
+fn group_gone_rc(rc: i32, errno: Option<i32>) -> bool {
+    rc == -1 && errno == Some(libc::ESRCH)
 }
 
 /// The pid's current command line, via `ps -o command= -p <pid>` — the
