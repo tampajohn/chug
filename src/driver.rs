@@ -242,7 +242,16 @@ pub(crate) struct LoopCtx<'a> {
 
 enum VerifyOutcome {
     Accepted,
+    /// The check command ran and failed (exit != 0 or timeout): the output
+    /// rides the T9 rejection message.
     Failed(String),
+    /// T139: the check command was BLOCKED before execution by the same
+    /// pre-execution gates an ordinary bash call passes (permissions deny,
+    /// PreToolUse veto, risk gate). Fail-closed: a blocked check never runs,
+    /// and a blocked check never verifies anything — the message (already
+    /// fully rendered) tells the model the check was policy-blocked, not
+    /// that it failed.
+    Blocked(String),
     NoCheck,
 }
 
@@ -1304,7 +1313,14 @@ pub(crate) fn drive_loop(
                 Mode::Plan => None,
                 Mode::Chat => knobs.check_cmd.clone(),
             };
-            match verify(ctx.cwd, check_cmd.as_deref(), sink)? {
+            match verify(
+                ctx,
+                check_cmd.as_deref(),
+                &permissions,
+                &mut hooks,
+                gate,
+                sink,
+            )? {
                 VerifyOutcome::NoCheck | VerifyOutcome::Accepted => {
                     let user_msg = Message::user(user_blocks);
                     transcript::append(ctx.cwd, &user_msg)?;
@@ -1342,6 +1358,23 @@ pub(crate) fn drive_loop(
                         );
                     }
                     user_blocks.push(ContentBlock::text_block(goal_rejected_message(&output)));
+                }
+                // T139: a policy-blocked check rejected the goal too — same
+                // flow (event + user message, loop continues), but the
+                // telemetry says "blocked", not "failed": the command never
+                // ran.
+                VerifyOutcome::Blocked(message) => {
+                    sink.emit(Event::GoalRejected {
+                        reason: "check command blocked by policy".to_string(),
+                    });
+                    if let Some(trace) = ctx.trace {
+                        ctx.obs.event(
+                            trace,
+                            "goal_rejected",
+                            json!({ "reason": "check command blocked by policy" }),
+                        );
+                    }
+                    user_blocks.push(ContentBlock::text_block(message));
                 }
             }
         }
@@ -1499,6 +1532,22 @@ fn budget_low_notice(
     }
 }
 
+/// The rejection text for a POLICY-BLOCKED check (T139): the command never
+/// ran, so the model must not read this as a command failure to fix — the
+/// check shares the bash tool's gates, and the block is an operator policy
+/// decision the model cannot route around.
+fn goal_check_blocked_message(block: &str) -> String {
+    format!(
+        "goal_complete rejected: the spec check command was BLOCKED by policy \
+         (the same gating as your bash tool) and never executed, so the goal is \
+         not verified.\n\n{block}\n\nThe spec is re-read every iteration, so its \
+         `check:` line is treated as model-influenced input and never bypasses \
+         the bash gates. A blocked check cannot be routed around: update the \
+         ledger to reflect that verification is blocked and leave the goal \
+         unclaimed until the operator adjusts the policy."
+    )
+}
+
 /// The rejection text for a failed goal check (T9). Beyond the failure
 /// output, the model is told the check shares the bash tool's environment —
 /// the same `sh -c` wrapper in the run cwd with the same PATH prepend — and
@@ -1524,9 +1573,24 @@ fn goal_rejected_message(output: &str) -> String {
 /// Verification on `goal_complete`: run the configured check command, if any.
 /// Autonomous mode parses the command from the spec's `check:` line; chat mode
 /// uses the `/check` setting. No configured command means unverified accept.
+///
+/// T139: the check command is model-influenceable text — the spec is re-read
+/// every iteration, so a model that may edit files can make any string the
+/// verification command (reviews/CODEX-REVIEW-20260928 §2 HIGH). It therefore
+/// passes the SAME pre-execution gates as an ordinary bash tool call, in the
+/// dispatch chain's order: T90 permissions deny → T83 PreToolUse veto → risk
+/// gate. A blocked check is fail-closed on both axes: the command never
+/// executes outside the gates, and a blocked check can never verify a goal
+/// ([`VerifyOutcome::Blocked`]). PostToolUse advisories intentionally do not
+/// fire here: T83 ties them to a dispatched tool call's execution, the check
+/// has no tool_result block to ride, and firing them would double-fire hook
+/// commands for one logical execution.
 fn verify(
-    cwd: &Path,
+    ctx: &LoopCtx,
     check_cmd: Option<&str>,
+    permissions: &permissions::Permissions,
+    hooks: &mut hooks::Hooks,
+    gate: &mut Option<RiskGate>,
     sink: &mut dyn EventSink,
 ) -> anyhow::Result<VerifyOutcome> {
     let Some(command) = check_cmd else {
@@ -1535,7 +1599,54 @@ fn verify(
     sink.emit(Event::Verifying {
         cmd: command.to_string(),
     });
-    let outcome = tools::run_shell(cwd, command, Duration::from_secs(tools::CHECK_TIMEOUT_SECS))?;
+    // Same input shape the bash tool dispatches with, so deny-rule command
+    // globs and hook payloads judge the check command byte-for-byte like a
+    // bash call.
+    let input = json!({ "command": command });
+    // T90: a denied check fires the deny event and never executes.
+    if !permissions.is_empty()
+        && let Some(deny_message) = permissions.check("bash", &input, sink)
+    {
+        return Ok(VerifyOutcome::Blocked(goal_check_blocked_message(&deny_message)));
+    }
+    // T83 PreToolUse veto: hook-side gating applies to the check too — a
+    // hook that vetoes bash vetoes any bash-shaped execution.
+    if !hooks.is_empty()
+        && ctx.mode != Mode::Plan
+        && let Err(veto_message) = hooks.pre_tool_use(ctx.cwd, "bash", &input, sink)
+    {
+        return Ok(VerifyOutcome::Blocked(goal_check_blocked_message(&veto_message)));
+    }
+    // Risk gate: the check command is judged exactly like a bash command
+    // (fail-open on judge failure, operator `allow destructive` override
+    // honored — the same semantics the bash dispatch leg implements).
+    if let Some(gate) = gate.as_mut()
+        && !gate.is_disabled()
+    {
+        let command_preview: String = command.chars().take(200).collect();
+        match gate.check(command, sink) {
+            GateDecision::Blocked(msg) => {
+                if let Some(trace) = ctx.trace {
+                    ctx.obs.event(
+                        trace,
+                        "risk_gate",
+                        json!({ "verdict": "blocked", "command": command_preview }),
+                    );
+                }
+                return Ok(VerifyOutcome::Blocked(goal_check_blocked_message(&msg)));
+            }
+            GateDecision::Allowed => {
+                if let Some(trace) = ctx.trace {
+                    ctx.obs.event(
+                        trace,
+                        "risk_gate",
+                        json!({ "verdict": "allowed", "command": command_preview }),
+                    );
+                }
+            }
+        }
+    }
+    let outcome = tools::run_shell(ctx.cwd, command, Duration::from_secs(tools::CHECK_TIMEOUT_SECS))?;
     if !outcome.timed_out && outcome.exit_code == Some(0) {
         return Ok(VerifyOutcome::Accepted);
     }
