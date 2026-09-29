@@ -763,7 +763,17 @@ each cycle and the loop runs on it — and since the T137 build gate, a
 FAILED build aborts the cycle instead of relaunching the previous
 release binary (a broken merge can no longer silently keep driving on
 stale code), with `set -euo pipefail` guarding the whole supervisor
-loop and the single-driver probe failing closed. Delegate children
+loop and the single-driver probe failing closed. Immediately after that
+probe passes — and before the build — the supervisor also runs the T152
+orphan-process reaper (`scripts/orphan-reaper.sh`), which SIGTERMs leftover
+chug test/build processes (an absolute `…/target-shared*/deps/` artifact
+binary, a process whose argv points into a removed
+`/tmp/chug-loop-t*/`/`/tmp/chug-mut-*` worktree, or — the cycle-72 shape — a
+plain process whose working directory sits inside one of those worktrees,
+innocent argv and all) at the one instant they are
+definitionally orphaned; the sweep is identity-based and fail-closed
+(ambiguous processes are skipped and logged, never killed, own-process-group
+never signalled) and `LOOP_REAPER=0` disables it. Delegate children
 re-launch that same executable, and the bounded review/validation gates
 run the nextest-first
 gate runner (T82): `cargo nextest run --release` when `cargo nextest` is on
