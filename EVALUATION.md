@@ -343,6 +343,31 @@ web_fetch enumeration) killed + 2 extras (injection-order, empty-check);
 cosmetic nits carried. Post-merge nextest 1121/1121. FEATURES.md F2
 annotated phase-2a landed, 2b deferred with refreshed reason.
 
+**Cycle-70 wrap notes (budget-low at 240-min orchestrator ceiling).**
+Landed 3/7 rows: T144 (bug), T145 (robustness), T146 (feature). DEFERRED
+to next cycle: T147 (impl died 80/80 at the glm-flash ~5s/iter pace
+class — 613k input tokens in ~10 min; worktree /tmp/chug-loop-t147 left
+STANDING with uncommitted work + a recovery pointer on the row),
+T148/T150 (not dispatched), T149 (doctrine — never dispatched; its
+census GREW this cycle: t146-validate was the 5th validator budget death
+in 5 cycles). Cycle-level findings: (1) a 9.8-hour orphaned spinning
+t134-era test binary (99% CPU, 590 min burned) was found and killed
+mid-T145 — a mutation-leg test process outlived its validator by ~11h;
+the port-test flakes that cost T145 two gate rejections trace to its
+load; watch for recurrence, candidate row next eval if the T6 bounded
+harness needs a reaper. (2) The mcp_http dead-port race (T31/T59/T66
+class) fired twice under load this cycle — third era sighting; next
+eval should weigh a deflake row. (3) glm-flash pace class: iteration
+budgets, not minutes, bind (T146 impl 80 iters in 6m41s; T147 impl same
+death) — next eval weighs whether glm children need higher iteration
+budgets or tighter specs. (4) Tool-result RENDER garbles (7 sightings)
+proved to be artifacts on every disk read-back — verify-then-act held
+every time; no action needed beyond the standing doctrine. Validators
+this cycle: 3 REQUIRED PASSes (T144/T145/T146), 4+6+3 mutants killed,
+survivors carried (M4 env-passthrough, M5 hooks-scrub pin, T146
+cosmetics). Release: v0.5.0 (minor — T146 feature) cut at this wrap per
+the T100 trigger (3 items + FEATURES phase annotation since v0.4.1).
+
 ### Cycle 69 (2026-09-29) — routine glm freshness-skip (queue non-empty: T129/T131 deferred from cycle 68, eval fresh) — the deferrals worked first
 
 **T129 — F10 phase 2b: chug_launch MCP write leg (pri 2 feature, landed
