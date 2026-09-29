@@ -1237,6 +1237,12 @@ pub(crate) mod tests {
     const DEAD_PORT_ATTEMPTS: usize = 32;
 
     /// True when `port` currently REFUSES connections (nothing listening).
+    ///
+    /// Single-shot, definitive-only: `ConnectionRefused` (an RST landed —
+    /// nothing is listening) and `Ok(_)` (a listener answered — someone
+    /// holds the port) are both trusted; any other `Err` kind is NOT a
+    /// verdict. Dead-expecting legs must not use this form directly under
+    /// load: see [`port_refuses_within_backstop`] (T151).
     fn port_refuses_connections(port: u16) -> bool {
         let addr = SocketAddr::from(([127, 0, 0, 1], port));
         matches!(
@@ -1244,6 +1250,125 @@ pub(crate) mod tests {
             Err(e) if e.kind() == std::io::ErrorKind::ConnectionRefused
         )
     }
+
+    /// T151: liveness BACKSTOP for the dead-direction probes' polling
+    /// conversion (req 3 — convert, don't widen). A refused loopback connect
+    /// lands in microseconds unpolluted; the backstop only bounds the poll
+    /// when whole-machine starvation stretches the per-connect probe
+    /// (whose 1s ceiling, [`DEAD_PORT_PROBE_TIMEOUT`], is UNCHANGED) into
+    /// TimedOut non-verdicts. 5s is ≥10x the unpolluted refusal
+    /// (sub-millisecond — ≥5000x) and rides out ~5 consecutive full-ceiling
+    /// stalls before the caller classifies. It is NEW to this polling leg:
+    /// no existing timeout/grace/slack constant is touched.
+    const DEAD_PORT_PROBE_BACKSTOP: Duration = Duration::from_secs(5);
+
+    /// T151 fix-up: the reading of one bounded connect-poll against a
+    /// supposedly-dead port ([`confirm_connect`]). The two definitive
+    /// verdicts short-circuit the poll; only starvation artifacts burn the
+    /// fence.
+    enum Confirm {
+        /// A connect SUCCEEDED: a listener answers the port (definitive).
+        Live,
+        /// The connect got an RST: nothing is listening (definitive).
+        Dead,
+        /// The fence expired on ambiguous errors only — whole-machine
+        /// starvation; NO verdict was reached.
+        Unresolved,
+    }
+
+    /// T151 fix-up: ONE bounded connect-poll against a supposedly-dead port,
+    /// shared by every dead-direction read in this family. `ConnectionRefused`
+    /// is a definitive DEAD verdict (return immediately — an RST landed,
+    /// nothing is listening); `Ok(_)` is a definitive LIVE verdict (a
+    /// listener answered — return immediately, NO fence burn, which keeps
+    /// the T59/T66 scripted-theft pins fast); only the ambiguous `Err(_)`
+    /// kinds — starvation artifacts — are re-polled, every ≤50ms, until the
+    /// caller's fence. The fences ([`DEAD_PORT_PROBE_BACKSTOP`],
+    /// [`DEAD_PORT_CONFIRM_BACKSTOP`]) are liveness backstops, not
+    /// assertions: a genuinely dead port refuses on some poll long before
+    /// its fence, and a genuinely live port answers on the first.
+    fn confirm_connect(port: u16, backstop: Duration) -> Confirm {
+        let addr = SocketAddr::from(([127, 0, 0, 1], port));
+        let t0 = Instant::now();
+        loop {
+            match TcpStream::connect_timeout(&addr, DEAD_PORT_PROBE_TIMEOUT) {
+                Err(e) if e.kind() == std::io::ErrorKind::ConnectionRefused => return Confirm::Dead,
+                // A listener answered: definitive live reading.
+                Ok(_) => return Confirm::Live,
+                // Starvation artifact (the probe's unchanged 1s ceiling
+                // expired before the RST landed): NOT a verdict — poll and
+                // retry until the caller's fence.
+                Err(_) => {}
+            }
+            if t0.elapsed() >= backstop {
+                return Confirm::Unresolved;
+            }
+            thread::sleep(Duration::from_millis(50));
+        }
+    }
+
+    /// T151: the dead-direction probe, converted from single-shot to
+    /// condition-polling against a deadline (req 3 — the cycle-70 goal-gate
+    /// rejections read a genuinely dead port's connect as a 1s TimedOut
+    /// under whole-machine starvation, which the single-shot check
+    /// misclassified as "live": `check_dead_port` then named a theft and
+    /// `dead_port_probe_retry_with`'s post-drop leg panicked "real
+    /// regression" — both red with zero real faults). Semantics per
+    /// attempt are [`port_refuses_connections`]'s. T151 fix-up: this is the
+    /// bool view of [`confirm_connect`] — `true` iff the poll reached the
+    /// definitive DEAD verdict; a definitive LIVE reading and an
+    /// unresolved fence both read "not (provably) refused". The
+    /// connect-phase classifier needs the tri-state directly (a definitive
+    /// connect success is the fix-up's sighting class — see
+    /// [`invalidation_or_regression`]) and calls [`confirm_connect`] itself.
+    fn port_refuses_within_backstop(port: u16) -> bool {
+        matches!(confirm_connect(port, DEAD_PORT_PROBE_BACKSTOP), Confirm::Dead)
+    }
+
+    /// T151 fix-up: the LIVE-direction mirror of [`confirm_connect`] —
+    /// poll until a connect SUCCEEDS. `Ok(_)` is a definitive live verdict
+    /// (return immediately); `ConnectionRefused` is a definitive dead
+    /// verdict (return immediately — during the probe test's live leg the
+    /// listener is held by the caller, so a refusal is a real probe
+    /// regression and this keeps that panic immediate); only ambiguous
+    /// `Err(_)` kinds — starvation artifacts — are re-polled, every ≤50ms,
+    /// until the fence. Swept per req 4 ("re-read ... and its neighbors"):
+    /// the base commit converted the DEAD direction (cycle-70's sighting —
+    /// a starved connect to a dead port read as live) but left this leg
+    /// single-shot, the mirror-image hazard — a starved connect to a LIVE
+    /// port reads TimedOut, `port_refuses_connections` reports "not
+    /// refused", and the live leg false-reds "real probe regression" under
+    /// exactly the load that class was sighted in.
+    fn port_answers_within_backstop(port: u16) -> bool {
+        let addr = SocketAddr::from(([127, 0, 0, 1], port));
+        let t0 = Instant::now();
+        loop {
+            match TcpStream::connect_timeout(&addr, DEAD_PORT_PROBE_TIMEOUT) {
+                Ok(_) => return true,
+                // Definitive: nothing is listening. Not a starvation
+                // artifact — the caller holds the listener, so a refusal is
+                // a real regression and must panic immediately.
+                Err(e) if e.kind() == std::io::ErrorKind::ConnectionRefused => return false,
+                // Starvation artifact: re-poll until the fence.
+                Err(_) => {}
+            }
+            if t0.elapsed() >= DEAD_PORT_LIVE_BACKSTOP {
+                return false;
+            }
+            thread::sleep(Duration::from_millis(50));
+        }
+    }
+
+    /// T151 fix-up: liveness BACKSTOP for [`port_answers_within_backstop`]
+    /// (the probe test's live leg). A live loopback connect completes in
+    /// microseconds unpolluted; the fence only bounds the poll when
+    /// whole-machine starvation stretches the per-connect probe (whose 1s
+    /// ceiling, [`DEAD_PORT_PROBE_TIMEOUT`], is UNCHANGED) into ambiguous
+    /// non-verdicts. 5s is ≥10x the unpolluted connect (sub-millisecond —
+    /// ≥5000x) and rides out ~5 consecutive full-ceiling stalls. NEW to
+    /// this polling leg: no existing timeout/grace/slack constant is
+    /// touched.
+    const DEAD_PORT_LIVE_BACKSTOP: Duration = Duration::from_secs(5);
 
     /// An ephemeral port verified, at acquisition time, to refuse connections
     /// — a "dead server" address for the fail-soft tests.
@@ -1269,7 +1394,11 @@ pub(crate) mod tests {
                 .port();
             // The listener above is dropped at the end of this statement;
             // the probe decides whether the port is actually dead.
-            if port_refuses_connections(port) {
+            // T151: polling form — under starvation a single-shot probe's
+            // connect can time out (non-verdict) and burn an attempt; the
+            // poll re-probes until the port proves dead (or definitively
+            // live, which moves on to the next bind).
+            if port_refuses_within_backstop(port) {
                 return port;
             }
         }
@@ -1302,89 +1431,216 @@ pub(crate) mod tests {
     /// bind+probe bound.)
     const DEAD_PORT_RETRY_ATTEMPTS: usize = 3;
 
-    /// Evidence that a dead-port attempt was invalidated by theft (T59).
-    /// Constructed ONLY for theft; ordinary test failures panic directly
-    /// inside the attempt closure, so a real regression is never retried
-    /// into a flake-shaped message.
-    struct PortTheft(String);
+    /// T151 fix-up: HOW a dead-port attempt was invalidated. Both classes
+    /// are RETRYABLE — the retry drivers re-run the whole
+    /// acquire-probe-connect sequence, bounded by the same
+    /// `DEAD_PORT_RETRY_ATTEMPTS` — with per-class exhaustion wording so a
+    /// bounded flake signature stays distinguishable from a real regression
+    /// (which panics inside the classifier, un-retried, byte-distinct).
+    /// Constructed ONLY for invalidated attempts; ordinary test failures and
+    /// genuine regressions panic directly inside the attempt closure, so a
+    /// real regression is never retried into a flake-shaped message. (T59's
+    /// single `PortTheft` class, widened by the T151 fix-up.)
+    #[derive(Debug)]
+    enum Invalidation {
+        /// A confirmed listener holds the handout: the confirmation connect
+        /// ALSO succeeded, so a listener genuinely answers the port (T59
+        /// theft — retryable, unchanged).
+        Theft { detail: String },
+        /// NEW (T151 fix-up): ONE connect succeeded against the
+        /// supposedly-dead handout and the confirmation connect REFUSED.
+        /// T59's premise — "a connect can only succeed if SOMETHING was
+        /// listening" — is false on macOS during listener TEARDOWN: a
+        /// connect to a just-closed listener can complete from the kernel's
+        /// pending-accept backlog, and once the backlog drains the port
+        /// refuses again. First-succeeds-then-refuses is therefore neither
+        /// theft (no listener exists) nor a regression (no code under test
+        /// misbehaved): the attempt is invalidated and retried like theft.
+        TeardownArtifact { detail: String },
+    }
 
-    /// Non-panicking re-verify of a [`dead_port`] handout (T59 seam):
-    /// `Ok` while the port still refuses connections, `Err(theft)` once
-    /// claimed. Same mechanism and message as [`assert_dead_port`], which
-    /// remains the panicking form for callers without a retry path
-    /// (webfetch's T31 dead-port leg keeps it unchanged).
-    fn check_dead_port(port: u16) -> Result<(), PortTheft> {
-        if port_refuses_connections(port) {
-            Ok(())
-        } else {
-            Err(PortTheft(format!(
-                "dead-port {port} no longer refuses connections: claimed by another listener \
-                 between acquisition and use (T31 probe)"
-            )))
+    impl Invalidation {
+        /// The class noun used by the per-attempt progress lines and the
+        /// distinct exhaustion panics ("hit {class} (...)").
+        fn class_name(&self) -> &'static str {
+            match self {
+                Invalidation::Theft { .. } => "port-theft",
+                Invalidation::TeardownArtifact { .. } => "a listener-teardown backlog artifact",
+            }
+        }
+
+        fn detail(&self) -> &str {
+            match self {
+                Invalidation::Theft { detail } => detail,
+                Invalidation::TeardownArtifact { detail } => detail,
+            }
         }
     }
 
-    /// Classify an unexpected connect-phase outcome (T59). A connect can
-    /// only succeed if SOMETHING was listening, so first re-probe the
-    /// handout: if it is now LIVE the theft is confirmed (retryable); if it
-    /// still refuses, no listener existed and the unexpected outcome is a
-    /// REAL regression — panic immediately with the observation, un-retried,
-    /// so it stays distinguishable from a flake storm.
-    fn theft_or_regression(port: u16, observed: &str) -> PortTheft {
-        if port_refuses_connections(port) {
-            panic!(
+    /// Non-panicking re-verify of a [`dead_port`] handout (T59 seam):
+    /// `Ok` while the port still refuses connections, `Err` (theft
+    /// invalidation) once claimed. Same mechanism and message as
+    /// [`assert_dead_port`], which remains the panicking form for callers
+    /// without a retry path (webfetch's T31 dead-port leg keeps it
+    /// unchanged). T151: the dead-direction read is the polling form
+    /// ([`port_refuses_within_backstop`]) — a starvation-stretched connect
+    /// is a non-verdict to re-poll, not a live reading to misreport as
+    /// theft; a genuine thief still answers `Ok(_)` on the first probe, so
+    /// the theft detection this seam exists for is unchanged (and the
+    /// T59 scripted-theft pins stay fast).
+    fn check_dead_port(port: u16) -> Result<(), Invalidation> {
+        if port_refuses_within_backstop(port) {
+            Ok(())
+        } else {
+            Err(Invalidation::Theft {
+                detail: format!(
+                    "dead-port {port} no longer refuses connections: claimed by another listener \
+                     between acquisition and use (T31 probe)"
+                ),
+            })
+        }
+    }
+
+    /// T151 fix-up: liveness BACKSTOP for the connect-phase classifier's
+    /// confirmation re-connect ([`confirm_connect`] with this fence). A
+    /// loopback connect completes in microseconds unpolluted; the fence
+    /// only bounds the poll when whole-machine starvation stretches the
+    /// per-connect probe (whose 1s ceiling, [`DEAD_PORT_PROBE_TIMEOUT`], is
+    /// UNCHANGED) into ambiguous non-verdicts. 5s is ≥10x the unpolluted
+    /// confirmation connect (sub-millisecond — ≥5000x) and rides out ~5
+    /// consecutive full-ceiling stalls before the caller classifies
+    /// unresolved. NEW to this leg: no existing timeout/grace/slack
+    /// constant is touched.
+    const DEAD_PORT_CONFIRM_BACKSTOP: Duration = Duration::from_secs(5);
+
+    /// Classify an unexpected connect-phase outcome (T59; T151 fix-up).
+    ///
+    /// T59's premise — "a connect can only succeed if SOMETHING was
+    /// listening, so re-probe the handout: live → theft, refuses → real
+    /// regression" — is FALSE on macOS during listener TEARDOWN: a connect
+    /// to a just-closed listener can complete from the kernel's
+    /// pending-accept backlog, and the single-shot re-probe that followed
+    /// then refused once the backlog drained — so a real attempt was
+    /// misclassified as a REAL regression and panicked un-retried (the
+    /// orchestrator's T151 fix-up sighting: ~2/7 full-suite
+    /// default-parallelism runs, `dead_port_probe_retry_recovers_after_
+    /// scripted_theft`, port 54396, zero real faults). The premise is now
+    /// held only CONFIRMED: before classifying, the port gets ONE bounded
+    /// confirmation connect-poll ([`confirm_connect`] with
+    /// [`DEAD_PORT_CONFIRM_BACKSTOP`]; cadence ≤50ms; a NEW liveness fence,
+    /// ≥10x the unpolluted connect) and the PAIR of readings classifies:
+    ///
+    /// - confirmation connect SUCCEEDS → a listener genuinely answers →
+    ///   [`Invalidation::Theft`] (retryable, unchanged — both connects
+    ///   succeeded);
+    /// - confirmation connect REFUSES and a connect success WAS observed
+    ///   (`observed_connect` — true only when the attempt is KNOWN to have
+    ///   completed a connect, e.g. a definitive probe `Ok` or a fully-served
+    ///   handshake) → first-succeeds-then-refuses →
+    ///   [`Invalidation::TeardownArtifact`] (NEW): the backlog completed the
+    ///   first connect during teardown — NOT a regression and NOT theft;
+    ///   retried like theft, bounded by the same `DEAD_PORT_RETRY_ATTEMPTS`,
+    ///   with its own distinct exhaustion wording;
+    /// - confirmation connect REFUSES and NO connect success was observed →
+    ///   the code under test failed against a genuinely-dead port (nothing
+    ///   succeeded, so no load artifact explains the outcome) → REAL
+    ///   regression → panic immediately with the observation, un-retried,
+    ///   byte-identical wording (T59's original panic text, kept verbatim);
+    /// - confirmation fence expires with no definitive verdict → machine
+    ///   starvation is not a classification; T59's mapping is kept (every
+    ///   non-refused reading → theft) → [`Invalidation::Theft`], retryable.
+    fn invalidation_or_regression(
+        port: u16,
+        observed: &str,
+        observed_connect: bool,
+    ) -> Invalidation {
+        match confirm_connect(port, DEAD_PORT_CONFIRM_BACKSTOP) {
+            Confirm::Live => Invalidation::Theft {
+                detail: format!(
+                    "{observed}; port {port} is now live (claimed after handoff: thief listener)"
+                ),
+            },
+            Confirm::Unresolved => Invalidation::Theft {
+                detail: format!(
+                    "{observed}; port {port} unreadable within the confirm fence (machine \
+                     starvation — no definitive reading, retried like theft per T59)"
+                ),
+            },
+            Confirm::Dead if observed_connect => Invalidation::TeardownArtifact {
+                detail: format!(
+                    "{observed}; port {port} accepted one connect but the confirmation connect \
+                     refused (listener-teardown backlog artifact: the kernel completed the first \
+                     connect from the just-closed listener's pending-accept queue — no listener \
+                     exists, so neither theft nor a code regression)"
+                ),
+            },
+            Confirm::Dead => panic!(
                 "dead_port_retry: {observed} — but {port} still refuses connections, so no \
                  listener existed and this is NOT port-theft: real regression in the code \
                  under test (panicked immediately, not retried)"
-            );
+            ),
         }
-        PortTheft(format!(
-            "{observed}; port {port} is now live (claimed after handoff: thief listener)"
-        ))
     }
 
-    /// Retry-on-theft driver (T59). Acquires a handout via `acquire`
-    /// (production callers pass [`dead_port`]) and runs `attempt` against
-    /// it; `attempt` returns `Err(PortTheft)` ONLY for a detected theft
-    /// (via [`check_dead_port`] or [`theft_or_regression`]). Each theft
-    /// retries the WHOLE sequence with a fresh handout — immediately, with
-    /// no sleep or wait (T31 doctrine: mechanism, not timeouts) — bounded by
-    /// `DEAD_PORT_RETRY_ATTEMPTS`. Exhaustion panics naming the attempt
-    /// count and the theft mechanism; a real regression never reaches this
-    /// message (it panics inside `attempt` first). `acquire` is the unit
-    /// seam: the T59 test scripts a REAL live listener as the handout so
-    /// the retry path is exercised deterministically, not by racing.
+    /// Retry-on-invalidation driver (T59; T151 fix-up widens the classes).
+    /// Acquires a handout via `acquire` (production callers pass
+    /// [`dead_port`]) and runs `attempt` against it; `attempt` returns
+    /// `Err(Invalidation)` ONLY for a detected invalidation (via
+    /// [`check_dead_port`] or [`invalidation_or_regression`]). Each
+    /// invalidation retries the WHOLE sequence with a fresh handout —
+    /// immediately, with no sleep or wait (T31 doctrine: mechanism, not
+    /// timeouts) — bounded by `DEAD_PORT_RETRY_ATTEMPTS`. Exhaustion panics
+    /// naming the attempt count and the PER-CLASS mechanism (theft vs the
+    /// T151 fix-up's teardown-backlog artifact, worded distinctly); a real
+    /// regression never reaches either message (it panics inside the
+    /// classifier first). `acquire` is the unit seam: the T59 test scripts
+    /// a REAL live listener as the handout so the retry path is exercised
+    /// deterministically, not by racing.
     fn dead_port_retry_with<T>(
         acquire: impl Fn() -> u16,
-        mut attempt: impl FnMut(u16) -> Result<T, PortTheft>,
+        mut attempt: impl FnMut(u16) -> Result<T, Invalidation>,
     ) -> T {
-        let mut last_theft: Option<PortTheft> = None;
+        let mut last: Option<Invalidation> = None;
         for attempt_no in 1..=DEAD_PORT_RETRY_ATTEMPTS {
             let port = acquire();
             match attempt(port) {
                 Ok(value) => return value,
-                Err(theft) => {
+                Err(invalid) => {
                     eprintln!(
                         "dead_port_retry: attempt {attempt_no}/{DEAD_PORT_RETRY_ATTEMPTS} \
-                         hit port-theft ({}); retrying with a fresh dead_port handout",
-                        theft.0
+                         hit {} ({}); retrying with a fresh dead_port handout",
+                        invalid.class_name(),
+                        invalid.detail()
                     );
-                    last_theft = Some(theft);
+                    last = Some(invalid);
                 }
             }
         }
-        panic!(
-            "dead_port_retry: port-theft persisted across all {DEAD_PORT_RETRY_ATTEMPTS} \
-             attempts (mechanism: another test's listener or the OS ephemeral allocator \
-             claimed the supposedly-dead handout between verify and connect — T31 residual \
-             race, retried per T59); last theft: {}",
-            last_theft.map(|t| t.0).unwrap_or_else(|| "unknown".to_string())
-        );
+        match last {
+            Some(Invalidation::Theft { detail }) => panic!(
+                "dead_port_retry: port-theft persisted across all {DEAD_PORT_RETRY_ATTEMPTS} \
+                 attempts (mechanism: another test's listener or the OS ephemeral allocator \
+                 claimed the supposedly-dead handout between verify and connect — T31 residual \
+                 race, retried per T59); last theft: {detail}"
+            ),
+            Some(Invalidation::TeardownArtifact { detail }) => panic!(
+                "dead_port_retry: listener-teardown backlog artifact persisted across all \
+                 {DEAD_PORT_RETRY_ATTEMPTS} attempts (mechanism: on macOS a connect to a \
+                 just-closed listener can complete from the kernel's pending-accept backlog, \
+                 then the confirmation connect refused once the backlog drained — no listener \
+                 existed, so neither port-theft nor a code regression — T151 fix-up, retried \
+                 per T59's bound); last artifact: {detail}"
+            ),
+            None => panic!(
+                "dead_port_retry: exhausted {DEAD_PORT_RETRY_ATTEMPTS} attempts with no \
+                 recorded invalidation (unreachable: every non-Ok attempt records one)"
+            ),
+        }
     }
 
     // ---------- T66: bounded retry-on-theft for the probe test's drop→probe leg ----------
 
-    /// Retry-on-theft driver for the drop→dead-probe leg of
+    /// Retry-on-invalidation driver for the drop→dead-probe leg of
     /// [`dead_port_probe_distinguishes_live_from_dead`] (T66 sibling of
     /// [`dead_port_retry_with`]; first organic sighting: cycle-30's goal
     /// gate, default-parallel `cargo test`, port 50956 — "dropped port did
@@ -1397,49 +1653,102 @@ pub(crate) mod tests {
     /// ONE attempt = bind via `bind` + live-probe + drop + dead-probe. The
     /// live leg has NO theft window (we hold the listener throughout), so a
     /// live-port-reads-dead failure panics directly — that is a real probe
-    /// regression, never retried. After the drop, a live reading goes
-    /// through [`theft_or_regression`] UNCHANGED: re-probe at catch still
-    /// live → thief confirmed → `PortTheft` → the WHOLE unit retries with a
-    /// FRESHLY bound stub (the old port stays poisoned — the thief holds it
-    /// — so re-probing it can never recover); refuses at catch → the drop
-    /// released the port yet the probe read live → real probe bug, panicked
-    /// immediately, un-retried, never masked into green by a retry. Bounded
-    /// by `DEAD_PORT_RETRY_ATTEMPTS` (reused — no new const); exhaustion
-    /// panics naming the attempts. The `bind` seam is the unit seam: the T66
+    /// regression, never retried (T151 fix-up: the live-direction read is
+    /// the polling form [`port_answers_within_backstop`], so a
+    /// starvation-stretched connect can no longer masquerade as that
+    /// regression). After the drop, the dead-direction read is the TRI-STATE
+    /// poll ([`confirm_connect`]): a definitive REFUSAL ends the leg. A
+    /// definitive connect success (the T151 fix-up's sighting class — on
+    /// macOS the connect can complete from the just-closed listener's
+    /// pending-accept backlog) or an unresolved fence goes through
+    /// [`invalidation_or_regression`] with `observed_connect` set from the
+    /// reading: confirmed live → thief → [`Invalidation::Theft`] → the
+    /// WHOLE unit retries with a FRESHLY bound stub (the old port stays
+    /// poisoned — the thief holds it — so re-probing it can never recover);
+    /// first-succeeds-then-refuses → [`Invalidation::TeardownArtifact`] →
+    /// retried the same way, distinctly worded; no connect success observed
+    /// and the confirm refuses → the drop released the port yet the probe
+    /// read live → real probe bug, panicked immediately, un-retried, never
+    /// masked into green by a retry. Bounded by `DEAD_PORT_RETRY_ATTEMPTS`
+    /// (reused — no new const); exhaustion panics naming the attempts and
+    /// the per-class mechanism. The `bind` seam is the unit seam: the T66
     /// pin scripts a port that is genuinely live across the drop window so
     /// the theft branch is exercised deterministically, not by racing.
     fn dead_port_probe_retry_with(bind: impl Fn() -> TcpListener) {
-        let mut last_theft: Option<PortTheft> = None;
+        let mut last: Option<Invalidation> = None;
         for attempt_no in 1..=DEAD_PORT_RETRY_ATTEMPTS {
             let listener = bind();
             let port = listener.local_addr().unwrap().port();
             assert!(
-                !port_refuses_connections(port),
+                port_answers_within_backstop(port),
                 "live port {port} probed as dead (listener held throughout the live leg, \
                  no theft window: real probe regression, not port-theft)"
             );
+            // T151 fix-up: DRAIN the connection the live leg just queued
+            // before dropping the stub. The sighting mechanism is a connect
+            // completing from the kernel's pending-accept backlog during
+            // listener teardown — and on this test the backlog content was
+            // the live leg's OWN unaccepted probe connect, so every retry
+            // re-armed the same artifact (first organic reproduction: this
+            // fix-up's first full-suite run — the post-drop probe read LIVE,
+            // the confirmation connect refused, and the artifact exhausted
+            // the driver where the pre-fix-up code would have panicked
+            // "real regression" with zero real faults). A close with an
+            // EMPTY pending-accept backlog has nothing to complete, so the
+            // post-drop dead-probe reads Dead deterministically — mechanism,
+            // not timeouts (T31 doctrine).
+            drain_pending_accepts(&listener);
             drop(listener);
-            if port_refuses_connections(port) {
-                return;
-            }
-            let theft = theft_or_regression(
-                port,
-                "dropped port did not refuse connections (probe read LIVE after the drop)",
-            );
+            // T151 fix-up: the dead-direction read is the tri-state poll —
+            // this is exactly the t145/cycle-70 sighting's window (a
+            // starvation-stretched connect to a genuinely dead port read as
+            // live and misrouted into classification). A definitive refusal
+            // ends the leg; a definitive connect success (or an unresolved
+            // fence) is classified with the confirmation connect — a
+            // connect success alone no longer proves a listener EXISTS
+            // (teardown backlog), so the classifier confirms before naming
+            // theft vs teardown artifact vs regression.
+            let observed = match confirm_connect(port, DEAD_PORT_PROBE_BACKSTOP) {
+                Confirm::Dead => return,
+                Confirm::Live => (
+                    "dropped port did not refuse connections (probe read LIVE after the drop)",
+                    true,
+                ),
+                Confirm::Unresolved => (
+                    "dropped port did not refuse connections within the probe fence (no \
+                     definitive reading)",
+                    false,
+                ),
+            };
+            let invalid = invalidation_or_regression(port, observed.0, observed.1);
             eprintln!(
                 "dead_port_probe_retry: attempt {attempt_no}/{DEAD_PORT_RETRY_ATTEMPTS} hit \
-                 port-theft ({}); retrying with a freshly bound stub",
-                theft.0
+                 {} ({}); retrying with a freshly bound stub",
+                invalid.class_name(),
+                invalid.detail()
             );
-            last_theft = Some(theft);
+            last = Some(invalid);
         }
-        panic!(
-            "dead_port_probe_retry: port-theft persisted across all \
-             {DEAD_PORT_RETRY_ATTEMPTS} attempts (mechanism: another test's listener or the \
-             OS ephemeral allocator claimed the just-freed port between the stub drop and the \
-             dead-probe connect — T31 residual race, retried per T66); last theft: {}",
-            last_theft.map(|t| t.0).unwrap_or_else(|| "unknown".to_string())
-        );
+        match last {
+            Some(Invalidation::Theft { detail }) => panic!(
+                "dead_port_probe_retry: port-theft persisted across all \
+                 {DEAD_PORT_RETRY_ATTEMPTS} attempts (mechanism: another test's listener or the \
+                 OS ephemeral allocator claimed the just-freed port between the stub drop and the \
+                 dead-probe connect — T31 residual race, retried per T66); last theft: {detail}"
+            ),
+            Some(Invalidation::TeardownArtifact { detail }) => panic!(
+                "dead_port_probe_retry: listener-teardown backlog artifact persisted across all \
+                 {DEAD_PORT_RETRY_ATTEMPTS} attempts (mechanism: on macOS a connect to a \
+                 just-closed listener can complete from the kernel's pending-accept backlog, \
+                 then the confirmation connect refused once the backlog drained — no listener \
+                 existed, so neither port-theft nor a code regression — T151 fix-up, retried \
+                 per T66's bound); last artifact: {detail}"
+            ),
+            None => panic!(
+                "dead_port_probe_retry: exhausted {DEAD_PORT_RETRY_ATTEMPTS} attempts with no \
+                 recorded invalidation (unreachable: every non-Ok attempt records one)"
+            ),
+        }
     }
 
     /// Stub-side I/O ceiling (T6): every blocking operation a stub thread
@@ -1479,6 +1788,33 @@ pub(crate) mod tests {
                     thread::sleep(Duration::from_millis(5));
                 }
                 Err(e) => panic!("accept failed: {e}"),
+            }
+        }
+    }
+
+    /// T151 fix-up: drain (accept-and-close) every connection ALREADY
+    /// queued on `listener`, so its close tears down with an EMPTY
+    /// pending-accept backlog. The dead_port probe test's live leg connects
+    /// to the held stub and never accepts — the queued connection was the
+    /// backlog content that let a post-drop connect complete during
+    /// teardown (the T151 fix-up's sighting mechanism, organically
+    /// reproduced by the fix-up's own first full-suite run). Nonblocking:
+    /// only entries already in the queue are taken; `WouldBlock` (queue
+    /// empty) ends the drain; a queued peer vanishing between completion
+    /// and accept (reset) is not a verdict — keep draining until the queue
+    /// is empty, bounded by [`STUB_ACCEPT_TIMEOUT`] (reused — no new const)
+    /// as a pure liveness backstop.
+    fn drain_pending_accepts(listener: &TcpListener) {
+        listener.set_nonblocking(true).unwrap();
+        let t0 = Instant::now();
+        loop {
+            match listener.accept() {
+                Ok((stream, _)) => drop(stream),
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => return,
+                Err(_) => {}
+            }
+            if t0.elapsed() >= STUB_ACCEPT_TIMEOUT {
+                return;
             }
         }
     }
@@ -1714,6 +2050,10 @@ pub(crate) mod tests {
 
     #[test]
     fn dead_server_retries_then_tool_error_without_sleeping() {
+        // T151: hold the shared timing domain across the whole body (first
+        // acquisition — see crate::testsupport's lock-order rule). The dead-port family is a named T151 sighting class (probe timing).
+        let _timing = crate::testsupport::timing_guard();
+
         // T31: probe-verified dead port. A plain bind+drop is a TOCTOU under
         // parallel load — another test's bind_stub can claim the port between
         // our drop and the client's connect (mechanism: see dead_port). T59:
@@ -1739,24 +2079,38 @@ pub(crate) mod tests {
             // Phase 1: the call must observe a REFUSED connect (the fail-soft
             // retry schedule). Any other outcome means the handout was live —
             // stolen mid-flight (retryable) or, if the port still refuses, a
-            // real regression (theft_or_regression panics, un-retried).
+            // real regression (invalidation_or_regression panics,
+            // un-retried). T151 fix-up: `call()` maps every transport error
+            // to an is_error result, so this Err leg is defensive and NO
+            // connect success is attributable to it — `observed_connect`
+            // stays false, keeping the regression panic exactly as strong
+            // as before the fix-up.
             let res = match srv.call("echo", json!({})) {
                 Ok(res) => res,
                 Err(e) => {
-                    return Err(theft_or_regression(
+                    return Err(invalidation_or_regression(
                         port,
                         &format!("call against supposedly-dead port hard-errored: {e:#}"),
+                        false,
                     ))
                 }
             };
+            // T151 fix-up: this leg's expected shape IS the refused/failing-
+            // connect outcome (the fail-soft marker); a teardown-backlog
+            // artifact also lands here (its post-backlog I/O failure rides
+            // the same retry schedule), so a wrong shape with the port now
+            // genuinely dead cannot be an artifact — `observed_connect`
+            // stays false and a real fail-soft regression still panics
+            // immediately.
             if !(res.is_error && res.content.contains("POST failed after retries")) {
-                return Err(theft_or_regression(
+                return Err(invalidation_or_regression(
                     port,
                     &format!(
                         "expected the refused-connect fail-soft outcome, got \
                          is_error={} content={:?}",
                         res.is_error, res.content
                     ),
+                    false,
                 ));
             }
             // Exactly the 1s/2s/4s schedule ran — through the injected sleeper,
@@ -1785,10 +2139,19 @@ pub(crate) mod tests {
             )
             .unwrap();
             check_dead_port(port)?;
+            // T151 fix-up: the handshake returning Ok means a FULL HTTP
+            // exchange completed — a connect DID succeed (and something
+            // served it). That observed success alone no longer proves a
+            // listener EXISTS (teardown backlog): classification confirms —
+            // confirm also succeeds → thief (retryable); confirm refuses →
+            // first-succeeds-then-refuses → teardown-backlog artifact
+            // (retryable, NEW class) instead of the old misread "real
+            // regression" panic.
             if srv2.initialize().is_ok() {
-                return Err(theft_or_regression(
+                return Err(invalidation_or_regression(
                     port,
                     "dead-server handshake unexpectedly SUCCEEDED (connect was not refused)",
+                    true,
                 ));
             }
             Ok(())
@@ -1803,6 +2166,10 @@ pub(crate) mod tests {
     /// dead_port would exhaust its attempts and panic.
     #[test]
     fn dead_port_probe_distinguishes_live_from_dead() {
+        // T151: hold the shared timing domain across the whole body (first
+        // acquisition — see crate::testsupport's lock-order rule). The dead-port family is a named T151 sighting class (probe timing).
+        let _timing = crate::testsupport::timing_guard();
+
         // T66: live-probe + drop + dead-probe run as ONE bounded-retry
         // attempt. The live leg holds the listener (no theft window); only
         // the drop→dead-probe window is exposed — first organic sighting:
@@ -1823,7 +2190,10 @@ pub(crate) mod tests {
         // here).
         let fresh = dead_port_retry_with(dead_port, |port| check_dead_port(port).map(|_| port));
         assert!(
-            port_refuses_connections(fresh),
+            // T151: dead-direction read — polling form (starvation-stretched
+            // connects are non-verdicts to re-poll, not live readings; a
+            // genuine thief answers Ok(_) on the first probe).
+            port_refuses_within_backstop(fresh),
             "dead_port handed out port {fresh} that no longer refuses connections"
         );
     }
@@ -1839,6 +2209,10 @@ pub(crate) mod tests {
     /// path executing.
     #[test]
     fn dead_port_retry_succeeds_after_scripted_theft() {
+        // T151: hold the shared timing domain across the whole body (first
+        // acquisition — see crate::testsupport's lock-order rule). The dead-port family is a named T151 sighting class (probe timing).
+        let _timing = crate::testsupport::timing_guard();
+
         let thief = TcpListener::bind("127.0.0.1:0").unwrap();
         let thief_port = thief.local_addr().unwrap().port();
         let script = RefCell::new(vec![thief_port]);
@@ -1856,7 +2230,11 @@ pub(crate) mod tests {
             "theft on attempt 1 must retry exactly once, not loop and not panic"
         );
         assert!(
-            port_refuses_connections(got),
+            // T151 fix-up: dead-direction read — polling form (a
+            // starvation-stretched connect is a non-verdict to re-poll, not
+            // a false "does not refuse" red; the final handout is also
+            // re-verified above via check_dead_port).
+            port_refuses_within_backstop(got),
             "helper returned {got}, which does not refuse connections"
         );
     }
@@ -1869,6 +2247,10 @@ pub(crate) mod tests {
     /// message and is never retried).
     #[test]
     fn dead_port_retry_exhaustion_names_attempts_and_mechanism() {
+        // T151: hold the shared timing domain across the whole body (first
+        // acquisition — see crate::testsupport's lock-order rule). The dead-port family is a named T151 sighting class (probe timing).
+        let _timing = crate::testsupport::timing_guard();
+
         let thief = TcpListener::bind("127.0.0.1:0").unwrap();
         let thief_port = thief.local_addr().unwrap().port();
         let attempts = Cell::new(0usize);
@@ -1910,14 +2292,20 @@ pub(crate) mod tests {
     /// by a second open handle the helper does not own, so after the helper
     /// drops the stub the port stays GENUINELY live through the whole
     /// dead-probe window — mechanically identical to a thief binding the
-    /// freed port in that window (probe and [`theft_or_regression`]
+    /// freed port in that window (probe and [`invalidation_or_regression`]
     /// classification cannot tell the two apart, and the connect genuinely
-    /// succeeds) — while attempt 2 binds clean. The bind-call counter pins
+    /// succeeds — the fix-up's confirmation connect then ALSO succeeds, so
+    /// the theft classification is unchanged) — while attempt 2 binds
+    /// clean. The bind-call counter pins
     /// that the retry executed exactly once: the pre-T66 shape (single
     /// attempt, bare panicking assert) cannot pass this test — it dies on
     /// attempt 1's live-after-drop reading.
     #[test]
     fn dead_port_probe_retry_recovers_after_scripted_theft() {
+        // T151: hold the shared timing domain across the whole body (first
+        // acquisition — see crate::testsupport's lock-order rule). The dead-port family is a named T151 sighting class (probe timing).
+        let _timing = crate::testsupport::timing_guard();
+
         let bind_calls = Cell::new(0usize);
         let thief_handle = RefCell::new(None::<TcpListener>);
         dead_port_probe_retry_with(|| {
@@ -1947,6 +2335,10 @@ pub(crate) mod tests {
     /// [`dead_port_retry_exhaustion_names_attempts_and_mechanism`].
     #[test]
     fn dead_port_probe_retry_exhaustion_names_attempts_and_mechanism() {
+        // T151: hold the shared timing domain across the whole body (first
+        // acquisition — see crate::testsupport's lock-order rule). The dead-port family is a named T151 sighting class (probe timing).
+        let _timing = crate::testsupport::timing_guard();
+
         let bind_calls = Cell::new(0usize);
         let thief_handle = RefCell::new(None::<TcpListener>);
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -1973,6 +2365,170 @@ pub(crate) mod tests {
         );
         assert_eq!(
             bind_calls.get(),
+            DEAD_PORT_RETRY_ATTEMPTS,
+            "bounded: exactly the cap, never an unbounded storm"
+        );
+    }
+
+    // ---------- T151 fix-up: teardown-artifact classification pins ----------
+
+    /// The T151 fix-up's decision table, scripted deterministically. The
+    /// REAL macOS race — a connect completing from a just-closed listener's
+    /// pending-accept backlog, then refusing once the backlog drains — is
+    /// microsecond-scale and cannot be staged deterministically (a scripted
+    /// attempt would itself race the queue flush), so the seam here is the
+    /// classifier's `observed_connect` input, which production callers set
+    /// from a DEFINITIVE first reading (probe `Ok`, fully-served handshake).
+    /// The classifier's own confirm connect IS real: against a genuinely
+    /// dead handout it refuses (TeardownArtifact leg), against a held live
+    /// listener it succeeds (Theft leg) — so the confirm mechanism itself
+    /// is exercised, not just the mapping. Non-vacuous: the pre-fix-up
+    /// shape (single-shot re-probe, refuses → panic) dies on the first leg.
+    #[test]
+    fn dead_port_classification_distinguishes_teardown_artifact_from_theft_and_regression() {
+        // T151: hold the shared timing domain across the whole body (first
+        // acquisition — see crate::testsupport's lock-order rule). The dead-port family is a named T151 sighting class (probe timing).
+        let _timing = crate::testsupport::timing_guard();
+
+        // Leg 1 (THE FIX): a connect success was observed and the port is
+        // genuinely dead at classification → first-succeeds-then-refuses →
+        // TeardownArtifact, NOT the old "real regression" panic. The
+        // handout can be stolen between acquisition and the confirmation
+        // connect (T31's residual window — a real listener answers, the
+        // classifier reads Theft): retry with a fresh handout, bounded,
+        // exactly like production (T59).
+        let mut classified = None;
+        for _ in 0..DEAD_PORT_RETRY_ATTEMPTS {
+            let port = dead_port();
+            match invalidation_or_regression(
+                port,
+                "scripted first-succeeds-then-refuses outcome (probe read LIVE after the drop)",
+                true,
+            ) {
+                inv @ Invalidation::TeardownArtifact { .. } => {
+                    classified = Some(inv);
+                    break;
+                }
+                Invalidation::Theft { .. } => continue,
+            }
+        }
+        assert!(
+            classified.is_some(),
+            "observed-connect + confirmed-dead handout must classify TeardownArtifact \
+             (all {DEAD_PORT_RETRY_ATTEMPTS} handouts were stolen mid-leg — see progress lines)"
+        );
+
+        // Leg 2: BOTH connects succeed (the confirmation connect answers —
+        // a real listener we hold, no race) → theft, retryable, unchanged.
+        let thief = TcpListener::bind("127.0.0.1:0").unwrap();
+        let inv = invalidation_or_regression(
+            thief.local_addr().unwrap().port(),
+            "scripted both-connects-succeed outcome",
+            true,
+        );
+        assert!(
+            matches!(inv, Invalidation::Theft { .. }),
+            "both connects succeeding must classify Theft: {inv:?}"
+        );
+
+        // Leg 3: NO connect success was observed and the confirm connect
+        // refuses → the code under test failed against a genuinely-dead
+        // port → REAL regression: panic immediately, un-retried, wording
+        // byte-distinct from both retryable classes. The handout is
+        // re-verified dead immediately before the classification (T31) so
+        // a mid-leg theft cannot flip the reading; a live/unresolved
+        // re-verify or a theft read in the microsecond classification
+        // window retries with a fresh handout, bounded.
+        let mut regression_msg = None;
+        for _ in 0..DEAD_PORT_RETRY_ATTEMPTS {
+            let port = dead_port();
+            if !port_refuses_within_backstop(port) {
+                continue;
+            }
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                invalidation_or_regression(port, "scripted no-connect-success outcome", false)
+            }));
+            match result {
+                Err(err) => {
+                    regression_msg = Some(
+                        err.downcast_ref::<String>()
+                            .map(String::as_str)
+                            .or_else(|| err.downcast_ref::<&'static str>().copied())
+                            .expect("panic payload is a string")
+                            .to_string(),
+                    );
+                    break;
+                }
+                // Stolen in the classification window (a real listener
+                // answered the confirm connect): fresh handout, bounded.
+                Ok(Invalidation::Theft { .. }) => continue,
+                Ok(other) => {
+                    panic!("no-connect-success leg must panic or read Theft, got {other:?}")
+                }
+            }
+        }
+        let msg = regression_msg
+            .expect("no-connect-success + confirmed-dead must panic as a real regression");
+        assert!(
+            msg.contains("real regression") && msg.contains("NOT port-theft"),
+            "regression panic must keep its byte-distinct wording: {msg}"
+        );
+        assert!(
+            !msg.contains("backlog artifact"),
+            "regression wording must stay distinct from the artifact class: {msg}"
+        );
+    }
+
+    /// The NEW invalidation class retries like theft and its exhaustion
+    /// panic names the artifact DISTINCTLY (never "port-theft persisted"),
+    /// so a bounded artifact storm stays distinguishable from both a theft
+    /// storm and a real regression. Seam: the attempt closure returns the
+    /// artifact directly — `check_dead_port` can only produce Theft and the
+    /// wild artifact (backlog-completed connect) cannot be staged
+    /// deterministically (see the classification pin above), so the
+    /// driver-level pin scripts the class the classifier emits.
+    #[test]
+    fn dead_port_retry_teardown_artifact_exhaustion_names_the_artifact() {
+        // T151: hold the shared timing domain across the whole body (first
+        // acquisition — see crate::testsupport's lock-order rule). The dead-port family is a named T151 sighting class (probe timing).
+        let _timing = crate::testsupport::timing_guard();
+
+        let attempts = Cell::new(0usize);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            dead_port_retry_with(
+                || {
+                    attempts.set(attempts.get() + 1);
+                    dead_port()
+                },
+                |port| -> Result<(), Invalidation> {
+                    Err(Invalidation::TeardownArtifact {
+                        detail: format!(
+                            "scripted teardown artifact on port {port} (pin: exhaustion wording)"
+                        ),
+                    })
+                },
+            );
+        }));
+        let err = result.expect_err("artifact on every attempt must exhaust and panic");
+        let msg = err
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| err.downcast_ref::<&'static str>().copied())
+            .expect("panic payload is a string");
+        assert!(
+            msg.contains("3 attempts"),
+            "artifact exhaustion panic must name the attempt count: {msg}"
+        );
+        assert!(
+            msg.contains("backlog artifact") && msg.contains("pending-accept backlog"),
+            "artifact exhaustion panic must name the teardown mechanism: {msg}"
+        );
+        assert!(
+            !msg.contains("port-theft persisted"),
+            "artifact exhaustion wording must stay distinct from the theft class: {msg}"
+        );
+        assert_eq!(
+            attempts.get(),
             DEAD_PORT_RETRY_ATTEMPTS,
             "bounded: exactly the cap, never an unbounded storm"
         );

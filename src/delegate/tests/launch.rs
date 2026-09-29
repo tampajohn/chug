@@ -15,6 +15,11 @@ pub(super) const TEST_COUNT: usize = 15;
     #[cfg(unix)]
     #[test]
     fn delegate_launch_stub_then_status_reports_summary_and_liveness() {
+        // T151: hold the shared timing domain FIRST (before the env lock —
+        // see crate::testsupport's lock-order rule) across the spawn → poll →
+        // cleanup body: this leg's outcome rides a child-spawn deadline.
+        let _timing = crate::testsupport::timing_guard();
+
         use std::os::unix::fs::PermissionsExt;
         let _guard = DELEGATE_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let child_dir = tempfile::tempdir().unwrap();
@@ -149,6 +154,11 @@ pub(super) const TEST_COUNT: usize = 15;
     /// error naming the path — never a panic, never a driver abort.
     #[test]
     fn delegate_launch_missing_binary_is_tool_error() {
+        // T151: hold the shared timing domain FIRST (before the env lock —
+        // see crate::testsupport's lock-order rule) across the spawn → poll →
+        // cleanup body: this leg's outcome rides a child-spawn deadline.
+        let _timing = crate::testsupport::timing_guard();
+
         let _guard = DELEGATE_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let tmp = tempfile::tempdir().unwrap();
         // SAFETY: serialized by DELEGATE_ENV_LOCK; no other test reads this var.
@@ -186,6 +196,11 @@ pub(super) const TEST_COUNT: usize = 15;
     /// (shape-only validation), so the error asserts fail.
     #[test]
     fn delegate_launch_refuses_nonexistent_spec_naming_the_path() {
+        // T151: hold the shared timing domain FIRST (before the env lock —
+        // see crate::testsupport's lock-order rule) across the spawn → poll →
+        // cleanup body: this leg's outcome rides a child-spawn deadline.
+        let _timing = crate::testsupport::timing_guard();
+
         let _guard = DELEGATE_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let child_dir = tempfile::tempdir().unwrap();
         let ctx_cwd = tempfile::tempdir().unwrap();
@@ -236,6 +251,11 @@ pub(super) const TEST_COUNT: usize = 15;
     /// honest.
     #[test]
     fn delegate_launch_refuses_a_directory_spec_with_the_same_error() {
+        // T151: hold the shared timing domain FIRST (before the env lock —
+        // see crate::testsupport's lock-order rule) across the spawn → poll →
+        // cleanup body: this leg's outcome rides a child-spawn deadline.
+        let _timing = crate::testsupport::timing_guard();
+
         let _guard = DELEGATE_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let child_dir = tempfile::tempdir().unwrap();
         let ctx_cwd = tempfile::tempdir().unwrap();
@@ -281,6 +301,11 @@ pub(super) const TEST_COUNT: usize = 15;
     /// that reword is the RED leg here.
     #[test]
     fn delegate_launch_refuses_nonexistent_cwd_naming_the_path() {
+        // T151: hold the shared timing domain FIRST (before the env lock —
+        // see crate::testsupport's lock-order rule) across the spawn → poll →
+        // cleanup body: this leg's outcome rides a child-spawn deadline.
+        let _timing = crate::testsupport::timing_guard();
+
         let _guard = DELEGATE_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let ctx_cwd = tempfile::tempdir().unwrap();
         // SAFETY: serialized by DELEGATE_ENV_LOCK; no other test reads this var.
@@ -329,6 +354,11 @@ pub(super) const TEST_COUNT: usize = 15;
     #[cfg(unix)]
     #[test]
     fn delegate_launch_with_both_payloads_valid_still_spawns() {
+        // T151: hold the shared timing domain FIRST (before the env lock —
+        // see crate::testsupport's lock-order rule) across the spawn → poll →
+        // cleanup body: this leg's outcome rides a child-spawn deadline.
+        let _timing = crate::testsupport::timing_guard();
+
         let _guard = DELEGATE_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let child_dir = tempfile::tempdir().unwrap();
         let ctx_cwd = tempfile::tempdir().unwrap();
@@ -372,6 +402,11 @@ pub(super) const TEST_COUNT: usize = 15;
     /// without the flag and fails here.
     #[test]
     fn delegate_launch_with_max_tokens_appends_flag_to_child_argv() {
+        // T151: hold the shared timing domain FIRST (before the env lock —
+        // see crate::testsupport's lock-order rule) across the spawn → poll →
+        // cleanup body: this leg's outcome rides a child-spawn deadline.
+        let _timing = crate::testsupport::timing_guard();
+
         let _guard = DELEGATE_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let child_dir = tempfile::tempdir().unwrap();
         let ctx_cwd = tempfile::tempdir().unwrap();
@@ -419,6 +454,11 @@ pub(super) const TEST_COUNT: usize = 15;
     /// opts in.
     #[test]
     fn delegate_launch_without_max_tokens_keeps_argv_byte_identical() {
+        // T151: hold the shared timing domain FIRST (before the env lock —
+        // see crate::testsupport's lock-order rule) across the spawn → poll →
+        // cleanup body: this leg's outcome rides a child-spawn deadline.
+        let _timing = crate::testsupport::timing_guard();
+
         let _guard = DELEGATE_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let child_dir = tempfile::tempdir().unwrap();
         let ctx_cwd = tempfile::tempdir().unwrap();
@@ -473,6 +513,11 @@ pub(super) const TEST_COUNT: usize = 15;
     #[cfg(unix)]
     #[test]
     fn delegate_launch_boundary_max_tokens_one_reaches_child() {
+        // T151: hold the shared timing domain FIRST (before the env lock —
+        // see crate::testsupport's lock-order rule) across the spawn → poll →
+        // cleanup body: this leg's outcome rides a child-spawn deadline.
+        let _timing = crate::testsupport::timing_guard();
+
         let _guard = DELEGATE_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let child_dir = tempfile::tempdir().unwrap();
         let ctx_cwd = tempfile::tempdir().unwrap();
@@ -511,6 +556,11 @@ pub(super) const TEST_COUNT: usize = 15;
     /// parsing with `as_u64` like `max_iters` does) fails the error asserts.
     #[test]
     fn delegate_launch_rejects_zero_and_negative_max_tokens_without_spawning() {
+        // T151: hold the shared timing domain FIRST (before the env lock —
+        // see crate::testsupport's lock-order rule) across the spawn → poll →
+        // cleanup body: this leg's outcome rides a child-spawn deadline.
+        let _timing = crate::testsupport::timing_guard();
+
         let _guard = DELEGATE_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let child_dir = tempfile::tempdir().unwrap();
         let ctx_cwd = tempfile::tempdir().unwrap();
@@ -554,6 +604,11 @@ pub(super) const TEST_COUNT: usize = 15;
     /// the content assert.
     #[test]
     fn delegate_launch_with_resume_appends_flag_to_child_argv() {
+        // T151: hold the shared timing domain FIRST (before the env lock —
+        // see crate::testsupport's lock-order rule) across the spawn → poll →
+        // cleanup body: this leg's outcome rides a child-spawn deadline.
+        let _timing = crate::testsupport::timing_guard();
+
         let _guard = DELEGATE_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let child_dir = tempfile::tempdir().unwrap();
         let ctx_cwd = tempfile::tempdir().unwrap();
@@ -615,6 +670,11 @@ pub(super) const TEST_COUNT: usize = 15;
     #[cfg(unix)]
     #[test]
     fn delegate_launch_reports_goal_bytes_sha256_and_tail_anchored_tail() {
+        // T151: hold the shared timing domain FIRST (before the env lock —
+        // see crate::testsupport's lock-order rule) across the spawn → poll →
+        // cleanup body: this leg's outcome rides a child-spawn deadline.
+        let _timing = crate::testsupport::timing_guard();
+
         let _guard = DELEGATE_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let child_dir = tempfile::tempdir().unwrap();
         let ctx_cwd = tempfile::tempdir().unwrap();
@@ -679,6 +739,11 @@ pub(super) const TEST_COUNT: usize = 15;
     #[cfg(unix)]
     #[test]
     fn delegate_launch_goal_tail_is_verbatim_for_a_short_goal() {
+        // T151: hold the shared timing domain FIRST (before the env lock —
+        // see crate::testsupport's lock-order rule) across the spawn → poll →
+        // cleanup body: this leg's outcome rides a child-spawn deadline.
+        let _timing = crate::testsupport::timing_guard();
+
         let _guard = DELEGATE_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let child_dir = tempfile::tempdir().unwrap();
         let ctx_cwd = tempfile::tempdir().unwrap();
@@ -735,6 +800,11 @@ pub(super) const TEST_COUNT: usize = 15;
     #[cfg(unix)]
     #[test]
     fn delegate_launch_multibyte_goal_tail_stays_on_char_boundaries() {
+        // T151: hold the shared timing domain FIRST (before the env lock —
+        // see crate::testsupport's lock-order rule) across the spawn → poll →
+        // cleanup body: this leg's outcome rides a child-spawn deadline.
+        let _timing = crate::testsupport::timing_guard();
+
         let _guard = DELEGATE_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let child_dir = tempfile::tempdir().unwrap();
         let ctx_cwd = tempfile::tempdir().unwrap();
@@ -820,6 +890,11 @@ pub(super) const TEST_COUNT: usize = 15;
     #[cfg(unix)]
     #[test]
     fn delegate_launch_child_does_not_inherit_target_dir_vars() {
+        // T151: hold the shared timing domain FIRST (before the env lock —
+        // see crate::testsupport's lock-order rule) across the spawn → poll →
+        // cleanup body: this leg's outcome rides a child-spawn deadline.
+        let _timing = crate::testsupport::timing_guard();
+
         use std::os::unix::fs::PermissionsExt;
         let _guard = DELEGATE_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let child_dir = tempfile::tempdir().unwrap();
