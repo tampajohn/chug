@@ -862,9 +862,9 @@ pub(crate) fn drive_loop(
     let sink = &mut event_log as &mut dyn EventSink;
     // T83: `.chug/hooks.json` loads once per invocation, before the loop —
     // that is what makes the config-error warn+error-line once-per-run. Plan
-    // mode is structurally excluded (its tool contract is exactly the five
-    // read-only tools — hooks would be a sixth behavior), so it runs with
-    // zero hooks and zero cost.
+    // mode is structurally excluded (its tool contract is exactly the six
+    // plan tools — T146: five read-only + submit_plan; hooks would be a
+    // seventh behavior), so it runs with zero hooks and zero cost.
     let mut hooks = match ctx.mode {
         Mode::Plan => hooks::Hooks::empty(),
         _ => hooks::Hooks::load(ctx.cwd, sink),
