@@ -451,6 +451,30 @@ budget-died 50/50 mid-mutant-batch, resumed per T63 and finished at
 iter 4 (5th consecutive resume success). Post-merge nextest 1077/1077
 (target-shared-main).
 
+**T143 — per-request max_tokens too small for thinking models (pri 1,
+operator intake, landed 00adb88 rebased ff from 67c4913).** A live
+operator session died at iteration 9: the request-side `max_tokens` was
+hardcoded 8192 in src/api.rs, and GLM thinking blocks consume the SAME
+budget as the response content — a ~7KB `write_file` JSON overflowed
+the cap and truncated mid-stream (the REQUEST-side sibling of T141's
+stream-side detection). Fix (impl 67c4913, glm, 140/80 across two
+segments after a T63 resume — the first segment died 80/80 in 4m45s of
+fast small steps): `DEFAULT_MAX_TOKENS = 32768` (the operator-proven
+value, not their stashed diff verbatim), `$CHUG_MAX_TOKENS` env +
+`--max-tokens-per-request` CLI on run/plan/chat, resolution flag > env
+> default via a pure main.rs helper; the cap flows through
+RunConfig/PlanConfig/ChatConfig into `Client::new(model, cap)` and out
+the single request-body site (api.rs:1350); T38's budget-abort advisory
+gains a `raise CHUG_MAX_TOKENS` remedy line ONLY when
+stop_reason=max_tokens AND the cap is below 32768 (byte-identical
+otherwise); eventlog run_start records the cap. T15's cumulative
+`--max-tokens` independence pinned (clap introspection + both-set
+test). kimi REQUIRED PASS d1790655550-10: RED re-proven at parent
+(body==8192, assert vs 32768 fails), remedy boundary + run_start
+field-drop mutants killed, 8/9 mutants (m9 observ-sink survivor
+non-blocking, outside spec surface, carried) + 3 minor coverage
+observations. Post-merge nextest 1084/1084 (target-shared-main).
+
 ### Cycle 66 (2026-09-28) — routine (reconciled cycle-65 divergence first) — codex-intake queue T134–T142
 
 **CYCLE-66 CYCLE-LEVEL NOTES (wrap).** FOUR items landed (T140,
