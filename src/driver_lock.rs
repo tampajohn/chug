@@ -713,6 +713,110 @@ mod tests {
         );
     }
 
+    /// T147 (T135-M2 kill): the release-side sweep runs under the kernel
+    /// mutex. With the `.chug` directory mutex HELD (flock excludes across
+    /// separately-opened descriptors in ONE process — the T135 probe
+    /// premise), [`Guard::drop`] must spend its bounded release budget
+    /// (MUTEX_TRIES_RELEASE × MUTEX_RETRY_PAUSE = 50 × 10ms) waiting before
+    /// degrading to the unlocked compare-then-delete. A drop that skips the
+    /// mutex call returns in microseconds, so this leg is RED under the
+    /// release-mutex-removal mutant (the T135 survivor). One-sided timing:
+    /// correct code is floored at 500ms of retries, the mutant at ~0ms.
+    #[cfg(unix)]
+    #[test]
+    fn release_sweep_waits_on_a_held_kernel_mutex_before_degrading() {
+        let tmp = tempfile::tempdir().unwrap();
+        let guard = acquire(tmp.path()).expect("fresh cwd acquires");
+        let dir = lock_path(tmp.path()).parent().unwrap().to_path_buf();
+        // Hold the directory mutex from the test via a FRESH descriptor:
+        // flock exclusion holds across separately-opened fds in one process.
+        let held = fs::File::open(&dir).expect("open the .chug dir");
+        // A parallel test's flock on a recycled inode could briefly hold the
+        // take — retry the NB take for up to 2s (a parked racer holds ≤300ms).
+        let mut taken = false;
+        let mut last_err = None;
+        for _ in 0..200 {
+            // SAFETY: flock(2) LOCK_EX | LOCK_NB on a descriptor this test
+            // opened — the same advisory exclusive lock dir_mutex uses.
+            let rc = unsafe { libc::flock(held.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+            if rc == 0 {
+                taken = true;
+                break;
+            }
+            last_err = Some(std::io::Error::last_os_error());
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(taken, "the mutex must be free before the drop: {last_err:?}");
+        let started = Instant::now();
+        drop(guard);
+        let elapsed = started.elapsed();
+        drop(held);
+        assert!(
+            elapsed >= Duration::from_millis(400),
+            "the release-side sweep must wait out the held kernel mutex \
+             (budget 50 × 10ms) before degrading; took {elapsed:?}"
+        );
+        // The degraded sweep still released the file: degradation changes the
+        // locking, never the release.
+        assert!(!lock_path(tmp.path()).exists(), "the degraded sweep still releases");
+    }
+
+    /// T147 (T135-M2/F2 kill — the weak sweep test): after the guard drops,
+    /// the lock file must be ABSENT, and a fresh acquire must decide on its
+    /// FIRST attempt: exactly one deciding read (the observe seam fires once
+    /// per loop attempt), and that read must observe the lock ABSENT —
+    /// acquire, never reclaim. The sweep-removal mutant (a drop that leaves
+    /// the file behind) is RED on BOTH legs: the file survives the drop, and
+    /// the fresh acquirer's first read sees a stale lock and must reclaim it.
+    #[test]
+    fn release_leaves_the_lock_absent_and_a_fresh_acquire_decides_first_try() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::create_dir_all(tmp.path().join(".chug")).unwrap();
+        // The holder records the fake dead RACER_A, so the release legs stay
+        // probe-environment-independent (a real pid would be a live chug).
+        let guard = acquire_with(tmp.path(), RACER_A, &|_| {}).expect("first acquire");
+        assert_eq!(
+            parse_holder_pid(&fs::read_to_string(lock_path(tmp.path())).unwrap()),
+            Some(RACER_A),
+            "premise: the holder's lock is on disk"
+        );
+        drop(guard);
+        // Leg 1 — the release sweep REMOVES the file.
+        assert!(
+            !lock_path(tmp.path()).exists(),
+            "the guard drop must remove the lock file, not leave it for the next acquirer"
+        );
+        // Leg 2 — the fresh acquire: one deciding read, observing ABSENT.
+        let reads = Arc::new(AtomicUsize::new(0));
+        let first_seen: Arc<Mutex<Option<Option<String>>>> = Arc::new(Mutex::new(None));
+        let (r, f) = (reads.clone(), first_seen.clone());
+        let observe = move |seen: Option<&str>| {
+            r.fetch_add(1, Ordering::SeqCst);
+            let mut slot = f.lock().unwrap();
+            if slot.is_none() {
+                *slot = Some(seen.map(str::to_string));
+            }
+        };
+        let fresh = acquire_with(tmp.path(), RACER_B, &observe).expect("fresh acquire");
+        assert_eq!(
+            reads.load(Ordering::SeqCst),
+            1,
+            "the fresh acquire must decide on its FIRST attempt (one deciding read)"
+        );
+        assert_eq!(
+            first_seen.lock().unwrap().clone(),
+            Some(None::<String>),
+            "the first deciding read must observe the lock ABSENT — acquire, never reclaim"
+        );
+        assert_eq!(
+            parse_holder_pid(&fs::read_to_string(lock_path(tmp.path())).unwrap()),
+            Some(RACER_B),
+            "the fresh holder owns the lock"
+        );
+        drop(fresh);
+        assert!(!lock_path(tmp.path()).exists(), "the second release removes too");
+    }
+
     #[test]
     fn lock_never_refuses_on_an_unwritable_lock_path() {
         // T20 never-fail: lock infrastructure failures degrade to running

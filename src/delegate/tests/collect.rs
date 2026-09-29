@@ -4,7 +4,7 @@
 // T109 req 4 count-pin anchor (see mod.rs's pin): this family's
 // #[test] fn count — a dropped `mod collect;` line fails the pin's
 // reference to this const to compile.
-pub(super) const TEST_COUNT: usize = 17;
+pub(super) const TEST_COUNT: usize = 18;
     use super::*; // the shared harness (delegate::tests) + delegate's own imports
 
     /// Manual smoke, permanent: `collect` against the REAL checkout the test
@@ -530,3 +530,28 @@ pub(super) const TEST_COUNT: usize = 17;
         );
     }
 
+    /// T147 (T128-M4 kill): BOTH `render_collect` liveness arms are pinned at
+    /// the unit level — a live child renders the distinct `alive: true` line,
+    /// a dead child the distinct `alive: false` line, no pid renders neither,
+    /// and flipping the liveness bool flips the output. The alive-true-flip
+    /// mutant (the `Some(true)` arm rendering the dead text) turns the first
+    /// pair RED; the reverse flip turns the second pair RED.
+    #[test]
+    fn delegate_collect_render_collect_pins_both_liveness_arms() {
+        let summary = summarize_collect(&[]);
+        let no_commits: Result<Vec<String>, String> = Err("not a repo".to_string());
+        let live = render_collect(&summary, Some(true), None, &no_commits, None);
+        let dead = render_collect(&summary, Some(false), None, &no_commits, None);
+        let unasked = render_collect(&summary, None, None, &no_commits, None);
+        // The live arm's distinctive text — and ONLY the live arm renders it.
+        assert!(live.contains("\nalive: true"), "{live}");
+        assert!(!live.contains("alive: false"), "{live}");
+        // The dead arm's distinctive text — and ONLY the dead arm renders it.
+        assert!(dead.contains("\nalive: false"), "{dead}");
+        assert!(!dead.contains("alive: true"), "{dead}");
+        // No pid → NO liveness line at all (collect's contract, unlike
+        // status's always-rendered `alive: unknown`).
+        assert!(!unasked.contains("alive:"), "{unasked}");
+        // Flipping the liveness bool flips the rendered output.
+        assert_ne!(live, dead, "the liveness bool must flip the rendering");
+    }
