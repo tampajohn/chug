@@ -261,6 +261,27 @@ audit.**
 
 ### Cycle 71 (2026-09-29) — routine glm freshness-skip (queue non-empty, eval fresh) — T147 landed
 
+**T148 — chug_launch wire e2e (8cd59ac, merge of loop-t148: 14d1bcd).**
+T129's descoped follow-up closed the M7+M8 survivor gap with a real-wire
+e2e: the REAL `chug mcp-serve` binary over REAL stdio (T124 harness,
++425 tests-only + one README line), `CHUG_DELEGATE_BIN` stub child
+recording argv+env — real server, real spawn, no model endpoint. Three
+legs: happy path (advertised ⇔ callable, pid/log/events payload, stub
+record byte-equals the wire's spec/goal/model + budgets 7/9 — distinct
+from the 40/35 delegate defaults), above-ceiling refusal (isError:true
+naming "got 201" + the 200 ceiling, 1s bounded absence probe, loop alive
+after refusal), default-deny (unadvertised, unknown-tool -32602). Carried
+nit honored — zero sub-ms ordering assertions. kimi SKIPPED (routing
+d1790684833-5, tests-only precedent); the orchestrator independently
+re-ran the 3 canonical mutants — ALL RED (verdict d1790684835-6):
+flag-drop → happy-path FAIL, isError:false → ceiling-leg FAIL,
+advertise-unconditional → default-deny FAIL. Gates 1129/1129 nextest
+--release worktree + main. Child's gate note: default-parallelism
+`cargo test` bin-test flakes reproduce on the CLEAN base (dc6c11d,
+tree stashed) under current machine load — pre-existing, nextest-based
+gates unaffected; watch item for the next eval (threading or
+isolation candidate).
+
 **T147 — 4 carried survivor pins, tests-only (6b217c3, merge of loop-t147:
 b08e909).** The cycle-70 80/80 budget death recovered by ONE T63 resume in
 the standing worktree: child finished at 26/80 with the goal accepted,
