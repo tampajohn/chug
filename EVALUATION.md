@@ -339,6 +339,30 @@ tier the routing call declined). Review + post-merge nextest 1106/1106
 (target-shared-main). Est ~30 → actual +73/−4 (test density again beats
 the line estimate; within the no-action band).
 
+**CYCLE-69 CYCLE-LEVEL NOTES (wrap).** BOTH deferred rows landed — the
+cycle-68 deferrals were honored in queue order (feature T129 first, then
+small T131) — and the queue is now EMPTY. Zero budget deaths, zero T63
+resumes (77/27 and 41/50 of their ceilings — the healthiest census in
+the post-T110 era); minutes never binding. Pipeline overlap ran once
+clean (T129-validator ‖ T131-impl, disjoint file sets, strictly serial
+merges, clean rebase-ff for T131). Two decision-log hygiene notes for
+the record: (a) one outcome record (d1790664534-4) was appended with
+T131's inputs under T129's routing subject — corrected by the two
+following records (d1790664540-5/-6); the corpus is append-only so the
+stray stays readable; (b) child decision records (T129's descope call,
+T131's RED-first verdict) were merged into the main decisions.jsonl at
+harvest. Harvest: 3 impl/validate streams + 1 verdict LEDGER into
+`.chug/` (untracked by design — .gitignore carries .chug/; commit
+messages name the harvest). NO release tag this wrap: 2 items since
+v0.4.1 (< 3) and no FEATURES.md check-off (F10 phase 2 CLOSED is a
+progress annotation on a still-open row — phase 3 deferred — matching
+the T128 precedent). Carried to the next eval (queue empty → fresh
+eval routes kimi): T129's M7 (--allow-launch CLI plumbing pin = the
+descoped wire e2e) + M8 (launch-failure isError arm pin) survivors, the
+stub-spawn events-ordering nit, and the optional follow-up row for the
+flag-ON wire e2e. Final gates at HEAD: build + clippy clean, nextest
+1106/1106 (target-shared-main).
+
 ### Cycle 67 (2026-09-28/29) — routine glm freshness-skip (queue non-empty, eval fresh) — codex-review pri-2 rows
 
 ### Cycle 67 (2026-09-28/29) — routine (freshness-skip) — codex-intake pri-2 queue
