@@ -342,7 +342,7 @@
         );
     }
 
-    /// (c) The tool list the REAL loop sends to the API is exactly the five
+    /// (c) The tool list the REAL loop sends to the API is exactly the six
     /// plan tools EVEN WITH a live non-empty MCP registry present — the
     /// plan branch must never extend the advertised list with mcp schemas
     /// (an empty prod registry would make that extension invisible).
