@@ -14,6 +14,7 @@
     // One `mod` line per family file; each family's tests live in exactly one
     // file.
     mod budget;
+    mod crash;
     mod events;
     mod goal;
     mod hooks_policy;

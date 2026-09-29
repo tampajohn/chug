@@ -13,6 +13,7 @@ mod driver_lock;
 mod eventlog;
 mod events;
 mod fork;
+mod fsatomic;
 mod hooks;
 mod riskgate;
 mod ledger;
