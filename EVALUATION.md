@@ -318,6 +318,27 @@ nextest 1105/1105 (target-shared-main). Pipeline overlap ran once clean
 merges). FEATURES.md F10 updated at the row flip (phase 2b LANDED, phase
 2 CLOSED).
 
+**T131 — eval-digest reader staleness check excludes the reader's own
+live stream (pri 4, landed b52e62c rebased ff from 26b3ec6).** The
+cycle-65 eval's live-observed annoyance (digest 17:47:52Z vs own-stream
+rotation 17:48:12Z → STALE within the first minute, "regenerate if
+stale" unsatisfiable mid-cycle) fixed at the render: the newest events
+file (`ls -t | head -1`) is dropped from the `-newer` candidate set via
+`grep -vx`, both verdicts render (`&& echo STALE || echo FRESH`), and
+the rendered rationale sentence says why the newest file is excluded and
+what STALE now means (foreign corpus). Pre/post-scan machinery,
+corpus-age field, and the four pinned staleness labels byte-identical;
+one pin leg RED-proven on the parent tree (died at the check-line pin,
+old render lacked exclusion + FRESH) with a live 3-leg tempdir demo of
+the extracted check (digest-newest→FRESH, own-stream→FRESH,
+foreign-second→STALE) recorded in the commit message. glm impl 27/80
+first-try; kimi SKIPPED per routing d1790664201-3 (T16/T116
+tests+tooling precedent — the child's RED proof + orchestrator gates
+carried it; a kimi round on a ~30-line script render is the optional
+tier the routing call declined). Review + post-merge nextest 1106/1106
+(target-shared-main). Est ~30 → actual +73/−4 (test density again beats
+the line estimate; within the no-action band).
+
 ### Cycle 67 (2026-09-28/29) — routine glm freshness-skip (queue non-empty, eval fresh) — codex-review pri-2 rows
 
 ### Cycle 67 (2026-09-28/29) — routine (freshness-skip) — codex-intake pri-2 queue
