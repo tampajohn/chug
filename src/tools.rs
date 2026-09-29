@@ -1266,7 +1266,6 @@ pub fn truncate_middle(s: &str, head: usize, tail: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{Mutex, MutexGuard};
 
     #[test]
     fn path_safety_rejects_parent_traversal() {
@@ -1661,6 +1660,12 @@ mod tests {
     fn bash_dispatch_honors_ctx_bash_timeout() {
         // The override path must reach run_shell: a 1s ToolCtx timeout kills a
         // 5s sleep at ~1s (not the 120s default), reporting a timeout error.
+        // T151 family sweep (tools.rs sibling, req 2): the `elapsed < 4s`
+        // bound below is an absolute wall-clock assert of exactly the shape
+        // parallel scheduler stretch violates — hold the shared timing lock
+        // so no other file's clocked window can overlap ours (same mechanism
+        // as the three run_shell legs above). Bound itself unchanged.
+        let _timing = crate::testsupport::timing_guard();
         let tmp = tempfile::tempdir().unwrap();
         let ctx = ToolCtx {
             cwd: tmp.path().to_path_buf(),
@@ -1888,27 +1893,26 @@ mod tests {
 
     // ---- T31: wall-clock-sensitive run_shell tests serialize on one lock ----
 
-    /// Serializes the wall-clock-sensitive `run_shell` tests (T31). Each of
-    /// the three tests below asserts an upper bound on real elapsed time
-    /// around a `timeout + READER_GRACE` window; under `--test-threads=4` the
-    /// scheduler can starve a test thread while sibling tests run, stretching
-    /// `elapsed` past the bound even though run_shell behaved correctly (two
-    /// one-off sightings, both under parallel load, both green isolated).
-    /// Holding this lock for the clocked window removes that co-occurrence by
-    /// construction: no two timing tests are ever in flight together, so the
-    /// only stretch source left is whole-machine starvation, not the suite
-    /// itself. std-only — no new dependencies. The elapsed bounds themselves
-    /// are deliberately untouched: they must keep dying when run_shell stops
-    /// returning promptly.
-    static RUN_SHELL_TIMING_LOCK: Mutex<()> = Mutex::new(());
-
-    /// Poison-tolerant acquisition: a panic inside one timing test must not
-    /// cascade `PoisonError` failures into its siblings.
-    fn timing_guard() -> MutexGuard<'static, ()> {
-        RUN_SHELL_TIMING_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-    }
+    // T151: the T31 lock moved to the ONE shared crate-visible timing
+    // domain (crate::testsupport) so the run_shell windows can no longer
+    // overlap ANY other file's timing test either (the cycle-70/71 flake
+    // storms were all cross-file co-occurrences). The three tests below
+    // keep passing byte-identical in behavior: same guard semantics, same
+    // elapsed bounds, only the acquisition path changed. The old
+    // `RUN_SHELL_TIMING_LOCK` static + `timing_guard` fn were deleted with
+    // the move — re-declaring them here would re-introduce a second
+    // independent lock (the T151 req-1 finding).
+    //
+    // The original T31 rationale, still true: each of the three tests
+    // asserts an upper bound on real elapsed time around a
+    // `timeout + READER_GRACE` window; under parallel load the scheduler
+    // can starve a test thread while sibling tests run, stretching
+    // `elapsed` past the bound even though run_shell behaved correctly
+    // (two one-off sightings, both under parallel load, both green
+    // isolated). Holding the shared lock for the clocked window removes
+    // that co-occurrence by construction. The elapsed bounds themselves
+    // are deliberately untouched: they must keep dying when run_shell
+    // stops returning promptly.
 
     /// Regression: a backgrounded grandchild in the shell's own process group
     /// must be killed with the GROUP at timeout — before the fix only the
@@ -1918,9 +1922,9 @@ mod tests {
     #[test]
     fn run_shell_timeout_kills_process_group_and_returns() {
         // T31: wall-clock ceiling below — hold the timing lock so a sibling
-        // timing test cannot stretch `elapsed` (see RUN_SHELL_TIMING_LOCK).
+        // timing test cannot stretch `elapsed` (crate::testsupport, T151).
         // Same mechanism as the two named flake sites, so it serializes too.
-        let _timing = timing_guard();
+        let _timing = crate::testsupport::timing_guard();
         let tmp = tempfile::tempdir().unwrap();
         let timeout = Duration::from_secs(1);
         let start = Instant::now();
@@ -1943,6 +1947,80 @@ mod tests {
         );
     }
 
+    /// T151 (new residual mechanism, named in the commit message): the setsid
+    /// leg's escapee must boot python3 and call `os.setsid()` BEFORE the 1s
+    /// group kill fires. Unpolluted that is ~30ms of CPU against a 1s
+    /// deadline — but macOS charges the FIRST exec of an interpreter after a
+    /// short idle gap ~1s of wall clock (measured on the dev host, both
+    /// Homebrew's and /usr/bin's python3: 0.8–1.2s cold, 0.02–0.05s within
+    /// ~3s of a previous exec of the same binary, then cold again). A suite
+    /// run usually keeps python3 warm via the mcp stub tests; when the leg
+    /// lands outside that window (isolated runs, quiet stretches at default
+    /// parallelism) the cold exec LOSES the race to the kill, the escapee
+    /// dies WITH its group, the inherited pipe closes, the readers drain,
+    /// and the truncation note this test pins never appears — a red shaped
+    /// exactly like a real run_shell regression (observed deterministic-red
+    /// in isolation). Two mechanisms, both race-eliminating and
+    /// constant-preserving:
+    /// 1. WARM-UP (primary): an untimed, best-effort `python3 -c "import os"`
+    ///    spawn immediately before the timed leg — the leg's exec then sits
+    ///    inside the warm window by construction (the gap is spawn+fork
+    ///    syscalls, milliseconds; the measured warm window is ~3s). The race
+    ///    is eliminated, not widened; no timeout constant moves.
+    /// 2. T59-STYLE BOUNDED RETRY (defense in depth): the slow-detach shape
+    ///    is DETECTED (`timed_out` + group-killed message + missing
+    ///    truncation note — no other outcome produces that triple; a broken
+    ///    group kill leaves `sleep 300` alive holding the pipe, so the note
+    ///    IS present and the leg is never retried) and the whole leg retries
+    ///    with a FRESH escapee, bounded by [`SETSID_DETACH_RETRY_ATTEMPTS`].
+    ///    On exhaustion the LAST outcome is returned so the caller's asserts
+    ///    keep their byte-identical messages — a genuine regression (python3
+    ///    missing, kill broken) still lands red, unmasked. The per-attempt
+    ///    `elapsed` is what the caller asserts on, so a retry can never
+    ///    stretch the asserted window.
+    const SETSID_DETACH_RETRY_ATTEMPTS: usize = 3;
+
+    /// Untimed, best-effort warm-up exec of `program` (see
+    /// [`SETSID_DETACH_RETRY_ATTEMPTS`] for the mechanism): a spawn failure
+    /// (interpreter absent) just leaves the timed leg exactly as it was.
+    fn warm_interpreter_exec(program: &str) {
+        let _ = Command::new(program).arg("-c").arg("import os").output();
+    }
+
+    /// One setsid-escapee leg with the warm-up + bounded retry-on-slow-detach
+    /// (see [`SETSID_DETACH_RETRY_ATTEMPTS`]). Returns the surviving
+    /// attempt's outcome plus ITS OWN elapsed window.
+    fn run_shell_setsid_escapee_holds_pipe_once(timeout: Duration) -> (ShellOutcome, Duration) {
+        warm_interpreter_exec("python3");
+        let mut last = None;
+        for attempt in 1..=SETSID_DETACH_RETRY_ATTEMPTS {
+            let tmp = tempfile::tempdir().unwrap();
+            let escapee =
+                "python3 -c \"import os, time; os.setsid(); print('held'); time.sleep(60)\"";
+            let command = format!("{escapee} & sleep 300");
+            let start = Instant::now();
+            let outcome = run_shell(tmp.path(), &command, timeout).unwrap();
+            let elapsed = start.elapsed();
+            let slow_detach = outcome.timed_out
+                && outcome
+                    .output
+                    .contains("timed out after 1s (process group killed)")
+                && !outcome
+                    .output
+                    .contains("(output truncated: reader did not drain after kill)");
+            if !slow_detach {
+                return (outcome, elapsed);
+            }
+            eprintln!(
+                "run_shell setsid leg: attempt {attempt}/{SETSID_DETACH_RETRY_ATTEMPTS} hit a \
+                 slow escapee boot (detached after the group kill — pipe drained, no reader \
+                 note, {elapsed:?}); retrying with a fresh escapee"
+            );
+            last = Some((outcome, elapsed));
+        }
+        last.expect("retry loop ran at least once")
+    }
+
     /// Regression: a setsid-escaped grandchild keeps the stdout pipe open after
     /// the process group is killed, so the reader never sees EOF. run_shell must
     /// still return (capped reader wait), reporting partial output plus a
@@ -1954,16 +2032,10 @@ mod tests {
         // T31 (named flake): the ceiling below is exactly the shape parallel
         // scheduler stretch violates — hold the timing lock so no sibling
         // timing test's clocked window can overlap ours and starve this
-        // thread (see RUN_SHELL_TIMING_LOCK). Bound itself unchanged.
-        let _timing = timing_guard();
-        let tmp = tempfile::tempdir().unwrap();
+        // thread (crate::testsupport, T151). Bound itself unchanged.
+        let _timing = crate::testsupport::timing_guard();
         let timeout = Duration::from_secs(1);
-        let escapee = "python3 -c \"import os, time; os.setsid(); print('held'); time.sleep(60)\"";
-        let command = format!("{escapee} & sleep 300");
-        let start = Instant::now();
-        let outcome = run_shell(tmp.path(), &command, timeout).unwrap();
-        let elapsed = start.elapsed();
-
+        let (outcome, elapsed) = run_shell_setsid_escapee_holds_pipe_once(timeout);
         assert!(outcome.timed_out);
         assert!(
             outcome
@@ -2003,8 +2075,8 @@ mod tests {
         // spawn and its next poll, and the suite's own heavyweight timing
         // tests (multi-second kill+grace windows) are the co-occurrence that
         // produced the one-off sighting. Serialize against them (see
-        // RUN_SHELL_TIMING_LOCK); every assertion below is byte-identical.
-        let _timing = timing_guard();
+        // crate::testsupport, T151); every assertion below is byte-identical.
+        let _timing = crate::testsupport::timing_guard();
         let tmp = tempfile::tempdir().unwrap();
         let outcome = run_shell(tmp.path(), "echo hi; exit 3", Duration::from_secs(10)).unwrap();
         assert!(!outcome.timed_out);

@@ -11,6 +11,10 @@
     /// to completion).
     #[test]
     fn hook_veto_blocks_bash_execution_and_loop_continues() {
+        // T151: hold the shared timing domain across the whole body (first
+        // acquisition — see crate::testsupport's lock-order rule). Named T151 sighting + siblings asserting hook/bash child outcomes (HOOK_TIMEOUT spawn timing).
+        let _timing = crate::testsupport::timing_guard();
+
         let tmp = tempfile::tempdir().unwrap();
         write_hooks_json(
             tmp.path(),
@@ -77,6 +81,10 @@
     /// the advisory mutates the veto text).
     #[test]
     fn hook_veto_result_is_exact_and_fires_no_post_hook() {
+        // T151: hold the shared timing domain across the whole body (first
+        // acquisition — see crate::testsupport's lock-order rule). Named T151 sighting + siblings asserting hook/bash child outcomes (HOOK_TIMEOUT spawn timing).
+        let _timing = crate::testsupport::timing_guard();
+
         let tmp = tempfile::tempdir().unwrap();
         write_hooks_json(
             tmp.path(),
@@ -180,6 +188,10 @@
     /// result the model receives, without changing ok/is_error.
     #[test]
     fn hook_allow_executes_tool_and_post_note_lands_in_result() {
+        // T151: hold the shared timing domain across the whole body (first
+        // acquisition — see crate::testsupport's lock-order rule). Named T151 sighting + siblings asserting hook/bash child outcomes (HOOK_TIMEOUT spawn timing).
+        let _timing = crate::testsupport::timing_guard();
+
         let tmp = tempfile::tempdir().unwrap();
         write_hooks_json(
             tmp.path(),
@@ -232,6 +244,10 @@
     /// once per drive_loop invocation, not per tool call.
     #[test]
     fn malformed_hooks_config_error_line_exactly_once_despite_two_calls() {
+        // T151: hold the shared timing domain across the whole body (first
+        // acquisition — see crate::testsupport's lock-order rule). Named T151 sighting + siblings asserting hook/bash child outcomes (HOOK_TIMEOUT spawn timing).
+        let _timing = crate::testsupport::timing_guard();
+
         let tmp = tempfile::tempdir().unwrap();
         fs::create_dir_all(tmp.path().join(".chug")).unwrap();
         fs::write(hooks::hooks_path(tmp.path()), "{ not json !!!").unwrap();
@@ -331,6 +347,10 @@
     /// fix flips this red: `GoalAccepted` instead of `Completed`.
     #[test]
     fn vetoed_goal_complete_does_not_complete_the_run() {
+        // T151: hold the shared timing domain across the whole body (first
+        // acquisition — see crate::testsupport's lock-order rule). Named T151 sighting + siblings asserting hook/bash child outcomes (HOOK_TIMEOUT spawn timing).
+        let _timing = crate::testsupport::timing_guard();
+
         let tmp = tempfile::tempdir().unwrap();
         write_hooks_json(
             tmp.path(),
@@ -402,6 +422,10 @@
     /// runs and the accepted summary is "premature claim" — red.
     #[test]
     fn vetoed_premature_goal_complete_loops_until_honest_claim() {
+        // T151: hold the shared timing domain across the whole body (first
+        // acquisition — see crate::testsupport's lock-order rule). Named T151 sighting + siblings asserting hook/bash child outcomes (HOOK_TIMEOUT spawn timing).
+        let _timing = crate::testsupport::timing_guard();
+
         let tmp = tempfile::tempdir().unwrap();
         write_hooks_json(
             tmp.path(),
