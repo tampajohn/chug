@@ -1611,9 +1611,42 @@
             wall < std::time::Duration::from_secs(8),
             "the leg stays under the ~8 s wall: {wall:?}"
         );
-        // The SIGKILLed fixture is a zombie until the test reaps it — drop
-        // the guard (kill is a no-op on the dead group; wait reaps), then
-        // assert the pid is fully gone.
+        // The EFFECT, not just the report (T160): immediately after the
+        // cancel call — while the guard still holds the fixture — the
+        // group must actually be EMPTY. The same reap-then-ESRCH probe
+        // shape as `group_gone_convergence_reaps_the_zombie_leader`,
+        // reusing the escalation loop's own `group_gone` (its WNOHANG
+        // reap clears our now-zombie child, then the group probe must
+        // answer ESRCH). A mutant that skips the SIGKILL yet still
+        // reports `kill` dies HERE: the TERM-ignoring fixture is still a
+        // live group member, so the probe never turns ESRCH — and the
+        // guard's cleanup kill after the drop would otherwise mask it.
+        let pid_i = pid as i32; // the fixture is its own group leader
+        let mut gone = false;
+        for _ in 0..20 {
+            if group_gone(pid_i, pid_i) {
+                gone = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(
+            gone,
+            "the escalation emptied the group — a `signaled: kill` payload \
+             with the group still alive is the report-only mutant"
+        );
+        // The probe's own post-condition: the reap inside `group_gone`
+        // consumed the zombie leader, so the per-pid probe is ESRCH too —
+        // never left a zombie the suite's cleanup would have to reap.
+        assert_ne!(
+            unsafe { libc::kill(pid_i, 0) },
+            0,
+            "the probe reaped the leader: fully gone, not a zombie"
+        );
+        // Cleanup is now a no-op on an already-empty group (the guard's
+        // kill finds nothing; its wait hits an already-reaped child and
+        // the error is deliberately ignored) — drop it, then assert the
+        // pid is still fully gone.
         drop(guard);
         assert_ne!(
             unsafe { libc::kill(pid as i32, 0) },
@@ -1815,6 +1848,13 @@
             ("/bin/sh -c 'exec chug run' chug run --spec /tmp/s.md", true),
             // A binary whose PATH merely contains "run".
             ("/opt/something/grunt --special run", false),
+            // The mirror near-miss (T160): `run` FIRST, immediately
+            // followed by a `--spec*` token that is neither `--spec` nor
+            // `--spec=` — the needle's comment says `--special` must not
+            // match, and this is the row that enforces it. A needle
+            // relaxed to a bare `starts_with("--spec")` answers `true`
+            // here and ships green without this pin.
+            ("tool run --special cfg", false),
             ("/bin/sleep 30", false),
             ("vim /notes/run --spec-notes.txt", false),
             ("chug status --spec /tmp/s.md", false),
