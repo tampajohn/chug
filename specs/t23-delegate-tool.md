@@ -1,6 +1,6 @@
 # T23 — `delegate` tool: launch + status for bounded child chug runs
 
-check: cd /Users/jadams/workspace/chug && cargo test
+check: cargo test
 
 ## Why (evidence)
 

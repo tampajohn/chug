@@ -1,6 +1,6 @@
 # T21 — LOOP-SPEC impl-child template: --max-iters 40 → 50
 
-check: cd /Users/jadams/workspace/chug && grep -q -- '--max-iters 50' LOOP-SPEC.md && ! grep -q -- '--max-iters 40' LOOP-SPEC.md && cargo test
+check: grep -q -- '--max-iters 50' LOOP-SPEC.md && ! grep -q -- '--max-iters 40' LOOP-SPEC.md && cargo test
 
 ## Why (evidence)
 

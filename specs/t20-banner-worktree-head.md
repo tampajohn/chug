@@ -1,6 +1,6 @@
 # T20 — Startup banner + run_start gain the cwd's worktree HEAD (branch@commit)
 
-check: cd /Users/jadams/workspace/chug && cargo test
+check: cargo test
 
 ## Why (evidence)
 

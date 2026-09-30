@@ -202,22 +202,34 @@ fn malformed_rows_are_rejected_naming_the_row() {
 }
 
 // ---------------------------------------------------------------------------
-// T67 — spec `check:` lines never invoke `cargo test --lib`.
+// T67 → T164 — spec `check:` line lint: no `--lib`, no failure-masking pipes,
+// no absolute-path `cd`.
 //
 // This crate is binary-only (`src/main.rs`, no `lib.rs`), so
 // `cargo test --lib` exits 101 ("no library targets found in package
 // `chug`") — and `goal_complete` re-runs a spec's `check:` line as the impl
 // child's goal gate. Nine child streams (t22/t25/t26/t29/t39/t42/t58/t59/
 // t64) died on that unsatisfiable gate, the latest (t64) after its work was
-// already committed and 14/14 green on leg 1. The lint below keeps the
-// specs corpus clean; the doctrine pin keeps META-META-SPEC.md's
-// convention sentence from being silently reverted.
+// already committed and 14/14 green on leg 1. The T67 lint guarded that by
+// matching the literal `cargo test --lib` — but the literal misses flag-
+// in-between spellings (`cargo test --release --lib`: the t160 escape, whose
+// `--lib … | tail -3` leg exited 101 while the goal gate PASSED, because a
+// pipeline's exit status is the last command's). T164 generalizes the lint
+// to three mechanical rules over every check line of every specs/t*.md:
+//
+//   (a) `--lib` must not be passed to cargo in ANY flag position (token
+//       match, not substring — the t160 escape);
+//   (b) a check line piping a cargo command through tail/head/grep MUST
+//       contain `pipefail` — otherwise the filter masks the failure;
+//   (c) a check line must not `cd` to an absolute path (the worktree-
+//       relative rule — the T21 anomaly class: the gate must test the impl
+//       child's worktree, never a pinned directory).
 //
 // t67's own spec spells the flag `--l[i]b` (a BRE class matching the
 // literal `i`) so its prose does not carry the literal token its own gate
-// greps `specs/t*.md` for — the lint still matches the literal here.
-
-const CARGO_TEST_LIB: &str = "cargo test --lib";
+// greps `specs/t*.md` for — the lint matches bare tokens only, so a quoted
+// needle naming the flag (`grep -q 'cargo test --lib' …`) is not a
+// pass-to-cargo and stays clean.
 
 /// Every `specs/t*.md` file on disk (sorted), mirroring the shell glob the
 /// spec's acceptance grep uses. Asserts an implausible-shrink floor so the
@@ -257,8 +269,163 @@ fn check_lines(text: &str) -> Vec<(usize, &str)> {
         .collect()
 }
 
+/// Shell segments of a check line, each paired with the separator that ENDED
+/// it (`'\0'` for the final segment). `&&`, `||`, `;`, and `|` separate
+/// segments; only `|` (and `||`) marks a pipeline, which leg (b) needs.
+/// Quoted runs (`'…'`, `"…"`) are opaque: separators inside a grep needle
+/// (t40 greps LOOP-SPEC for a needle containing a literal `|`) do not split.
+fn shell_segments(line: &str) -> Vec<(char, &str)> {
+    let mut segments: Vec<(char, &str)> = Vec::new();
+    let mut quote: Option<char> = None;
+    let mut start = 0;
+    let mut chars = line.char_indices();
+    while let Some((i, ch)) = chars.next() {
+        if let Some(q) = quote {
+            if ch == q {
+                quote = None;
+            }
+            continue;
+        }
+        let (sep, width) = match ch {
+            ';' => (';', 1),
+            '&' if line[i + 1..].starts_with('&') => ('&', 2),
+            '|' if line[i + 1..].starts_with('|') => {
+                chars.next(); // consume the second '|'
+                ('|', 2)
+            }
+            '|' => ('|', 1),
+            '\'' | '"' => {
+                quote = Some(ch);
+                continue;
+            }
+            _ => continue,
+        };
+        segments.push((sep, &line[start..i]));
+        start = i + width;
+    }
+    segments.push(('\0', &line[start..]));
+    segments
+}
+
+/// Tokens of one shell segment: whitespace-separated outside quotes, and a
+/// quoted run is ONE token with the quote characters stripped. A grep needle
+/// like `'cargo test --lib'` is therefore a single opaque token that can
+/// never re-assemble into the bare `cargo` / `--lib` tokens the lint
+/// matches (the shell would strip the quotes — `cargo test '--lib'` really
+/// does pass `--lib` — so quoted flag passes stay flagged).
+fn segment_tokens(segment: &str) -> Vec<String> {
+    let mut tokens: Vec<String> = Vec::new();
+    let mut current = String::new();
+    let mut in_token = false;
+    let mut quote: Option<char> = None;
+    for ch in segment.chars() {
+        if let Some(q) = quote {
+            if ch == q {
+                quote = None;
+            } else {
+                current.push(ch);
+            }
+            continue;
+        }
+        match ch {
+            '\'' | '"' => {
+                quote = Some(ch);
+                in_token = true;
+            }
+            c if c.is_whitespace() => {
+                if in_token {
+                    tokens.push(std::mem::take(&mut current));
+                    in_token = false;
+                }
+            }
+            c => {
+                current.push(c);
+                in_token = true;
+            }
+        }
+    }
+    if in_token {
+        tokens.push(current);
+    }
+    tokens
+}
+
+/// T164 — the three banned check-line shapes, one human-readable problem per
+/// violated rule (each names the rule). `check` is a check line's payload —
+/// the text after `check:`. Rules:
+///
+/// (a) `--lib` passed to cargo in ANY flag position — the T67 literal
+///     `cargo test --lib` missed `cargo test --release --lib` (the t160
+///     escape); token-scoped per shell segment, so a quoted needle naming
+///     the flag is not a pass-to-cargo;
+/// (b) a cargo command piped through tail/head/grep with no `pipefail`
+///     anywhere on the line — the pipeline's exit status is the filter's,
+///     so the filter masks a RED build/test leg;
+/// (c) `cd` to an absolute path (`/…` or `~…`) — the worktree-relative
+///     rule: check lines run in the impl child's worktree cwd.
+fn check_line_violations(check: &str) -> Vec<String> {
+    let mut problems = Vec::new();
+    let segments = shell_segments(check);
+    let tokenized: Vec<Vec<String>> = segments
+        .iter()
+        .map(|(_, seg)| segment_tokens(seg))
+        .collect();
+    let has_cargo = |t: &[String]| t.iter().any(|w| w == "cargo");
+
+    // (a) `--lib` in ANY flag position.
+    if tokenized
+        .iter()
+        .any(|t| has_cargo(t) && t.iter().any(|w| w == "--lib"))
+    {
+        problems.push(
+            "check line passes `--lib` to cargo — binary-only crate, `--lib` exits 101 \
+             `no library targets found` at the goal gate (use plain `cargo test` or \
+             `cargo test --bin chug [<filter>]`)"
+                .to_string(),
+        );
+    }
+
+    // (b) failure-masking pipe: cargo piped through tail/head/grep without
+    //     `pipefail` (t160: the `--lib … | tail -3` leg exited 101 and the
+    //     goal gate passed).
+    let piped = (0..tokenized.len().saturating_sub(1)).any(|i| {
+        segments[i].0 == '|'
+            && has_cargo(&tokenized[i])
+            && matches!(
+                tokenized[i + 1].first().map(String::as_str),
+                Some("tail") | Some("head") | Some("grep")
+            )
+    });
+    if piped && !check.contains("pipefail") {
+        problems.push(
+            "check line pipes a cargo command through tail/head/grep without `pipefail` — \
+             the pipeline's exit status is the filter's, masking the build/test failure \
+             (prefix `set -o pipefail;` or drop the filter)"
+                .to_string(),
+        );
+    }
+
+    // (c) absolute-path `cd` (the T21 anomaly class).
+    for t in &tokenized {
+        for (i, w) in t.iter().enumerate() {
+            if w == "cd"
+                && let Some(arg) = t[i + 1..]
+                    .iter()
+                    .find(|a| a.starts_with('/') || a.starts_with('~'))
+            {
+                problems.push(format!(
+                    "check line cd's to the absolute path `{arg}` — check lines are \
+                     worktree-relative: they run in the impl child's worktree cwd, never \
+                     cd to a pinned directory"
+                ));
+            }
+        }
+    }
+    problems
+}
+
 #[test]
-fn spec_check_lines_never_invoke_cargo_test_lib() {
+fn spec_check_lines_are_lint_clean() {
     let root = std::env::current_dir().expect("cargo sets the test cwd to the package root");
     let mut offenders = Vec::new();
     let mut saw_t64 = false;
@@ -274,10 +441,8 @@ fn spec_check_lines_never_invoke_cargo_test_lib() {
         let text =
             std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{} readable: {e}", path.display()));
         for (line_no, check) in check_lines(&text) {
-            if check.contains(CARGO_TEST_LIB) {
-                offenders.push(format!(
-                    "{name}:{line_no}: check line invokes `{CARGO_TEST_LIB}` — binary-only crate — use cargo test or cargo test --bin chug"
-                ));
+            for problem in check_line_violations(check) {
+                offenders.push(format!("{name}:{line_no}: {problem}"));
             }
         }
     }
@@ -287,9 +452,98 @@ fn spec_check_lines_never_invoke_cargo_test_lib() {
     );
     assert!(
         offenders.is_empty(),
-        "spec check lines must not invoke cargo test --lib (binary-only crate — use cargo test or cargo test --bin chug):\n{}",
+        "spec check lines must satisfy the T164 lint (no `--lib`, no failure-masking pipes, no absolute-path `cd`):\n{}",
         offenders.join("\n")
     );
+}
+
+#[test]
+fn check_line_lint_flags_lib_in_any_flag_position() {
+    // The t160 escape: the T67 literal `cargo test --lib` missed this shape.
+    let problems = check_line_violations("cargo test --release --lib mcp_serve");
+    assert!(problems.iter().any(|p| p.contains("--lib")), "{problems:?}");
+    assert!(
+        check_line_violations("cargo test --lib")
+            .iter()
+            .any(|p| p.contains("--lib")),
+        "the plain T67 shape must stay flagged"
+    );
+    // A quoted flag pass still reaches cargo (the shell strips the quotes)…
+    assert!(
+        check_line_violations("cargo test '--lib'")
+            .iter()
+            .any(|p| p.contains("--lib")),
+        "a quoted --lib still reaches cargo and must stay flagged"
+    );
+    // …but a quoted needle NAMING the flag is not a pass-to-cargo.
+    assert!(
+        check_line_violations("grep -q 'cargo test --lib' META-META-SPEC.md && cargo test")
+            .is_empty()
+    );
+    // Compliant spellings pass.
+    assert!(check_line_violations("cargo test --test mcp_serve").is_empty());
+    assert!(check_line_violations("cargo test --bin chug mcp_serve").is_empty());
+}
+
+#[test]
+fn check_line_lint_flags_cargo_piped_through_a_filter_without_pipefail() {
+    for banned in [
+        "cargo test 2>&1 | tail -3",
+        "cargo test 2>&1 | head -5",
+        "cargo test 2>&1 | grep -q ok",
+        "cargo clippy --release --all-targets | tail -5",
+    ] {
+        let problems = check_line_violations(banned);
+        assert!(
+            problems.iter().any(|p| p.contains("pipefail")),
+            "{banned}: {problems:?}"
+        );
+    }
+    // The pipefail prefix clears the leg…
+    assert!(
+        check_line_violations("set -o pipefail; cargo test 2>&1 | tail -3").is_empty(),
+        "pipefail-prefixed pipe must pass"
+    );
+    // …and filters not downstream of cargo, or no filter at all, never trip it.
+    assert!(
+        check_line_violations("grep -c 'x' LOOP-SPEC.md | grep -q '^1$' && cargo test").is_empty()
+    );
+    assert!(check_line_violations("cargo test --test todo_consistency").is_empty());
+}
+
+#[test]
+fn check_line_lint_flags_absolute_path_cd() {
+    for banned in [
+        // The T21 anomaly class: the main repo is not the worktree under test.
+        "cd /Users/jadams/workspace/chug && cargo test",
+        // A pinned worktree path is still absolute — the check line must be
+        // runnable from whatever cwd the gate runs it in.
+        "cd /private/tmp/chug-loop-t156 && cargo test --test loop_spec_recovery",
+    ] {
+        let problems = check_line_violations(banned);
+        assert!(
+            problems.iter().any(|p| p.contains("absolute path")),
+            "{banned}: {problems:?}"
+        );
+    }
+    // Worktree-relative forms are the rule.
+    assert!(check_line_violations("cargo test").is_empty());
+    assert!(check_line_violations("cd specs && grep -q x t1.md && cargo test").is_empty());
+}
+
+#[test]
+fn sample_spec_text_with_banned_check_line_fails_every_leg() {
+    // T164 requirement 4: a sample spec text whose check line carries all
+    // three banned shapes fails the lint, naming each rule.
+    let spec = "# T999 — sample\n\nestimate: ~1 changed line\n\ncheck: cd /Users/jadams/workspace/chug && cargo test --release --lib mcp_serve 2>&1 | tail -3\n";
+    let problems: Vec<String> = check_lines(spec)
+        .into_iter()
+        .flat_map(|(_, check)| check_line_violations(check))
+        .collect();
+    assert_eq!(problems.len(), 3, "{problems:?}");
+    assert!(problems[0].contains("--lib"), "{problems:?}");
+    assert!(problems[1].contains("pipefail"), "{problems:?}");
+    assert!(problems[2].contains("absolute path"), "{problems:?}");
 }
 
 #[test]
@@ -302,6 +556,20 @@ fn metameta_doctrine_pins_no_library_targets_rule() {
         "META-META-SPEC.md lost the T67 convention sentence: a spec's `check:` line must never \
          invoke `cargo test --lib` — binary-only crate, `--lib` exits 101 `no library targets \
          found` at the goal gate (use plain `cargo test` or `cargo test --bin chug`)"
+    );
+}
+
+#[test]
+fn metameta_doctrine_pins_pipe_masking_ban() {
+    let root = std::env::current_dir().expect("cargo sets the test cwd to the package root");
+    let text = std::fs::read_to_string(root.join("META-META-SPEC.md"))
+        .expect("META-META-SPEC.md readable");
+    assert!(
+        text.contains("pipefail"),
+        "META-META-SPEC.md lost the T164 pipe-masking sentence: a spec's `check:` line that \
+         pipes a cargo command through tail/head/grep must set `pipefail` first — a pipeline's \
+         exit status is the last command's, so the filter masks a RED build/test leg (t160's \
+         `--lib … | tail -3` leg exited 101 and its goal gate passed)"
     );
 }
 

@@ -1,6 +1,6 @@
 # T18 — Widen the budget-low iteration warning margin (WARN_REMAINING_ITERS 5 → 8)
 
-check: cd /Users/jadams/workspace/chug && cargo test
+check: cargo test
 
 ## Why (evidence)
 

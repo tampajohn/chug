@@ -125,4 +125,4 @@ adjudicate:
 - export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared before
   every cargo command (shared warm cache — delegate cannot pass env).
 
-check: cd /private/tmp/chug-loop-t153 && export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared && cargo clippy --release --all-targets 2>&1 | tail -5 && cargo test --release --test mcp_serve 2>&1 | tail -5
+check: export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared && cargo clippy --release --all-targets && cargo test --release --test mcp_serve
