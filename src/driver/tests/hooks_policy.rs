@@ -14,6 +14,10 @@ fn hook_veto_blocks_bash_execution_and_loop_continues() {
     // T151: hold the shared timing domain across the whole body (first
     // acquisition — see crate::testsupport's lock-order rule). Named T151 sighting + siblings asserting hook/bash child outcomes (HOOK_TIMEOUT spawn timing).
     let _timing = crate::testsupport::timing_guard();
+    // T158: the whole scripted attempt (fresh tempdir -> drive -> asserts) is
+    // spawn-invalidation retried; the red legs below embed the observed tool/event
+    // evidence (content/lines) so a spawn failure under pressure classifies.
+    drive_attempt_with_spawn_retry(|| {
 
     let tmp = tempfile::tempdir().unwrap();
     write_hooks_json(
@@ -82,6 +86,7 @@ fn hook_veto_blocks_bash_execution_and_loop_continues() {
             .unwrap()
             .contains("vetoing-hook-stderr")
     );
+    });
 }
 
 /// CLASS-SWEEP killing test (T83 fix-up, kills the
@@ -98,6 +103,10 @@ fn hook_veto_result_is_exact_and_fires_no_post_hook() {
     // T151: hold the shared timing domain across the whole body (first
     // acquisition — see crate::testsupport's lock-order rule). Named T151 sighting + siblings asserting hook/bash child outcomes (HOOK_TIMEOUT spawn timing).
     let _timing = crate::testsupport::timing_guard();
+    // T158: the whole scripted attempt (fresh tempdir -> drive -> asserts) is
+    // spawn-invalidation retried; the red legs below embed the observed tool/event
+    // evidence (content/lines) so a spawn failure under pressure classifies.
+    drive_attempt_with_spawn_retry(|| {
 
     let tmp = tempfile::tempdir().unwrap();
     write_hooks_json(
@@ -145,6 +154,7 @@ fn hook_veto_result_is_exact_and_fires_no_post_hook() {
     );
     assert_eq!(hook_lines[0]["event"], "PreToolUse");
     assert_eq!(hook_lines[0]["veto"], true);
+    });
 }
 
 /// CLASS-SWEEP killing test (T83 fix-up, kills the
@@ -216,6 +226,10 @@ fn hook_allow_executes_tool_and_post_note_lands_in_result() {
     // T151: hold the shared timing domain across the whole body (first
     // acquisition — see crate::testsupport's lock-order rule). Named T151 sighting + siblings asserting hook/bash child outcomes (HOOK_TIMEOUT spawn timing).
     let _timing = crate::testsupport::timing_guard();
+    // T158: the whole scripted attempt (fresh tempdir -> drive -> asserts) is
+    // spawn-invalidation retried; the red legs below embed the observed tool/event
+    // evidence (content/lines) so a spawn failure under pressure classifies.
+    drive_attempt_with_spawn_retry(|| {
 
     let tmp = tempfile::tempdir().unwrap();
     write_hooks_json(
@@ -281,6 +295,7 @@ fn hook_allow_executes_tool_and_post_note_lands_in_result() {
     assert_eq!(hook_lines[1]["event"], "PostToolUse");
     assert_eq!(hook_lines[1]["veto"], false);
     assert_eq!(hook_lines[1]["exit"], 0);
+    });
 }
 
 /// The once-per-run leg: a malformed config warns and records exactly
@@ -402,6 +417,10 @@ fn vetoed_goal_complete_does_not_complete_the_run() {
     // T151: hold the shared timing domain across the whole body (first
     // acquisition — see crate::testsupport's lock-order rule). Named T151 sighting + siblings asserting hook/bash child outcomes (HOOK_TIMEOUT spawn timing).
     let _timing = crate::testsupport::timing_guard();
+    // T158: the whole scripted attempt (fresh tempdir -> drive -> asserts) is
+    // spawn-invalidation retried; the red legs below embed the observed tool/event
+    // evidence (content/lines) so a spawn failure under pressure classifies.
+    drive_attempt_with_spawn_retry(|| {
 
     let tmp = tempfile::tempdir().unwrap();
     write_hooks_json(
@@ -464,6 +483,7 @@ fn vetoed_goal_complete_does_not_complete_the_run() {
     assert_eq!(hook_lines.len(), 1, "{lines:?}");
     assert_eq!(hook_lines[0]["tool"], "goal_complete");
     assert_eq!(hook_lines[0]["veto"], true);
+    });
 }
 
 /// T140 POSITIVE CONTROL (kills the block-everything mutant): the veto
@@ -479,6 +499,10 @@ fn vetoed_premature_goal_complete_loops_until_honest_claim() {
     // T151: hold the shared timing domain across the whole body (first
     // acquisition — see crate::testsupport's lock-order rule). Named T151 sighting + siblings asserting hook/bash child outcomes (HOOK_TIMEOUT spawn timing).
     let _timing = crate::testsupport::timing_guard();
+    // T158: the whole scripted attempt (fresh tempdir -> drive -> asserts) is
+    // spawn-invalidation retried; the red legs below embed the observed tool/event
+    // evidence (content/lines) so a spawn failure under pressure classifies.
+    drive_attempt_with_spawn_retry(|| {
 
     let tmp = tempfile::tempdir().unwrap();
     write_hooks_json(
@@ -548,4 +572,5 @@ fn vetoed_premature_goal_complete_loops_until_honest_claim() {
     assert_eq!(hook_lines.len(), 2, "{lines:?}");
     let vetoes: Vec<_> = hook_lines.iter().filter(|l| l["veto"] == true).collect();
     assert_eq!(vetoes.len(), 1, "{lines:?}");
+    });
 }

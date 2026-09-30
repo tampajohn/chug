@@ -53,6 +53,10 @@ fn ok_preview_short_content_kept_whole() {
 /// 500-char head dropped it, which is what hid the flaky test's name).
 #[test]
 fn error_tool_result_preview_ends_with_output_tail() {
+    // T158: the whole scripted attempt (fresh tempdir -> drive -> asserts) is
+    // spawn-invalidation retried; red legs embed the observed evidence so a
+    // spawn failure under pressure classifies as invalidation.
+    drive_attempt_with_spawn_retry(|| {
     let tmp = tempfile::tempdir().unwrap();
     let (_utx, urx) = mpsc::channel::<SlashUpdate>();
     let controls = Controls::detached();
@@ -103,12 +107,17 @@ fn error_tool_result_preview_ends_with_output_tail() {
         preview.ends_with(&format!("{marker}\n[exit code: 7]")),
         "the emitted preview ends with the output tail"
     );
+    });
 }
 
 /// T25 control: a successful tool result keeps the pre-T25 500-char
 /// head preview, byte-identical.
 #[test]
 fn ok_tool_result_preview_keeps_500_char_head() {
+    // T158: the whole scripted attempt (fresh tempdir -> drive -> asserts) is
+    // spawn-invalidation retried; red legs embed the observed evidence so a
+    // spawn failure under pressure classifies as invalidation.
+    drive_attempt_with_spawn_retry(|| {
     let tmp = tempfile::tempdir().unwrap();
     let (_utx, urx) = mpsc::channel::<SlashUpdate>();
     let controls = Controls::detached();
@@ -154,4 +163,5 @@ fn ok_tool_result_preview_keeps_500_char_head() {
         .expect("bash tool_result event");
     assert!(ok, "the succeeding command is not an error result");
     assert_eq!(preview, "y".repeat(500), "ok preview is the 500-char head");
+    });
 }

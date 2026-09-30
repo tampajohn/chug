@@ -112,8 +112,14 @@
 
     /// The stub's argv dump, polled for (launch returns at spawn; the stub
     /// writes the dump within milliseconds of exec).
+    ///
+    /// T158 (req 3): the deadline assert names the OBSERVED launch outcome —
+    /// a >5s miss of a live stub is a failed/starved spawn, and the
+    /// assertion must say whether the launch already returned an isError
+    /// payload or reported a pid whose stub never produced the dump. No
+    /// deadline change (5s stays).
     #[cfg(unix)]
-    fn wait_for_argv_dump(child_dir: &Path) -> Vec<String> {
+    fn wait_for_argv_dump(child_dir: &Path, launch: &ToolResult) -> Vec<String> {
         let path = child_dir.join("argv.txt");
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
@@ -129,8 +135,20 @@
             }
             assert!(
                 Instant::now() < deadline,
-                "stub never wrote argv.txt in {}",
-                child_dir.display()
+                "stub never wrote argv.txt in {} AND the launch outcome was: {}",
+                child_dir.display(),
+                if launch.is_error {
+                    format!("isError: {}", launch.content)
+                } else {
+                    match launch
+                        .content
+                        .lines()
+                        .find_map(|l| l.strip_prefix("launched: pid "))
+                    {
+                        Some(pid) => format!("reported pid {pid} but no dump appeared"),
+                        None => format!("no pid line at all: {}", launch.content),
+                    }
+                }
             );
             thread::sleep(Duration::from_millis(25));
         }

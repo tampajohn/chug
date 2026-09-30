@@ -361,6 +361,10 @@ fn plan_loop_run_leaves_preexisting_ledger_and_todo_bytes_untouched() {
 /// (an empty prod registry would make that extension invisible).
 #[test]
 fn plan_loop_advertises_exactly_six_tools_with_a_live_mcp_registry() {
+    // T158: the whole scripted attempt (fresh tempdir -> drive -> asserts) is
+    // spawn-invalidation retried; red legs embed the observed evidence so a
+    // spawn failure under pressure classifies as invalidation.
+    drive_attempt_with_spawn_retry(|| {
     let tmp = tempfile::tempdir().unwrap();
     write_echo_server(tmp.path());
     let mut mcp = McpRegistry::new(tmp.path(), false, None).expect("live fake registry");
@@ -405,6 +409,7 @@ fn plan_loop_advertises_exactly_six_tools_with_a_live_mcp_registry() {
         ],
         "the live MCP schemas must never reach a plan-mode API call: {names:?}"
     );
+    });
 }
 
 /// (d) A REJECTED submit_plan keeps the loop UP — no goal/accepted

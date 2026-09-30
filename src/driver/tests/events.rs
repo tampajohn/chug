@@ -165,6 +165,12 @@ fn run_loop_run_start_carries_goal_pack_from_config_both_ways() {
 /// recorded. The tee is transparent to the real sink.
 #[test]
 fn drive_loop_writes_events_jsonl() {
+    // T158: the WHOLE scripted attempt (fresh tempdir → drive → asserts) is
+    // spawn-invalidation-retried; a spawn failure under pressure surfaces as
+    // a `tool error: spawning sh -c …` result whose is_error flip is exactly
+    // the premise this test asserts, so the red leg embeds the tool lines
+    // (evidence) and the seam retries.
+    drive_attempt_with_spawn_retry(|| {
     // T151: hold the shared timing domain across the whole body (first
     // acquisition — see crate::testsupport's lock-order rule). Named T151 sighting + spawn sibling (bash/check children).
     let _timing = crate::testsupport::timing_guard();
@@ -227,7 +233,13 @@ fn drive_loop_writes_events_jsonl() {
     assert_eq!(tools[0]["ok"], false);
     assert_eq!(tools[0]["is_error"], true);
     assert!(tools[0]["duration_ms"].is_u64(), "duration recorded");
-    assert_eq!(tools[1]["is_error"], false);
+    // T158 evidence: the observed tool lines ride the message so a spawn
+    // failure (`tool error: spawning sh -c …`) classifies as invalidation.
+    assert_eq!(
+        tools[1]["is_error"],
+        false,
+        "the printf leg must succeed: {tools:?}"
+    );
     for t in &tools {
         let p = t["preview"].as_str().unwrap();
         assert!(
@@ -236,17 +248,29 @@ fn drive_loop_writes_events_jsonl() {
             p.chars().count()
         );
     }
-    assert_eq!(tools[1]["preview"].as_str().unwrap().chars().count(), 200);
+    assert_eq!(
+        tools[1]["preview"].as_str().unwrap().chars().count(),
+        200,
+        "the successful printf's preview is the 500-char head capped: {tools:?}"
+    );
     // The check ran and the terminal goal verdict is on record.
-    assert!(lines.iter().any(|l| l["type"] == "verifying"));
+    assert!(
+        lines.iter().any(|l| l["type"] == "verifying"),
+        "the goal-gate check ran: {lines:?}"
+    );
     let goal = lines
         .iter()
         .find(|l| l["type"] == "goal")
         .expect("goal line");
-    assert_eq!(goal["outcome"], "accepted");
+    assert_eq!(
+        goal["outcome"],
+        "accepted",
+        "the verified goal is accepted: {lines:?}"
+    );
     assert_eq!(goal["summary"], "all done");
     // The goal line is the last event of the run.
-    assert_eq!(lines.last().unwrap()["type"], "goal");
+    assert_eq!(lines.last().unwrap()["type"], "goal", "{lines:?}");
+    });
 }
 
 /// The terminal abort event lands in the log too (budget death here).

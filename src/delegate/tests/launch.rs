@@ -383,7 +383,7 @@ pub(super) const TEST_COUNT: usize = 15;
             "both-valid launch must spawn: {}",
             launch.content
         );
-        let argv = wait_for_argv_dump(child_dir.path());
+        let argv = wait_for_argv_dump(child_dir.path(), &launch);
         assert!(
             argv.windows(2).any(|w| w[0] == "--spec" && w[1] == spec.to_str().unwrap()),
             "spec must reach the child verbatim: {:?}",
@@ -427,7 +427,7 @@ pub(super) const TEST_COUNT: usize = 15;
             }),
         );
         assert!(!launch.is_error, "{}", launch.content);
-        let argv = wait_for_argv_dump(child_dir.path());
+        let argv = wait_for_argv_dump(child_dir.path(), &launch);
         let pos = argv
             .iter()
             .position(|a| a == "--max-tokens")
@@ -478,7 +478,7 @@ pub(super) const TEST_COUNT: usize = 15;
             }),
         );
         assert!(!launch.is_error, "{}", launch.content);
-        let argv = wait_for_argv_dump(child_dir.path());
+        let argv = wait_for_argv_dump(child_dir.path(), &launch);
         assert_eq!(
             argv,
             vec![
@@ -538,7 +538,7 @@ pub(super) const TEST_COUNT: usize = 15;
             }),
         );
         assert!(!launch.is_error, "{}", launch.content);
-        let argv = wait_for_argv_dump(child_dir.path());
+        let argv = wait_for_argv_dump(child_dir.path(), &launch);
         let pos = argv
             .iter()
             .position(|a| a == "--max-tokens")
@@ -630,7 +630,7 @@ pub(super) const TEST_COUNT: usize = 15;
             }),
         );
         assert!(!launch.is_error, "{}", launch.content);
-        let argv = wait_for_argv_dump(child_dir.path());
+        let argv = wait_for_argv_dump(child_dir.path(), &launch);
         assert_eq!(
             argv.last().map(String::as_str),
             Some("--resume"),
@@ -950,6 +950,8 @@ pub(super) const TEST_COUNT: usize = 15;
 
         // The stub's env dump, polled like argv.txt (launch returns at
         // spawn; `cbtd=` guards the tail so a partial write re-polls).
+        // T158 (req 3): the deadline assert names the observed launch
+        // outcome (isError payload, or the reported pid with no dump).
         let env_path = child_dir.path().join("env.txt");
         let deadline = Instant::now() + Duration::from_secs(5);
         let dump = loop {
@@ -960,8 +962,20 @@ pub(super) const TEST_COUNT: usize = 15;
             }
             assert!(
                 Instant::now() < deadline,
-                "stub never wrote {}",
-                env_path.display()
+                "stub never wrote {} in 5s AND the launch outcome was: {}",
+                env_path.display(),
+                if launch.is_error {
+                    format!("isError: {}", launch.content)
+                } else {
+                    match launch
+                        .content
+                        .lines()
+                        .find_map(|l| l.strip_prefix("launched: pid "))
+                    {
+                        Some(pid) => format!("reported pid {pid} but no dump appeared"),
+                        None => format!("no pid line at all: {}", launch.content),
+                    }
+                }
             );
             thread::sleep(Duration::from_millis(25));
         };

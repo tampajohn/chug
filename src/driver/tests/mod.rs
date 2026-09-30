@@ -502,8 +502,9 @@ fn spawn_retry_seam_classifies_only_the_enumerated_markers() {
         }));
         // The seam must NOT have retried: re-panic the resumed payload so
         // this test's failure carries the ORIGINAL regression message.
-        let Err(payload) = result else {
-            panic!("a marker-free red leg must not pass");
+        let payload = match result {
+            Err(payload) => payload,
+            Ok(()) => panic!("a marker-free red leg must not pass"),
         };
         let message = panic_payload_message(payload.as_ref());
         assert_eq!(
@@ -531,8 +532,9 @@ fn spawn_retry_seam_exhaustion_names_class_and_attempt_count() {
             panic!("premise broke again: tool error: {MARKER_TIMED_OUT}30s (process group killed)");
         })
     }));
-    let Err(payload) = exhausted else {
-        panic!("a persistently-invalidated attempt must exhaust");
+    let payload = match exhausted {
+        Err(payload) => payload,
+        Ok(()) => panic!("a persistently-invalidated attempt must exhaust"),
     };
     let message = panic_payload_message(payload.as_ref());
     assert!(
