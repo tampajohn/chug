@@ -1,6 +1,6 @@
 # T159 — bring the loopd_orphan_reaper family into the shared timing-lock domain
 
-check: cargo test
+check: export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared && cargo test --test loopd_orphan_reaper
 
 estimate: ~40 lines (lock-domain join + a serialization assertion, tests-only)
 
