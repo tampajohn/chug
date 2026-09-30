@@ -36,7 +36,11 @@ check: test -f EVALUATION.md && grep -q "specs/t" TODO.md
 ## Write `EVALUATION.md`
 
 Honest, specific, evidence-linked (transcript/ledger/code line refs where
-you can). Sections:
+you can). A regenerated EVALUATION.md MUST carry forward every existing
+`## Outcomes` content verbatim (per-cycle sections and per-item entries) —
+the eval rewrites the assessment body only, never the Outcomes ledger;
+before committing, verify the newest pre-existing cycle's section is still
+present. Sections:
 
 1. **What chug does well** — be brief.
 2. **Incidents worth fixing** — from the corpus: hangs, budget deaths,
