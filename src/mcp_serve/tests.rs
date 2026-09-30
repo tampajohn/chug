@@ -3,6 +3,21 @@
 // ---------------------------------------------------------------------------
 
     use super::*;
+
+    // T172 (req-5 NAMED SEAM — tests-only in substance, named in the commit
+    // message): the bin-internal stub-spawn leg joins THE cross-binary
+    // load-lock domain of the mcp stub-spawn family (the flock harness in
+    // tests/support/load_lock.rs, shared with tests/mcp_serve.rs's launch/
+    // cancel wire legs). The family's per-binary locks (DELEGATE_ENV_LOCK
+    // below; tests/mcp_serve.rs's LAUNCH_LEG_LOCK) are PER-PROCESS domains:
+    // nextest runs each TEST as its own PROCESS, so neither can see the
+    // cross-binary contention that starved this test's 10s stub-dump
+    // window 3x under gate load (solo 0.55s). A bounded advisory flock
+    // under the shared target dir can, under BOTH gate runners. Lock order
+    // (deadlock-freedom): the load lock first, THEN the env lock — the
+    // T151 doctrine's order, no site reverses it.
+    #[path = "../../tests/support/load_lock.rs"]
+    mod t172_load_lock;
     use serde_json::json;
 
     /// The flagless dispatch — the pre-T129 entry, byte-identical read-only
@@ -1062,6 +1077,13 @@
     fn chug_launch_stub_spawn_pins_exact_argv_cwd_and_return_paths() {
         use std::os::unix::fs::PermissionsExt;
         use std::time::Duration;
+        // T172: FIRST acquisition — the cross-binary load lock for the mcp
+        // stub-spawn family (shared with tests/mcp_serve.rs's wire legs),
+        // taken BEFORE the process-global env lock (the T151 lock-order
+        // doctrine). Held across the stub spawn → poll → kill → cleanup:
+        // sibling processes under nextest can no longer starve the stub's
+        // 10s dump window (the cycle-77 signature, solo 0.55s).
+        let _t172_load = t172_load_lock::family_guard("mcp-serve-launch");
         // The env var is process-global and the delegate tests mutate it too
         // (same test binary) — one env, one lock.
         let _guard = crate::delegate::tests::DELEGATE_ENV_LOCK

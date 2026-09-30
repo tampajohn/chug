@@ -37,6 +37,21 @@ use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
+// T172: the launch/cancel wire legs join THE cross-binary load-lock domain
+// for the mcp stub-spawn family (the flock harness in
+// tests/support/load_lock.rs). LAUNCH_LEG_LOCK below is a static Mutex — a
+// PER-PROCESS domain: nextest runs each TEST as its own PROCESS, so it
+// cannot see the cross-binary contention that starved this family's stub
+// children 3x under gate load (solo 0.55s) and false-rejected
+// mcp_serve_chug_cancel_happy_path_over_the_real_wire. A bounded advisory
+// flock under the shared target dir can, under BOTH gate runners, and it
+// also covers the family's OTHER binary: the bin-internal stub-spawn leg in
+// src/mcp_serve/tests.rs takes the SAME named domain. Lock order
+// (deadlock-freedom): the load lock first, THEN LAUNCH_LEG_LOCK — no site
+// reverses the order.
+#[path = "support/load_lock.rs"]
+mod t172_load_lock;
+
 /// Per-read deadline: a healthy server answers a read-only call in
 /// milliseconds; ten seconds is orders of magnitude of slack.
 const READ_DEADLINE: Duration = Duration::from_secs(10);
@@ -491,6 +506,12 @@ fn assert_no_stub_record(path: &std::path::Path) {
 #[cfg(unix)]
 #[test]
 fn mcp_serve_chug_launch_happy_path_over_the_real_wire() {
+    // T172: FIRST acquisition — the cross-binary load lock for the mcp
+    // stub-spawn family (shared with the bin's src/mcp_serve/tests.rs
+    // stub-spawn leg), taken BEFORE the per-process env lock (the T151
+    // lock-order doctrine; the load domain never waits on a static lock).
+    // Held across spawn → assertion → cleanup.
+    let _t172_load = t172_load_lock::family_guard("mcp-serve-launch");
     let _guard = LAUNCH_LEG_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let scratch = tempfile::tempdir().expect("scratch tempdir");
     let target = tempfile::tempdir().expect("target tempdir");
@@ -624,6 +645,12 @@ fn mcp_serve_chug_launch_happy_path_over_the_real_wire() {
 #[cfg(unix)]
 #[test]
 fn mcp_serve_chug_launch_budget_above_ceiling_is_error_arm_over_the_wire() {
+    // T172: FIRST acquisition — the cross-binary load lock for the mcp
+    // stub-spawn family (shared with the bin's src/mcp_serve/tests.rs
+    // stub-spawn leg), taken BEFORE the per-process env lock (the T151
+    // lock-order doctrine; the load domain never waits on a static lock).
+    // Held across spawn → assertion → cleanup.
+    let _t172_load = t172_load_lock::family_guard("mcp-serve-launch");
     let _guard = LAUNCH_LEG_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let scratch = tempfile::tempdir().expect("scratch tempdir");
     let target = tempfile::tempdir().expect("target tempdir");
@@ -835,6 +862,12 @@ fn poll_pid_state(pid: u32, want_alive: bool, what: &str) {
 #[cfg(unix)]
 #[test]
 fn mcp_serve_chug_cancel_happy_path_over_the_real_wire() {
+    // T172: FIRST acquisition — the cross-binary load lock for the mcp
+    // stub-spawn family (shared with the bin's src/mcp_serve/tests.rs
+    // stub-spawn leg), taken BEFORE the per-process env lock (the T151
+    // lock-order doctrine; the load domain never waits on a static lock).
+    // Held across spawn → assertion → cleanup.
+    let _t172_load = t172_load_lock::family_guard("mcp-serve-launch");
     let _guard = LAUNCH_LEG_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let scratch = tempfile::tempdir().expect("scratch tempdir");
     let target = tempfile::tempdir().expect("target tempdir");
@@ -1144,6 +1177,12 @@ fn mcp_serve_control_verbs_default_deny_over_the_real_wire() {
 #[cfg(unix)]
 #[test]
 fn mcp_serve_launch_then_steer_then_abort_over_the_real_wire() {
+    // T172: FIRST acquisition — the cross-binary load lock for the mcp
+    // stub-spawn family (shared with the bin's src/mcp_serve/tests.rs
+    // stub-spawn leg), taken BEFORE the per-process env lock (the T151
+    // lock-order doctrine; the load domain never waits on a static lock).
+    // Held across spawn → assertion → cleanup.
+    let _t172_load = t172_load_lock::family_guard("mcp-serve-launch");
     let _guard = LAUNCH_LEG_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let scratch = tempfile::tempdir().expect("scratch tempdir");
     let target = tempfile::tempdir().expect("target tempdir");
@@ -1306,4 +1345,82 @@ fn mcp_serve_launch_then_steer_then_abort_over_the_real_wire() {
     assert_eq!(ping["result"], serde_json::json!({}), "{ping}");
     drop(stdin);
     close_stdin_and_expect_success_exit(child, "control arc");
+}
+
+/// T172 pin (the T159 lock-scope pin shape): every launch-family wire leg —
+/// every test that takes LAUNCH_LEG_LOCK — takes the cross-binary load lock
+/// FIRST, before the per-process env lock. The static Mutex is per-binary:
+/// nextest runs each TEST as its own PROCESS, so the stub-spawn family's
+/// real serialization across binaries (tests/mcp_serve.rs wire legs + the
+/// bin's src/mcp_serve/tests.rs stub-spawn leg) is the flock harness in
+/// tests/support/load_lock.rs. A future unguarded launch leg is RED by
+/// construction even while every behavioral test stays green.
+#[test]
+fn pin_launch_family_legs_hold_the_t172_cross_binary_load_lock() {
+    let src = std::fs::read_to_string(std::path::Path::new("tests/mcp_serve.rs"))
+        .expect("read own source (cargo runs test binaries with cwd = package root)");
+    // The join must be THE #[path] include of the harness file — a copy
+    // would be a second, independent domain (the T151 finding, at file
+    // granularity).
+    assert!(
+        src.contains("#[path = \"support/load_lock.rs\"]\nmod t172_load_lock;"),
+        "the cross-binary join must be the #[path] include of \
+         tests/support/load_lock.rs — any other lock source is a second, \
+         independent domain"
+    );
+    let guard_line = "let _t172_load = t172_load_lock::family_guard(\"mcp-serve-launch\");";
+    let mut guarded: Vec<&str> = Vec::new();
+    for chunk in src.split("\n#[test]").skip(1) {
+        let body = chunk.trim_start_matches('\n');
+        let name = body
+            .strip_prefix("fn ")
+            .and_then(|rest| rest.split(['(', '<']).next())
+            .unwrap_or("")
+            .trim();
+        assert!(!name.is_empty(), "a test chunk failed to yield its fn name");
+        // This pin's own chunk mentions the scanned marker as TEXT; it is
+        // not a wire leg and takes no guard.
+        if name == "pin_launch_family_legs_hold_the_t172_cross_binary_load_lock" {
+            continue;
+        }
+        if !chunk.contains("LAUNCH_LEG_LOCK.lock()") {
+            continue;
+        }
+        let at_guard = chunk.find(guard_line).unwrap_or_else(|| {
+            panic!(
+                "{name} takes the per-process LAUNCH_LEG_LOCK but never the \
+                 T172 cross-binary load lock — nextest runs each test as its \
+                 own PROCESS, so the launch-family stub children would still \
+                 race every OTHER binary's launch legs (the cycle-77 \
+                 stub-spawn starvations)"
+            )
+        });
+        let at_env = chunk
+            .find("LAUNCH_LEG_LOCK.lock()")
+            .expect("chunk has the env lock");
+        assert!(
+            at_guard < at_env,
+            "{name} must take the load lock BEFORE the env lock — the one \
+             global lock order (the load domain never waits on a static \
+             lock, so no cycle can form)"
+        );
+        guarded.push(name);
+    }
+    assert!(
+        guarded.len() >= 4,
+        "the launch-leg scan went empty — the LAUNCH_LEG_LOCK family must \
+         still exist (4 guarded wire legs at T172 landing)"
+    );
+    for name in [
+        "mcp_serve_chug_launch_happy_path_over_the_real_wire",
+        "mcp_serve_chug_launch_budget_above_ceiling_is_error_arm_over_the_wire",
+        "mcp_serve_chug_cancel_happy_path_over_the_real_wire",
+        "mcp_serve_launch_then_steer_then_abort_over_the_real_wire",
+    ] {
+        assert!(
+            guarded.contains(&name),
+            "the named launch-family leg {name} is not in the guarded set — \
+             the family membership regressed"
+        );
+    }
 }
