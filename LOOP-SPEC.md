@@ -259,6 +259,12 @@ never 3+, never 2 validators):
    ambiguity default below. Any ambiguity in the classification — a
    predicate that cannot be evaluated, a diff shape it does not fit —
    defaults to full gates.
+   Orchestrator mutation legs for RED-proofs MUST be applied inside the
+   worktree via bash (e.g. `perl -i` with cwd `/tmp/chug-loop-t<N>`) —
+   `edit_file`/`write_file` are confined to the main tree and silently
+   produce false survivors when the gates under proof run the worktree
+   copy; after any main-tree edit during a round, verify main is
+   restored byte-identical before merging.
 4. **Adversarial validation (kimi, REQUIRED** for any item touching
    src/driver.rs, src/api.rs, src/tools.rs, src/events.rs, or the loop/spec
    doctrine itself; optional for docs/tests-only items): META-SPEC §6
