@@ -1,168 +1,255 @@
-# EVALUATION — chug, assessed by chug-loop (2026-09-30, cycle 76)
+# EVALUATION — chug, assessed by chug-loop (2026-09-30, cycle 79)
 
-**MANDATORY fresh eval** — the queue is EMPTY (cycle 75 landed T160 and its
-wrap commit `f2d0977` declared the queue drained; the freshness predicate's
-queue half fails, so loopd routed kimi per T81 — exactly the cycle-75
-wrap's own prediction). The delta corpus since the cycle-72 eval is cycles
-72–75: six orchestrator streams (kimi 152 iters/1.1M-in fresh-eval + glm
-179/159/140/75/40-iter routine streams) and 14 child streams (t152–t161
-impl/validate/fixup/resume segments), read via `.chug/eval-digest.md` (385
-events files, 21,334 iterations, FRESH per its self-exclusion check) with
-targeted drills into `decisions.jsonl` (578 records), the harvested
-validator ledgers (`.chug/LEDGER-t129-validate-*.md`), and the git record.
-The headline: **the loop shipped two feature-heavy cycles and two self-cut
-release tags (v0.6.0, v0.7.0) with the T63/T156 recovery family absorbing
-every budget death — and the friction frontier moved to the goal gate
-itself.** Spec `check:` lines whose warm walls exceed the gate's 600s
-timeout produced FALSE `check command failed` rejections on green work
-(t153-fixup ×2, t152-fixup ×1), and a `check:` line with a `--lib` leg
-piped through `tail` passed VACUOUSLY (t160) — the gate meant to keep
-children honest is now the noisiest liar in the loop (→ T163, T164). The
-mandatory roadmap pull is **F11 phase 1a, SPLIT → T162 (MCP resources
-consume legs)**. Seven rows filed: T162–T168.
+**MANDATORY fresh eval** — the queue is EMPTY (cycle 78 landed T167+T168
+and its wrap commit `8da16a4` declared the queue drained; the freshness
+predicate's queue half fails, so loopd routed kimi per T81 — exactly the
+cycle-78 wrap's own prediction). The delta corpus since the cycle-76 eval
+is cycles 76–78: three orchestrator streams (kimi 114-iter/1.2M-in
+fresh-eval + glm 178-iter and 113-iter routine streams) and 14 child
+streams (t162–t168 impl/validate/resume segments), read via
+`.chug/eval-digest.md` (399 events files, 22,282 iterations, FRESH per its
+self-exclusion check) with targeted drills into the harvested streams, the
+git record, and `src/mcp.rs` / `tests/todo_consistency.rs` code reads. The
+headline: **the cycle-76 queue drained in three cycles — 7/7 landed, every
+kimi verdict first-round PASS — and the loop's binding budget moved from
+iterations to MINUTES**: 5 of 7 impl children died at the 35-minute wall
+(4 with work committed → orchestrator-finish, 1 uncommitted → resume) and
+3 of 5 validators finished within ~1–4.5 min of the 40-minute wall. The
+T63/T156 family absorbed every death (routing 100%), but a child that
+verifies and accepts its own work is now the exception, not the rule. The
+mandatory roadmap pull is **F11 phase 1b, SPLIT → T169 (model-facing
+resource read surface) + T170 (prompts/list+get stdio legs) + T171 (HTTP
+transport legs)**. Ten rows filed: T169–T178.
 
 ## 1. What chug does well — be brief
 
+- **The cycle-76 queue drained 7/7 with zero FAIL verdicts**: kimi
+  REQUIRED ×6 all first-round PASS (T162 4/5 mutants + one informational
+  survivor, T163 4/4, T164 5/5, T166 3 mutants + hand-check, T167 5/5
+  parallel, T168 5/5 serial with the overlap judgment declared); two
+  tests-only rows (T165, plus T160 at the delta's start) got orchestrator
+  personal RED-proofs per the T16/T147 precedent.
 - **The T63/T156 recovery family absorbed 100% of the delta's budget
-  deaths**: t152-fixup 35-min ×2, t153 80/80 + 35-min, t154/t155 35-min
-  (committed-variant orchestrator-finish executed four times in one cycle),
-  t157-impl 80/80 → resume, t157-fixup 80/80 committed → orchestrator-finish,
-  t157-validator 60/60 → resume, t158-impl 80/80 ×2 → resumes. Zero items
-  lost, zero recipes needed from the operator.
-- **The first live 2-impl overlap (T161) ran clean** — T159‖T161 under the
-  disjointness gate, strictly serial merges, kimi validated the doctrine
-  10/10 mutants.
-- **The kimi arc caught a REAL correctness bug class in T157** (control
-  verbs latching terminal state on goal-rejected children) —
-  FAIL→fix-up→re-PASS with the fix liveness-first. The adversarial loop
-  working as designed.
-- **Two self-cut tags (v0.6.0, v0.7.0) shipped with green release
-  workflows** — check-tag-version + generated notes, no operator touch.
-- **Tests-only routing discipline held**: kimi skipped ×4
-  (T155/T158/T159/T160) with the orchestrator personally RED-proving every
-  named mutant; the decision-record trail is complete (578 records; the
-  cycle-75 skip itself logged d1790747616-1).
+  deaths again** — 5 minutes-deaths (T162 54/80, T163 46/80, T164 50/80
+  uncommitted → ONE resume → accepted 11 iters later, T165 65/80, T167
+  47/80), every routing call correct, lifetime committed-variant routing
+  6/6. Zero items lost, zero operator recipes needed.
+- **The first 2-impl overlap (T161 pattern ii) ran and its teething hazard
+  was found AND fixed mid-flight** — T162‖T165 under the disjointness
+  gate; the check-line target-dir race surfaced as a goal-gate rejection
+  and was role-keyed within the cycle (607e877, routing d1790763842-1).
+- **Kill-rule discipline held twice**: both cycle-76/78 validator launch
+  goals rendered garbled in the orchestrator's echo; sequential transcript
+  read-back proved both payloads intact (sha-matched); zero kills, zero
+  burned relaunches — the cycle-61 doctrine doing exactly its job.
+- **v0.8.0 self-tagged** with the generated-notes + check-tag-version
+  pairing, third self-cut release, workflow green.
+- **Mechanical doctrine enforcement works**: T164's three-leg lint swept
+  17 problems across 13 legacy spec files on its first corpus run — the
+  honor-system era for check lines is over.
 
 ## 2. Incidents worth fixing
 
-1. **Goal-gate FALSE rejections — the check-wall (→ T163, pri 1).**
-   `CHECK_TIMEOUT_SECS = 600` (src/tools.rs:17) caps every spec `check:`
-   line, but nobody budgets check-line walls at filing time: the
-   t153-fixup spec embedded `cargo clippy --release --all-targets` plus
-   release tests (warm wall >600s) and the child was rejected TWICE with
-   `check command failed` on green work
-   (events-t153-fixup-20260929-185044.jsonl: `goal: rejected 2`); t152-fixup
-   took one more (same file family). The cycle-73 and cycle-75 wraps both
-   name this the top next-eval candidate (warm full debug suite
-   ~800–1000s). Compounder: the README Quickstart documents the check-env
-   scrub — a check line that forgets the `CARGO_TARGET_DIR` export builds
-   COLD into the worktree's own target, slower still. Each false rejection
-   burns child iterations and can cost a wrap.
-2. **Vacuous goal gates via piped / `--lib` check lines (→ T164, pri 2).**
-   specs/t160's check carries `cargo test --release --lib mcp_serve 2>&1 |
-   tail -3` — `--lib` exits 101 on this binary-only crate (the META-META
-   ban, nine child streams bitten) AND the `| tail` pipe masks ANY cargo
-   failure (pipeline exit = tail's 0). That leg of t160's goal gate ran
-   vacuously — and the existing todo_consistency `--lib` lint missed it
-   because it matches the literal `cargo test --lib` while t160 has a
-   flag in between (`--release --lib`). The same masking shape appears in t153/t156 checks; t152's
-   check `cd`s into the MAIN repo (the T21 anomaly class). All three bans
-   are doctrine — with zero mechanical enforcement. The lint belongs in
-   tests/todo_consistency.rs next to the T8 guard, with a legacy sweep.
-3. **glm's decision_log schema fumble recurs every stream (→ T168,
-   pri 4).** `invalid decision_log call: options must be a string, got
-   missing` fired in 6 of 10 glm streams this delta (orchestrators ×6,
-   children ×3) plus `choice ... got missing` ×2. T88's corrective errors
-   work (self-corrects in one iteration) but the tax recurs: the tool
-   description — the surface glm actually reads (the T22 lesson) — never
-   says the fields are required.
-4. **Weighed and REJECTED** (each logged eval-triage): (a) harvest
-   `cp: .chug/LEDGER.md: No such file or directory` — one fire
-   (events-20260930-010417), self-evident at harvest time; (b) harvest
-   filename role-mislabels (events-t152-validate-*.jsonl is a glm
-   impl-shaped stream; events-t153-validate-*.jsonl holds the fixup child)
-   — evidence clutter only, the wraps reclassify correctly; verified NOT a
-   glm-validates-glm T81 violation (drilled run_start goals); (c) `.git/
-   index.lock: File exists` — one fire (events-20260929-215547), no
-   recurrence; (d) T129's stub-spawn events-ordering nit — cosmetic,
-   non-blocking per its own verdict; (e) lifting the F13 phase 2–3
-   deferral — reaffirmed: the risk-gate laya endpoint exists but the
-   fine-tune TRAINING pipeline is operator-side infra that has not
-   materialized; corpus keeps growing (578 records) toward it.
+1. **Impl-child 35-minute deaths are now the NORM, not the exception
+   (→ T173, pri 2).** Five of seven impl children this delta died at the
+   minutes ceiling with iterations to spare: t162-impl 54/80 at 35m25s
+   (committed), t163-impl 46/80 at 37m05s (committed), t164-impl 50/80 at
+   ~35m (uncommitted → resume), t165-impl 65/80 at 37m07s (committed),
+   t167-impl 47/80 at ~35m (committed); the two survivors (t166 48/80,
+   t168 37/80) are the SMALL rows. glm throughput runs ~1.3–1.9 iters/min,
+   so an 80-iter budget needs 42–62 min — the 35-min ceiling caps real
+   work at ~50–65 iters. The T63/T156 family absorbs every death, but the
+   absorption is not free: (a) the child's own goal-gate self-verification
+   never runs (the orchestrator finishes instead — the honesty mechanism
+   the gate exists for is bypassed on the majority path); (b)
+   orchestrator iterations burn on finishes — cycle 77 scraped 178/200,
+   the closest since T121; (c) the uncommitted variant costs a full
+   resume (T164). **Validators are one slow mutant from the same wall**:
+   t167-val 39m16s of 40, t168-val 38m22s of 40, t162-val 35m46s of 40 —
+   an unannounced-verdict death costs a re-validation. Row: LOOP-SPEC
+   child budgets 35→50 impl, 40→50 validator (templates + recovery text +
+   measure clauses; META-SPEC untouched per the T21/T24 precedent; the
+   existing "if >1 of the next 8 validator runs dies at 60/40" measure
+   clause re-keys to 60/50).
+2. **Load-flake families under nextest parallelism, 4th cycle running
+   (→ T172, pri 2).** `loopd_stale_binary` + `loopd_spoof_guard` 90s
+   timeouts at nextest parallel load (T167 worktree gates; solo-green 3/3
+   under the T82 fallback); `the_reaper_terms_an_orphan_through_loopd_
+   before_the_build` 30.8s > 30s verdict deadline at 17-way load (T166
+   gates, solo green 3.36s — the exact T152 signature);
+   `chug_launch_stub_spawn_pins_exact_argv_cwd_and_return_paths` starved
+   THREE times in cycle 77 under different load shapes (T165 check
+   contention, T166 fallback run — solo green 0.55s) plus a coincident
+   `chug_cancel_happy_path` flake that cost t165's second goal-gate
+   rejection. Every fire costs a fallback re-run (~2–6 min of cycle wall)
+   and — worse — trains orchestrators to distrust red. T31/T151 doctrine:
+   mechanism, not timeouts — serialize the deadline-bearing families or
+   seam their clocks; ZERO timeout/deadline bumps; must hold under BOTH
+   gate runners (nextest parallelism AND `cargo test --test-threads=4`).
+3. **Spec check lines race the goal gate under 2-impl overlap (→ T175,
+   pri 3, doctrine).** Cycle 77: t165's spec check hardcoded the DEFAULT
+   `target-shared` while T162's impl child actively built into it — cargo
+   lock contention plus the T52 same-artifact-name class one level down (a
+   goal gate can execute a binary compiled from a foreign checkout's
+   source) rejected the child's goal on green work; fixed mid-flight by
+   role-keying the check to `target-shared-impl-a` (607e877). T144's scrub
+   makes a bare `cargo` content-correct but cold; explicit exports keep the
+   gate warm but must name the child's assigned slot. Weighed the
+   structural alternative (driver injects a per-worktree check target dir):
+   REJECTED — a cold-build tax on every child forever to fix a
+   rare-window race; the dispatch-time re-key is the proportionate fix.
+4. **The 120s bash cap × long gates retry tax (→ T178, pri 3).** Every
+   stream this delta shows `timed out after Ns (process group killed)`
+   bash deaths — orchestrators ×3–4 per cycle, impl children ×2–3: gates
+   and cold cargo builds exceed `BASH_TIMEOUT_SECS = 120`
+   (src/tools.rs:15) and die; the `perl -e 'alarm 600; …'` idiom in the
+   gate templates is cargo-culted under a 120s cap (alarm can never reach
+   600). The retry cadence works (warm retry ~25s) but burns the very
+   child minutes §2.1 is trying to hand back. loopd.sh:334 launches the
+   orchestrator with no `--bash-timeout`; `CHUG_BASH_TIMEOUT` exists
+   (src/main.rs:370 precedence flag > env > 120 default) and delegate
+   children inherit the orchestrator's process env (delegate has no env
+   param; T144's scrub touches only target-dir vars) — one env line in
+   loopd.sh lifts the whole fleet to 300s. loopd.sh = doctrine class
+   (runs alone).
+5. **T164's `shell_segments` slice-panics on `&&&` (→ T177, pri 3).**
+   Code-read confirmed (tests/todo_consistency.rs:277-306): the `&&` arm
+   does NOT consume the second `&` (unlike the `||` arm's `chars.next()`)
+   but advances `start = i + width` by 2 — for input `&&&` the next
+   iteration matches again with `start=2 > i=1` and `&line[start..i]`
+   panics. A malformed spec check line crashes the corpus lint with an
+   opaque slice panic instead of a lint finding. The T164 validator named
+   it non-blocking; it's a one-guard fix plus a regression test.
+6. **T162's informational survivor (→ T174, pri 4, tests-only).** The
+   list-err-drop mutant survived: no test pins the `resources/list`
+   error-reply message surface (the fallback error still names the server,
+   so the Req-3 named-error contract held — the validator filed it
+   informational with "a future eval may file the one-test pin"). One
+   named test in the mcp test modules.
+7. **Weighed and REJECTED** (each logged eval-triage): (a) **structural
+   check-env target-dir injection** — cold-build tax on every child to fix
+   a rare-window race; T175's doctrine fix is proportionate; (b)
+   **orchestrator iteration ceiling 200→raise** — cycle 77 scraped
+   178/200, ONE data point since T121; the T27 doctrine files on two
+   scrapes; watch next delta (T173's child-budget raise should shrink
+   orchestrator finishes); (c) **embrace orchestrator-finish as the
+   designed path** instead of raising child minutes — rejected: it loses
+   the child's goal-gate self-verification on the majority path and burns
+   orchestrator iterations (the 178/200 scrape); (d) **T167 pin comment
+   count 27→28** — cosmetic; would re-trigger full gates for zero pin
+   behavior (the cycle-78 wrap's own reasoning); (e) **T164 lint leg-b
+   line-wide substring + `||`-as-pipe** — defensible semantics, zero false
+   positives in the 13-file corpus sweep; (f) **`.chug/` gitignore harvest
+   `git add` hiccups** (one per orchestrator stream) — cosmetic; the
+   harvest is the `cp`, files landed, `.chug/` is intentionally
+   unversioned; (g) **needless_lifetimes sweep row** — one instance,
+   validator-caught and fixed on-branch (7911b3c); no evidence of a wider
+   class — the PREVENTION half (clippy `-D` in the impl goal template) is
+   filed as T176 instead.
 
 ## 3. Friction hot spots — fix assessment
 
-- **PATH tax (T4): fixed** — zero `cargo: command not found` in 21,334
-  digest iterations.
-- **macOS timeout mirage (T22): fixed** — zero exit-127s this delta.
-- **decision_log adoption (T75): working** — every cycle this delta logged
-  routing/verdict/outcome records; zero zero-call wraps.
-- **delegate status/collect + terminal long-poll: stuck** — orchestrators
-  run 22–43 delegate calls per stream, zero ps-fallback sightings.
-- **Estimate calibration (required re-check)**: T153 est ~380 → 1,433
-  actual (3.8x); T157 est ~450 → 2,085 (4.6x); T158 est ~240 → large but
-  dominated by mechanical test conversions; T160 est ~10 → 46 (tiny
-  absolute). Feature-row test/doc density now runs ~3.5–4.5x src
-  estimates (was 1.5–3x when the band was written). No estimate-caused
-  death this delta (T157's 80/80s were scope-ambition deaths, recovered),
-  so the ~400/~500 ceiling stands — noted as drift to watch, not edited
-  (META-META-SPEC's re-calibration rule edits thresholds deliberately,
-  not in passing).
+- **Goal-gate check-wall (T163, cycle 76): FIXED** —
+  `CHECK_TIMEOUT_SECS=1200` live (src/tools.rs:21); zero check-wall false
+  rejections post-landing (t165's two rejections were the NEW classes:
+  target-dir race → T175, load flake → T172).
+- **Check-line lint (T164, cycle 76): FIXED** — the corpus is clean
+  post-sweep (todo_consistency 16/16 at every wrap since); no new banned
+  shapes filed.
+- **decision_log schema fumbles (T168, landed at delta END): measure next
+  delta** — the description now names the six required fields; success
+  criterion is glm `options/choice ... got missing` corrective errors → 0
+  in the next digest.
+- **Estimate calibration (required re-check)**: T162 est ~350 → 687
+  actual (2.0x, in band); T164 ~220 → 327 (1.5x); T165 ~110 → 87 (0.8x);
+  T168 ~25 → 51 (2.0x); **T163 ~90 → 313 (3.5x), T166 ~45 → 224 (5.0x),
+  T167 ~40 → 303 (7.6x)** — the "one doctrine sentence + one pin file"
+  shape systematically prices the sentence and not the pin FILE
+  (~150–300 lines of pin tests). Re-calibration (in eval text per the
+  META-META rule, thresholds unedited): a sentence+pin-file row should
+  file at ~150–300, not ~25–90. No estimate-caused death this delta (all
+  undershoots were small absolute), so the ~400/~500 band stands.
+- **Orchestrator iteration economy**: kimi fresh-eval 114/200, glm
+  routine 178/200 and 113/200 — the 178 scrape is §2.7(b)'s watch item;
+  the terminal long-poll keeps per-arc orchestrator cost ~15–25 iters.
 
-## 4. Capability gaps — ROADMAP PULL: F11 phase 1a → T162 (pri 2)
+## 4. Capability gaps — ROADMAP PULL: F11 phase 1b → SPLIT T169 + T170 + T171
 
-Top unworked non-deferred roadmap item is **F11 (MCP resources+prompts,
-consume side)** — Tier 3, after F10 whose remaining phase 3b deferral is
-reaffirmed (no consumer pulls MCP-spec-completeness surfaces; the
-read/write verb fleet is complete and proven end to end). **F11 SPLITS at
-filing time**: the full item (resources + prompts × stdio + HTTP × a
-model-facing surface) blows the ~500-line estimate ceiling, so phase 1a →
-**T162: `resources/list` + `resources/read` consume legs on the stdio
-registry path (src/mcp.rs), a per-server capability catalog captured at
-initialize, response mapping placed for HTTP reuse, stub-server tests, no
-model surface yet**. Phase 1b (model-facing read surface, prompts/list+get,
-HTTP transport legs) is the next eval's pull. Written reasons for every
-standing deferral re-verified: F13 2–3 (external training pipeline; corpus
-578), F2-2b / F3-2 / F4-2+ / F5-2 / F6-2 / F7-2 / F8-2 (chat/TUI surfaces
-with no loop consumer), F10-3b (above). **New capability finds: none** —
-the era's frontier is gate honesty (§2.1/§2.2), not missing tools.
+Top unworked non-deferred roadmap item is **F11 phase 1b** (FEATURES.md:
+"model-facing read surface + prompts/list+get + HTTP transport legs is the
+next eval's pull"). Phase 1a landed (T162, 8120b00): the `McpBackend`
+trait carries a capability catalog and stdio `resources/list` /
+`resources/read`; the HTTP transport holds trait defaults that bail
+"phase 1b" (src/mcp.rs:210-224, mcp_http.rs:1019). The full 1b scope
+blows the ~400-line soft band as one row, so it SPLITS at filing time:
+- **T169 (pri 2, feature)**: the model-facing resource read surface — a
+  builtin `mcp_resource` tool (list/read actions) wired through
+  `McpRegistry::list_resources`/`read_resource`; capability-gated named
+  errors (non-capable/dead servers are tool errors, never panics);
+  read-only → consistent with mcp__ tools' risk-gate posture; matchable
+  by the T90 permissions deny-list; README MCP bullet updated (1b-i
+  honest, prompts/HTTP named as later phases).
+- **T170 (pri 3, feature)**: `prompts/list` + `prompts/get` consume legs
+  on the stdio path — mirrors 1a's shape (capability-gated,
+  MAX_MCP_PROMPTS warn-and-cap mirroring MAX_MCP_TOOLS/RESOURCES, response
+  mapping placed for HTTP reuse, hermetic stub tests); NO model surface
+  (slash-pack surfacing is a later phase's call, rides F9).
+- **T171 (pri 3, feature)**: HTTP transport legs — mcp_http.rs implements
+  the backend's resources + prompts methods reusing the shared response
+  mapping; hermetic HTTP stub tests (T6 harness). Depends on T170's
+  prompt types — worked after it.
+Written reasons for every standing deferral re-verified: F13 2–3
+(external training pipeline; corpus ~600 records and growing), F2-2b /
+F3-2 / F4-2+ / F5-2 / F6-2 / F7-2 / F8-2 (chat/TUI surfaces with no loop
+consumer), F10-3b (no consumer pulls MCP-spec-completeness surfaces).
+**New capability finds: none** — the frontier remains budget economics and
+gate trust (§2.1/§2.2), not missing tools.
 
 ## 5. Top 3 priorities
 
-1. **T163** (pri 1) — the goal gate falsely rejects green work TODAY; every
-   cycle that files a heavy check line risks a burned child.
-2. **T162** (pri 2) — the mandatory roadmap pull; features are first-class
-   and F11 unblocks the MCP resources/prompts frontier.
-3. **T164** (pri 2) — honor-system doctrine becomes a mechanical lint;
-   sweeps the t160 `--lib` leg and the pipe-masking class before the next
-   vacuous gate lands.
+1. **T173** (pri 2) — minutes are the loop's binding budget: 5/7 impl
+   children died at the wall and 3/5 validators nearly did; landing it
+   FIRST raises the budgets every later arc this cycle gets.
+2. **T172** (pri 2) — four cycles of fallback burns and a false-red risk
+   on the one signal every gate decision trusts.
+3. **T169** (pri 2) — the mandatory roadmap pull; completes the MCP
+   consume story's model surface (1a's registry work has no consumer
+   until this lands).
 
 ## 6. README audit (usability)
 
 Read top to bottom as a newcomer. (a) **Reading order: sound** — what →
 install → quickstart → chat → run → fork → plan → TUI → tools → policy
-surfaces (risk gate → hooks → permissions) → MCP client/server →
-observability → specs → loopd → development; no append-only accretion
-visible. (b) **Redundancy: none drifting** spotted. (c) **Staleness:
-none** — the install section reflects the tag-triggered release workflow
-(T100/T127 held), the mcp-serve section carries the T153/T157 verbs. (d)
-**Balance: watch** — 819 lines is near the "detail belongs in specs" line,
-but every section still earns its place; no row. (e) **Quickstart truth:
-accurate** — commands work as written, including the check-env scrub
-honesty paragraph (which §2.1 leans on). No docs row filed this cycle.
+surfaces (risk gate → hooks → permissions) → MCP → observability → specs →
+loopd → development; no accretion. (b) **Redundancy: none drifting**
+spotted. (c) **Staleness: none** — the MCP section carries T162's honest
+phase-1a bullet naming 1b's contents as the next phase (stays true until
+T169 lands); the quickstart's check-env scrub paragraph is the T144 truth.
+(d) **Balance: watch** — ~930 lines; the MCP section is the densest but
+still earns its place (client + server + policy interactions); no split
+row. (e) **Quickstart truth: accurate** — commands work as written, in
+order (cargo build → install --path . → run). No docs row filed this
+cycle.
 
 ## Handoff
 
-- **Worked this cycle, in order** (LOOP-SPEC §2: bugs > robustness >
-  features > DX): T163 (pri 1) → T164 (pri 2) → T162 (pri 2, feature;
-  robustness outranks feature at equal pri) → T165 (pri 3) →
-  T166+T167 (pri 3, T45 bundle, doctrine — runs alone) → T168 (pri 4).
-- **Validation routing preview**: T163 touches src/tools.rs → kimi
-  REQUIRED; T162 feature protocol work in src/mcp.rs → kimi exercised;
-  T166+T167 doctrine → kimi REQUIRED (bundle runs alone); T164/T165
-  tests-only → orchestrator gates + personal RED-proofs, kimi skipped per
-  T16/T147/T155 precedent; T168 touches src/tools.rs description → kimi
-  per the T22 precedent.
+- **Queue order** (LOOP-SPEC §2: bugs > robustness > features > DX, pri
+  tiebreak): T173 (pri 2, doctrine — runs ALONE, kimi REQUIRED; worked
+  first so later arcs get the raised budgets) → T172 (pri 2, robustness)
+  → T169 (pri 2, FEATURE — the roadmap pull) → T177 (pri 3, robustness)
+  → T170 (pri 3, feature) → T171 (pri 3, feature; after T170) → T178
+  (pri 3, loopd.sh — doctrine class, runs ALONE) → T175+T176 (pri 3,
+  T45 bundle of 2, doctrine — runs ALONE, kimi REQUIRED) → T174 (pri 4,
+  tests-only).
+- **Overlap notes**: doctrine rows (T173, T178, T175+T176) never overlap.
+  T172 (tests/loopd*, src/mcp_serve tests) vs T169 (src/mcp.rs,
+  src/tools.rs, README) read disjoint — 2-impl overlap eligible, declare
+  the file lists at dispatch. Validators cap at 1; merges strictly serial.
+- **Validation routing preview**: T173/T178/T175+T176 doctrine → kimi
+  REQUIRED; T169/T170/T171 touch src/mcp*.rs (+tools.rs for T169) → kimi
+  REQUIRED; T172 tests-only → orchestrator gates + personal RED-proofs
+  unless src/ is touched; T177/T174 tests-only → kimi optional (T16
+  precedent).
 - **Human-decision items**: none new. Standing carries: the laya
   fine-tune pipeline (F13 2–3 precondition), the deferred chat/TUI phase
   2s, the stale-loopd restart carry.
