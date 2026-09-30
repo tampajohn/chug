@@ -100,6 +100,9 @@ pub fn schema() -> Value {
             "Record ONE structured loop decision to `.chug/decisions.jsonl` — the machine-readable \
              decision corpus feeding F13 distillation (class, compact evidence, options considered, \
              choice, confidence; confidence is the deciding model's stated 0..=1 confidence). \
+             Required in every call: `class`, `subject`, `inputs`, `options`, `choice`, and \
+             `confidence` — all strings except `confidence` (a number in 0..=1) — with no field \
+             omitted. \
              Seed classes (use these verbatim so records do not fork into \
              synonyms): {seed_list} — free-string classes beyond these are allowed and need no code \
              change. Outcome backfills are ordinary records with `class: \"outcome\"`, `subject` \
@@ -488,6 +491,54 @@ mod tests {
                 "description must carry {token:?}: {desc}"
             );
         }
+    }
+
+    // ---------- description pin (T22 convention, T168) ----------
+
+    /// T168: the description the model actually reads must NAME the six
+    /// required fields explicitly. Cycle-76 eval §2.3: models omitted
+    /// `options`/`choice` in most streams of a delta; T88's corrective errors
+    /// self-correct in one iteration but the tax recurs every stream, because
+    /// the description never said the fields were required. Pinned against the
+    /// LIVE `tool_schemas()` output, with needles that exist ONLY in the
+    /// required-fields sentence — the pre-T168 description already carried the
+    /// bare tokens `options` and `choice` in the record-shape parenthetical,
+    /// so bare-token pins would not be RED-provable.
+    #[test]
+    fn decision_log_description_pins_required_fields_sentence() {
+        let schemas = tool_schemas();
+        let entries: Vec<&Value> = schemas
+            .iter()
+            .filter(|s| s.get("name").and_then(Value::as_str) == Some("decision_log"))
+            .collect();
+        assert_eq!(entries.len(), 1, "exactly one decision_log schema");
+        let desc = entries[0]
+            .get("description")
+            .and_then(Value::as_str)
+            .expect("decision_log schema has a description");
+        // The six-field list in backticks, in schema (required-array) order,
+        // is the load-bearing needle: the joined sequence appears nowhere else
+        // in the description, so dropping the sentence (or any one field from
+        // it) fails here. The remaining needles pin the sentence's contract
+        // clauses — required-ness, the all-strings-but-confidence typing, and
+        // the no-omission rule.
+        for token in [
+            "Required in every call",
+            "`class`, `subject`, `inputs`, `options`, `choice`, and `confidence`",
+            "all strings except `confidence`",
+            "no field omitted",
+        ] {
+            assert!(
+                desc.contains(token),
+                "decision_log description lost the required-fields sentence ({token:?}): {desc}"
+            );
+        }
+        // Exactly ONE sentence added (T22 precedent): 5 before T168, 6 after.
+        assert_eq!(
+            desc.split(". ").count(),
+            6,
+            "decision_log description must gain exactly one required-fields sentence: {desc}"
+        );
     }
 
     // ---------- dispatch round-trip ----------
