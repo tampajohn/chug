@@ -609,13 +609,24 @@ transport, unreachable server) is skipped with a note in
 
 Server tools appear as `mcp__<name>__<tool>` alongside the builtins.
 
-Resources (F11 phase 1a): chug consumes tools AND reads resources from
-servers that advertise them — `resources/list` + `resources/read` on servers
-whose initialize handshake advertised the `resources` capability (capped at
-200 per server, like tools); a server without the capability is never asked.
-This surface is internal for now — no model-facing tool yet, and prompts
-plus the resource legs over the HTTP transport are the next phase (F11
-phase 1b).
+Resources (F11 phase 1a + 1b-i): chug consumes tools AND reads resources
+from servers that advertise them — `resources/list` + `resources/read` on
+servers whose initialize handshake advertised the `resources` capability
+(capped at 200 per server, like tools); a server without the capability is
+never asked. The model-facing surface is the builtin **`mcp_resource`**
+tool: `{"action": "list", "server"?}` returns the resource catalog, one
+resource per line (`server uri — description (mimeType)`; all servers, or
+one named server), and `{"action": "read", "server", "uri"}` returns one
+resource's contents (text inline; binary as base64 with the mimeType
+named; output char-capped with a truncation note, like `web_fetch`).
+Capability-gated and named-error shaped: a non-capable, unknown, or dead
+server is a tool error naming the server — never a hang — and with no
+servers connected, `list` says so plainly. The tool is a builtin (not an
+`mcp__`-prefixed server tool), so T90 deny rules can match the plain
+`mcp_resource` name, and it is read-only: it bypasses the laya risk gate
+exactly like `mcp__` tool calls (the gate judges bash commands only).
+Still to come in F11 phase 1b: prompts (`prompts/list` + `prompts/get`)
+and the resource+prompt legs over the HTTP transport.
 
 Per-server fail-soft at runtime too: a stdio server that dies mid-run errors
 its calls without killing the run; a remote server that refuses connection

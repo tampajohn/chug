@@ -263,6 +263,46 @@ fn whole_tool_deny_blocks_web_fetch_and_loop_continues() {
     assert_eq!(content, "[permission denied] deny web_fetch", "{content:?}");
 }
 
+/// T169 (f): a `mcp_resource` deny rule blocks the BUILTIN resources tool
+/// before dispatch — the T90 chain is first for builtins too. The registry
+/// below is mcp-off, so a dispatched call would have answered plainly
+/// (`no MCP servers`, not an error): an is_error result with exactly the
+/// deny text proves the deny won and the registry was never consulted.
+#[test]
+fn whole_tool_deny_blocks_mcp_resource_and_loop_continues() {
+    let tmp = tempfile::tempdir().unwrap();
+    write_permissions_json(tmp.path(), json!([{"tool": "mcp_resource"}]));
+    let (_utx, urx) = mpsc::channel::<SlashUpdate>();
+    let controls = Controls::detached();
+    let ctx = ctx_for(&tmp, Mode::Chat, &controls, &urx, None, &observ::Sink::Noop);
+    let mut knobs = knobs_with(5);
+    let mut llm = ScriptedLlm::new(vec![
+        tool_use_response("mcp_resource", json!({"action": "list"})),
+        text_only_response("routed around the deny"),
+    ]);
+    let mut gate = None;
+    let mut messages = Vec::new();
+    let mut sink = RecordingSink::default();
+    let outcome = drive_loop(
+        &ctx,
+        &mut knobs,
+        &mut llm,
+        &mut gate,
+        &mut messages,
+        None,
+        &mut sink,
+        &mut McpRegistry::new(tmp.path(), true, None).unwrap(),
+    )
+    .unwrap();
+    assert!(
+        matches!(outcome, DriveOutcome::TurnEnded(TurnEndReason::Completed)),
+        "{outcome:?}"
+    );
+    let (content, is_error) = tool_result_text(&messages).expect("a tool result exists");
+    assert!(is_error, "{content:?}");
+    assert_eq!(content, "[permission denied] deny mcp_resource", "{content:?}");
+}
+
 /// PLAN MODE surfaces the deny (spec req 6): an in-process policy can
 /// only restrict further, so a `read_file *.key` rule denies that read
 /// inside a plan session while the other read-only tools keep working
