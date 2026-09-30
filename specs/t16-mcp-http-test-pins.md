@@ -68,4 +68,4 @@ test failure, never a frozen suite.
 - No production-code behavior change (diff should be test-module-only
   unless a pin exposes a bug — then report, don't fix).
 
-check: cd /Users/jadams/workspace/chug && cargo test
+check: cargo test

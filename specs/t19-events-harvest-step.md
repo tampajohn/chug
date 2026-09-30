@@ -1,6 +1,6 @@
 # T19 — Codify the child events-harvest step in LOOP-SPEC (K2)
 
-check: cd /Users/jadams/workspace/chug && cargo test
+check: cargo test
 
 ## Why (evidence)
 

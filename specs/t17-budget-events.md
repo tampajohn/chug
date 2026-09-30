@@ -1,6 +1,6 @@
 # T17 — Budget telemetry in `.chug/events.jsonl`: warning injections + configured budgets
 
-check: cd /Users/jadams/workspace/chug && cargo test
+check: cargo test
 
 ## Why (evidence)
 

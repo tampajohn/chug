@@ -1,6 +1,6 @@
 # T22 — Bash tool description: macOS `timeout` mirage note
 
-check: cd /Users/jadams/workspace/chug && cargo test
+check: cargo test
 
 ## Why (evidence)
 
