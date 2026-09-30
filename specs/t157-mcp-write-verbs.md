@@ -1,6 +1,6 @@
 # T157 — F10 phase 3: MCP write verbs (chug_abort + chug_steer)
 
-check: cargo test
+check: export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared && cargo test --bin chug mcp_serve::
 
 estimate: ~450 lines (2 verbs + gates + e2e)
 
