@@ -832,6 +832,10 @@ worktree-review gates), `target-shared-validate/` (validators),
 parallel (T79) add per-leg caches `target-shared-mut-<k>/` — one per mutant
 leg, cap 3, gitignored by glob, created on demand in the repo root and
 never shared across legs (the same role-keying, one level down).
+Two-impl overlap (T161) adds two impl-child slots, `target-shared-impl-a/`
+and `target-shared-impl-b/` — the impl launched into an overlap takes the
+slot no flying impl holds, so two concurrent implementation children never
+share one artifact dir (the T52 role-keying, widened).
 The supervisor hands `CARGO_TARGET_DIR`
 to each cycle as a per-invocation env prefix; loopd.sh carries the
 rationale. Why role-keyed: cargo's artifact filename excludes the checkout
