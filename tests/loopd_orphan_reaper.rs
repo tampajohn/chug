@@ -50,6 +50,25 @@ use std::time::{Duration, Instant};
 
 use tempfile::TempDir;
 
+// T159: the tests in this file that spawn a REAL `loopd.sh` join T151's ONE
+// shared test-timing serialization domain. The include compiles
+// `src/testsupport.rs` itself — the same declaration, the same
+// poison-tolerant `timing_guard()`, the fixed singleton export symbol — so
+// no second lock exists anywhere in the repo (a re-declaration is the T151
+// finding, blocked by review). Every test that spawns a real supervisor is a
+// spawn-timing / wall-clock test: its `wait_for_any` 30s deadline is a
+// quiescence cap, NOT a load assumption, and it stays untouched — what the
+// guard removes is the suite-manufactured contention (the cycle-73
+// post-merge gate: the three through-loopd tests ran concurrently with the
+// rest of the suite at 17-way parallelism and each busted its cap; solo each
+// finishes in <4s). Discipline is T151's verbatim: `timing_guard()` is the
+// FIRST acquisition in the body, held across spawn → assertion → cleanup.
+// The lock's scope is the process (nextest runs each test in its own
+// process and is unaffected, per T151's doctrine); the victim this protects
+// is `cargo test` at default parallelism — the goal-gate form.
+#[path = "../src/testsupport.rs"]
+mod testsupport;
+
 fn repo_root() -> PathBuf {
     std::env::current_dir().expect("cargo sets the test cwd to the package root")
 }
@@ -1021,6 +1040,9 @@ fn a_failing_enumeration_fails_closed() {
 /// signal, real fixture) by the fixture's exit status.
 #[test]
 fn the_reaper_terms_an_orphan_through_loopd_before_the_build() {
+    // T159: first acquisition — T151's shared timing domain, held for the
+    // whole body (spawn → assertion → cleanup); see the include comment.
+    let _timing = testsupport::timing_guard();
     let sandbox = Sandbox::new();
     let exe = sandbox.root.join("target-shared-mut-1/deps/spinner");
     compile_spinner(&exe);
@@ -1087,6 +1109,9 @@ fn the_reaper_terms_an_orphan_through_loopd_before_the_build() {
 /// what the probe establishes.
 #[test]
 fn a_failing_driver_probe_means_no_sweep() {
+    // T159: first acquisition — T151's shared timing domain, held for the
+    // whole body (spawn → assertion → cleanup); see the include comment.
+    let _timing = testsupport::timing_guard();
     let sandbox = Sandbox::new();
     let exe = sandbox.root.join("target-shared-mut-1/deps/spinner");
     compile_spinner(&exe);
@@ -1123,6 +1148,9 @@ fn a_failing_driver_probe_means_no_sweep() {
 /// fixture survives, and the harness reaps it.
 #[test]
 fn the_cwd_leg_identifies_an_orphan_through_loopd() {
+    // T159: first acquisition — T151's shared timing domain, held for the
+    // whole body (spawn → assertion → cleanup); see the include comment.
+    let _timing = testsupport::timing_guard();
     let sandbox = Sandbox::new();
     let wt = format!("/tmp/chug-loop-t{}2", std::process::id());
     fs::create_dir_all(&wt).expect("create the fixture worktree");
@@ -1282,4 +1310,105 @@ fn pin_the_reaper_wiring_and_doctrine() {
         "the README loopd section must mention the reaper, its sweep point, \
          and LOOP_REAPER=0"
     );
+}
+
+// ---------------------------------------------------------------------------
+// T159 lock-scope pin (the T151 lock-domain pin shape). The load stretch the
+// join defends against is NOT reliably reproducible on this host — solo the
+// trio finishes in ~9s serial / ~4s concurrent, and the perturbation run
+// (unlocked trio + full binary at 17-way under a 24-worker hammer, load
+// average 26 on an 18-CPU host) stayed green at ~4.5s, because the
+// through-loopd tests are wait-dominated (sleep-seam-bounded child
+// pipelines), not CPU-bound. What CAN be proven is membership: the family
+// contends on T151's ONE shared domain. Structural, source-text pin — a
+// through-loopd test added WITHOUT the guard, a guard taken mid-body, or a
+// second in-file lock is RED by construction even while every behavioral
+// test stays green (the cycle-33 sweep-the-family lesson: scan the family,
+// don't hardcode today's names alone).
+#[test]
+fn pin_through_loopd_tests_hold_the_t151_timing_domain() {
+    let src = fs::read_to_string(repo_root().join("tests/loopd_orphan_reaper.rs"))
+        .expect("read own source (cargo runs test binaries with cwd = package root)");
+    let ts = fs::read_to_string(repo_root().join("src/testsupport.rs"))
+        .expect("read src/testsupport.rs");
+
+    // The domain this file joins is THE T151 singleton, by construction: the
+    // include compiles src/testsupport.rs itself (a reference, not a copy),
+    // and that file still declares the fixed export symbol and the
+    // poison-tolerant acquisition helper.
+    assert!(
+        src.contains("#[path = \"../src/testsupport.rs\"]\nmod testsupport;"),
+        "the timing-domain join must be the #[path] include of \
+         src/testsupport.rs — any other lock source is a second, independent \
+         domain (the T151 finding)"
+    );
+    assert!(
+        ts.contains("chug_t151_test_timing_lock_singleton")
+            && ts.contains("pub(crate) fn timing_guard()"),
+        "src/testsupport.rs must remain the T151 singleton timing domain this \
+         file joins"
+    );
+    // A second in-file lock is the T151 finding; the needle is assembled at
+    // runtime so this assertion's own source does not match it.
+    let mutex_needle = concat!("Mutex", "::", "new");
+    assert!(
+        !src.contains(mutex_needle),
+        "no second in-file lock: the only serialization domain in this file is \
+         the included T151 one"
+    );
+
+    // Sweep the family: every test in this file whose body spawns a real
+    // loopd (`Sandbox::new()`) takes the timing guard as its FIRST
+    // acquisition — before the sandbox exists, so the supervisor spawn
+    // itself sits inside the critical region (spawn → assertion → cleanup).
+    let guard = "let _timing = testsupport::timing_guard();";
+    let mut through_loopd: Vec<&str> = Vec::new();
+    for chunk in src.split("\n#[test]").skip(1) {
+        let body = chunk.trim_start_matches('\n');
+        let name = body
+            .strip_prefix("fn ")
+            .and_then(|rest| rest.split(['(', '<']).next())
+            .unwrap_or("")
+            .trim();
+        assert!(!name.is_empty(), "a test chunk failed to yield its fn name");
+        // This pin's own chunk mentions the scanned markers as TEXT; it is
+        // not a timing test and takes no guard.
+        if name == "pin_through_loopd_tests_hold_the_t151_timing_domain" {
+            continue;
+        }
+        if !chunk.contains("Sandbox::new()") {
+            continue;
+        }
+        let at_guard = chunk.find(guard).unwrap_or_else(|| {
+            panic!(
+                "{name} spawns a real loopd but never takes the T151 timing \
+                 guard — the through-loopd family must stay joined to the one \
+                 shared serialization domain (the cycle-73 gate flake class)"
+            )
+        });
+        let at_sandbox = chunk.find("Sandbox::new()").expect("chunk has the spawn");
+        assert!(
+            at_guard < at_sandbox,
+            "{name} must take the timing guard as its FIRST acquisition \
+             (guard before Sandbox::new), not mid-body — a late guard leaves \
+             the sandbox setup and spawn racing the rest of the suite"
+        );
+        through_loopd.push(name);
+    }
+    assert!(
+        through_loopd.len() >= 3,
+        "the through-loopd family scan went empty — the real-loopd harness \
+         must still be named Sandbox::new"
+    );
+    for name in [
+        "the_cwd_leg_identifies_an_orphan_through_loopd",
+        "a_failing_driver_probe_means_no_sweep",
+        "the_reaper_terms_an_orphan_through_loopd_before_the_build",
+    ] {
+        assert!(
+            through_loopd.contains(&name),
+            "the spec-named through-loopd test {name} is not in the guarded \
+             real-loopd set — the family membership regressed"
+        );
+    }
 }
