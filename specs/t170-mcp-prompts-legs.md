@@ -1,6 +1,6 @@
 # T170 — F11 phase 1b-ii: prompts/list + prompts/get consume legs (stdio)
 
-check: export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared && cargo test --bin chug mcp
+check: export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-impl-a && cargo test --bin chug mcp
 
 ## Repo context
 
