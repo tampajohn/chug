@@ -80,7 +80,7 @@ fn t172_load_lock_degrades_fail_open_on_an_unopenable_lockfile() {
          to hold the domain"
     );
     assert!(
-        started.elapsed() < Duration::from_secs(5),
+        started.elapsed() < Duration::from_millis(5_000),
         "the degrade must be immediate (the open failed) — no bounded wait \
          is needed when the lockfile cannot even be opened"
     );
@@ -104,7 +104,7 @@ fn t172_load_lock_bounded_wait_expires_into_degrade_not_hang() {
          can never have observed the holder release)"
     );
     assert!(
-        elapsed >= Duration::from_millis(200) && elapsed < Duration::from_secs(5),
+        elapsed >= Duration::from_millis(200) && elapsed < Duration::from_millis(5_000),
         "the bounded wait must actually bound: expired after {elapsed:?} — \
          a fail-CLOSED mutant (unbounded wait) hangs here and dies on the \
          runner's per-test timeout instead"
