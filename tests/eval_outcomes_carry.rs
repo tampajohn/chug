@@ -90,7 +90,7 @@ const SECTIONS_MARKER: &str = "Sections:";
 
 /// The Write-EVALUATION window: from its heading to the Extend-TODO
 /// heading (the next `## ` section).
-fn write_eval_window<'a>(spec: &'a str) -> &'a str {
+fn write_eval_window(spec: &str) -> &str {
     let start = spec
         .find(WRITE_EVAL_HEADING)
         .unwrap_or_else(|| panic!("META-META-SPEC must carry the {WRITE_EVAL_HEADING:?} heading"));
