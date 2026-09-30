@@ -69,6 +69,19 @@ use tempfile::TempDir;
 #[path = "../src/testsupport.rs"]
 mod testsupport;
 
+// T172: the through-loopd tests join THE cross-binary load-lock domain for
+// this binary family (the flock harness in tests/support/load_lock.rs).
+// testsupport::timing_guard above is a static Mutex — a PER-PROCESS domain:
+// nextest runs each TEST as its own PROCESS, so the T151 shape cannot see
+// the cross-binary contention that stretched this family's 30s verdict
+// deadline to 30.8s at 17-way gate parallelism (the T152 signature, cycle
+// 76). A bounded advisory flock under the shared target dir can, under BOTH
+// gate runners, with the kernel releasing a dead holder's lock. Lock order
+// (deadlock-freedom): the T151 timing guard first, THEN this file lock — the
+// one global order everywhere the two domains meet.
+#[path = "support/load_lock.rs"]
+mod t172_load_lock;
+
 fn repo_root() -> PathBuf {
     std::env::current_dir().expect("cargo sets the test cwd to the package root")
 }
@@ -1043,6 +1056,12 @@ fn the_reaper_terms_an_orphan_through_loopd_before_the_build() {
     // T159: first acquisition — T151's shared timing domain, held for the
     // whole body (spawn → assertion → cleanup); see the include comment.
     let _timing = testsupport::timing_guard();
+    // T172: the cross-binary load lock, taken AFTER the T151 timing guard
+    // (the one global lock order) and held across the sandbox spawn →
+    // assertion → cleanup — sibling sandbox processes under nextest can no
+    // longer manufacture the stretch that busted this test's 30s verdict
+    // deadline (30.8s at 17-way; solo 3.36s).
+    let _t172_load = t172_load_lock::family_guard("loopd-orphan-reaper");
     let sandbox = Sandbox::new();
     let exe = sandbox.root.join("target-shared-mut-1/deps/spinner");
     compile_spinner(&exe);
@@ -1112,6 +1131,12 @@ fn a_failing_driver_probe_means_no_sweep() {
     // T159: first acquisition — T151's shared timing domain, held for the
     // whole body (spawn → assertion → cleanup); see the include comment.
     let _timing = testsupport::timing_guard();
+    // T172: the cross-binary load lock, taken AFTER the T151 timing guard
+    // (the one global lock order) and held across the sandbox spawn →
+    // assertion → cleanup — sibling sandbox processes under nextest can no
+    // longer manufacture the stretch that busted this test's 30s verdict
+    // deadline (30.8s at 17-way; solo 3.36s).
+    let _t172_load = t172_load_lock::family_guard("loopd-orphan-reaper");
     let sandbox = Sandbox::new();
     let exe = sandbox.root.join("target-shared-mut-1/deps/spinner");
     compile_spinner(&exe);
@@ -1151,6 +1176,12 @@ fn the_cwd_leg_identifies_an_orphan_through_loopd() {
     // T159: first acquisition — T151's shared timing domain, held for the
     // whole body (spawn → assertion → cleanup); see the include comment.
     let _timing = testsupport::timing_guard();
+    // T172: the cross-binary load lock, taken AFTER the T151 timing guard
+    // (the one global lock order) and held across the sandbox spawn →
+    // assertion → cleanup — sibling sandbox processes under nextest can no
+    // longer manufacture the stretch that busted this test's 30s verdict
+    // deadline (30.8s at 17-way; solo 3.36s).
+    let _t172_load = t172_load_lock::family_guard("loopd-orphan-reaper");
     let sandbox = Sandbox::new();
     let wt = format!("/tmp/chug-loop-t{}2", std::process::id());
     fs::create_dir_all(&wt).expect("create the fixture worktree");
@@ -1407,6 +1438,96 @@ fn pin_through_loopd_tests_hold_the_t151_timing_domain() {
     ] {
         assert!(
             through_loopd.contains(&name),
+            "the spec-named through-loopd test {name} is not in the guarded \
+             real-loopd set — the family membership regressed"
+        );
+    }
+}
+
+/// T172 pin (the T159 lock-scope pin shape, one domain later): every
+/// through-loopd test in this file — every body that spawns a REAL
+/// supervisor and polls a clocked 30s verdict window — takes the T151
+/// timing guard AND THEN the T172 cross-binary load lock, in that order,
+/// before the sandbox spawn. The T151 domain is per-process; nextest runs
+/// each TEST as its own PROCESS, so the cross-binary half of the T152
+/// signature (the trio stretched to 30.8s at 17-way gate parallelism) is
+/// the flock harness in tests/support/load_lock.rs. A future unguarded
+/// through-loopd test is RED by construction even while every behavioral
+/// test stays green.
+#[test]
+fn pin_through_loopd_tests_hold_the_t172_cross_binary_load_lock() {
+    let src = fs::read_to_string(repo_root().join("tests/loopd_orphan_reaper.rs"))
+        .expect("read own source (cargo runs test binaries with cwd = package root)");
+    // The join must be THE #[path] include of the harness file — a copy
+    // would be a second, independent domain (the T151 finding, at file
+    // granularity).
+    assert!(
+        src.contains("#[path = \"support/load_lock.rs\"]\nmod t172_load_lock;"),
+        "the cross-binary join must be the #[path] include of \
+         tests/support/load_lock.rs — any other lock source is a second, \
+         independent domain"
+    );
+    let timing_line = "let _timing = testsupport::timing_guard();";
+    let guard_line = "let _t172_load = t172_load_lock::family_guard(\"loopd-orphan-reaper\");";
+    let mut guarded: Vec<&str> = Vec::new();
+    for chunk in src.split("\n#[test]").skip(1) {
+        let body = chunk.trim_start_matches('\n');
+        let name = body
+            .strip_prefix("fn ")
+            .and_then(|rest| rest.split(['(', '<']).next())
+            .unwrap_or("")
+            .trim();
+        assert!(!name.is_empty(), "a test chunk failed to yield its fn name");
+        // This pin's own chunk mentions the scanned markers as TEXT; it is
+        // not a through-loopd test and takes no guard. The T159 pin's chunk
+        // scans the same markers as text — it takes no guard either.
+        if name == "pin_through_loopd_tests_hold_the_t172_cross_binary_load_lock"
+            || name == "pin_through_loopd_tests_hold_the_t151_timing_domain"
+        {
+            continue;
+        }
+        if !chunk.contains("Sandbox::new()") {
+            // The Direct (hermetic-stub) legs spawn no supervisor and carry
+            // no clocked window — they take no guard.
+            continue;
+        }
+        let at_timing = chunk.find(timing_line).unwrap_or_else(|| {
+            panic!(
+                "{name} spawns a real loopd but never takes the T151 timing \
+                 guard — the T159 lock-scope membership regressed"
+            )
+        });
+        let at_guard = chunk.find(guard_line).unwrap_or_else(|| {
+            panic!(
+                "{name} spawns a real loopd but never takes the T172 \
+                 cross-binary load lock — nextest runs each test as its own \
+                 PROCESS, so the T151 static domain cannot see the sibling \
+                 sandbox processes that stretched the 30s verdict deadline \
+                 to 30.8s at 17-way gate parallelism (the T152 signature)"
+            )
+        });
+        let at_sandbox = chunk.find("Sandbox::new()").expect("chunk has the spawn");
+        assert!(
+            at_timing < at_guard && at_guard < at_sandbox,
+            "{name} must take the T151 timing guard FIRST, then the T172 \
+             cross-binary load lock, both before the sandbox spawn — the one \
+             global lock order everywhere the two domains meet (a reversed \
+             or mid-body acquisition races the rest of the suite)"
+        );
+        guarded.push(name);
+    }
+    assert!(
+        guarded.len() >= 3,
+        "the through-loopd scan went empty — the real-supervisor family must \
+         still be named Sandbox::new (3 guarded tests at T172 landing)"
+    );
+    for name in [
+        "the_cwd_leg_identifies_an_orphan_through_loopd",
+        "a_failing_driver_probe_means_no_sweep",
+        "the_reaper_terms_an_orphan_through_loopd_before_the_build",
+    ] {
+        assert!(
+            guarded.contains(&name),
             "the spec-named through-loopd test {name} is not in the guarded \
              real-loopd set — the family membership regressed"
         );

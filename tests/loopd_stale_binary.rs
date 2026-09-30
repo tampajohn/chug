@@ -37,6 +37,18 @@ use std::time::{Duration, Instant};
 
 use tempfile::TempDir;
 
+// T172: the deadline-bearing sandbox tests in this file join THE
+// cross-binary load-lock domain for this binary family (the flock harness in
+// tests/support/load_lock.rs). A static Mutex is per-binary — nextest runs
+// each TEST as its own PROCESS, so the T31/T151 static shape cannot see the
+// cross-binary contention; a bounded advisory flock on a lockfile under the
+// shared target dir can, under BOTH gate runners, with the kernel releasing
+// a dead holder's lock. The pin test at the bottom enforces membership by
+// construction.
+#[path = "support/load_lock.rs"]
+mod t172_load_lock;
+
+
 fn repo_root() -> PathBuf {
     std::env::current_dir().expect("cargo sets the test cwd to the package root")
 }
@@ -248,6 +260,12 @@ fn stub(path: &Path, body: &str) {
 /// recorded `cycle OK`.)
 #[test]
 fn failed_build_must_not_launch_the_stale_binary() {
+    // T172: FIRST acquisition — hold the cross-binary load lock across
+    // the whole invalidation-retry span (all attempts) and the sandbox
+    // spawn → assertion → cleanup, so sibling sandbox tests (own
+    // processes under nextest) can no longer manufacture scheduler
+    // stretch inside this test's clocked verdict window.
+    let _t172_load = t172_load_lock::family_guard("loopd-stale-binary");
     // T158: the fixture's 30s verdict deadline is a liveness fence, not a load
     // assumption — a deadline blow invalidates the attempt and the WHOLE test
     // retries with a fresh sandbox (bounded); a wrong verdict still panics
@@ -295,6 +313,12 @@ fn failed_build_must_not_launch_the_stale_binary() {
 /// while the stale one runs the cycle.)
 #[test]
 fn inherited_cargo_target_dir_cannot_leave_the_stale_binary_running() {
+    // T172: FIRST acquisition — hold the cross-binary load lock across
+    // the whole invalidation-retry span (all attempts) and the sandbox
+    // spawn → assertion → cleanup, so sibling sandbox tests (own
+    // processes under nextest) can no longer manufacture scheduler
+    // stretch inside this test's clocked verdict window.
+    let _t172_load = t172_load_lock::family_guard("loopd-stale-binary");
     // T158: the fixture's 30s verdict deadline is a liveness fence, not a load
     // assumption — a deadline blow invalidates the attempt and the WHOLE test
     // retries with a fresh sandbox (bounded); a wrong verdict still panics
@@ -363,6 +387,12 @@ exit 0
 /// seconds, not the production 3×300s.
 #[test]
 fn three_consecutive_failed_builds_halt_the_supervisor() {
+    // T172: FIRST acquisition — hold the cross-binary load lock across
+    // the whole invalidation-retry span (all attempts) and the sandbox
+    // spawn → assertion → cleanup, so sibling sandbox tests (own
+    // processes under nextest) can no longer manufacture scheduler
+    // stretch inside this test's clocked verdict window.
+    let _t172_load = t172_load_lock::family_guard("loopd-stale-binary");
     // T158: the fixture's 30s verdict deadline is a liveness fence, not a load
     // assumption — a deadline blow invalidates the attempt and the WHOLE test
     // retries with a fresh sandbox (bounded); a wrong verdict still panics
@@ -416,6 +446,12 @@ fn three_consecutive_failed_builds_halt_the_supervisor() {
 /// the active driver and skip.
 #[test]
 fn an_early_driver_match_must_survive_a_sigpoled_ps_leg() {
+    // T172: FIRST acquisition — hold the cross-binary load lock across
+    // the whole invalidation-retry span (all attempts) and the sandbox
+    // spawn → assertion → cleanup, so sibling sandbox tests (own
+    // processes under nextest) can no longer manufacture scheduler
+    // stretch inside this test's clocked verdict window.
+    let _t172_load = t172_load_lock::family_guard("loopd-stale-binary");
     // T158: the fixture's 30s verdict deadline is a liveness fence, not a load
     // assumption — a deadline blow invalidates the attempt and the WHOLE test
     // retries with a fresh sandbox (bounded); a wrong verdict still panics
@@ -471,6 +507,12 @@ fn an_early_driver_match_must_survive_a_sigpoled_ps_leg() {
 /// driver": skip, say why, retry.
 #[test]
 fn a_failing_driver_probe_must_fail_closed_not_open() {
+    // T172: FIRST acquisition — hold the cross-binary load lock across
+    // the whole invalidation-retry span (all attempts) and the sandbox
+    // spawn → assertion → cleanup, so sibling sandbox tests (own
+    // processes under nextest) can no longer manufacture scheduler
+    // stretch inside this test's clocked verdict window.
+    let _t172_load = t172_load_lock::family_guard("loopd-stale-binary");
     // T158: the fixture's 30s verdict deadline is a liveness fence, not a load
     // assumption — a deadline blow invalidates the attempt and the WHOLE test
     // retries with a fresh sandbox (bounded); a wrong verdict still panics
@@ -618,5 +660,75 @@ fn pin_the_build_gate_and_the_pipefail_regime() {
         "the inter-cycle sleeps must honor test seams (the CHUG_ROUTINE_TODAY \
          pattern) so the gate and HALT are behaviorally testable in seconds \
          (T137)"
+    );
+}
+
+/// T172 pin (the T159 lock-scope pin shape): every deadline-bearing test in
+/// this file — every body that constructs a sandbox (a real loopd.sh + a
+/// clocked `wait_for_any` verdict window) — takes the cross-binary load lock
+/// as its FIRST acquisition, before the T158 invalidation-retry wrapper and
+/// the sandbox spawn. A static Mutex cannot do this job (nextest runs each
+/// TEST as its own PROCESS — the contention this guards is cross-binary), so
+/// the domain is the flock harness in tests/support/load_lock.rs; a future
+/// unguarded sandbox test here is RED by construction even while every
+/// behavioral test stays green (the cycle-33 sweep-the-family lesson).
+#[test]
+fn pin_deadline_tests_hold_the_t172_cross_binary_load_lock() {
+    let src = fs::read_to_string(repo_root().join("tests/loopd_stale_binary.rs"))
+        .expect("read own source (cargo runs test binaries with cwd = package root)");
+    // The join must be THE #[path] include of the harness file — a copy
+    // would be a second, independent domain (the T151 finding, at file
+    // granularity).
+    assert!(
+        src.contains("#[path = \"support/load_lock.rs\"]\nmod t172_load_lock;"),
+        "the cross-binary join must be the #[path] include of \
+         tests/support/load_lock.rs — any other lock source is a second, \
+         independent domain"
+    );
+    let guard_line = "let _t172_load = t172_load_lock::family_guard(\"loopd-stale-binary\");";
+    let mut guarded: Vec<&str> = Vec::new();
+    for chunk in src.split("\n#[test]").skip(1) {
+        let body = chunk.trim_start_matches('\n');
+        let name = body
+            .strip_prefix("fn ")
+            .and_then(|rest| rest.split(['(', '<']).next())
+            .unwrap_or("")
+            .trim();
+        assert!(!name.is_empty(), "a test chunk failed to yield its fn name");
+        // This pin's own chunk mentions the scanned markers as TEXT; it is
+        // not a sandbox test and takes no guard.
+        if name == "pin_deadline_tests_hold_the_t172_cross_binary_load_lock" {
+            continue;
+        }
+        if !chunk.contains("Sandbox::") {
+            // The static source pin carries no clock and no sandbox — it
+            // takes no guard.
+            continue;
+        }
+        let at_guard = chunk.find(guard_line).unwrap_or_else(|| {
+            panic!(
+                "{name} spawns a clocked sandbox but never takes the T172 \
+                 cross-binary load lock — nextest runs each test as its own \
+                 PROCESS, so without the flock domain the suite's parallel \
+                 sandboxes manufacture the scheduler stretch that busts this \
+                 test's 30s verdict window (the T152 signature, cycles 76-79)"
+            )
+        });
+        let at_retry = chunk
+            .find("loopd_attempt_with_invalidation_retry(")
+            .expect("every sandbox test here rides the T158 retry seam");
+        assert!(
+            at_guard < at_retry,
+            "{name} must take the load lock as its FIRST acquisition — before \
+             the T158 retry wrapper — so ALL invalidation attempts of one test \
+             hold the domain (a mid-body guard would let a sibling sandbox \
+             interleave between attempts)"
+        );
+        guarded.push(name);
+    }
+    assert!(
+        guarded.len() >= 5,
+        "the sandbox scan went empty — the deadline-bearing family must still \
+         be named Sandbox (5 guarded tests at T172 landing)"
     );
 }
