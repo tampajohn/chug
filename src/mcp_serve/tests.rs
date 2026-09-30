@@ -1148,6 +1148,68 @@
         unsafe { std::env::remove_var("CHUG_DELEGATE_BIN") };
     }
 
+    /// The launch-FAILURE leg (T165 — M8 pin, the T129 validator's
+    /// weak-test survivor `.chug/LEDGER-t129-validate-20260929-064334.md`):
+    /// `delegate_launch` fails at the spawn (the seam points at a path that
+    /// does not exist — ENOENT after the log file is already open, a real
+    /// seam-side failure, not a validation refusal), so the SECOND
+    /// `chug_launch` arm runs. Pins that the failure rides back as an
+    /// isError:true tool RESULT carrying the failure payload — tool-named
+    /// and naming the binary that failed to spawn — and that the server
+    /// loop survives it (the next dispatch still answers). Kills the M8
+    /// mutant: the arm's `true` flipped to `false` survived 13/13 green —
+    /// a launch failure would come back as a SUCCESS result and the
+    /// caller would read the error text as a pid/log/events payload.
+    #[cfg(unix)]
+    #[test]
+    fn chug_launch_spawn_failure_is_an_is_error_result_and_the_loop_survives() {
+        // The env var is process-global and the delegate tests mutate it
+        // too (same test binary) — one env, one lock.
+        let _guard = crate::delegate::tests::DELEGATE_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let target = tempfile::tempdir().unwrap();
+        let scratch = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(target.path().join(".chug")).unwrap();
+        let spec = write_launch_spec(scratch.path());
+        // The spawn-failure seam: an ABSOLUTE path that was never created.
+        let missing_bin = scratch.path().join("no-such-chug-binary");
+        // SAFETY: serialized by the delegate env lock; removed before return.
+        unsafe { std::env::set_var("CHUG_DELEGATE_BIN", &missing_bin) };
+        let (text, is_error) = launch_call(
+            true,
+            &json!({
+                "cwd": target.path().display().to_string(),
+                "spec": spec.display().to_string(),
+                "goal": "t165 spawn-failure leg",
+                "model": "stub-model",
+            }),
+        );
+        // THE M8 PIN: the launch failure is an isError result — the arm the
+        // validator flipped true→false — and the payload is the failure
+        // text, not a fabricated success shape.
+        assert_eq!(
+            is_error,
+            Some(true),
+            "a launch failure must be an isError result: {text}"
+        );
+        assert!(text.starts_with("chug_launch:"), "tool-named failure: {text}");
+        assert!(text.contains("spawning chug child"), "{text}");
+        assert!(
+            text.contains(missing_bin.to_str().unwrap()),
+            "the failure names the binary that failed to spawn: {text}"
+        );
+        // The loop survived: the NEXT dispatch (flag-on tools/list) still
+        // answers — no panic, no killed server.
+        let list = handle_message_launch(r#"{"jsonrpc":"2.0","id":165,"method":"tools/list"}"#)
+            .expect("the server loop survives a launch failure");
+        let (_, id, _, error) = parts(&list);
+        assert_eq!(id, Some(json!(165)), "{list}");
+        assert!(error.is_none(), "{list}");
+        // SAFETY: serialized by the delegate env lock.
+        unsafe { std::env::remove_var("CHUG_DELEGATE_BIN") };
+    }
+
     // ---------- chug_cancel (T153) ----------
 
     /// Route a `chug_cancel` tools/call through the FULL dispatch with the
