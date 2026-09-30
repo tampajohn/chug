@@ -1,6 +1,6 @@
 # T161 — Two-impl overlap (T44 extension: {1 impl + 1 validator} → ≤2 impls)
 
-check: cargo test
+check: export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared && cargo test --test shared_target_dir
 
 estimate: ~120 lines (doctrine + guard tests)
 
