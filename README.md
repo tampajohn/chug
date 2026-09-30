@@ -608,6 +608,15 @@ transport, unreachable server) is skipped with a note in
 `.chug/mcp-<name>.log` — it never aborts the run.
 
 Server tools appear as `mcp__<name>__<tool>` alongside the builtins.
+
+Resources (F11 phase 1a): chug consumes tools AND reads resources from
+servers that advertise them — `resources/list` + `resources/read` on servers
+whose initialize handshake advertised the `resources` capability (capped at
+200 per server, like tools); a server without the capability is never asked.
+This surface is internal for now — no model-facing tool yet, and prompts
+plus the resource legs over the HTTP transport are the next phase (F11
+phase 1b).
+
 Per-server fail-soft at runtime too: a stdio server that dies mid-run errors
 its calls without killing the run; a remote server that refuses connection
 retries 3× (1s, 2s, 4s) then returns a tool error. Timeouts mirror stdio:
