@@ -703,6 +703,18 @@ fn mcp_serve_chug_launch_budget_above_ceiling_is_error_arm_over_the_wire() {
 /// tool gets — a read-only deployment cannot probe the flag into revealing
 /// the tool. The call's arguments are deliberately non-absolute, so even a
 /// gate-neutered mutant would fail validation without spawning anything.
+///
+/// T165 — the M7 pin (the T129 validator's CLI-plumbing weak-test
+/// survivor, `.chug/LEDGER-t129-validate-20260929-064334.md`): this leg IS
+/// the flag-OFF CLI-wiring boundary over the real wire. The refusal shape
+/// is pinned EXACTLY as the T129 implementation serves it — JSON-RPC
+/// error, code `-32602`, message `unknown tool: chug_launch`, byte for
+/// byte. Kills the ALWAYS-ON direction of the M7 mutant (plumbing
+/// hardcoding the launch gate ON: the flag-OFF server would advertise the
+/// write leg and this leg dies at the tool-set assertion). The DROP
+/// direction (`cmd_mcp_serve(false)` ignoring the parsed flag) is killed
+/// by the flag-ON happy-path leg above — together the two directions pin
+/// the whole plumbing.
 #[test]
 fn mcp_serve_chug_launch_default_deny_over_the_real_wire() {
     let (mut child, rx) = spawn_server_with(&[], &[]);
@@ -740,17 +752,20 @@ fn mcp_serve_chug_launch_default_deny_over_the_real_wire() {
         "chug_launch must be ABSENT from the default-deny tool set: {list}"
     );
 
-    // Not callable: the unknown-tool error, indistinguishable from a tool
-    // that never existed.
+    // Not callable: the policy error, EXACTLY as the T129 implementation
+    // serves it — code -32602 and the verbatim `unknown tool: chug_launch`
+    // message (the T165 M7 pin: a paraphrased refusal would be a plumbed-in
+    // lie about the wire shape).
     let call = next_response(&rx, "default-deny tools/call response");
     assert_eq!(call["id"], 3, "{call}");
     let error = call
         .get("error")
         .unwrap_or_else(|| panic!("the default-deny call must be the unknown-tool error: {call}"));
     assert_eq!(error["code"], -32602, "{call}");
-    let message = error["message"].as_str().expect("error message string");
-    assert!(message.contains("unknown tool"), "{call}");
-    assert!(message.contains("chug_launch"), "{call}");
+    assert_eq!(
+        error["message"], "unknown tool: chug_launch",
+        "exact refusal text: {call}"
+    );
 
     close_stdin_and_expect_success_exit(child, "default-deny");
 }
