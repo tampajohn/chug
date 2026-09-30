@@ -274,6 +274,10 @@ fn check_lines(text: &str) -> Vec<(usize, &str)> {
 /// segments; only `|` (and `||`) marks a pipeline, which leg (b) needs.
 /// Quoted runs (`'…'`, `"…"`) are opaque: separators inside a grep needle
 /// (t40 greps LOOP-SPEC for a needle containing a literal `|`) do not split.
+/// Separator runs longer than two bytes tokenize left-to-right, each `&&`/`||`
+/// pair one separator: a leftover lone `&` is ordinary segment text (a lone
+/// `&` is not a separator here), a leftover lone `|` a one-byte separator —
+/// deterministic, and never the T177 `start > i` slice panic.
 fn shell_segments(line: &str) -> Vec<(char, &str)> {
     let mut segments: Vec<(char, &str)> = Vec::new();
     let mut quote: Option<char> = None;
@@ -288,7 +292,12 @@ fn shell_segments(line: &str) -> Vec<(char, &str)> {
         }
         let (sep, width) = match ch {
             ';' => (';', 1),
-            '&' if line[i + 1..].starts_with('&') => ('&', 2),
+            '&' if line[i + 1..].starts_with('&') => {
+                chars.next(); // consume the second '&' — the `||` arm's shape;
+                              // without it a third `&` re-matched and pushed
+                              // `&line[start..i]` with start > i (T177 panic)
+                ('&', 2)
+            }
             '|' if line[i + 1..].starts_with('|') => {
                 chars.next(); // consume the second '|'
                 ('|', 2)
@@ -529,6 +538,67 @@ fn check_line_lint_flags_absolute_path_cd() {
     // Worktree-relative forms are the rule.
     assert!(check_line_violations("cargo test").is_empty());
     assert!(check_line_violations("cd specs && grep -q x t1.md && cargo test").is_empty());
+}
+
+#[test]
+fn shell_segments_tokenizes_any_ampersand_run_without_panicking() {
+    // T177: the `&&` arm matched a second `&` via `line[i + 1..]` without
+    // consuming it, so in a `&&&` run the third `&` re-matched the arm and
+    // pushed `&line[start..i]` with `start = i_prev + 2 > i` — a slice
+    // panic. A malformed check line must tokenize deterministically, never
+    // crash the corpus lint. Chosen segmentation for odd runs: each `&&`
+    // pair is one separator left-to-right; a leftover lone `&` is ordinary
+    // segment text (a lone `&` has never been a separator here); an even
+    // run of four yields two `&&` separators with an empty middle segment.
+    for line in [
+        "a &&& b",      // the T177 panic shape
+        "a &&&& b",     // even run: two `&&` separators
+        "a &&&",        // odd run at end of line
+        "cargo test &", // trailing lone `&`
+        "cargo test & ", // `& ` at end of line
+        "cargo test &&", // trailing `&&`
+        // Sweep-the-family pins: `||` already consumes its second char and
+        // `;` is single-byte, so the match-2-consume-1 class cannot occur
+        // there — `a ||| b` falls back to a one-byte `|` separator and
+        // `;;;` to three, both segment- (never panic-) producing.
+        "a ||| b",
+        "a ;;; b",
+    ] {
+        let _ = shell_segments(line);
+    }
+    // The chosen odd-run segmentation, pinned.
+    assert_eq!(
+        shell_segments("a &&& b"),
+        vec![('&', "a "), ('\0', "& b")]
+    );
+    assert_eq!(
+        shell_segments("a &&&& b"),
+        vec![('&', "a "), ('&', ""), ('\0', " b")]
+    );
+}
+
+#[test]
+fn check_line_lint_survives_a_malformed_ampersand_run() {
+    // T177: a check line containing `&&&` must yield lint segments (a
+    // finding, or none for a clean command) instead of crashing
+    // todo_consistency — which runs in every docs-only gate floor.
+    let problems = check_line_violations("cargo test --release --lib mcp_serve &&& cargo test");
+    assert!(problems.iter().any(|p| p.contains("--lib")), "{problems:?}");
+    assert!(
+        check_line_violations("cargo test --test todo_consistency &&& echo ok").is_empty(),
+        "a clean command behind a malformed `&&&` run must stay clean"
+    );
+}
+
+#[test]
+fn shell_segments_keeps_the_well_formed_and_segmentation() {
+    // T177 requirement: zero behavior change for well-formed input — the
+    // fix touches only the malformed-run path.
+    assert_eq!(shell_segments("a && b"), vec![('&', "a "), ('\0', " b")]);
+    assert_eq!(
+        shell_segments("a && b && c"),
+        vec![('&', "a "), ('&', " b "), ('\0', " c")]
+    );
 }
 
 #[test]
