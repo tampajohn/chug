@@ -1,4 +1,4 @@
-use anyhow::{Context, bail};
+use anyhow::{anyhow, Context, bail};
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::fs;
@@ -31,6 +31,164 @@ pub struct McpTool {
     pub input_schema: Value,
 }
 
+/// Defensive cap on registered resources per server (mirror of the HTTP
+/// transport's MAX_MCP_TOOLS: a broken server must not flood the registry).
+pub(crate) const MAX_MCP_RESOURCES: usize = 200;
+
+/// Server capabilities advertised at `initialize` (F11 phase 1a). One
+/// shared shape for every transport — stdio parses it now, the HTTP
+/// transport captures the same struct (no per-transport fork) and phase 1b
+/// reads the prompts/listChanged flags from it. Presence, per the MCP spec,
+/// is the capability KEY existing (an empty `{}` object advertises the
+/// capability with no options); `listChanged` is its optional flag.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[allow(dead_code)] // the catalog is kept COMPLETE (all advertised flags), not just the flags phase 1a reads; phase 1b reads the rest
+pub(crate) struct McpCapabilities {
+    pub tools: bool,
+    pub resources: bool,
+    pub prompts: bool,
+    pub tools_list_changed: bool,
+    pub resources_list_changed: bool,
+    pub prompts_list_changed: bool,
+}
+
+impl McpCapabilities {
+    /// Parse the `capabilities` object out of an initialize result. An
+    /// absent object (or absent per-capability entries) is simply false —
+    /// a server advertising nothing supports nothing, and a server without
+    /// `resources` is never queried for them.
+    pub(crate) fn parse(capabilities: Option<&Value>) -> Self {
+        let Some(caps) = capabilities.and_then(Value::as_object) else {
+            return Self::default();
+        };
+        let flag = |key: &str| caps.contains_key(key);
+        let list_changed = |key: &str| {
+            caps.get(key)
+                .and_then(|c| c.get("listChanged"))
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+        };
+        Self {
+            tools: flag("tools"),
+            resources: flag("resources"),
+            prompts: flag("prompts"),
+            tools_list_changed: list_changed("tools"),
+            resources_list_changed: list_changed("resources"),
+            prompts_list_changed: list_changed("prompts"),
+        }
+    }
+}
+
+/// One advertised MCP resource (a `resources/list` entry) — metadata only;
+/// the content itself comes from `resources/read`.
+#[derive(Debug, Clone)]
+#[allow(dead_code)] // registry surface is internal until phase 1b wires a model-facing consumer
+pub struct McpResource {
+    pub uri: String,
+    pub name: String,
+    pub description: String,
+    pub mime_type: String,
+}
+
+/// One content block from `resources/read`: exactly one of `text`/`blob`
+/// carries the payload (`blob` is the server's base64 string, kept verbatim
+/// — decoding is the consumer's job, phase 1b).
+#[derive(Debug, Clone)]
+#[allow(dead_code)] // registry surface is internal until phase 1b wires a model-facing consumer
+pub struct McpResourceContents {
+    pub uri: String,
+    pub mime_type: String,
+    pub text: Option<String>,
+    pub blob: Option<String>,
+}
+
+/// Shared `resources/list` response mapping (stdio phase 1a; the HTTP
+/// transport reuses it in phase 1b). Entries without a `uri` are skipped
+/// (same filter_map discipline as tools/list). Over-cap advertisements are
+/// warn-and-capped: the first `max` are kept and the warning line is
+/// returned for the caller to log where its transport logs.
+pub(crate) fn parse_resources_list(
+    server: &str,
+    resp: &Value,
+    max: usize,
+) -> anyhow::Result<(Vec<McpResource>, Option<String>)> {
+    // A JSON-RPC error reply carries the server's own message — surface it
+    // (same discipline as parse_call_response) so a refused list names why.
+    if let Some(err) = resp
+        .get("error")
+        .and_then(|e| e.get("message"))
+        .and_then(Value::as_str)
+    {
+        bail!("mcp server {server}: resources/list failed: {err}");
+    }
+    let resources = resp
+        .get("result")
+        .and_then(|r| r.get("resources"))
+        .and_then(Value::as_array)
+        .with_context(|| format!("mcp server {server}: resources/list returned no resources array"))?;
+    let mapped: Vec<McpResource> = resources
+        .iter()
+        .filter_map(|r| {
+            let uri = r.get("uri")?.as_str()?.to_string();
+            Some(McpResource {
+                uri,
+                name: r.get("name").and_then(Value::as_str).unwrap_or("").to_string(),
+                description: r
+                    .get("description")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string(),
+                mime_type: r
+                    .get("mimeType")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string(),
+            })
+        })
+        .collect();
+    if mapped.len() > max {
+        let warning =
+            format!("resources/list advertised {} resources; capped at {max}", mapped.len());
+        return Ok((mapped.into_iter().take(max).collect(), Some(warning)));
+    }
+    Ok((mapped, None))
+}
+
+/// Shared `resources/read` response mapping: `result.contents` text and
+/// blob blocks become [`McpResourceContents`] values.
+pub(crate) fn parse_resource_contents(server: &str, resp: &Value) -> anyhow::Result<Vec<McpResourceContents>> {
+    // Same error mapping as resources/list: the server's message names the
+    // failure (e.g. an unknown uri), not just the missing contents array.
+    if let Some(err) = resp
+        .get("error")
+        .and_then(|e| e.get("message"))
+        .and_then(Value::as_str)
+    {
+        bail!("mcp server {server}: resources/read failed: {err}");
+    }
+    let contents = resp
+        .get("result")
+        .and_then(|r| r.get("contents"))
+        .and_then(Value::as_array)
+        .with_context(|| format!("mcp server {server}: resources/read returned no contents array"))?;
+    Ok(contents
+        .iter()
+        .filter_map(|c| {
+            let uri = c.get("uri")?.as_str()?.to_string();
+            Some(McpResourceContents {
+                uri,
+                mime_type: c
+                    .get("mimeType")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string(),
+                text: c.get("text").and_then(Value::as_str).map(str::to_string),
+                blob: c.get("blob").and_then(Value::as_str).map(str::to_string),
+            })
+        })
+        .collect())
+}
+
 /// Transport-agnostic view of one MCP server (stdio child process or remote
 /// streamable-HTTP endpoint). The registry routes purely by server name; the
 /// transport is an implementation detail of each backend.
@@ -42,6 +200,28 @@ pub trait McpBackend {
     fn is_alive(&self) -> bool;
     fn tools(&self) -> &[McpTool];
     fn call(&mut self, tool_name: &str, arguments: Value) -> anyhow::Result<ToolResult>;
+    /// Capabilities the server advertised at initialize (shared
+    /// [`McpCapabilities`] shape — both transports capture it).
+    #[allow(dead_code)] // phase 1b wires a model-facing surface; the registry methods below read it
+    fn capabilities(&self) -> &McpCapabilities;
+    /// `resources/list`. Default: this transport does not speak resources
+    /// yet (F11 phase 1b) — the stdio transport overrides.
+    #[allow(dead_code)]
+    fn list_resources(&mut self) -> anyhow::Result<Vec<McpResource>> {
+        bail!(
+            "mcp server {}: resources are not supported over this transport yet (phase 1b)",
+            self.name()
+        )
+    }
+    /// `resources/read` for one uri. Default: same phase-1b story as
+    /// [`McpBackend::list_resources`].
+    #[allow(dead_code)]
+    fn read_resource(&mut self, _uri: &str) -> anyhow::Result<Vec<McpResourceContents>> {
+        bail!(
+            "mcp server {}: resources are not supported over this transport yet (phase 1b)",
+            self.name()
+        )
+    }
 }
 
 #[derive(Debug)]
@@ -55,6 +235,12 @@ pub struct McpServer {
     pending: Arc<Mutex<HashMap<u64, Sender<Value>>>>,
     next_id: Arc<Mutex<u64>>,
     tools: Vec<McpTool>,
+    /// Capabilities the server advertised at initialize (F11 phase 1a):
+    /// a server without the `resources` flag is never sent resources legs.
+    capabilities: McpCapabilities,
+    /// Per-server log file (.chug/mcp-<name>.log): stderr, dropped
+    /// notifications, and the resources warn-and-cap note land here.
+    log_path: PathBuf,
     alive: Arc<Mutex<bool>>,
 }
 
@@ -165,6 +351,36 @@ impl McpServer {
             },
         }
     }
+
+    /// `resources/list` (LIST_TIMEOUT budget, same framing discipline as
+    /// tools/list). The response mapping is shared with the HTTP transport
+    /// (phase 1b reuses `parse_resources_list`); the warn-and-cap note goes
+    /// to the per-server log, mirroring the HTTP tools cap.
+    fn resources_list(&mut self) -> anyhow::Result<Vec<McpResource>> {
+        if !self.is_alive() {
+            bail!("mcp server {} is down", self.name);
+        }
+        let resp = self.send_request("resources/list", json!({}), LIST_TIMEOUT)?;
+        let (resources, warning) = parse_resources_list(&self.name, &resp, MAX_MCP_RESOURCES)?;
+        if let Some(warning) = warning {
+            log_line(
+                &self.log_path,
+                &format!("chug: warning: mcp server {}: {warning}", self.name),
+            );
+        }
+        Ok(resources)
+    }
+
+    /// `resources/read` for one uri (CALL_TIMEOUT budget: a read can be as
+    /// expensive as a tool call). Text and blob contents map into
+    /// [`McpResourceContents`]; JSON-RPC errors become named errors.
+    fn resource_read(&mut self, uri: &str) -> anyhow::Result<Vec<McpResourceContents>> {
+        if !self.is_alive() {
+            bail!("mcp server {} is down", self.name);
+        }
+        let resp = self.send_request("resources/read", json!({ "uri": uri }), CALL_TIMEOUT)?;
+        parse_resource_contents(&self.name, &resp)
+    }
 }
 
 impl McpBackend for McpServer {
@@ -180,6 +396,17 @@ impl McpBackend for McpServer {
     fn call(&mut self, tool_name: &str, arguments: Value) -> anyhow::Result<ToolResult> {
         // Delegate to the inherent method: identical wire behavior.
         McpServer::call(self, tool_name, arguments)
+    }
+    fn capabilities(&self) -> &McpCapabilities {
+        &self.capabilities
+    }
+    fn list_resources(&mut self) -> anyhow::Result<Vec<McpResource>> {
+        // Delegate to the inherent method: identical wire behavior.
+        McpServer::resources_list(self)
+    }
+    fn read_resource(&mut self, uri: &str) -> anyhow::Result<Vec<McpResourceContents>> {
+        // Delegate to the inherent method: identical wire behavior.
+        McpServer::resource_read(self, uri)
     }
 }
 
@@ -223,6 +450,20 @@ struct PendingServer {
     cwd: PathBuf,
     name: String,
     raw: McpServerConfigRaw,
+}
+
+/// One server's outcome from [`McpRegistry::list_resources`]: every started
+/// server appears exactly once; a server that cannot serve resources (not
+/// advertised, down, timed out) carries the named error instead — partial
+/// failure is data, never a panic and never a wire request the server did
+/// not advertise.
+#[derive(Debug)]
+#[allow(dead_code)] // phase 1b wires a model-facing surface over this result
+pub struct McpServerResources {
+    pub server: String,
+    /// This server's resources, or the error that failed its leg (the
+    /// message already names the server).
+    pub resources: anyhow::Result<Vec<McpResource>>,
 }
 
 impl McpRegistry {
@@ -377,6 +618,51 @@ impl McpRegistry {
                 images: Vec::new(),
             },
         }
+    }
+
+    /// F11 phase 1a: list resources from every started server. The
+    /// capability catalog gates the wire: a server that did not advertise
+    /// `resources` is NEVER sent resources/list — its entry carries the
+    /// named error instead. Dead or timed-out servers degrade to a named
+    /// error in their own entry (the run continues); capable servers reuse
+    /// the LIST timeout.
+    #[allow(dead_code)] // internal surface until phase 1b wires a model-facing tool
+    pub fn list_resources(&mut self) -> Vec<McpServerResources> {
+        self.servers
+            .iter_mut()
+            .map(|srv| {
+                let server = srv.name().to_string();
+                // The capability gate IS the (e) contract: a server that did
+                // not advertise `resources` is never sent resources/list —
+                // RED-proven (the always-query mutant made the stub see the
+                // request) and now enforced here.
+                let resources = if srv.capabilities().resources {
+                    srv.list_resources()
+                } else {
+                    Err(anyhow!("mcp server {server} does not advertise resources"))
+                };
+                McpServerResources { server, resources }
+            })
+            .collect()
+    }
+
+    /// F11 phase 1a: read one resource from the named server. Unknown
+    /// server, missing capability, and dead server all produce named
+    /// errors — never a panic, never a hang (the leg reuses the CALL
+    /// timeout).
+    #[allow(dead_code)] // internal surface until phase 1b wires a model-facing tool
+    pub fn read_resource(
+        &mut self,
+        server: &str,
+        uri: &str,
+    ) -> anyhow::Result<Vec<McpResourceContents>> {
+        let Some(srv) = self.servers.iter_mut().find(|s| s.name() == server) else {
+            bail!("mcp server {server} not found");
+        };
+        if !srv.capabilities().resources {
+            bail!("mcp server {server} does not advertise resources; not sending resources/read");
+        }
+        srv.read_resource(uri)
     }
 }
 
@@ -629,6 +915,8 @@ impl McpServer {
             pending,
             next_id,
             tools: Vec::new(),
+            capabilities: McpCapabilities::default(),
+            log_path,
             alive,
         })
     }
@@ -679,12 +967,14 @@ impl McpServer {
         match rx.recv_timeout(timeout) {
             Ok(resp) => Ok(resp),
             // A timeout is NOT a dead server: remove the pending entry so it
-            // cannot shadow a late response's id, and say so.
+            // cannot shadow a late response's id, and say so. The message
+            // names the server: registry-level resource errors must name it
+            // (F11 phase 1a), and the tools path benefits equally.
             Err(RecvTimeoutError::Timeout) => {
                 lock(&self.pending).remove(&request_id);
                 bail!(
-                    "mcp {} request timed out after {}s",
-                    method,
+                    "mcp server {} request {method} timed out after {}s",
+                    self.name,
                     timeout.as_secs()
                 );
             }
@@ -695,14 +985,22 @@ impl McpServer {
     }
 
     /// `initialize` → `notifications/initialized` → `tools/list`. Any failure
-    /// aborts the handshake; the caller drops the server (fail-soft).
+    /// aborts the handshake; the caller drops the server (fail-soft). The
+    /// initialize response's `capabilities` object is parsed into the shared
+    /// [`McpCapabilities`] catalog (F11 phase 1a): it decides whether this
+    /// server is ever sent resources legs.
     fn initialize(&mut self) -> anyhow::Result<()> {
         let params = json!({
             "protocolVersion": PROTOCOL_VERSION,
             "capabilities": {},
             "clientInfo": { "name": "chug", "version": "0.1.0" }
         });
-        self.send_request("initialize", params, INIT_TIMEOUT)?;
+        let init_resp = self.send_request("initialize", params, INIT_TIMEOUT)?;
+        self.capabilities = McpCapabilities::parse(
+            init_resp
+                .get("result")
+                .and_then(|r| r.get("capabilities")),
+        );
         let notif = json!({
             "jsonrpc": "2.0",
             "method": "notifications/initialized",
@@ -1224,6 +1522,331 @@ for line in sys.stdin:
         let res = McpServer::parse_call_response(resp);
         assert!(res.is_error);
         assert_eq!(res.content, "line one\nline two");
+    }
+
+    // ---------- F11 phase 1a (T162): resources consume legs ----------
+
+    /// Resources stub: advertises tools + resources{listChanged} + prompts,
+    /// serves resources/list (250 entries — over MAX_MCP_RESOURCES) and
+    /// resources/read (a text resource, a blob resource, JSON-RPC error for
+    /// unknown uris).
+    fn resources_server_body() -> &'static str {
+        r#"
+import sys, json
+def send(o):
+    sys.stdout.write(json.dumps(o) + "\n"); sys.stdout.flush()
+RESOURCES = [{"uri": "mem://r%d" % i, "name": "r%d" % i, "mimeType": "text/plain", "description": "resource %d" % i} for i in range(250)]
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    req = json.loads(line)
+    if "method" not in req or "id" not in req:
+        continue
+    m, i = req["method"], req["id"]
+    if m == "initialize":
+        send({"jsonrpc": "2.0", "id": i, "result": {"protocolVersion": "2025-06-18", "capabilities": {"tools": {}, "resources": {"listChanged": True}, "prompts": {}}, "serverInfo": {"name": "fake", "version": "0.0.1"}}})
+    elif m == "tools/list":
+        send({"jsonrpc": "2.0", "id": i, "result": {"tools": [{"name": "echo", "description": "echo", "inputSchema": {"type": "object"}}]}})
+    elif m == "resources/list":
+        send({"jsonrpc": "2.0", "id": i, "result": {"resources": RESOURCES}})
+    elif m == "resources/read":
+        uri = req["params"].get("uri")
+        if uri == "mem://greeting":
+            send({"jsonrpc": "2.0", "id": i, "result": {"contents": [{"uri": uri, "mimeType": "text/plain", "text": "hello from the stub"}]}})
+        elif uri == "mem://bytes":
+            send({"jsonrpc": "2.0", "id": i, "result": {"contents": [{"uri": uri, "mimeType": "application/octet-stream", "blob": "aGVsbG8="}]}})
+        else:
+            send({"jsonrpc": "2.0", "id": i, "error": {"code": -32602, "message": "unknown resource: " + str(uri)}})
+    else:
+        send({"jsonrpc": "2.0", "id": i, "error": {"code": -32601, "message": "method not found: " + m}})
+"#
+    }
+
+    /// Tools-only stub (echo capabilities) that appends EVERY received
+    /// method name to a log file — the (e) witness: the test reads the file
+    /// at the stub side and asserts zero resources/list requests.
+    fn method_log_body(requests: &Path) -> String {
+        format!(
+            r#"
+import sys, json, pathlib
+LOG = pathlib.Path({requests:?})
+def send(o):
+    sys.stdout.write(json.dumps(o) + "\n"); sys.stdout.flush()
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    req = json.loads(line)
+    if "method" in req:
+        with LOG.open("a") as f:
+            f.write(req["method"] + "\n")
+    if "method" not in req or "id" not in req:
+        continue
+    m, i = req["method"], req["id"]
+    if m == "initialize":
+        send({{"jsonrpc": "2.0", "id": i, "result": {{"protocolVersion": "2025-06-18", "capabilities": {{"tools": {{}}}}, "serverInfo": {{"name": "fake", "version": "0.0.1"}}}}}})
+    elif m == "tools/list":
+        send({{"jsonrpc": "2.0", "id": i, "result": {{"tools": []}}}})
+    else:
+        send({{"jsonrpc": "2.0", "id": i, "error": {{"code": -32601, "message": "method not found: " + m}}}})
+"#,
+            requests = requests
+        )
+    }
+
+    /// (a) The capability catalog captures what the server advertised —
+    /// and stays all-false for a server advertising only tools.
+    #[test]
+    fn capabilities_captured_when_advertised_and_absent_when_not() {
+        let tmp = TempDir::new().unwrap();
+        let mut capable = McpServer::spawn(
+            tmp.path(),
+            "capable",
+            server_config(tmp.path(), "capable", resources_server_body()),
+        )
+        .unwrap();
+        capable.initialize().unwrap();
+        let caps = capable.capabilities();
+        assert!(caps.tools, "{caps:?}");
+        assert!(caps.resources, "{caps:?}");
+        assert!(caps.prompts, "{caps:?}");
+        assert!(caps.resources_list_changed, "{caps:?}");
+        assert!(!caps.prompts_list_changed, "{caps:?}");
+        assert!(!caps.tools_list_changed, "{caps:?}");
+        drop(capable);
+
+        // The plain echo server advertises {"tools": {}} — resources and
+        // prompts absent means false.
+        let srv = spawn_echo(tmp.path());
+        let caps = srv.capabilities();
+        assert!(caps.tools);
+        assert!(!caps.resources);
+        assert!(!caps.prompts);
+    }
+
+    /// (a, unit) Parse rules: presence is the key existing (even `{}`);
+    /// absent object → all false; listChanged only when the flag is there.
+    #[test]
+    fn capabilities_parse_presence_and_list_changed_flags() {
+        assert_eq!(McpCapabilities::parse(None), McpCapabilities::default());
+        assert_eq!(
+            McpCapabilities::parse(Some(&json!({}))),
+            McpCapabilities::default()
+        );
+        let caps = McpCapabilities::parse(Some(&json!({
+            "tools": {"listChanged": true},
+            "resources": {},
+            "prompts": {"listChanged": true}
+        })));
+        assert!(caps.tools && caps.tools_list_changed);
+        assert!(caps.resources && !caps.resources_list_changed);
+        assert!(caps.prompts && caps.prompts_list_changed);
+    }
+
+    /// (b) resources/list parses into McpResource values and is capped at
+    /// MAX_MCP_RESOURCES with the warn-and-cap note in the per-server log
+    /// (same semantics as the HTTP MAX_MCP_TOOLS cap).
+    #[test]
+    fn resources_list_parses_and_caps_at_max_with_warning() {
+        let tmp = TempDir::new().unwrap();
+        let mut srv = McpServer::spawn(
+            tmp.path(),
+            "fake",
+            server_config(tmp.path(), "fake", resources_server_body()),
+        )
+        .unwrap();
+        srv.initialize().unwrap();
+        let resources = McpBackend::list_resources(&mut srv).unwrap();
+        assert_eq!(
+            resources.len(),
+            MAX_MCP_RESOURCES,
+            "the stub advertises 250; the registry must cap at {MAX_MCP_RESOURCES}"
+        );
+        assert_eq!(resources[0].uri, "mem://r0");
+        assert_eq!(resources[0].name, "r0");
+        assert_eq!(resources[0].description, "resource 0");
+        assert_eq!(resources[0].mime_type, "text/plain");
+        // warn-and-cap: the cap note lands in the per-server log.
+        let log =
+            fs::read_to_string(tmp.path().join(".chug").join("mcp-fake.log")).unwrap_or_default();
+        assert!(
+            log.contains("capped at"),
+            "expected the cap warning in the server log, got: {log}"
+        );
+        assert!(log.contains("250 resources"), "{log}");
+    }
+
+    /// (c) resources/read maps text AND blob contents.
+    #[test]
+    fn resources_read_maps_text_and_blob_contents() {
+        let tmp = TempDir::new().unwrap();
+        let mut srv = McpServer::spawn(
+            tmp.path(),
+            "fake",
+            server_config(tmp.path(), "fake", resources_server_body()),
+        )
+        .unwrap();
+        srv.initialize().unwrap();
+        let contents = McpBackend::read_resource(&mut srv, "mem://greeting").unwrap();
+        assert_eq!(contents.len(), 1);
+        assert_eq!(contents[0].uri, "mem://greeting");
+        assert_eq!(contents[0].mime_type, "text/plain");
+        assert_eq!(contents[0].text.as_deref(), Some("hello from the stub"));
+        assert!(contents[0].blob.is_none());
+
+        let contents = McpBackend::read_resource(&mut srv, "mem://bytes").unwrap();
+        assert_eq!(contents.len(), 1);
+        assert_eq!(contents[0].blob.as_deref(), Some("aGVsbG8="));
+        assert!(contents[0].text.is_none());
+    }
+
+    /// (c, unit) The shared read mapping: text and blob blocks, empty
+    /// mimeType when absent, and a named error when the contents array is
+    /// missing.
+    #[test]
+    fn resource_contents_parse_maps_blocks_and_errors() {
+        let resp = json!({"result": {"contents": [
+            {"uri": "mem://a", "mimeType": "text/plain", "text": "hi"},
+            {"uri": "mem://b", "blob": "aGVsbG8="}
+        ]}});
+        let contents = parse_resource_contents("fake", &resp).unwrap();
+        assert_eq!(contents[0].text.as_deref(), Some("hi"));
+        assert!(contents[0].blob.is_none());
+        assert_eq!(contents[1].blob.as_deref(), Some("aGVsbG8="));
+        assert!(contents[1].text.is_none());
+        assert_eq!(contents[1].mime_type, "");
+        // Missing contents array: the error names the server.
+        let err = parse_resource_contents("fake", &json!({"result": {}})).unwrap_err();
+        assert!(err.to_string().contains("fake"), "{err}");
+        assert!(err.to_string().contains("contents"), "{err}");
+        // A JSON-RPC error reply surfaces the server's own message.
+        let err = parse_resource_contents(
+            "fake",
+            &json!({"error": {"code": -32602, "message": "unknown resource: mem://x"}}),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("unknown resource: mem://x"), "{err}");
+    }
+
+    /// (d) An unknown uri and a dead server both produce errors that name
+    /// the server — never a panic, never a hang.
+    #[test]
+    fn resource_read_unknown_uri_and_dead_server_are_named_errors() {
+        let tmp = TempDir::new().unwrap();
+        let mut srv = McpServer::spawn(
+            tmp.path(),
+            "fake",
+            server_config(tmp.path(), "fake", resources_server_body()),
+        )
+        .unwrap();
+        srv.initialize().unwrap();
+        let err = McpBackend::read_resource(&mut srv, "mem://nope").unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("fake"), "{msg}");
+        assert!(msg.contains("unknown resource: mem://nope"), "{msg}");
+
+        // Kill the child (SIGKILL): the read degrades to the named
+        // "is down" error.
+        let mut child = srv.child.take().unwrap();
+        let _ = child.kill();
+        let _ = child.wait();
+        for _ in 0..50 {
+            if !srv.is_alive() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(!srv.is_alive());
+        let err = McpBackend::read_resource(&mut srv, "mem://greeting").unwrap_err();
+        assert!(err.to_string().contains("mcp server fake is down"), "{err}");
+    }
+
+    /// (d, registry) Unknown server name and non-capable server read: named
+    /// errors from the registry surface.
+    #[test]
+    fn registry_read_resource_names_unknown_and_noncapable_servers() {
+        let tmp = TempDir::new().unwrap();
+        write_mcp_json(tmp.path(), "fake", echo_server_body());
+        let mut reg = McpRegistry::new(tmp.path(), false, None).unwrap();
+        reg.start(&Permissions::empty());
+        assert_eq!(reg.servers.len(), 1);
+        let err = reg.read_resource("nosuch", "mem://x").unwrap_err();
+        assert!(err.to_string().contains("mcp server nosuch not found"), "{err}");
+        let err = reg.read_resource("fake", "mem://x").unwrap_err();
+        assert!(
+            err.to_string().contains("mcp server fake does not advertise resources"),
+            "{err}"
+        );
+    }
+
+    /// (e) THE CAPABILITY GATE: a server WITHOUT the resources capability
+    /// is never sent resources/list — asserted at the stub (zero such
+    /// requests in its method log) and in the registry result (its entry
+    /// carries the named error instead).
+    #[test]
+    fn resources_never_queried_without_capability() {
+        let tmp = TempDir::new().unwrap();
+        let requests = tmp.path().join("requests.log");
+        write_mcp_json(tmp.path(), "fake", &method_log_body(&requests));
+        let mut reg = McpRegistry::new(tmp.path(), false, None).unwrap();
+        reg.start(&Permissions::empty());
+        assert_eq!(reg.servers.len(), 1);
+
+        let out = reg.list_resources();
+        assert_eq!(out.len(), 1, "every started server appears exactly once");
+        assert_eq!(out[0].server, "fake");
+        let err = out[0].resources.as_ref().unwrap_err();
+        assert!(
+            err.to_string().contains("mcp server fake does not advertise resources"),
+            "{err}"
+        );
+        // A targeted read is gated the same way.
+        let err = reg.read_resource("fake", "mem://x").unwrap_err();
+        assert!(err.to_string().contains("does not advertise resources"), "{err}");
+
+        // The stub-side witness: tools were spoken, resources never were.
+        let seen = fs::read_to_string(&requests).unwrap_or_default();
+        assert!(seen.contains("initialize"), "{seen}");
+        assert!(seen.contains("tools/list"), "{seen}");
+        assert!(
+            !seen.contains("resources/list"),
+            "a server without the resources capability was queried: {seen}"
+        );
+    }
+
+    /// Registry routing end-to-end on a CAPABLE server: list_resources()
+    /// aggregates the capped list, read_resource(server, uri) returns the
+    /// text contents — errors name the server on both paths.
+    #[test]
+    fn registry_lists_and_reads_capable_server() {
+        let tmp = TempDir::new().unwrap();
+        write_mcp_json(tmp.path(), "fake", resources_server_body());
+        let mut reg = McpRegistry::new(tmp.path(), false, None).unwrap();
+        reg.start(&Permissions::empty());
+        assert_eq!(reg.servers.len(), 1);
+
+        let out = reg.list_resources();
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].server, "fake");
+        let resources = out[0].resources.as_ref().unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(resources.len(), MAX_MCP_RESOURCES);
+        assert_eq!(resources[0].uri, "mem://r0");
+
+        let contents = reg.read_resource("fake", "mem://greeting").unwrap();
+        assert_eq!(contents[0].text.as_deref(), Some("hello from the stub"));
+    }
+
+    /// Phase-1b honesty is covered where the HTTP backend lives: the
+    /// transport captures the shared capability catalog but speaks no
+    /// resource legs yet (see mcp_http.rs tests).
+    #[test]
+    fn capabilities_parse_is_the_shared_shape_between_transports() {
+        // The HTTP transport parses the SAME struct (mcp_http.rs initialize);
+        // pin the parse shape once here so a transport fork fails loudly.
+        let caps = McpCapabilities::parse(Some(&json!({"resources": {"listChanged": true}})));
+        assert!(caps.resources && caps.resources_list_changed);
+        assert!(!caps.tools && !caps.prompts);
     }
 
     // ---------- spec-9 config extension ----------
