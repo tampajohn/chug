@@ -1,6 +1,6 @@
 # T158 — harden the spawn-failure-under-resource-pressure test family (invalidation seams, deterministic premises)
 
-check: cargo test
+check: export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared && cargo test --bin chug driver::tests
 
 ## Repo context
 
