@@ -23,7 +23,11 @@ use std::sync::{Arc, Mutex, MutexGuard, mpsc};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime};
 
-use crate::mcp::{McpBackend, McpCapabilities, McpTool};
+use crate::mcp::{
+    McpBackend, McpCapabilities, McpPrompt, McpPromptGet, McpResource, McpResourceContents, McpTool,
+    MAX_MCP_PROMPTS, MAX_MCP_RESOURCES, parse_prompt_result, parse_prompts_list,
+    parse_resource_contents, parse_resources_list,
+};
 use crate::sse::{PostRetrySchedule, SseParser, SseReconnectBackoff};
 use crate::tools::ToolResult;
 
@@ -79,9 +83,10 @@ pub struct HttpMcpServer {
     next_id: u64,
     tools: Vec<McpTool>,
     /// Capabilities the server advertised at initialize — the SAME shared
-    /// struct the stdio transport parses (F11 phase 1a). Captured here so
-    /// phase 1b's HTTP resource legs can gate on it; no resource legs are
-    /// spoken over HTTP yet (the trait defaults answer phase-1b errors).
+    /// struct the stdio transport parses (F11 phase 1a). The registry's
+    /// capability gate reads it for BOTH transports: a server that did not
+    /// advertise `resources` / `prompts` is never sent those legs (the gate
+    /// is single-sourced in the registry, same discipline as stdio).
     capabilities: McpCapabilities,
     alive: Arc<Mutex<bool>>,
     /// Sleep between POST retries and listen-stream backoff chunks;
@@ -228,7 +233,8 @@ impl HttpMcpServer {
     /// caller skips the server (fail-soft). The initialize response's
     /// `capabilities` object is parsed into the shared [`McpCapabilities`]
     /// catalog — the same struct the stdio transport keeps (F11 phase 1a);
-    /// HTTP resource legs themselves are phase 1b.
+    /// the resource/prompt legs (T171) speak the same shared mapping over
+    /// this transport, gated on that catalog through the registry.
     pub fn initialize(&mut self) -> anyhow::Result<()> {
         let params = json!({
             "protocolVersion": PROTOCOL_VERSION,
@@ -303,6 +309,77 @@ impl HttpMcpServer {
                 images: Vec::new(),
             }),
         }
+    }
+
+    /// `resources/list` (LIST_TIMEOUT budget, same framing discipline as
+    /// tools/list). The response mapping is the SHARED stdio parser
+    /// ([`parse_resources_list`] — no fork); the warn-and-cap note goes to
+    /// the per-server log through `self.log`, mirroring the stdio cap.
+    /// Errors carry the named-error shape: server + leg + transport.
+    fn resources_list(&mut self) -> anyhow::Result<Vec<McpResource>> {
+        if !self.is_alive() {
+            bail!("mcp server {} is down", self.name);
+        }
+        let resp = self
+            .send_request("resources/list", json!({}), LIST_TIMEOUT)
+            .with_context(|| format!("mcp server {}: resources/list over http", self.name))?;
+        let (resources, warning) = parse_resources_list(&self.name, &resp, MAX_MCP_RESOURCES)?;
+        if let Some(warning) = warning {
+            self.log(&warning);
+        }
+        Ok(resources)
+    }
+
+    /// `resources/read` for one uri (CALL_TIMEOUT budget: a read can be as
+    /// expensive as a tool call). Text and blob blocks map into
+    /// [`McpResourceContents`] through the shared [`parse_resource_contents`];
+    /// a JSON-RPC error reply surfaces the server's own message in the same
+    /// named shape the stdio legs produce.
+    fn resource_read(&mut self, uri: &str) -> anyhow::Result<Vec<McpResourceContents>> {
+        if !self.is_alive() {
+            bail!("mcp server {} is down", self.name);
+        }
+        let resp = self
+            .send_request("resources/read", json!({ "uri": uri }), CALL_TIMEOUT)
+            .with_context(|| format!("mcp server {}: resources/read over http", self.name))?;
+        parse_resource_contents(&self.name, &resp)
+    }
+
+    /// `prompts/list` (LIST_TIMEOUT budget, same framing discipline as
+    /// tools/list). The response mapping is the SHARED T170 parser
+    /// ([`parse_prompts_list`] — no fork); the warn-and-cap note goes to
+    /// the per-server log through `self.log`.
+    fn prompts_list(&mut self) -> anyhow::Result<Vec<McpPrompt>> {
+        if !self.is_alive() {
+            bail!("mcp server {} is down", self.name);
+        }
+        let resp = self
+            .send_request("prompts/list", json!({}), LIST_TIMEOUT)
+            .with_context(|| format!("mcp server {}: prompts/list over http", self.name))?;
+        let (prompts, warning) = parse_prompts_list(&self.name, &resp, MAX_MCP_PROMPTS)?;
+        if let Some(warning) = warning {
+            self.log(&warning);
+        }
+        Ok(prompts)
+    }
+
+    /// `prompts/get` for one named prompt (CALL_TIMEOUT budget). The
+    /// optional arguments map rides the params only when the caller
+    /// supplied one (a null is omitted, matching the stdio leg); the
+    /// shared T170 parser ([`parse_prompt_result`]) maps the expanded
+    /// template.
+    fn prompt_get(&mut self, name: &str, arguments: Value) -> anyhow::Result<McpPromptGet> {
+        if !self.is_alive() {
+            bail!("mcp server {} is down", self.name);
+        }
+        let mut params = json!({ "name": name });
+        if !arguments.is_null() {
+            params["arguments"] = arguments;
+        }
+        let resp = self
+            .send_request("prompts/get", params, CALL_TIMEOUT)
+            .with_context(|| format!("mcp server {}: prompts/get over http", self.name))?;
+        parse_prompt_result(&self.name, &resp)
     }
 
     /// Send one JSON-RPC request and await its response, retrying only
@@ -1016,9 +1093,30 @@ impl McpBackend for HttpMcpServer {
     fn capabilities(&self) -> &McpCapabilities {
         &self.capabilities
     }
-    // list_resources / read_resource: inherited trait defaults — the HTTP
-    // transport does not speak resources yet (F11 phase 1b reuses the shared
-    // mapping), so they answer the named phase-1b error.
+    // list_resources / read_resource / list_prompts / get_prompt (T171):
+    // the SAME shared response mapping the stdio transport uses — the
+    // inherent methods call the shared parsers (parse_resources_list,
+    // parse_resource_contents, parse_prompts_list, parse_prompt_result) —
+    // wrapped in this transport's session discipline (Mcp-Session-Id
+    // replay, JSON-RPC over POST, SSE read to the matching-id response).
+    // The capability gate stays single-sourced in the registry, same as
+    // stdio: a server that did not advertise the capability is never sent
+    // the leg.
+    fn list_resources(&mut self) -> anyhow::Result<Vec<McpResource>> {
+        HttpMcpServer::resources_list(self)
+    }
+
+    fn read_resource(&mut self, uri: &str) -> anyhow::Result<Vec<McpResourceContents>> {
+        HttpMcpServer::resource_read(self, uri)
+    }
+
+    fn list_prompts(&mut self) -> anyhow::Result<Vec<McpPrompt>> {
+        HttpMcpServer::prompts_list(self)
+    }
+
+    fn get_prompt(&mut self, name: &str, arguments: Value) -> anyhow::Result<McpPromptGet> {
+        HttpMcpServer::prompt_get(self, name, arguments)
+    }
 }
 
 impl Drop for HttpMcpServer {
@@ -1896,36 +1994,595 @@ pub(crate) mod tests {
         HttpMcpServer::new(name.to_string(), url, vec![]).unwrap()
     }
 
-    /// F11 phase 1b honesty: the HTTP transport captures the shared
-    /// capability catalog, but it speaks no resource legs yet — the trait
-    /// defaults answer with a named error (and never touch the network).
-    #[test]
-    fn http_resource_legs_are_phase_1b_named_errors() {
-        let mut srv = new_server("remote", "http://127.0.0.1:9/mcp".to_string());
-        let err = McpBackend::list_resources(&mut srv).unwrap_err();
-        assert!(err.to_string().contains("mcp server remote"), "{err}");
-        assert!(err.to_string().contains("phase 1b"), "{err}");
-        let err = McpBackend::read_resource(&mut srv, "mem://x").unwrap_err();
-        assert!(err.to_string().contains("mcp server remote"), "{err}");
-        assert!(err.to_string().contains("phase 1b"), "{err}");
-        // The catalog starts empty (no handshake yet) — all false.
-        assert!(!srv.capabilities().resources);
+    /// Handshake variant advertising a custom `capabilities` object — the
+    /// resource/prompt leg tests (T171) need servers that advertise those
+    /// capabilities, and the capability-gate witness needs one that does
+    /// NOT. Same three exchanges (initialize → initialized → tools/list,
+    /// empty tool list), session replay asserted, one echo of the shared
+    /// `serve_handshake` discipline. `close_last` closes on the tools/list
+    /// reply so every later POST lands on a FRESH connection (deterministic
+    /// accept order for the watch loops below).
+    fn serve_handshake_with_caps(
+        stream: &mut TcpStream,
+        session: Option<&str>,
+        caps: &str,
+        close_last: bool,
+    ) {
+        let req = read_request(stream);
+        assert_eq!(req.json()["method"], "initialize");
+        assert_eq!(req.json()["id"], 1);
+        let body = format!(
+            r#"{{"jsonrpc":"2.0","id":1,"result":{{"protocolVersion":"2025-06-18","capabilities":{caps},"serverInfo":{{"name":"stub","version":"0.0.1"}}}}}}"#
+        );
+        let session_headers: Vec<(&str, &str)> = match session {
+            Some(s) => vec![("content-type", "application/json"), ("mcp-session-id", s)],
+            None => vec![("content-type", "application/json")],
+        };
+        write_response(stream, 200, &session_headers, body.as_bytes());
+        // notifications/initialized → 202 Accepted with no body
+        let req = read_request(stream);
+        assert_eq!(req.json()["method"], "notifications/initialized");
+        assert!(req.json().get("id").is_none(), "notification must carry no id");
+        if let Some(s) = session {
+            assert_eq!(req.header("mcp-session-id"), Some(s), "session id on notification");
+        }
+        write_response(stream, 202, &[], b"");
+        // tools/list → empty list (these tests exercise the resource/prompt
+        // legs, not the tool surface).
+        let req = read_request(stream);
+        assert_eq!(req.json()["method"], "tools/list");
+        assert_eq!(req.json()["id"], 2);
+        if let Some(s) = session {
+            assert_eq!(req.header("mcp-session-id"), Some(s), "session id on tools/list");
+        }
+        let body = br#"{"jsonrpc":"2.0","id":2,"result":{"tools":[]}}"#;
+        if close_last {
+            write_response_close(stream, 200, &[("content-type", "application/json")], body);
+        } else {
+            write_response(stream, 200, &[("content-type", "application/json")], body);
+        }
     }
 
-    /// F11 phase 1b honesty, prompts half (T170): the stdio transport got
-    /// the prompts/list + prompts/get legs, the HTTP transport still
-    /// answers with the shared trait defaults' named error (never touches
-    /// the network) — T171 overrides them over the same shared mapping
-    /// (`parse_prompts_list` / `parse_prompt_result`), no signature fork.
+    /// Watch the listener for `window`, answering listen-stream GETs with
+    /// 405 (which disables the manager — no reconnect storm mid-test) and
+    /// handing every JSON-RPC POST to `reply` (its return value is written
+    /// as the 200 JSON body, so a witness stub can refuse the method while
+    /// a capable stub answers it). Returns the POST methods in arrival
+    /// order — the stub-side witness the capability-gate test reads.
+    /// `done_when` ends the watch early (witness-satisfied) — the gate test
+    /// passes `|_| false` to run the full window; the mixed-registry test
+    /// stops once its awaited request landed, so a slow sibling spawn (the
+    /// python stub) can never outlive the window.
+    fn watch_and_answer(
+        listener: &TcpListener,
+        window: Duration,
+        reply: impl FnMut(&Observed) -> Value,
+    ) -> Vec<String> {
+        watch_and_answer_until(listener, window, |_| false, reply)
+    }
+
+    fn watch_and_answer_until(
+        listener: &TcpListener,
+        window: Duration,
+        done_when: impl Fn(&[String]) -> bool,
+        mut reply: impl FnMut(&Observed) -> Value,
+    ) -> Vec<String> {
+        listener.set_nonblocking(true).unwrap();
+        let deadline = Instant::now() + window;
+        let mut methods = Vec::new();
+        while Instant::now() < deadline {
+            if done_when(&methods) {
+                break;
+            }
+            match listener.accept() {
+                Ok((mut stream, _)) => {
+                    stream.set_nonblocking(false).unwrap();
+                    let req = read_request(&mut stream);
+                    if req.is_get() {
+                        write_response(
+                            &mut stream,
+                            405,
+                            &[("content-type", "text/plain")],
+                            b"no listen stream",
+                        );
+                        continue;
+                    }
+                    methods.push(req.json()["method"].as_str().unwrap_or("?").to_string());
+                    let body = reply(&req);
+                    write_response(
+                        &mut stream,
+                        200,
+                        &[("content-type", "application/json")],
+                        body.to_string().as_bytes(),
+                    );
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    thread::sleep(Duration::from_millis(10));
+                }
+                Err(e) => panic!("accept failed: {e}"),
+            }
+        }
+        methods
+    }
+
+    /// (a) resources/list over HTTP: the reply arrives SSE-framed and is
+    /// parsed into [`McpResource`] values through the SHARED stdio parser
+    /// (`parse_resources_list` — no fork). The session id replays on the
+    /// leg. RED-proved before the legs existed: the trait default bailed
+    /// with the transport-gap named error without touching the wire, so
+    /// this test failed on that error.
     #[test]
-    fn http_prompt_legs_are_phase_1b_named_errors() {
-        let mut srv = new_server("remote", "http://127.0.0.1:9/mcp".to_string());
-        let err = McpBackend::list_prompts(&mut srv).unwrap_err();
-        assert!(err.to_string().contains("mcp server remote"), "{err}");
-        assert!(err.to_string().contains("phase 1b"), "{err}");
-        let err = McpBackend::get_prompt(&mut srv, "review", json!({})).unwrap_err();
-        assert!(err.to_string().contains("mcp server remote"), "{err}");
-        assert!(err.to_string().contains("phase 1b"), "{err}");
+    fn http_resources_list_over_sse_returns_parsed_resources() {
+        let (listener, url) = bind_stub();
+        let stub = thread::spawn(move || {
+            let mut c1 = accept_conn(&listener);
+            serve_handshake_with_caps(&mut c1, Some("sess-r"), r#"{"tools": {}, "resources": {}}"#, false);
+            // resources/list rides the pooled keep-alive connection.
+            let req = read_request(&mut c1);
+            assert_eq!(req.json()["method"], "resources/list");
+            assert_eq!(
+                req.header("mcp-session-id"),
+                Some("sess-r"),
+                "session id replayed on resources/list"
+            );
+            // SSE-framed reply, held-open framing like the tools legs.
+            write_sse_head(&mut c1);
+            write_sse_event(
+                &mut c1,
+                r#"{"jsonrpc":"2.0","id":3,"result":{"resources":[{"uri":"mem://a","name":"a","description":"resource a","mimeType":"text/plain"},{"uri":"mem://b","name":"b"}]}}"#,
+            );
+        });
+        let mut srv = new_server("remote", url);
+        srv.initialize().unwrap();
+        let resources = McpBackend::list_resources(&mut srv).unwrap();
+        assert_eq!(resources.len(), 2);
+        assert_eq!(resources[0].uri, "mem://a");
+        assert_eq!(resources[0].name, "a");
+        assert_eq!(resources[0].description, "resource a");
+        assert_eq!(resources[0].mime_type, "text/plain");
+        // mimeType falls back to "" when the server omits it (shared parser).
+        assert_eq!(resources[1].uri, "mem://b");
+        assert_eq!(resources[1].name, "b");
+        assert_eq!(resources[1].mime_type, "");
+        stub.join().unwrap();
+        drop(srv);
+    }
+
+    /// (b) resources/read over HTTP: text and blob contents map into
+    /// [`McpResourceContents`] through the shared `parse_resource_contents`
+    /// (same shapes the stdio leg produces).
+    #[test]
+    fn http_resource_read_returns_text_contents() {
+        let (listener, url) = bind_stub();
+        let stub = thread::spawn(move || {
+            let mut c1 = accept_conn(&listener);
+            serve_handshake_with_caps(&mut c1, None, r#"{"tools": {}, "resources": {}}"#, false);
+            let req = read_request(&mut c1);
+            assert_eq!(req.json()["method"], "resources/read");
+            assert_eq!(req.json()["params"]["uri"], "mem://greeting");
+            write_response(
+                &mut c1,
+                200,
+                &[("content-type", "application/json")],
+                br#"{"jsonrpc":"2.0","id":3,"result":{"contents":[{"uri":"mem://greeting","mimeType":"text/plain","text":"hello over http"}]}}"#,
+            );
+            let req = read_request(&mut c1);
+            assert_eq!(req.json()["params"]["uri"], "mem://bytes");
+            write_response(
+                &mut c1,
+                200,
+                &[("content-type", "application/json")],
+                br#"{"jsonrpc":"2.0","id":4,"result":{"contents":[{"uri":"mem://bytes","mimeType":"application/octet-stream","blob":"aGVsbG8="}]}}"#,
+            );
+        });
+        let mut srv = new_server("remote", url);
+        srv.initialize().unwrap();
+        let contents = McpBackend::read_resource(&mut srv, "mem://greeting").unwrap();
+        assert_eq!(contents.len(), 1);
+        assert_eq!(contents[0].uri, "mem://greeting");
+        assert_eq!(contents[0].mime_type, "text/plain");
+        assert_eq!(contents[0].text.as_deref(), Some("hello over http"));
+        assert!(contents[0].blob.is_none());
+        let contents = McpBackend::read_resource(&mut srv, "mem://bytes").unwrap();
+        assert_eq!(contents[0].uri, "mem://bytes");
+        assert_eq!(contents[0].blob.as_deref(), Some("aGVsbG8="));
+        assert!(contents[0].text.is_none());
+        stub.join().unwrap();
+        drop(srv);
+    }
+
+    /// (c) prompts/list + prompts/get over HTTP: T170's shared types
+    /// ([`McpPrompt`] / [`McpPromptGet`]) reused through
+    /// `parse_prompts_list` / `parse_prompt_result` — no fork. Session id
+    /// replays; the optional arguments map rides prompts/get.
+    #[test]
+    fn http_prompts_list_and_get_return_parsed_prompts() {
+        let (listener, url) = bind_stub();
+        let stub = thread::spawn(move || {
+            let mut c1 = accept_conn(&listener);
+            serve_handshake_with_caps(&mut c1, Some("sess-p"), r#"{"tools": {}, "prompts": {}}"#, false);
+            let req = read_request(&mut c1);
+            assert_eq!(req.json()["method"], "prompts/list");
+            assert_eq!(
+                req.header("mcp-session-id"),
+                Some("sess-p"),
+                "session id replayed on prompts/list"
+            );
+            write_response(
+                &mut c1,
+                200,
+                &[("content-type", "application/json")],
+                br#"{"jsonrpc":"2.0","id":3,"result":{"prompts":[{"name":"review","description":"Review a topic","arguments":[{"name":"topic","description":"the topic","required":true}]}]}}"#,
+            );
+            let req = read_request(&mut c1);
+            assert_eq!(req.json()["method"], "prompts/get");
+            assert_eq!(req.json()["params"]["name"], "review");
+            assert_eq!(req.json()["params"]["arguments"]["topic"], "mcp");
+            write_response(
+                &mut c1,
+                200,
+                &[("content-type", "application/json")],
+                br#"{"jsonrpc":"2.0","id":4,"result":{"description":"Review a topic","messages":[{"role":"user","content":{"type":"text","text":"Review mcp"}},{"role":"assistant","content":{"type":"text","text":"will do"}}]}}"#,
+            );
+        });
+        let mut srv = new_server("remote", url);
+        srv.initialize().unwrap();
+        let prompts = McpBackend::list_prompts(&mut srv).unwrap();
+        assert_eq!(prompts.len(), 1);
+        assert_eq!(prompts[0].name, "review");
+        assert_eq!(prompts[0].description, "Review a topic");
+        assert_eq!(prompts[0].arguments.len(), 1);
+        assert_eq!(prompts[0].arguments[0].name, "topic");
+        assert_eq!(prompts[0].arguments[0].description, "the topic");
+        assert!(prompts[0].arguments[0].required);
+
+        let got = McpBackend::get_prompt(&mut srv, "review", json!({"topic": "mcp"})).unwrap();
+        assert_eq!(got.description, "Review a topic");
+        assert_eq!(got.messages.len(), 2);
+        assert_eq!(got.messages[0].role, "user");
+        assert_eq!(got.messages[0].content["text"], "Review mcp");
+        assert_eq!(got.messages[1].role, "assistant");
+        assert_eq!(got.messages[1].content["text"], "will do");
+        stub.join().unwrap();
+        drop(srv);
+    }
+
+    /// (d) THE CAPABILITY GATE over HTTP — same discipline as stdio's
+    /// `resources_never_queried_without_capability` / T170's prompts twin:
+    /// a registry server that did not advertise `resources` / `prompts` is
+    /// never sent the corresponding list/get. Every registry outcome
+    /// carries the named error instead, and the STUB-SIDE WITNESS (the
+    /// methods the stub actually received, returned by `watch_and_answer`)
+    /// stays clean. RED-proved by the always-query mutant: with the
+    /// registry's capability check removed the stub received
+    /// resources/list + prompts/list (refused -32601) and both the witness
+    /// and the outcome-shape asserts went red.
+    #[test]
+    fn http_capability_gate_never_queries_uncapable_stubs() {
+        let (listener, url) = bind_stub();
+        let stub = thread::spawn(move || {
+            let mut c1 = accept_conn(&listener);
+            // Tools-only capabilities: resources and prompts NOT advertised.
+            serve_handshake_with_caps(&mut c1, Some("sess-g"), r#"{"tools": {}}"#, true);
+            // Witness window: every POST lands on a fresh connection
+            // (handshake closed); refuse them all with -32601 so a mutant
+            // stays bounded, and record what arrived.
+            watch_and_answer(&listener, Duration::from_millis(600), |req| {
+                json!({
+                    "jsonrpc": "2.0",
+                    "id": req.json()["id"],
+                    "error": {"code": -32601, "message": "method not found"}
+                })
+            })
+        });
+        let tmp = TempDir::new().unwrap();
+        let cfg = json!({"mcpServers": {"remote": {"url": url, "transport": "http"}}});
+        std::fs::write(tmp.path().join("mcp.json"), cfg.to_string()).unwrap();
+        let mut reg = McpRegistry::new(tmp.path(), false, None).unwrap();
+        // T138: spawn (and the HTTP handshake) is deferred to start(),
+        // gated on permissions.
+        reg.start(&crate::permissions::Permissions::empty());
+
+        // Aggregated list legs: the entry names the server and carries the
+        // named error — the wire was never touched. One entry = the one
+        // started server (every started server appears exactly once).
+        let out = reg.list_resources();
+        assert_eq!(out.len(), 1, "every started server appears exactly once");
+        assert_eq!(out[0].server, "remote");
+        let err = out[0].resources.as_ref().unwrap_err();
+        assert!(
+            err.to_string().contains("mcp server remote does not advertise resources"),
+            "{err}"
+        );
+        let out = reg.list_prompts();
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].server, "remote");
+        let err = out[0].prompts.as_ref().unwrap_err();
+        assert!(
+            err.to_string().contains("mcp server remote does not advertise prompts"),
+            "{err}"
+        );
+        // Targeted legs gate the same way (their own named-error shapes).
+        let err = reg.read_resource("remote", "mem://x").unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("does not advertise resources; not sending resources/read"),
+            "{err}"
+        );
+        let err = reg.get_prompt("remote", "review", json!({})).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("does not advertise prompts; not sending prompts/get"),
+            "{err}"
+        );
+
+        // The stub-side witness: only the listen GET happened after the
+        // handshake — zero resources/* or prompts/* requests.
+        let seen = stub.join().unwrap();
+        assert!(
+            seen.is_empty(),
+            "a server without the resources/prompts capabilities was queried: {seen:?}"
+        );
+    }
+
+    /// (e) Error parity: a JSON-RPC error reply and an HTTP error status
+    /// surface as the SAME named-error shapes the stdio legs produce —
+    /// server named, leg named — with the HTTP transport visible in the
+    /// transport-level failure ("over http" / "POST returned HTTP 500").
+    /// Never a panic, never a hang.
+    #[test]
+    fn http_leg_error_parity_json_rpc_error_and_http_status() {
+        let (listener, url) = bind_stub();
+        let stub = thread::spawn(move || {
+            let mut c1 = accept_conn(&listener);
+            serve_handshake_with_caps(
+                &mut c1,
+                None,
+                r#"{"tools": {}, "resources": {}, "prompts": {}}"#,
+                false,
+            );
+            // resources/read for an unknown uri → JSON-RPC error reply.
+            let req = read_request(&mut c1);
+            assert_eq!(req.json()["method"], "resources/read");
+            write_response(
+                &mut c1,
+                200,
+                &[("content-type", "application/json")],
+                br#"{"jsonrpc":"2.0","id":3,"error":{"code":-32602,"message":"unknown resource: mem://nope"}}"#,
+            );
+            // prompts/get for an unknown prompt → JSON-RPC error reply.
+            let req = read_request(&mut c1);
+            assert_eq!(req.json()["method"], "prompts/get");
+            write_response(
+                &mut c1,
+                200,
+                &[("content-type", "application/json")],
+                br#"{"jsonrpc":"2.0","id":4,"error":{"code":-32602,"message":"unknown prompt: nope"}}"#,
+            );
+            // resources/list → HTTP 500: no JSON-RPC reply at all.
+            let req = read_request(&mut c1);
+            assert_eq!(req.json()["method"], "resources/list");
+            write_response(&mut c1, 500, &[("content-type", "text/plain")], b"nope");
+        });
+        let mut srv = new_server("remote", url);
+        srv.initialize().unwrap();
+        // JSON-RPC error reply: the server's own message rides the shared
+        // parser's named-error shape (byte-identical to the stdio legs).
+        let err = McpBackend::read_resource(&mut srv, "mem://nope").unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("mcp server remote"), "{msg}");
+        assert!(msg.contains("resources/read failed"), "{msg}");
+        assert!(msg.contains("unknown resource: mem://nope"), "{msg}");
+        let err = McpBackend::get_prompt(&mut srv, "nope", json!({})).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("mcp server remote"), "{msg}");
+        assert!(msg.contains("prompts/get failed"), "{msg}");
+        assert!(msg.contains("unknown prompt: nope"), "{msg}");
+        // HTTP error status: the transport name appears with the mechanism.
+        let err = McpBackend::list_resources(&mut srv).unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(msg.contains("mcp server remote"), "{msg}");
+        assert!(msg.contains("resources/list over http"), "{msg}");
+        assert!(msg.contains("POST returned HTTP 500"), "{msg}");
+        stub.join().unwrap();
+        drop(srv);
+    }
+
+    /// (e, connection-refused): an unreachable server surfaces the named
+    /// error (server + leg + transport + mechanism) after the bounded
+    /// 1s/2s/4s retry schedule — through the injected sleeper, so the test
+    /// never really sleeps — and the server is marked down (the next leg
+    /// short-circuits to the stdio-shaped "is down" named error).
+    #[test]
+    fn http_leg_connection_refused_is_named_error() {
+        // T151: hold the shared timing domain across the whole body (the
+        // dead-port family is a named sighting class — probe timing).
+        let _timing = crate::testsupport::timing_guard();
+        dead_port_retry_with(dead_port, |port| {
+            let (sleeper, slept) = no_sleep();
+            let mut srv = HttpMcpServer::with_sleeper(
+                "remote".to_string(),
+                format!("http://127.0.0.1:{port}"),
+                vec![],
+                sleeper,
+            )
+            .unwrap();
+            // T31/T59: re-verified dead immediately before the connect; a
+            // failed re-verify is THEFT (retryable), not a failure.
+            check_dead_port(port)?;
+            let err = match McpBackend::list_resources(&mut srv) {
+                Err(e) => e,
+                // A leg "succeeding" against a supposedly-dead port means
+                // the handout was stolen mid-flight (retryable) — or, if the
+                // port still refuses, a real regression (the classifier
+                // panics, un-retried).
+                Ok(_) => {
+                    return Err(invalidation_or_regression(
+                        port,
+                        "resources/list against supposedly-dead port unexpectedly SUCCEEDED",
+                        false,
+                    ))
+                }
+            };
+            let msg = format!("{err:#}");
+            assert!(msg.contains("mcp server remote"), "{msg}");
+            assert!(msg.contains("resources/list over http"), "{msg}");
+            assert!(msg.contains("POST failed after retries"), "{msg}");
+            // Exactly the 1s/2s/4s schedule ran — bounded, never a hang.
+            assert_eq!(
+                slept.lock().unwrap().as_slice(),
+                &[Duration::from_secs(1), Duration::from_secs(2), Duration::from_secs(4)]
+            );
+            // Marked down: the next leg short-circuits (no new retries) with
+            // the stdio-shaped "is down" named error.
+            assert!(!srv.is_alive());
+            let err = McpBackend::list_prompts(&mut srv).unwrap_err();
+            assert!(err.to_string().contains("mcp server remote is down"), "{err}");
+            assert_eq!(slept.lock().unwrap().len(), 3, "no further retries once down");
+            Ok(())
+        });
+    }
+
+    /// Cap parity with stdio (T162/T170): an over-cap `resources/list` /
+    /// `prompts/list` advertisement is warn-and-capped at 200 with the note
+    /// in the per-server log — the shared parsers cap, the HTTP legs route
+    /// the note through `self.log`, mirroring the tools/list cap.
+    #[test]
+    fn http_resource_and_prompt_caps_with_log_note() {
+        let (listener, url) = bind_stub();
+        let stub = thread::spawn(move || {
+            let mut c1 = accept_conn(&listener);
+            serve_handshake_with_caps(
+                &mut c1,
+                None,
+                r#"{"tools": {}, "resources": {}, "prompts": {}}"#,
+                false,
+            );
+            // Five over the cap on both legs.
+            let req = read_request(&mut c1);
+            assert_eq!(req.json()["method"], "resources/list");
+            let resources: Vec<Value> = (0..(MAX_MCP_RESOURCES + 5))
+                .map(|i| json!({"uri": format!("mem://r{i}"), "name": format!("r{i}")}))
+                .collect();
+            let body = json!({"jsonrpc": "2.0", "id": 3, "result": {"resources": resources}});
+            write_response(
+                &mut c1,
+                200,
+                &[("content-type", "application/json")],
+                body.to_string().as_bytes(),
+            );
+            let req = read_request(&mut c1);
+            assert_eq!(req.json()["method"], "prompts/list");
+            let prompts: Vec<Value> = (0..(MAX_MCP_PROMPTS + 5))
+                .map(|i| json!({"name": format!("p{i}")}))
+                .collect();
+            let body = json!({"jsonrpc": "2.0", "id": 4, "result": {"prompts": prompts}});
+            write_response(
+                &mut c1,
+                200,
+                &[("content-type", "application/json")],
+                body.to_string().as_bytes(),
+            );
+        });
+        let tmp = TempDir::new().unwrap();
+        let log_path = tmp.path().join("mcp-remote.log");
+        let mut srv = new_server("remote", url);
+        srv.set_log_path(log_path.clone());
+        srv.initialize().unwrap();
+        let resources = McpBackend::list_resources(&mut srv).unwrap();
+        assert_eq!(resources.len(), MAX_MCP_RESOURCES);
+        assert_eq!(resources[0].uri, "mem://r0");
+        assert_eq!(resources[MAX_MCP_RESOURCES - 1].uri, format!("mem://r{}", MAX_MCP_RESOURCES - 1));
+        let prompts = McpBackend::list_prompts(&mut srv).unwrap();
+        assert_eq!(prompts.len(), MAX_MCP_PROMPTS);
+        assert_eq!(prompts[0].name, "p0");
+        stub.join().unwrap();
+        drop(srv);
+        let log = std::fs::read_to_string(&log_path).expect("cap notes logged");
+        assert!(
+            log.contains("resources/list advertised 205 resources; capped at 200"),
+            "log should note the resources cap: {log}"
+        );
+        assert!(
+            log.contains("prompts/list advertised 205 prompts; capped at 200"),
+            "log should note the prompts cap: {log}"
+        );
+    }
+
+    /// (f) Mixed registry (stdio + HTTP stubs): the aggregated per-server
+    /// outcomes name EACH server, and the T162 structured outcome type
+    /// ([`crate::mcp::McpServerResources`]) is reused as-is across
+    /// transports — no fork.
+    #[test]
+    fn mixed_registry_aggregates_per_server_outcomes_naming_each_server() {
+        let (listener, url) = bind_stub();
+        let stub = thread::spawn(move || {
+            let mut c1 = accept_conn(&listener);
+            serve_handshake_with_caps(&mut c1, None, r#"{"tools": {}, "resources": {}}"#, true);
+            // The resources/list POST lands on a fresh connection (handshake
+            // closed) and races the listen GET at accept(): answer GETs 405.
+            // The sibling python stub's spawn delays the test thread, so the
+            // watch runs to a 5s ceiling and stops the moment the awaited
+            // request has landed.
+            watch_and_answer_until(
+                &listener,
+                Duration::from_secs(5),
+                |methods| methods.iter().any(|m| m == "resources/list"),
+                |req| {
+                if req.json()["method"] == "resources/list" {
+                    json!({
+                        "jsonrpc": "2.0",
+                        "id": req.json()["id"],
+                        "result": {"resources": [
+                            {"uri": "mem://http", "name": "http-resource",
+                             "mimeType": "text/plain", "description": "from http"}
+                        ]}
+                    })
+                } else {
+                    json!({
+                        "jsonrpc": "2.0",
+                        "id": req.json()["id"],
+                        "error": {"code": -32601, "message": "method not found"}
+                    })
+                }
+            });
+        });
+        let tmp = TempDir::new().unwrap();
+        // The stdio half: a python stub advertising + serving resources/list
+        // (T6 alarm prelude, same discipline as the mcp.rs fake servers).
+        let py = tmp.path().join("stdio_srv.py");
+        std::fs::write(&py, format!("import signal\nsignal.alarm(120)\n{STDIO_RESOURCES_STUB}")).unwrap();
+        let cfg = json!({"mcpServers": {
+            "http-srv": {"url": url, "transport": "http"},
+            "stdio-srv": {"command": "python3", "args": [py.to_string_lossy()]}
+        }});
+        std::fs::write(tmp.path().join("mcp.json"), cfg.to_string()).unwrap();
+        let mut reg = McpRegistry::new(tmp.path(), false, None).unwrap();
+        reg.start(&crate::permissions::Permissions::empty());
+
+        let out = reg.list_resources();
+        // One outcome per STARTED server, each naming its server — a
+        // spawn failure would shrink this count (fail-soft) and fail here.
+        assert_eq!(out.len(), 2, "every started server appears exactly once");
+        let names: Vec<&str> = out.iter().map(|e| e.server.as_str()).collect();
+        assert!(names.contains(&"http-srv"), "{names:?}");
+        assert!(names.contains(&"stdio-srv"), "{names:?}");
+        let http = out.iter().find(|e| e.server == "http-srv").unwrap();
+        let resources = http
+            .resources
+            .as_ref()
+            .unwrap_or_else(|e| panic!("http leg failed: {e}"));
+        assert_eq!(resources.len(), 1);
+        assert_eq!(resources[0].uri, "mem://http");
+        assert_eq!(resources[0].name, "http-resource");
+        let stdio = out.iter().find(|e| e.server == "stdio-srv").unwrap();
+        let resources = stdio
+            .resources
+            .as_ref()
+            .unwrap_or_else(|e| panic!("stdio leg failed: {e}"));
+        assert_eq!(resources.len(), 1);
+        assert_eq!(resources[0].uri, "mem://stdio");
+        stub.join().unwrap();
     }
 
     type Sleeper = Arc<dyn Fn(Duration) + Send + Sync>;
@@ -3406,4 +4063,29 @@ pub(crate) mod tests {
         stub.join().unwrap();
         drop(srv);
     }
+
+    /// Stdio half of the mixed-registry test: a python stub advertising
+    /// tools + resources that serves one `resources/list` entry (T6 alarm
+    /// prelude, same discipline as the mcp.rs fake servers).
+    const STDIO_RESOURCES_STUB: &str = r#"
+import sys, json
+def send(o):
+    sys.stdout.write(json.dumps(o) + "\n"); sys.stdout.flush()
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    req = json.loads(line)
+    if "method" not in req or "id" not in req:
+        continue
+    m, i = req["method"], req["id"]
+    if m == "initialize":
+        send({"jsonrpc": "2.0", "id": i, "result": {"protocolVersion": "2025-06-18", "capabilities": {"tools": {}, "resources": {}}, "serverInfo": {"name": "fake", "version": "0.0.1"}}})
+    elif m == "tools/list":
+        send({"jsonrpc": "2.0", "id": i, "result": {"tools": []}})
+    elif m == "resources/list":
+        send({"jsonrpc": "2.0", "id": i, "result": {"resources": [{"uri": "mem://stdio", "name": "stdio-resource", "mimeType": "text/plain", "description": "from stdio"}]}})
+    else:
+        send({"jsonrpc": "2.0", "id": i, "error": {"code": -32601, "message": "method not found: " + m}})
+"#;
 }
