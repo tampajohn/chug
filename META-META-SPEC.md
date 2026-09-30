@@ -100,7 +100,11 @@ files writes plain `cargo test` or names the integration targets
 explicitly (the T111 readme_layout escape: its `--bin chug` check
 passed the goal gate while its README edit broke the
 `tests/readme_layout.rs` pin, caught by orchestrator review gates —
-fc1d691). Every spec carries an `estimate: ~N changed lines` line in
+fc1d691). Spec authors MUST budget the check line's warm wall — prefer
+targeted test binaries that finish in ~300s warm; a check line whose
+warm wall exceeds ~600s (half the gate) must state its
+measured warm wall in the spec's repo-context section.
+Every spec carries an `estimate: ~N changed lines` line in
 its repo-context section, and a row estimated above
 ~500 lines of new/modified logic MUST be split into 2–3 rows at filing
 time — mechanical byte-identical move rows (the T104/T109 class) are

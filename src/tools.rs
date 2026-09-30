@@ -13,8 +13,12 @@ use anyhow::{Context, anyhow, bail};
 use serde_json::{Value, json};
 
 pub const BASH_TIMEOUT_SECS: u64 = 120;
-/// Verification (`check:`) commands get a more generous ceiling than the bash tool.
-pub const CHECK_TIMEOUT_SECS: u64 = 600;
+/// Verification (`check:`) commands get a more generous ceiling than the bash
+/// tool: 1200s covers the observed 800–1000s warm full-suite wall with
+/// headroom (T163 — at the old 600s cap the cycle-76 t153-fixup child was
+/// rejected twice on green work), while a truly hung check still dies well
+/// inside an 80-iter/35-min child budget.
+pub const CHECK_TIMEOUT_SECS: u64 = 1200;
 const READ_MAX_LINES: usize = 2000;
 const OUTPUT_KEEP_HEAD: usize = 20_000;
 const OUTPUT_KEEP_TAIL: usize = 10_000;
