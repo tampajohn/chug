@@ -277,6 +277,22 @@
         .collect()
     }
 
+    /// The d1-demo shape (T157 fix-up): a segment with a mid-run goal
+    /// REJECTION. `summarize_events().state()` latches "done" on ANY goal
+    /// line — including `outcome:"rejected"` — but the driver KEEPS
+    /// RUNNING after a rejection, so the child behind this stream is very
+    /// much alive.
+    fn run_then_iteration_then_goal_rejected() -> Vec<String> {
+        [
+            r#"{"type":"run_start","ts":"t0","mode":"run","model":"m","max_iters":50,"max_minutes":35,"max_tokens":null}"#,
+            r#"{"type":"iteration","ts":"t1","n":3,"input_tokens":1,"output_tokens":1}"#,
+            r#"{"type":"goal","ts":"t2","outcome":"rejected","reason":"check failed"}"#,
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect()
+    }
+
     #[test]
     fn chug_status_happy_path_names_state_and_iteration_counts() {
         let tmp = tempfile::tempdir().unwrap();
@@ -2119,19 +2135,102 @@
         );
     }
 
-    /// The already-done leg: the latest segment has a verdict → idempotent
-    /// success (`isError: false`), the verdict named, and NOTHING signalled
-    /// — the live fixture survives the call.
+    /// The already-done leg (T157 fix-up semantics): an events terminal
+    /// state decides ONLY when the process is actually GONE — the pre-fix
+    /// shape trusted the stream alone and reported LIVE children done (the
+    /// killing test below pins the live side). With the child gone, the
+    /// leg is idempotent success (`isError: false`) naming the verdict,
+    /// nothing is signalled, and the stream is untouched (no abort record
+    /// appended after the verdict). Both terminal shapes pin here: a
+    /// goal-accepted segment and an aborted one.
     #[cfg(unix)]
     #[test]
-    fn chug_abort_already_done_is_idempotent_and_unsignalled() {
+    fn chug_abort_already_done_needs_a_gone_child_and_is_idempotent() {
         let tmp = tempfile::tempdir().unwrap();
         write_fixture(tmp.path(), &as_str_refs(&run_then_iterations_then_goal()));
-        // A LIVE group-leader fixture the verdict leg must NOT signal (the
-        // argv shape is irrelevant here — the verdict leg fires before the
-        // ownership legs).
-        let script = "while :; do sleep 0.2; done".to_string();
-        let child = spawn_group_leader_fixture(&script, &["sleep", "30"]);
+        // GONE by construction (the not-found test's dead pid): the
+        // already-done leg fires on liveness + stream, before the
+        // ownership legs.
+        let dead_pid: u64 = 2_000_000_000;
+        let (text, is_error) = abort_call(
+            true,
+            &json!({ "cwd": tmp.path().display().to_string(), "pid": dead_pid }),
+        );
+        assert_eq!(is_error, Some(false), "already-done is NOT an error: {text}");
+        assert!(text.contains("state: already-done"), "{text}");
+        assert!(text.contains("verdict: goal-accepted"), "{text}");
+        assert!(text.contains("nothing signalled"), "{text}");
+        // The stream is untouched: no abort record was appended after the
+        // accepted goal.
+        let events = std::fs::read_to_string(tmp.path().join(".chug/events.jsonl"))
+            .expect("events readable");
+        let last: serde_json::Value = serde_json::from_str(events.lines().last().unwrap())
+            .expect("the last line parses");
+        assert_eq!(last["type"], "goal", "{last}");
+        assert_eq!(last["outcome"], "accepted", "{last}");
+        // A retried abort lands in the same place — idempotent.
+        let (text2, is_error2) = abort_call(
+            true,
+            &json!({ "cwd": tmp.path().display().to_string(), "pid": dead_pid }),
+        );
+        assert_eq!(is_error2, Some(false), "{text2}");
+        assert!(text2.contains("state: already-done"), "{text2}");
+        assert!(text2.contains("verdict: goal-accepted"), "{text2}");
+
+        // The aborted-segment shape: a gone child whose segment ends in an
+        // abort record is already-done too, verdict aborted.
+        let tmp2 = tempfile::tempdir().unwrap();
+        let mut aborted = running_segment_fixture();
+        aborted.push(
+            r#"{"type":"abort","ts":"t9","reason":"operator abort","model":"m"}"#.to_string(),
+        );
+        write_fixture(tmp2.path(), &as_str_refs(&aborted));
+        let (text3, is_error3) = abort_call(
+            true,
+            &json!({ "cwd": tmp2.path().display().to_string(), "pid": dead_pid }),
+        );
+        assert_eq!(is_error3, Some(false), "{text3}");
+        assert!(text3.contains("state: already-done"), "{text3}");
+        assert!(text3.contains("verdict: aborted"), "{text3}");
+        assert!(text3.contains("nothing signalled"), "{text3}");
+    }
+
+    /// THE killing test (T157 fix-up, validator finding 1): a LIVE child
+    /// whose latest segment carries a mid-run goal REJECTION must be
+    /// aborted. The pre-fix verdict leg keyed on
+    /// `summarize_events().state()`, whose "done" latches on ANY goal line
+    /// — including `outcome:"rejected"`, after which the driver keeps
+    /// running — so this exact shape reported `already-done` and signalled
+    /// nothing. Liveness (the T28 reap seam) is consulted BEFORE the
+    /// stream: a live child stays abortable whatever the stream says.
+    #[cfg(unix)]
+    #[test]
+    fn chug_abort_goal_rejected_live_child_is_signalled_not_already_done() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_fixture(
+            tmp.path(),
+            &as_str_refs(&run_then_iteration_then_goal_rejected()),
+        );
+        let record = tmp.path().join("fixture-record.txt");
+        let ready = tmp.path().join("fixture-ready.txt");
+        let script = format!(
+            "trap 'echo term > {}; exit 0' TERM; : > {}; while :; do sleep 0.2; done",
+            record.display(),
+            ready.display()
+        );
+        let child = spawn_group_leader_fixture(
+            &script,
+            &[
+                "chug",
+                "run",
+                "--spec",
+                "/tmp/t157-fake-spec.md",
+                "--goal",
+                "g",
+                "--model",
+                "m",
+            ],
+        );
         let pid = child.id();
         let _guard = FixtureGuard {
             pid,
@@ -2140,20 +2239,41 @@
         };
         let pid = pid as u64;
         assert_eq!(unsafe { libc::kill(pid as i32, 0) }, 0, "fixture up");
+        wait_for_settled_fixture(pid as u32, Some(&ready));
+
         let (text, is_error) = abort_call(
             true,
             &json!({ "cwd": tmp.path().display().to_string(), "pid": pid }),
         );
-        assert_eq!(is_error, Some(false), "already-done is NOT an error: {text}");
-        assert!(text.contains("state: already-done"), "{text}");
-        assert!(text.contains("verdict: goal-accepted"), "{text}");
-        assert!(text.contains("nothing signalled"), "{text}");
-        // PROOF nothing was signalled: the fixture is STILL ALIVE.
-        assert_eq!(
+        assert_eq!(is_error, Some(false), "{text}");
+        // NEVER already-done: the child is alive, whatever the stream
+        // latched.
+        assert!(
+            !text.contains("already-done"),
+            "a LIVE goal-rejected child must not read as done: {text}"
+        );
+        assert!(text.contains("state: aborted"), "{text}");
+        assert!(text.contains("signaled: term"), "{text}");
+        assert!(text.contains("recorded: true"), "{text}");
+        // The trap saw the TERM and the fixture is gone.
+        assert_eq!(wait_for_record(&record).trim(), "term", "the trap saw the TERM");
+        assert_ne!(
             unsafe { libc::kill(pid as i32, 0) },
             0,
-            "an already-done abort must not signal the fixture"
+            "the fixture did not survive the abort"
         );
+        // The abort is RECORDED, after the segment's rejected goal line.
+        let events = std::fs::read_to_string(tmp.path().join(".chug/events.jsonl"))
+            .expect("events readable");
+        let lines: Vec<&str> = events.lines().collect();
+        let last: serde_json::Value = serde_json::from_str(lines.last().unwrap())
+            .expect("the abort line parses as JSON");
+        assert_eq!(last["type"], "abort", "{last}");
+        assert_eq!(last["reason"], "operator abort via chug_abort", "{last}");
+        let rejected: serde_json::Value =
+            serde_json::from_str(lines[lines.len() - 2]).expect("the goal line parses");
+        assert_eq!(rejected["type"], "goal", "{rejected}");
+        assert_eq!(rejected["outcome"], "rejected", "{rejected}");
     }
 
     /// The graceful path: a live group-leader `chug run`-shaped fixture in
@@ -2410,27 +2530,24 @@
         assert!(lines[0]["ts"].is_string(), "{lines:?}");
     }
 
-    /// The done leg: a latest-segment verdict → undeliverable (distinctive
-    /// phrase), NOTHING written, the (live) fixture unsignalled.
+    /// The done leg (T157 fix-up semantics): the child-done phrase requires
+    /// the child to be verifiably GONE — a LIVE child is never
+    /// undeliverable (the killing test below pins the live side). With the
+    /// child gone and a terminal verdict on the stream, the refusal names
+    /// the verdict, NOTHING is written, and no signal is involved.
     #[cfg(unix)]
     #[test]
     fn chug_steer_done_child_is_undeliverable_and_writes_nothing() {
         let tmp = tempfile::tempdir().unwrap();
         write_fixture(tmp.path(), &as_str_refs(&run_then_iterations_then_goal()));
-        let script = "while :; do sleep 0.2; done".to_string();
-        let child = spawn_group_leader_fixture(&script, &["sleep", "30"]);
-        let pid = child.id();
-        let _guard = FixtureGuard {
-            pid,
-            group_kill: true,
-            child,
-        };
-        let pid = pid as u64;
+        // GONE by construction (the dead-pid test's pid): the done phrase
+        // fires on liveness + stream.
+        let dead_pid: u64 = 2_000_000_000;
         let (text, is_error) = steer_call(
             true,
             &json!({
                 "cwd": tmp.path().display().to_string(),
-                "pid": pid,
+                "pid": dead_pid,
                 "note": "too late"
             }),
         );
@@ -2446,6 +2563,57 @@
             !tmp.path().join(".chug/steer.jsonl").exists(),
             "an undeliverable steer must not write the queue"
         );
+    }
+
+    /// THE killing test (T157 fix-up, validator finding 2): a LIVE child
+    /// whose latest segment carries a mid-run goal REJECTION must be
+    /// steerable. The pre-fix done leg keyed on the same
+    /// `summarize_events().state()` latch, so this exact shape refused the
+    /// note as undeliverable ("already completed") and wrote nothing —
+    /// while the driver behind the pid kept running. Liveness first: a
+    /// live child gets the note queued; it drains at the child's next
+    /// iteration boundary.
+    #[cfg(unix)]
+    #[test]
+    fn chug_steer_goal_rejected_live_child_gets_the_note_queued() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_fixture(
+            tmp.path(),
+            &as_str_refs(&run_then_iteration_then_goal_rejected()),
+        );
+        let script = "while :; do sleep 0.2; done".to_string();
+        let child = spawn_group_leader_fixture(&script, &["sleep", "30"]);
+        let pid = child.id();
+        let _guard = FixtureGuard {
+            pid,
+            group_kill: true,
+            child,
+        };
+        let pid = pid as u64;
+        assert_eq!(unsafe { libc::kill(pid as i32, 0) }, 0, "fixture up");
+
+        let note = "the gate rejection is stale — keep going";
+        let (text, is_error) = steer_call(
+            true,
+            &json!({ "cwd": tmp.path().display().to_string(), "pid": pid, "note": note }),
+        );
+        assert_eq!(is_error, Some(false), "{text}");
+        // NEVER undeliverable: the child is alive, whatever the stream
+        // latched.
+        assert!(
+            !text.contains("note NOT queued"),
+            "a LIVE goal-rejected child must stay steerable: {text}"
+        );
+        assert!(text.contains("queued: true"), "{text}");
+        let body = std::fs::read_to_string(tmp.path().join(".chug/steer.jsonl"))
+            .expect("the note is durably queued");
+        let lines: Vec<serde_json::Value> = body
+            .lines()
+            .map(|l| serde_json::from_str(l).expect("every queue line parses"))
+            .collect();
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert_eq!(lines[0]["note"], note, "{lines:?}");
+        // Steering never signals the fixture.
         assert_eq!(
             unsafe { libc::kill(pid as i32, 0) },
             0,

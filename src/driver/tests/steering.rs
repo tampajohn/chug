@@ -157,6 +157,76 @@
         );
     }
 
+    /// THE m6-orderflip killing test (T157 fix-up): the PRODUCTION
+    /// composition — `drive_loop` draining the channel and then the queue —
+    /// is pinned by driving it, not by re-implementing it. The m6 mutant
+    /// (queue drained BEFORE the channel) passed the whole driver suite
+    /// because the only channel-vs-queue order pin above re-implements the
+    /// composition at the helper level, and the boundary e2e test asserts
+    /// presence (`contains`), not order. This test drives `drive_loop`
+    /// with BOTH transports live and pins the landed `[operator]`
+    /// sequence — in the in-memory messages AND the transcript — as
+    /// channel-first, then the queue's FIFO.
+    #[test]
+    fn drive_loop_lands_channel_notes_before_queue_notes() {
+        let tmp = tempfile::tempdir().unwrap();
+        queue_note(&tmp, "queue note one");
+        queue_note(&tmp, "queue note two");
+        let (stx, srx) = mpsc::channel();
+        stx.send("channel note".to_string()).unwrap();
+        let controls = Controls {
+            abort: Arc::new(AtomicBool::new(false)),
+            steering_rx: srx,
+        };
+        let (_utx, urx) = mpsc::channel::<SlashUpdate>();
+        let ctx = ctx_for(&tmp, Mode::Autonomous, &controls, &urx, None, &observ::Sink::Noop);
+        let mut knobs = knobs_with(5);
+        let mut llm = ScriptedLlm::new(vec![
+            tool_use_response("goal_complete", json!({"summary": "done with it"})),
+        ]);
+        let mut gate = None;
+        let mut messages = Vec::new();
+        let mut sink = RecordingSink::default();
+        let outcome = drive_loop(
+            &ctx,
+            &mut knobs,
+            &mut llm,
+            &mut gate,
+            &mut messages,
+            Some("check: true".to_string()),
+            &mut sink,
+            &mut McpRegistry::new(tmp.path(), true, None).unwrap(),
+        )
+        .unwrap();
+        assert!(matches!(outcome, DriveOutcome::RunFinished(0)));
+        let landed: Vec<String> = messages
+            .iter()
+            .filter_map(|m| m.content[0].text().map(str::to_string))
+            .filter(|t| t.starts_with("[operator]"))
+            .collect();
+        assert_eq!(
+            landed,
+            vec![
+                "[operator] channel note".to_string(),
+                "[operator] queue note one".to_string(),
+                "[operator] queue note two".to_string(),
+            ],
+            "drive_loop lands channel notes first, then the queue FIFO: {landed:?}"
+        );
+        // The transcript — the next-iteration context a reader (or a
+        // resumed run) sees — carries the SAME sequence.
+        let stored: Vec<String> = transcript::load(tmp.path())
+            .unwrap()
+            .iter()
+            .filter_map(|m| m.content[0].text().map(str::to_string))
+            .filter(|t| t.starts_with("[operator]"))
+            .collect();
+        assert_eq!(
+            stored, landed,
+            "the transcript lands the same [operator] sequence"
+        );
+    }
+
     /// Malformed queue lines and empty notes are dropped, not injected: a
     /// junk line must not corrupt the transcript, and a whitespace note
     /// must not become an empty `[operator]` message.

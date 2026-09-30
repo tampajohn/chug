@@ -488,8 +488,10 @@ fn chug_abort_schema() -> Value {
              child's .chug/events.jsonl so chug_status/chug_collect report \
              the run as aborted. The result names the terminal state: \
              `aborted` (signalled and recorded), `already-done` (the latest \
-             segment already has a verdict — idempotent, nothing signalled), \
-             or `not-found` (no such process, no verdict — nothing \
+             segment has a verdict AND the process is gone — idempotent, \
+             nothing signalled; a LIVE child is never already-done, even \
+             when its stream latched a mid-run goal rejection), or \
+             `not-found` (no such process, no verdict — nothing \
              signalled).",
         "inputSchema": {
             "type": "object",
@@ -530,9 +532,11 @@ fn chug_steer_schema() -> Value {
              queue (.chug/steer.jsonl), drained at the child's next \
              iteration boundary, and delivered as a user message in the \
              child's transcript context. The result reports `queued` with \
-             the queue path, or `undeliverable` when the child's latest run \
-             segment already has a verdict or the pid is not alive — in \
-             which case NOTHING is written.",
+             the queue path, or `undeliverable` when the pid is not alive \
+             (with the latest segment's verdict named when the stream \
+             carries one) — a LIVE child is never undeliverable, even when \
+             its stream latched a mid-run goal rejection — in which case \
+             NOTHING is written.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -1149,10 +1153,11 @@ fn cancel_unix(pid: u64) -> (String, bool) {
 ///    run's terminal state now is: `aborted` (this call signalled the
 ///    group and recorded the abort), `already-done` (the child's latest
 ///    run segment already carries a verdict — goal accepted/rejected or an
-///    abort — so the run is over; IDEMPOTENT, `isError: false`, nothing
-///    signalled, a retried abort lands here), or `not-found` (the pid is
-///    dead with no verdict on record — `isError: true`, nothing
-///    signalled, same distinctive phrase `chug_cancel` uses).
+///    abort — AND the process is verifiably gone, so the run is over;
+///    IDEMPOTENT, `isError: false`, nothing signalled, a retried abort
+///    lands here), or `not-found` (the pid is dead with no verdict on
+///    record — `isError: true`, nothing signalled, same distinctive phrase
+///    `chug_cancel` uses).
 /// 2. **The abort is RECORDED.** After the group is verified dying, an
 ///    `abort` line is appended to the child's `.chug/events.jsonl` (the
 ///    reason names this verb, [`CHUG_ABORT_REASON`], so a postmortem can
@@ -1163,12 +1168,19 @@ fn cancel_unix(pid: u64) -> (String, bool) {
 ///    leaves). The write is best-effort telemetry: the process IS dead
 ///    either way, so a record-write failure degrades to `recorded: false`
 ///    naming the path — never `isError`, never a killed loop.
-/// 3. **A verdict wins over liveness.** A latest-segment verdict is
-///    checked BEFORE the ownership legs: a run that already ended is
-///    reported `already-done` without signalling anything, even if its
-///    (usually already-reaped) pid still answers a probe. An unreadable or
-///    missing events file degrades to "no verdict" — telemetry failure
-///    must never block the operator's stop button.
+/// 3. **Liveness wins over the stream** (the T157 fix-up class rule). The
+///    pid's real aliveness — the same T28 reap seam the signal legs serve
+///    — is consulted BEFORE any events-derived terminal state:
+///    `summarize_events().state()` latches "done" on ANY goal line,
+///    including a mid-run `outcome:"rejected"`, after which the driver
+///    KEEPS RUNNING — keying the already-done leg on the stream alone
+///    reported live children as finished and signalled nothing (the
+///    validator's d1-demo). An events terminal state may only shorten the
+///    path when the process is actually gone; a live child stays
+///    abortable whatever the stream says, and a gone child with NO
+///    verdict falls through to the ownership legs' not-found refusal. An
+///    unreadable or missing events file degrades to "no verdict" —
+///    telemetry failure must never block the operator's stop button.
 fn chug_abort(args: &Value) -> (String, bool) {
     // cwd: the SAME fail-fast validator every tool serves — it names the
     // chug cwd the child was launched in AND where the abort record goes.
@@ -1187,16 +1199,26 @@ fn chug_abort(args: &Value) -> (String, bool) {
         Ok(pid) => pid,
         Err(message) => return (message, true),
     };
-    // The verdict leg FIRST (see doc point 3): one bounded tail read, then
-    // the delegate summaries over it — the latest segment's terminal
-    // verdict decides between already-done and a live abort.
+    // The events read comes first (one bounded tail read, then the delegate
+    // summaries over it) — but the stream only DECIDES anything when the
+    // process is actually gone (see doc point 3).
     let events_path = cwd.join(".chug").join("events.jsonl");
     // Unreadable events degrade to "no verdict" — the abort proceeds on
     // process identity alone.
     let lines: Vec<String> = crate::delegate::read_events_tail(&events_path).unwrap_or_default();
     let refs: Vec<&str> = lines.iter().map(String::as_str).collect();
     let segment = crate::delegate::summarize_events(&refs);
-    if segment.state() == "done" || segment.state() == "aborted" {
+    // LIVENESS FIRST (the T157 fix-up class rule): consult the pid's real
+    // aliveness BEFORE trusting an events-derived terminal state. The
+    // stream's "done" latches on ANY goal line — including a mid-run
+    // `outcome:"rejected"`, after which the driver keeps running — so a
+    // LIVE child is never already-done, whatever the stream says; it falls
+    // through to the signal legs. A verifiably GONE child with a terminal
+    // verdict shortens the path here (idempotent, nothing signalled); a
+    // gone child with NO verdict falls through to the ownership legs'
+    // not-found refusal.
+    let events_terminal = segment.state() == "done" || segment.state() == "aborted";
+    if events_terminal && crate::delegate::reap_and_alive(pid) == Some(false) {
         let verdict = crate::delegate::summarize_collect(&refs).verdict().to_string();
         return (
             format!(
@@ -1311,11 +1333,16 @@ fn append_abort_record(cwd: &Path) -> Result<(), String> {
 ///
 /// Delivery report: `queued` (the note is durably on the queue the child
 /// drains) vs `undeliverable` (`isError: true`, distinctive phrase, and
-/// NOTHING written) — the child's latest run segment already has a verdict
-/// (`child done`) or the pid is not alive (`child gone`). A note queued
-/// for a child that died without a verdict lingers undrained; the queue is
-/// the cwd's, so the next driver in that cwd consumes it at its first
-/// boundary — the documented boundary of file-based steering.
+/// NOTHING written) — the pid is verifiably GONE (the child-done phrase
+/// when the stream carries a terminal verdict, the child-gone phrase when
+/// it does not) or its liveness could not be probed (fail-closed).
+/// Deliverability keys on REAL process liveness FIRST (the T157 fix-up
+/// class rule): a live child is never undeliverable, whatever the stream
+/// latched — a mid-run goal rejection keeps the driver running, and the
+/// queued note lands at its next boundary. A note queued for a child that
+/// died without a verdict lingers undrained; the queue is the cwd's, so
+/// the next driver in that cwd consumes it at its first boundary — the
+/// documented boundary of file-based steering.
 fn chug_steer(args: &Value) -> (String, bool) {
     let Some(raw_cwd) = args.get("cwd").and_then(Value::as_str) else {
         return (
@@ -1362,50 +1389,59 @@ fn chug_steer(args: &Value) -> (String, bool) {
             true,
         );
     }
-    // The done leg: a latest-segment verdict means the run is over —
-    // steering a finished run is undeliverable (distinctive phrase), and
-    // nothing is written (a stale note must not sit in the queue for the
-    // cwd's NEXT driver).
-    let events_path = cwd.join(".chug").join("events.jsonl");
-    // Unreadable events degrade to "no verdict" — steering proceeds on
-    // process identity alone.
-    let lines: Vec<String> = crate::delegate::read_events_tail(&events_path).unwrap_or_default();
-    let refs: Vec<&str> = lines.iter().map(String::as_str).collect();
-    let segment = crate::delegate::summarize_events(&refs);
-    if segment.state() == "done" || segment.state() == "aborted" {
-        let verdict = crate::delegate::summarize_collect(&refs).verdict().to_string();
-        return (
-            format!(
-                "{CHUG_STEER_TOOL}: pid {pid} already completed its latest \
-                 run segment (verdict: {verdict}) — note NOT queued"
-            ),
-            true,
-        );
-    }
-    // The gone leg: the pid's liveness through the same T28 reap seam the
-    // signal verbs serve. Fail-closed on an unresolvable probe.
-    #[cfg(unix)]
-    {
-        match crate::delegate::reap_and_alive(pid) {
-            Some(true) => {}
-            Some(false) => {
+    // LIVENESS FIRST (the T157 fix-up class rule): deliverability keys on
+    // the pid's REAL aliveness — the same T28 reap seam the signal verbs
+    // serve — never on the stream alone. `summarize_events().state()`
+    // latches "done" on ANY goal line, including a mid-run
+    // `outcome:"rejected"` after which the driver KEEPS RUNNING, so keying
+    // the undeliverable leg on the stream alone refused notes to live
+    // children (the validator's d1-demo). A LIVE child — whatever the
+    // stream says — gets the note queued; it drains at the child's next
+    // iteration boundary. Only a verifiably GONE child consults the
+    // stream, and only to pick the refusal's phrase: a terminal verdict
+    // there means the run is over (the child-done phrase); no verdict
+    // means the child died mid-run (the child-gone phrase). An
+    // unresolvable probe fails closed.
+    match crate::delegate::reap_and_alive(pid) {
+        Some(true) => {}
+        Some(false) => {
+            // Gone: the stream picks the phrase — and NOTHING is written
+            // either way (a stale note must not sit in the queue for the
+            // cwd's NEXT driver). Unreadable events degrade to "no
+            // verdict" — the child-gone phrase, never a crash.
+            let events_path = cwd.join(".chug").join("events.jsonl");
+            let lines: Vec<String> =
+                crate::delegate::read_events_tail(&events_path).unwrap_or_default();
+            let refs: Vec<&str> = lines.iter().map(String::as_str).collect();
+            let segment = crate::delegate::summarize_events(&refs);
+            if segment.state() == "done" || segment.state() == "aborted" {
+                let verdict =
+                    crate::delegate::summarize_collect(&refs).verdict().to_string();
                 return (
                     format!(
-                        "{CHUG_STEER_TOOL}: pid {pid} is not alive (no such \
-                         process) — note NOT queued"
+                        "{CHUG_STEER_TOOL}: pid {pid} already completed its \
+                         latest run segment (verdict: {verdict}) — note NOT \
+                         queued"
                     ),
                     true,
                 );
             }
-            None => {
-                return (
-                    format!(
-                        "{CHUG_STEER_TOOL}: pid {pid} liveness could not be \
-                         probed — fail-closed, note NOT queued"
-                    ),
-                    true,
-                );
-            }
+            return (
+                format!(
+                    "{CHUG_STEER_TOOL}: pid {pid} is not alive (no such \
+                     process) — note NOT queued"
+                ),
+                true,
+            );
+        }
+        None => {
+            return (
+                format!(
+                    "{CHUG_STEER_TOOL}: pid {pid} liveness could not be \
+                     probed — fail-closed, note NOT queued"
+                ),
+                true,
+            );
         }
     }
     // Queue it: one JSON line appended (create if absent). A write failure
