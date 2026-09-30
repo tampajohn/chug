@@ -35,6 +35,11 @@ pub struct McpTool {
 /// transport's MAX_MCP_TOOLS: a broken server must not flood the registry).
 pub(crate) const MAX_MCP_RESOURCES: usize = 200;
 
+/// Defensive cap on registered prompts per server (same warn-and-cap
+/// discipline as MAX_MCP_TOOLS / MAX_MCP_RESOURCES: a broken server must
+/// not flood the registry).
+pub(crate) const MAX_MCP_PROMPTS: usize = 200;
+
 /// T169: char cap for one `mcp_resource` read render — pinned to
 /// web_fetch's cap constant so the two model-facing read surfaces cannot
 /// drift (same number, same `[truncated at N chars]` marker).
@@ -104,6 +109,47 @@ pub struct McpResourceContents {
     pub mime_type: String,
     pub text: Option<String>,
     pub blob: Option<String>,
+}
+
+/// One argument descriptor of an advertised prompt (a `prompts/list`
+/// entry's `arguments` array).
+#[derive(Debug, Clone)]
+#[allow(dead_code)] // fields are read by the tests + the later model-facing surface (F9); the mapping is kept COMPLETE for T171's reuse
+pub struct McpPromptArgument {
+    pub name: String,
+    pub description: String,
+    pub required: bool,
+}
+
+/// One advertised MCP prompt (a `prompts/list` entry) — metadata only; the
+/// message template itself comes from `prompts/get`.
+#[derive(Debug, Clone)]
+#[allow(dead_code)] // fields are read by the tests + the later model-facing surface (F9); the mapping is kept COMPLETE for T171's reuse
+pub struct McpPrompt {
+    pub name: String,
+    pub description: String,
+    pub arguments: Vec<McpPromptArgument>,
+}
+
+/// One message of a `prompts/get` result: `role` is the speaker
+/// (`"user"` / `"assistant"`); `content` is the server's content block
+/// kept verbatim — a text block (`{"type":"text","text":"..."}`) is the
+/// common case; image/resource blocks ride through for the later
+/// model-facing render (F9).
+#[derive(Debug, Clone)]
+#[allow(dead_code)] // fields are read by the tests + the later model-facing surface (F9); the mapping is kept COMPLETE for T171's reuse
+pub struct McpPromptMessage {
+    pub role: String,
+    pub content: Value,
+}
+
+/// The `prompts/get` result: the prompt's description plus the message
+/// template the server expanded from the call's arguments.
+#[derive(Debug, Clone)]
+#[allow(dead_code)] // fields are read by the tests + the later model-facing surface (F9); the mapping is kept COMPLETE for T171's reuse
+pub struct McpPromptGet {
+    pub description: String,
+    pub messages: Vec<McpPromptMessage>,
 }
 
 /// Shared `resources/list` response mapping (stdio phase 1a; the HTTP
@@ -193,6 +239,114 @@ pub(crate) fn parse_resource_contents(server: &str, resp: &Value) -> anyhow::Res
         .collect())
 }
 
+/// Shared `prompts/list` response mapping (stdio phase 1b-ii; the HTTP
+/// transport reuses it in T171). Entries without a `name` are skipped
+/// (same filter_map discipline as resources/list). Over-cap
+/// advertisements are warn-and-capped: the first `max` are kept and the
+/// warning line is returned for the caller to log where its transport logs.
+pub(crate) fn parse_prompts_list(
+    server: &str,
+    resp: &Value,
+    max: usize,
+) -> anyhow::Result<(Vec<McpPrompt>, Option<String>)> {
+    // A JSON-RPC error reply carries the server's own message — surface it
+    // (same discipline as parse_resources_list) so a refused list names why.
+    if let Some(err) = resp
+        .get("error")
+        .and_then(|e| e.get("message"))
+        .and_then(Value::as_str)
+    {
+        bail!("mcp server {server}: prompts/list failed: {err}");
+    }
+    let prompts = resp
+        .get("result")
+        .and_then(|r| r.get("prompts"))
+        .and_then(Value::as_array)
+        .with_context(|| format!("mcp server {server}: prompts/list returned no prompts array"))?;
+    let mapped: Vec<McpPrompt> = prompts
+        .iter()
+        .filter_map(|p| {
+            let name = p.get("name")?.as_str()?.to_string();
+            let arguments = p
+                .get("arguments")
+                .and_then(Value::as_array)
+                .map(|args| {
+                    args.iter()
+                        .filter_map(|a| {
+                            let name = a.get("name")?.as_str()?.to_string();
+                            Some(McpPromptArgument {
+                                name,
+                                description: a
+                                    .get("description")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or("")
+                                    .to_string(),
+                                required: a
+                                    .get("required")
+                                    .and_then(Value::as_bool)
+                                    .unwrap_or(false),
+                            })
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            Some(McpPrompt {
+                name,
+                description: p
+                    .get("description")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string(),
+                arguments,
+            })
+        })
+        .collect();
+    if mapped.len() > max {
+        let warning =
+            format!("prompts/list advertised {} prompts; capped at {max}", mapped.len());
+        return Ok((mapped.into_iter().take(max).collect(), Some(warning)));
+    }
+    Ok((mapped, None))
+}
+
+/// Shared `prompts/get` response mapping: `result`'s description plus its
+/// messages array (role + content blocks) become an [`McpPromptGet`].
+/// Messages missing `role` or `content` are skipped (same filter_map
+/// discipline); a JSON-RPC error reply surfaces the server's own message
+/// (an unknown prompt name, e.g.).
+pub(crate) fn parse_prompt_result(server: &str, resp: &Value) -> anyhow::Result<McpPromptGet> {
+    if let Some(err) = resp
+        .get("error")
+        .and_then(|e| e.get("message"))
+        .and_then(Value::as_str)
+    {
+        bail!("mcp server {server}: prompts/get failed: {err}");
+    }
+    let result = resp
+        .get("result")
+        .and_then(Value::as_object)
+        .with_context(|| format!("mcp server {server}: prompts/get returned no result object"))?;
+    let messages = result
+        .get("messages")
+        .and_then(Value::as_array)
+        .with_context(|| format!("mcp server {server}: prompts/get returned no messages array"))?;
+    Ok(McpPromptGet {
+        description: result
+            .get("description")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string(),
+        messages: messages
+            .iter()
+            .filter_map(|m| {
+                let role = m.get("role")?.as_str()?.to_string();
+                let content = m.get("content")?;
+                Some(McpPromptMessage { role, content: content.clone() })
+            })
+            .collect(),
+    })
+}
+
 /// Transport-agnostic view of one MCP server (stdio child process or remote
 /// streamable-HTTP endpoint). The registry routes purely by server name; the
 /// transport is an implementation detail of each backend.
@@ -223,6 +377,25 @@ pub trait McpBackend {
     fn read_resource(&mut self, _uri: &str) -> anyhow::Result<Vec<McpResourceContents>> {
         bail!(
             "mcp server {}: resources are not supported over this transport yet (phase 1b)",
+            self.name()
+        )
+    }
+    /// `prompts/list`. Default: this transport does not speak prompts yet
+    /// (F11 phase 1b) — the stdio transport overrides now, the HTTP
+    /// transport overrides in T171 (same shared mapping, no fork).
+    #[allow(dead_code)]
+    fn list_prompts(&mut self) -> anyhow::Result<Vec<McpPrompt>> {
+        bail!(
+            "mcp server {}: prompts are not supported over this transport yet (phase 1b)",
+            self.name()
+        )
+    }
+    /// `prompts/get` for one named prompt (arguments optional). Default:
+    /// same phase-1b story as [`McpBackend::list_prompts`].
+    #[allow(dead_code)]
+    fn get_prompt(&mut self, _name: &str, _arguments: Value) -> anyhow::Result<McpPromptGet> {
+        bail!(
+            "mcp server {}: prompts are not supported over this transport yet (phase 1b)",
             self.name()
         )
     }
@@ -385,6 +558,43 @@ impl McpServer {
         let resp = self.send_request("resources/read", json!({ "uri": uri }), CALL_TIMEOUT)?;
         parse_resource_contents(&self.name, &resp)
     }
+
+    /// `prompts/list` (LIST_TIMEOUT budget, same framing discipline as
+    /// tools/list + resources/list). The response mapping is shared with
+    /// the HTTP transport (T171 reuses `parse_prompts_list`); the
+    /// warn-and-cap note goes to the per-server log, mirroring the
+    /// resources cap.
+    fn prompts_list(&mut self) -> anyhow::Result<Vec<McpPrompt>> {
+        if !self.is_alive() {
+            bail!("mcp server {} is down", self.name);
+        }
+        let resp = self.send_request("prompts/list", json!({}), LIST_TIMEOUT)?;
+        let (prompts, warning) = parse_prompts_list(&self.name, &resp, MAX_MCP_PROMPTS)?;
+        if let Some(warning) = warning {
+            log_line(
+                &self.log_path,
+                &format!("chug: warning: mcp server {}: {warning}", self.name),
+            );
+        }
+        Ok(prompts)
+    }
+
+    /// `prompts/get` for one named prompt (CALL_TIMEOUT budget: a template
+    /// expansion can be as expensive as a tool call). `arguments` rides
+    /// the params only when the caller supplied one (null = omitted — the
+    /// MCP spec makes the map optional); JSON-RPC errors (an unknown
+    /// prompt name, e.g.) become named errors.
+    fn prompt_get(&mut self, name: &str, arguments: Value) -> anyhow::Result<McpPromptGet> {
+        if !self.is_alive() {
+            bail!("mcp server {} is down", self.name);
+        }
+        let mut params = json!({ "name": name });
+        if !arguments.is_null() {
+            params["arguments"] = arguments;
+        }
+        let resp = self.send_request("prompts/get", params, CALL_TIMEOUT)?;
+        parse_prompt_result(&self.name, &resp)
+    }
 }
 
 impl McpBackend for McpServer {
@@ -411,6 +621,14 @@ impl McpBackend for McpServer {
     fn read_resource(&mut self, uri: &str) -> anyhow::Result<Vec<McpResourceContents>> {
         // Delegate to the inherent method: identical wire behavior.
         McpServer::resource_read(self, uri)
+    }
+    fn list_prompts(&mut self) -> anyhow::Result<Vec<McpPrompt>> {
+        // Delegate to the inherent method: identical wire behavior.
+        McpServer::prompts_list(self)
+    }
+    fn get_prompt(&mut self, name: &str, arguments: Value) -> anyhow::Result<McpPromptGet> {
+        // Delegate to the inherent method: identical wire behavior.
+        McpServer::prompt_get(self, name, arguments)
     }
 }
 
@@ -467,6 +685,20 @@ pub struct McpServerResources {
     /// This server's resources, or the error that failed its leg (the
     /// message already names the server).
     pub resources: anyhow::Result<Vec<McpResource>>,
+}
+
+/// One server's outcome from [`McpRegistry::list_prompts`]: every started
+/// server appears exactly once; a server that cannot serve prompts (not
+/// advertised, down, timed out) carries the named error instead — partial
+/// failure is data, never a panic and never a wire request the server did
+/// not advertise.
+#[derive(Debug)]
+#[allow(dead_code)] // no model-facing prompts tool yet (a later F11/F9 phase); the registry surface is exercised by the tests
+pub struct McpServerPrompts {
+    pub server: String,
+    /// This server's prompts, or the error that failed its leg (the
+    /// message already names the server).
+    pub prompts: anyhow::Result<Vec<McpPrompt>>,
 }
 
 impl McpRegistry {
@@ -690,6 +922,59 @@ impl McpRegistry {
             bail!("mcp server {server} does not advertise resources; not sending resources/read");
         }
         srv.read_resource(uri)
+    }
+
+    /// F11 phase 1b-ii (T170): list prompts from every started server. The
+    /// capability catalog gates the wire: a server that did not advertise
+    /// `prompts` is NEVER sent prompts/list — its entry carries the named
+    /// error instead. Dead or timed-out servers degrade to a named error
+    /// in their own entry (the run continues); capable servers reuse the
+    /// LIST timeout. Registry-internal for now: a model-facing prompts
+    /// surface (slash-pack surfacing) is a later F11/F9 phase.
+    #[allow(dead_code)] // registry-internal until the model-facing prompts surface (F9); exercised by the tests
+    pub fn list_prompts(&mut self) -> Vec<McpServerPrompts> {
+        self.servers
+            .iter_mut()
+            .map(|srv| {
+                let server = srv.name().to_string();
+                let prompts = Self::prompts_leg(&mut **srv);
+                McpServerPrompts { server, prompts }
+            })
+            .collect()
+    }
+
+    /// F11 phase 1b-ii (T170): read one prompt's expanded message template
+    /// from the named server. Unknown server, missing capability, and dead
+    /// server all produce named errors — never a panic, never a hang (the
+    /// leg reuses the CALL timeout).
+    #[allow(dead_code)] // registry-internal until the model-facing prompts surface (F9); exercised by the tests
+    pub fn get_prompt(
+        &mut self,
+        server: &str,
+        name: &str,
+        arguments: Value,
+    ) -> anyhow::Result<McpPromptGet> {
+        let Some(srv) = self.servers.iter_mut().find(|s| s.name() == server) else {
+            bail!("mcp server {server} not found");
+        };
+        if !srv.capabilities().prompts {
+            bail!("mcp server {server} does not advertise prompts; not sending prompts/get");
+        }
+        srv.get_prompt(name, arguments)
+    }
+
+    /// One server's prompts leg — THE CAPABILITY GATE (single source,
+    /// shared by every prompts surface): a server that did not advertise
+    /// `prompts` is never sent prompts/list — RED-proven (the always-query
+    /// mutant made the stub see the request) and now enforced here.
+    #[allow(dead_code)] // registry-internal until the model-facing prompts surface (F9); exercised by the tests
+    fn prompts_leg(srv: &mut dyn McpBackend) -> anyhow::Result<Vec<McpPrompt>> {
+        let server = srv.name().to_string();
+        if srv.capabilities().prompts {
+            srv.list_prompts()
+        } else {
+            Err(anyhow!("mcp server {server} does not advertise prompts"))
+        }
     }
 
     /// F11 phase 1b-i (T169): the model-facing `mcp_resource` builtin tool
@@ -2443,6 +2728,327 @@ for line in sys.stdin:
     else:
         send({"jsonrpc": "2.0", "id": i, "error": {"code": -32601, "message": "method not found: " + m}})
 "#
+    }
+
+    // ---------- F11 phase 1b-ii (T170): prompts consume legs ----------
+
+    /// Prompts stub: advertises tools + prompts{listChanged} + resources,
+    /// serves prompts/list (250 entries — over MAX_MCP_PROMPTS) and
+    /// prompts/get (a `review` prompt whose arguments are echoed into the
+    /// message text; JSON-RPC error for unknown names).
+    fn prompts_server_body() -> &'static str {
+        r#"
+import sys, json
+def send(o):
+    sys.stdout.write(json.dumps(o) + "\n"); sys.stdout.flush()
+PROMPTS = [{"name": "p%d" % i, "description": "prompt %d" % i, "arguments": [{"name": "topic", "description": "the topic", "required": True}]} for i in range(250)]
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    req = json.loads(line)
+    if "method" not in req or "id" not in req:
+        continue
+    m, i = req["method"], req["id"]
+    if m == "initialize":
+        send({"jsonrpc": "2.0", "id": i, "result": {"protocolVersion": "2025-06-18", "capabilities": {"tools": {}, "resources": {}, "prompts": {"listChanged": True}}, "serverInfo": {"name": "fake", "version": "0.0.1"}}})
+    elif m == "tools/list":
+        send({"jsonrpc": "2.0", "id": i, "result": {"tools": []}})
+    elif m == "prompts/list":
+        send({"jsonrpc": "2.0", "id": i, "result": {"prompts": PROMPTS}})
+    elif m == "prompts/get":
+        name = req["params"].get("name")
+        if name != "review":
+            send({"jsonrpc": "2.0", "id": i, "error": {"code": -32602, "message": "unknown prompt: " + str(name)}})
+        else:
+            args = req["params"].get("arguments") or {}
+            send({"jsonrpc": "2.0", "id": i, "result": {"description": "Review a topic", "messages": [{"role": "user", "content": {"type": "text", "text": "review: " + json.dumps(args)}}, {"role": "assistant", "content": {"type": "text", "text": "will do"}}]}})
+    else:
+        send({"jsonrpc": "2.0", "id": i, "error": {"code": -32601, "message": "method not found: " + m}})
+"#
+    }
+
+    /// (a) The prompts capability is captured at initialize — the shared
+    /// catalog test above pins prompts present/absent for the resources
+    /// stub and the tools-only echo stub; this stub additionally carries
+    /// the listChanged flag (the catalog keeps ALL advertised flags).
+    #[test]
+    fn prompts_capability_captured_with_list_changed_flag() {
+        let tmp = TempDir::new().unwrap();
+        let mut srv = McpServer::spawn(
+            tmp.path(),
+            "fake",
+            server_config(tmp.path(), "fake", prompts_server_body()),
+        )
+        .unwrap();
+        srv.initialize().unwrap();
+        let caps = srv.capabilities();
+        assert!(caps.tools, "{caps:?}");
+        assert!(caps.resources, "{caps:?}");
+        assert!(caps.prompts, "{caps:?}");
+        assert!(caps.prompts_list_changed, "{caps:?}");
+        drop(srv);
+        // The plain echo server advertises {"tools": {}} — prompts absent
+        // means false (covered by the shared test too; pinned here so this
+        // section reads standalone).
+        let srv = spawn_echo(tmp.path());
+        assert!(!srv.capabilities().prompts);
+    }
+
+    /// (b) prompts/list parses into McpPrompt values (with their argument
+    /// descriptors) and is capped at MAX_MCP_PROMPTS with the warn-and-cap
+    /// note in the per-server log (same semantics as MAX_MCP_RESOURCES /
+    /// the HTTP MAX_MCP_TOOLS cap). RED-proven: the uncapped mutant
+    /// (cap dropped, all 250 returned) fails this test serially — see the
+    /// commit message.
+    #[test]
+    fn prompts_list_parses_and_caps_at_max_with_warning() {
+        let tmp = TempDir::new().unwrap();
+        let mut srv = McpServer::spawn(
+            tmp.path(),
+            "fake",
+            server_config(tmp.path(), "fake", prompts_server_body()),
+        )
+        .unwrap();
+        srv.initialize().unwrap();
+        let prompts = McpBackend::list_prompts(&mut srv).unwrap();
+        assert_eq!(
+            prompts.len(),
+            MAX_MCP_PROMPTS,
+            "the stub advertises 250; the registry must cap at {MAX_MCP_PROMPTS}"
+        );
+        assert_eq!(prompts[0].name, "p0");
+        assert_eq!(prompts[0].description, "prompt 0");
+        assert_eq!(prompts[0].arguments.len(), 1);
+        assert_eq!(prompts[0].arguments[0].name, "topic");
+        assert_eq!(prompts[0].arguments[0].description, "the topic");
+        assert!(prompts[0].arguments[0].required);
+        // warn-and-cap: the cap note lands in the per-server log.
+        let log =
+            fs::read_to_string(tmp.path().join(".chug").join("mcp-fake.log")).unwrap_or_default();
+        assert!(
+            log.contains("capped at"),
+            "expected the cap warning in the server log, got: {log}"
+        );
+        assert!(log.contains("250 prompts"), "{log}");
+    }
+
+    /// (c) prompts/get maps the response into description + messages with
+    /// roles and content blocks; a get WITHOUT arguments omits the map
+    /// from the params (the MCP spec makes it optional).
+    #[test]
+    fn prompts_get_maps_description_and_messages() {
+        let tmp = TempDir::new().unwrap();
+        let mut srv = McpServer::spawn(
+            tmp.path(),
+            "fake",
+            server_config(tmp.path(), "fake", prompts_server_body()),
+        )
+        .unwrap();
+        srv.initialize().unwrap();
+        let got = McpBackend::get_prompt(&mut srv, "review", json!({"topic": "mcp"})).unwrap();
+        assert_eq!(got.description, "Review a topic");
+        assert_eq!(got.messages.len(), 2);
+        assert_eq!(got.messages[0].role, "user");
+        assert_eq!(got.messages[0].content["type"], "text");
+        assert_eq!(got.messages[0].content["text"], r#"review: {"topic": "mcp"}"#);
+        assert_eq!(got.messages[1].role, "assistant");
+        assert_eq!(got.messages[1].content["text"], "will do");
+
+        // A get without arguments: the params carry only the name.
+        let got = McpBackend::get_prompt(&mut srv, "review", Value::Null).unwrap();
+        assert_eq!(got.messages[0].content["text"], "review: {}");
+    }
+
+    /// (c, unit) The shared mappings: prompts/list entries without a name
+    /// are skipped, arguments parse (required defaulting false), over-cap
+    /// keeps the first `max` + returns the warning; prompts/get skips
+    /// messages missing role or content and errors naming the server.
+    #[test]
+    fn prompt_parse_maps_arguments_messages_and_errors() {
+        let resp = json!({"result": {"prompts": [
+            {"name": "review", "description": "Review code", "arguments": [
+                {"name": "code", "description": "the code", "required": true},
+                {"name": "style", "required": false}
+            ]},
+            {"name": "bare"},
+            {"description": "no name here"}
+        ]}});
+        let (prompts, warning) = parse_prompts_list("fake", &resp, 200).unwrap();
+        assert!(warning.is_none());
+        assert_eq!(prompts.len(), 2, "entries without a name are skipped");
+        assert_eq!(prompts[0].name, "review");
+        assert_eq!(prompts[0].arguments.len(), 2);
+        assert!(prompts[0].arguments[0].required);
+        assert!(!prompts[0].arguments[1].required);
+        assert_eq!(prompts[0].arguments[1].description, "");
+        // A prompt with no arguments field maps to an empty argument list.
+        assert!(prompts[1].arguments.is_empty());
+
+        // Over-cap: the first `max` are kept, the warning line returned.
+        let (capped, warning) = parse_prompts_list("fake", &resp, 1).unwrap();
+        assert_eq!(capped.len(), 1);
+        assert_eq!(
+            warning.as_deref(),
+            Some("prompts/list advertised 2 prompts; capped at 1")
+        );
+
+        // Missing prompts array: the error names the server.
+        let err = parse_prompts_list("fake", &json!({"result": {}}), 200).unwrap_err();
+        assert!(err.to_string().contains("fake"), "{err}");
+        assert!(err.to_string().contains("prompts array"), "{err}");
+        // A JSON-RPC error reply surfaces the server's own message.
+        let err = parse_prompts_list(
+            "fake",
+            &json!({"error": {"code": -32602, "message": "no prompts here"}}),
+            200,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("no prompts here"), "{err}");
+
+        // prompts/get mapping: description + role/content messages; a
+        // message missing role or content is skipped.
+        let resp = json!({"result": {"description": "d", "messages": [
+            {"role": "user", "content": {"type": "text", "text": "hi"}},
+            {"content": {"type": "text", "text": "no role"}},
+            {"role": "assistant", "content": {"type": "text", "text": "ok"}}
+        ]}});
+        let got = parse_prompt_result("fake", &resp).unwrap();
+        assert_eq!(got.description, "d");
+        assert_eq!(got.messages.len(), 2);
+        assert_eq!(got.messages[1].role, "assistant");
+        assert_eq!(got.messages[1].content["text"], "ok");
+
+        // Missing result object / messages array: the error names the server.
+        let err = parse_prompt_result("fake", &json!({"result": {}})).unwrap_err();
+        assert!(err.to_string().contains("fake"), "{err}");
+        assert!(err.to_string().contains("messages"), "{err}");
+        let err = parse_prompt_result(
+            "fake",
+            &json!({"error": {"code": -32602, "message": "unknown prompt: x"}}),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("unknown prompt: x"), "{err}");
+    }
+
+    /// (d) An unknown prompt and a dead server both produce errors that
+    /// name the server — never a panic, never a hang.
+    #[test]
+    fn prompt_get_unknown_prompt_and_dead_server_are_named_errors() {
+        let tmp = TempDir::new().unwrap();
+        let mut srv = McpServer::spawn(
+            tmp.path(),
+            "fake",
+            server_config(tmp.path(), "fake", prompts_server_body()),
+        )
+        .unwrap();
+        srv.initialize().unwrap();
+        let err = McpBackend::get_prompt(&mut srv, "nope", json!({"topic": "x"})).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("fake"), "{msg}");
+        assert!(msg.contains("unknown prompt: nope"), "{msg}");
+
+        // Kill the child (SIGKILL): the get degrades to the named
+        // "is down" error — and so does the list leg beside it.
+        let mut child = srv.child.take().unwrap();
+        let _ = child.kill();
+        let _ = child.wait();
+        for _ in 0..50 {
+            if !srv.is_alive() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(!srv.is_alive());
+        let err = McpBackend::get_prompt(&mut srv, "review", json!({})).unwrap_err();
+        assert!(err.to_string().contains("mcp server fake is down"), "{err}");
+        let err = McpBackend::list_prompts(&mut srv).unwrap_err();
+        assert!(err.to_string().contains("mcp server fake is down"), "{err}");
+    }
+
+    /// (d, registry) Unknown server name and non-capable server get: named
+    /// errors from the registry surface.
+    #[test]
+    fn registry_get_prompt_names_unknown_and_noncapable_servers() {
+        let tmp = TempDir::new().unwrap();
+        write_mcp_json(tmp.path(), "fake", echo_server_body());
+        let mut reg = McpRegistry::new(tmp.path(), false, None).unwrap();
+        reg.start(&Permissions::empty());
+        assert_eq!(reg.servers.len(), 1);
+        let err = reg.get_prompt("nosuch", "review", json!({})).unwrap_err();
+        assert!(err.to_string().contains("mcp server nosuch not found"), "{err}");
+        let err = reg.get_prompt("fake", "review", json!({})).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("mcp server fake does not advertise prompts; not sending prompts/get"),
+            "{err}"
+        );
+    }
+
+    /// (e) THE CAPABILITY GATE: a server WITHOUT the prompts capability is
+    /// never sent prompts/list or prompts/get — asserted at the stub (zero
+    /// such requests in its method log) and in the registry result (its
+    /// entry carries the named error instead). RED-proven: the always-query
+    /// mutant (gate dropped from the shared leg + the get gate) made the
+    /// stub see both requests and fails this test serially — see the
+    /// commit message.
+    #[test]
+    fn prompts_never_queried_without_capability() {
+        let tmp = TempDir::new().unwrap();
+        let requests = tmp.path().join("requests.log");
+        write_mcp_json(tmp.path(), "fake", &method_log_body(&requests));
+        let mut reg = McpRegistry::new(tmp.path(), false, None).unwrap();
+        reg.start(&Permissions::empty());
+        assert_eq!(reg.servers.len(), 1);
+
+        let out = reg.list_prompts();
+        assert_eq!(out.len(), 1, "every started server appears exactly once");
+        assert_eq!(out[0].server, "fake");
+        let err = out[0].prompts.as_ref().unwrap_err();
+        assert!(
+            err.to_string().contains("mcp server fake does not advertise prompts"),
+            "{err}"
+        );
+        // A targeted get is gated the same way.
+        let err = reg.get_prompt("fake", "review", json!({})).unwrap_err();
+        assert!(err.to_string().contains("does not advertise prompts"), "{err}");
+
+        // The stub-side witness: tools were spoken, prompts never were.
+        let seen = fs::read_to_string(&requests).unwrap_or_default();
+        assert!(seen.contains("initialize"), "{seen}");
+        assert!(seen.contains("tools/list"), "{seen}");
+        assert!(
+            !seen.contains("prompts/"),
+            "a server without the prompts capability was queried: {seen}"
+        );
+    }
+
+    /// Registry routing end-to-end on a CAPABLE server: list_prompts()
+    /// aggregates the capped list, get_prompt(server, name, arguments)
+    /// returns the mapped messages — errors name the server on both paths.
+    #[test]
+    fn registry_lists_and_gets_capable_server_prompts() {
+        let tmp = TempDir::new().unwrap();
+        write_mcp_json(tmp.path(), "fake", prompts_server_body());
+        let mut reg = McpRegistry::new(tmp.path(), false, None).unwrap();
+        reg.start(&Permissions::empty());
+        assert_eq!(reg.servers.len(), 1);
+
+        let out = reg.list_prompts();
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].server, "fake");
+        let prompts = out[0].prompts.as_ref().unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(prompts.len(), MAX_MCP_PROMPTS);
+        assert_eq!(prompts[0].name, "p0");
+
+        let got = reg.get_prompt("fake", "review", json!({"topic": "mcp"})).unwrap();
+        assert_eq!(got.description, "Review a topic");
+        assert_eq!(got.messages[0].role, "user");
+        assert!(
+            got.messages[0].content["text"].as_str().unwrap().contains("mcp"),
+            "{}",
+            got.messages[0].content
+        );
     }
 
     // ---------- spec-9 config extension ----------

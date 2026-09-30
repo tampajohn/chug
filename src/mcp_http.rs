@@ -1912,6 +1912,22 @@ pub(crate) mod tests {
         assert!(!srv.capabilities().resources);
     }
 
+    /// F11 phase 1b honesty, prompts half (T170): the stdio transport got
+    /// the prompts/list + prompts/get legs, the HTTP transport still
+    /// answers with the shared trait defaults' named error (never touches
+    /// the network) — T171 overrides them over the same shared mapping
+    /// (`parse_prompts_list` / `parse_prompt_result`), no signature fork.
+    #[test]
+    fn http_prompt_legs_are_phase_1b_named_errors() {
+        let mut srv = new_server("remote", "http://127.0.0.1:9/mcp".to_string());
+        let err = McpBackend::list_prompts(&mut srv).unwrap_err();
+        assert!(err.to_string().contains("mcp server remote"), "{err}");
+        assert!(err.to_string().contains("phase 1b"), "{err}");
+        let err = McpBackend::get_prompt(&mut srv, "review", json!({})).unwrap_err();
+        assert!(err.to_string().contains("mcp server remote"), "{err}");
+        assert!(err.to_string().contains("phase 1b"), "{err}");
+    }
+
     type Sleeper = Arc<dyn Fn(Duration) + Send + Sync>;
 
     fn no_sleep() -> (Sleeper, Arc<Mutex<Vec<Duration>>>) {

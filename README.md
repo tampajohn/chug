@@ -625,8 +625,13 @@ servers connected, `list` says so plainly. The tool is a builtin (not an
 `mcp__`-prefixed server tool), so T90 deny rules can match the plain
 `mcp_resource` name, and it is read-only: it bypasses the laya risk gate
 exactly like `mcp__` tool calls (the gate judges bash commands only).
-Still to come in F11 phase 1b: prompts (`prompts/list` + `prompts/get`)
-and the resource+prompt legs over the HTTP transport.
+Prompts (F11 phase 1b-ii): chug also consumes prompts from servers that
+advertise the `prompts` capability — `prompts/list` (capped at 200 per
+server, like tools and resources) and `prompts/get` with the prompt's
+optional arguments map; a server without the capability is never asked.
+The legs are registry-internal for now — a model-facing prompts surface
+(slash-pack surfacing) is a later F11/F9 phase. Still to come in F11:
+the resource+prompt legs over the HTTP transport.
 
 Per-server fail-soft at runtime too: a stdio server that dies mid-run errors
 its calls without killing the run; a remote server that refuses connection
