@@ -4,5 +4,7 @@ target-shared-validate/
 target-shared-gates/
 target-shared-main/
 target-shared-mut-*/
+target-shared-impl-a/
+target-shared-impl-b/
 .chug/
 LEDGER.md

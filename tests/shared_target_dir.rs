@@ -1037,3 +1037,385 @@ fn gitignore_ignores_the_t79_mut_leg_cache_family() {
          in .gitignore (one contiguous cache family); got:\n{gitignore}"
     );
 }
+
+// ---- T161 — two-impl overlap: the T44 cap widened, the build slots
+// role-keyed ----
+//
+// T44 allowed at most {1 validator + 1 impl} in flight; T161 widens it:
+// at most 2 children, of which at most 1 validator, and TWO impl children
+// may fly together IFF the two items' spec-named target files are
+// disjoint — the same gate T44 already computes (both specs read, file
+// lists compared). When the gate fails the orchestrator falls back to the
+// T44 pattern, so the rule widens, never narrows, and never forces
+// overlap. Two concurrent impls from different checkouts must not share
+// one build slot (the T52 race, one level down: cargo's artifact filename
+// excludes the checkout path, so one shared dir is last-builder-wins) —
+// the overlap-launched impl takes `target-shared-impl-a` (or `-impl-b`
+// when the impl already in flight holds impl-a) for BOTH its step-1 warm
+// build and its goal export. Merges stay strictly serial: a FAIL on N's
+// validator pauses N+1's MERGE, never its impl. The old "never 2 impls"
+// clause is gone.
+
+/// T161: the hard-rules invariant — kept line-contiguous so a line-wise
+/// grep can find it; must occur EXACTLY once spec-wide (a second statement
+/// would fork the rule).
+const T161_INVARIANT: &str = "at most 2 children, ≤1 validator, disjoint-gated";
+/// T161: the two impl-child role-keyed slots — full env-prefix carriers.
+const IMPL_A: &str = "CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-impl-a";
+const IMPL_B: &str = "CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-impl-b";
+
+/// Prose needles wrap freely at doctrine edits, so count them
+/// wrap-insensitively (the T78 flat idiom: whitespace runs collapse).
+fn flat(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+#[test]
+fn t161_hard_rules_invariant_is_stated_exactly_once() {
+    let spec = read("LOOP-SPEC.md");
+    count_eq(
+        &spec,
+        T161_INVARIANT,
+        1,
+        "the T161 hard-rules invariant (at most 2 children, ≤1 validator, \
+         disjoint-gated)",
+    );
+    // The invariant lives in the Hard rules section, not just the §2 prose.
+    let hard = spec
+        .find("## Hard rules")
+        .expect("LOOP-SPEC keeps a Hard rules section (T161)");
+    let at = spec
+        .find(T161_INVARIANT)
+        .expect("invariant present (count pinned above)");
+    assert!(
+        at > hard,
+        "the T161 invariant must live in the Hard rules section (T161)"
+    );
+}
+
+#[test]
+fn t161_the_old_never_2_impls_clause_is_gone() {
+    let spec = read("LOOP-SPEC.md");
+    assert!(
+        !spec.contains("never 2 impls"),
+        "the old `never 2 impls` clause must be gone from LOOP-SPEC.md — T161 \
+         allows two impl children when the disjointness gate passes"
+    );
+    // The widened rule is stated POSITIVELY in the Hard rules — a mutant
+    // that only deletes the old clause without stating the new permission
+    // dies here.
+    count_eq(
+        &flat(&spec),
+        "two impl children may fly together iff the two items' spec-named \
+         target files are disjoint",
+        1,
+        "the T161 2-impl permission sentence (hard rules, flat)",
+    );
+    count_eq(
+        &spec,
+        "(ii) T161's 2-impl overlap",
+        1,
+        "the Pipeline-overlap pattern-(ii) naming (T161)",
+    );
+}
+
+#[test]
+fn t161_disjointness_gate_wording_is_pinned() {
+    let spec = read("LOOP-SPEC.md");
+    // The gate itself — the T44 sentence, kept verbatim: both specs read,
+    // file lists compared, overlap only when no file appears on both lists.
+    count_eq(
+        &flat(&spec),
+        "both specs read, file lists compared",
+        1,
+        "the disjointness gate's both-specs clause (hard rules, flat) (T161)",
+    );
+    count_eq(
+        &spec,
+        "no file appears on both lists",
+        1,
+        "the disjointness gate's no-shared-file clause (T44, kept verbatim; \
+         T161)",
+    );
+    // Pattern (ii) — the second impl launches while the first STILL FLIES,
+    // and only iff the gate passes.
+    count_eq(
+        &flat(&spec),
+        "MAY launch while impl child N is STILL FLYING, iff the disjointness \
+         gate passes",
+        1,
+        "the 2-impl launch condition (pipeline, flat) (T161)",
+    );
+}
+
+#[test]
+fn t161_cap_is_never_3_plus_never_2_validators() {
+    let spec = read("LOOP-SPEC.md");
+    // Three carriers each — §2 intro, the Pipeline-overlap paragraph, and
+    // the Hard rules bullet — dropping any ONE goes red.
+    count_eq(
+        &spec,
+        "never 3+",
+        3,
+        "the 3+-children ban: §2 intro + pipeline + hard rules (T161)",
+    );
+    count_eq(
+        &spec,
+        "never 2 validators",
+        3,
+        "the 2-validator ban: §2 intro + pipeline + hard rules (T161)",
+    );
+    // The ≤1-validator cap, wrap-insensitively (the intro and pipeline
+    // wordings wrap between `1` and `validator`): §2 intro, the Trivial-row
+    // bundling cap, the pipeline hard-cap sentence, and the Hard rules.
+    count_eq(
+        &flat(&spec),
+        "of which at most 1 validator",
+        4,
+        "the ≤1-validator cap: §2 intro + bundling cap + pipeline + hard \
+         rules (flat) (T161)",
+    );
+}
+
+#[test]
+fn t161_impl_slots_are_role_keyed_and_carried_at_both_dispatch_points() {
+    let spec = read("LOOP-SPEC.md");
+    // Each full-path slot carrier occurs EXACTLY twice: the step-2
+    // dispatch rule (the goal-export override the orchestrator actually
+    // copies) and the Pipeline-overlap paragraph (the rule itself). A
+    // dropped carrier — or a duplicated one — breaks the wiring.
+    count_eq(
+        &spec,
+        IMPL_A,
+        2,
+        "target-shared-impl-a full-path carriers: step-2 dispatch rule + \
+         pipeline overlap paragraph (T161)",
+    );
+    count_eq(
+        &spec,
+        IMPL_B,
+        2,
+        "target-shared-impl-b full-path carriers: step-2 dispatch rule + \
+         pipeline overlap paragraph (T161)",
+    );
+    // The Hard rules restatement names the slots bare (no env prefix).
+    count_eq(
+        &spec,
+        "build slot (target-shared-impl-a /",
+        1,
+        "the hard-rules slot restatement (T161)",
+    );
+    // The T52 lesson is named at both carriers: never one shared slot for
+    // concurrent impls; the step-1 warm build lands in the SAME dir.
+    count_eq(
+        &flat(&spec),
+        "never one shared slot for concurrent impls",
+        1,
+        "the T52-lesson naming (step 2, flat) (T161)",
+    );
+    count_eq(
+        &flat(&spec),
+        "its step-1 warm build goes to the SAME dir",
+        1,
+        "the step-1-build-in-the-slot rule (pipeline, flat) (T161)",
+    );
+    // Slot assignment: the flying impl's slot decides — the overlap impl
+    // takes impl-b when the flying impl already holds impl-a (both
+    // carriers state the condition), and the flying impl keeps its slot.
+    count_eq(
+        &flat(&spec),
+        "the impl already in flight holds impl-a",
+        2,
+        "the impl-b fallback condition (step 2 + pipeline, flat) (T161)",
+    );
+    count_eq(
+        &flat(&spec),
+        "keeps the slot it launched with",
+        1,
+        "the flying-impl-keeps-its-slot rule (pipeline, flat) (T161)",
+    );
+    // The solo default is unchanged: the goal template stays the T47
+    // shared dir (T52's role split is sufficient when one impl flies).
+    count_eq(
+        &spec,
+        &format!("{SHARED} before"),
+        1,
+        "the step-2 goal template keeps the T47 solo default (T161)",
+    );
+    count_eq(
+        &flat(&spec),
+        "the T47/T52 default `target-shared` when it launched solo",
+        1,
+        "the solo-impl default naming (pipeline, flat) (T161)",
+    );
+}
+
+#[test]
+fn t161_fail_pauses_merge_never_impl() {
+    let spec = read("LOOP-SPEC.md");
+    // Two carriers: the pipeline paragraph spells it, the hard rules
+    // restate it.
+    count_eq(
+        &spec,
+        "pauses N+1's MERGE",
+        2,
+        "the FAIL-pauses-MERGE carriers: pipeline + hard rules (T161)",
+    );
+    // ... and both say the impl is NOT paused (it may keep flying).
+    count_eq(
+        &spec,
+        "(never its impl)",
+        1,
+        "the hard-rules never-its-impl clause (T161)",
+    );
+    count_eq(
+        &flat(&spec),
+        "never N+1's impl, which may keep flying",
+        1,
+        "the pipeline never-its-impl clause (flat) (T161)",
+    );
+    // Merge order itself is unchanged and still stated serial.
+    count_eq(
+        &flat(&spec),
+        "Merges stay STRICTLY serial in queue order",
+        1,
+        "the strictly-serial merge order (pipeline, flat) (T161)",
+    );
+}
+
+#[test]
+fn t161_fallback_when_not_disjoint_widens_never_narrows() {
+    let spec = read("LOOP-SPEC.md");
+    // The fallback names the OLD overlap by its {1 impl + 1 validator}
+    // shape: pattern (i) + both fallback sentences = 3.
+    count_eq(
+        &flat(&spec),
+        "{1 impl + 1 validator} overlap",
+        3,
+        "the {1 impl + 1 validator} naming: pattern (i) + pipeline fallback + \
+         hard-rules fallback (T161)",
+    );
+    // Widens, never narrows, never forces overlap — both fallback
+    // sentences carry it.
+    count_eq(
+        &flat(&spec),
+        "T161 widens T44",
+        2,
+        "the widens-never-narrows clause (pipeline + hard rules, flat) (T161)",
+    );
+    count_eq(
+        &flat(&spec),
+        "never forces overlap",
+        2,
+        "the never-forces-overlap clause (pipeline + hard rules, flat) (T161)",
+    );
+}
+
+#[test]
+fn t161_doctrine_items_never_overlap_including_loopd_sh() {
+    let spec = read("LOOP-SPEC.md");
+    // Requirement 4 restates the doctrine-item exclusion for 2-impl — and
+    // adds loopd.sh to the list at BOTH carriers.
+    count_eq(
+        &spec,
+        "row format, or loopd.sh",
+        1,
+        "the pipeline doctrine-item list gains loopd.sh (T161)",
+    );
+    count_eq(
+        &spec,
+        "row format, loopd.sh",
+        1,
+        "the hard-rules doctrine-item list gains loopd.sh (T161)",
+    );
+    // The runs-alone consequence is unchanged.
+    count_eq(
+        &spec,
+        "runs alone, with NO other child in flight",
+        1,
+        "the doctrine-runs-alone consequence (T161)",
+    );
+}
+
+#[test]
+fn gitignore_ignores_the_t161_impl_slot_dirs() {
+    let gitignore = read(".gitignore");
+    count_eq(
+        &gitignore,
+        "target-shared-impl-a/",
+        1,
+        ".gitignore target-shared-impl-a line (T161)",
+    );
+    count_eq(
+        &gitignore,
+        "target-shared-impl-b/",
+        1,
+        ".gitignore target-shared-impl-b line (T161)",
+    );
+    // Contiguous with the target-shared* family: directly after the T79
+    // mut-leg glob (the T57 four-dir block + mut glob pin above still
+    // holds, so the slots extend the family at its tail).
+    let mut_at = gitignore
+        .lines()
+        .position(|l| l.trim() == "target-shared-mut-*/")
+        .expect(".gitignore keeps the T79 `target-shared-mut-*/` line");
+    let a_at = gitignore
+        .lines()
+        .position(|l| l.trim() == "target-shared-impl-a/")
+        .expect(".gitignore keeps the T161 `target-shared-impl-a/` line");
+    let b_at = gitignore
+        .lines()
+        .position(|l| l.trim() == "target-shared-impl-b/")
+        .expect(".gitignore keeps the T161 `target-shared-impl-b/` line");
+    assert_eq!(
+        (a_at, b_at),
+        (mut_at + 1, mut_at + 2),
+        "the T161 impl-slot lines must sit directly after the T79 mut-leg \
+         glob in .gitignore (one contiguous cache family); got:\n{gitignore}"
+    );
+    // Scoped like the other role-keyed dirs: META-SPEC.md and loopd.sh
+    // never name them (the T57 scope pattern).
+    for file in ["META-SPEC.md", "loopd.sh"] {
+        let text = read(file);
+        assert!(
+            !text.contains("target-shared-impl"),
+            "{file} must NOT name the T161 impl slots — they are scoped to \
+             LOOP-SPEC.md (+ .gitignore/README) (T161)"
+        );
+    }
+}
+
+#[test]
+fn readme_documents_the_t161_impl_slots() {
+    let readme = read("README.md");
+    count_eq(
+        &readme,
+        "target-shared-impl-a/",
+        1,
+        "README target-shared-impl-a carrier (T161)",
+    );
+    count_eq(
+        &readme,
+        "target-shared-impl-b/",
+        1,
+        "README target-shared-impl-b carrier (T161)",
+    );
+    // Integrated into the existing continuous-mode cache paragraph (the
+    // T57 README pattern): same paragraph as the T52 sibling caches.
+    let at = readme
+        .find("target-shared-impl-a/")
+        .expect("README keeps the T161 impl-slot clause");
+    let start = readme[..at].rfind("\n\n").map(|i| i + 2).unwrap_or(0);
+    let end = at + readme[at..].find("\n\n").unwrap_or(readme.len() - at);
+    let para = &readme[start..end];
+    assert!(
+        para.contains("target-shared-validate/"),
+        "the README T161 clause must sit in the same paragraph as the T52 \
+         sibling caches (T161); got:\n{para}"
+    );
+    assert!(
+        para.contains("T161") && para.contains("T52"),
+        "the README clause must name T161 and the T52 role-keying it widens \
+         (T161); got:\n{para}"
+    );
+}
