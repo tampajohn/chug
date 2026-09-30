@@ -297,116 +297,7 @@ behavior). **No docs row filed — fourth consecutive clean audit.**
 ## Outcomes (filled at cycle wrap — LOOP-SPEC Phase 3)
 
 
-### Cycle 67 (2026-09-28/29) — routine (freshness-skip) — codex-intake pri-2 queue
-
-**CYCLE-67 CYCLE-LEVEL NOTES (wrap).** TWO items landed (T135, T136 —
-both pri-2 codex-review §1 crash/concurrency rows, both through full
-kimi REQUIRED rounds); T137 reached impl+fix-up complete but its merge
-is BLOCKED on the round-2 re-validation (detached, verdict lands after
-this wrap); T138 impl #1 budget-died and is parked with a
-resume-ready worktree. The T63 resume recipe went 3-for-3 this cycle
-(T135 impl error-death, T136 impl 80/80, T137 impl error-death — all
-resumed children finished their arcs). Server-side truncated-SSE
-malformed-tool-JSON error-deaths: 2 sightings (T135#1, T137#1, both
-glm at iteration 7, both instant with no abort event) — reliability
-finding for the next eval: T141 made clean-EOF truncation retryable as
-Connection class, but a stream truncated mid tool-input still reaches
-the tool-input parser as a FATAL "LLM request failed: malformed tool_use
-input JSON" and kills the run; remedy candidate: classify that error
-shape retryable too, or survive one LLM failure with a bounded retry.
-The cycle-66 infra finding d1790632587-1 (goal_complete check harness
-runs cargo test WITHOUT a role-keyed target dir → cross-loop artifact
-collision) REPRODUCED live: T135's validator was goal-rejected by it
-while T136's impl built concurrently; the verdict was taken from the
-validator's LEDGER read-back. Remedy candidate stands: role-key the
-check env (validate dir for validators) or serialize checks across
-loops. Pipeline overlap ran twice clean (T135-val‖T136-impl,
-T137-val‖T138-impl — disjoint file sets, serial merges, T137's merge
-still respects queue order over T138's). Routing ids: T135
-d1790639671-2/d1790640546-3; T136 d1790642217-6/d1790643172-7; T137
-d1790645926-10/d1790647780-11; recoveries d1790637275-1, d1790641323-5,
-d1790643743-9, d1790647876-12. Carried survivors/findings for the next
-eval: T135 M2 (drop-sweep mutant, no release-side regression test) + F1
-(latent non-unix const-gating break, unix-only ship); T136's 3
-non-blocking (update_ledger wholesale write, legacy chat-shape repair
-gap, write_atomic dir-fsync/tmp-reap nits); T128 M4 + T141 M1 (older).
-Release: 2 items since v0.4.0, no FEATURES check-off — NO tag this
-wrap. Next cycle's cold input: T137 verdict collect → merge; T138
-resume; then T139, T129 (feature), T131.
-
-**T136 — crash mid-tool-batch leaves an unresumable transcript (pri 2,
-landed bf672b6, d67d434 rebased ff).** The review's second §1 HIGH
-crash-safety item: tool results were persisted only after a whole tool
-batch finished, so a kill mid-batch left the transcript's last assistant
-message holding unanswered `tool_use` blocks the endpoint rejects on
-resume — and earlier tools in the batch may already have changed files
-with no persisted record. Fix (impl d67d434, glm, 98/80 iters across
-two segments): `resume_messages` — the single choke point shared by run
-and chat resume — calls new `repair_interrupted_tools`, which appends
-one user message with an is_error "[interrupted] … effects unknown"
-`tool_result` per unanswered id, in memory AND on disk, idempotently
-(the exact shape the loop writes after an intact batch, so the endpoint
-pairing rule is satisfied and the model is routed at re-verifying real
-state instead of trusting a result that never landed). Swept legs:
-`transcript::load_with_torn` drops a torn trailing JSONL line (crash
-mid-append) and physically truncates it so later appends can't merge
-into the torn bytes (mid-file corruption still errors loudly);
-`transcript::rewrite` (the transcript.rs:77 truncating-rewrite destroy
-leg) and the same-shape `todos::save` now go through new
-`fsatomic::write_atomic` (same-dir pid-suffixed temp + fsync + atomic
-rename, temp cleaned on failure). Validation: 6 RED-proven tests
-pre-fix incl. a deterministic RLIMIT_FSIZE destroy-leg test and a
-recorded-transport test simulating the endpoint's tool_use/tool_result
-pairing rule over resumed request bodies. kimi REQUIRED PASS round 1
-(d1790643172-7): 6/6 mutants killed with zero survivors, the 6 RED legs
-independently reproduced at base, gates re-run 1056/1056 + clippy -D
-warnings clean, and the load-bearing invariant verified (unanswered
-tool_use only ever sits at the transcript tail, so append-at-end repair
-IS the immediately-following user message; `transcript::load` demoted
-to cfg(test) so no production bypass compiles). Non-blocking findings
-carried for the next eval: `update_ledger` (tools.rs:749) still does a
-wholesale truncating write of LEDGER.md (same shape, bounded impact);
-append-at-end repair cannot rescue pre-fix-damaged chat transcripts
-where user messages piled up after the unanswered assistant;
-`write_atomic` doesn't fsync the parent directory after rename and
-never reaps crash-orphaned `*.tmp` siblings. Recovery note: the impl
-child died 80/80 mid-work (iteration budget) and the ONE T63 resume
-(d1790641323-5) finished in 18 more iterations — the resume recipe's
-third consecutive success (T134 fix-up, T135 impl error-death, T136
-impl budget-death). Post-merge nextest 1057/1057.
-
-**T135 — driver.lock acquisition race (pri 2, landed 611916e ff-merge).**
-The cycle's first pri-2 codex-review item: acquire's read-absent →
-write → verify sequence was not atomic, so two simultaneous starters
-could both decide from the same absent lock and both proceed into
-transcript housekeeping. Fix: the whole critical section (loop
-iterations included) now runs under an exclusive advisory `flock` on
-the `.chug` directory fd — a stable inode, unlike `driver.lock` itself,
-which Guard::drop unlinks (a file-mutex would swap inodes under
-unlink+recreate and stop excluding). LOCK_NB + bounded retries
-(300×10ms acquire / 50×10ms release); unobtainable mutex degrades to
-the pre-T135 best-effort path with a stderr warning — T20 never-fail,
-no new abort/hang legs. Guard::drop's compare-then-delete swept under
-the same mutex (same read-then-act shape). The review's missing test
-leg pinned: `simultaneous_starters_only_one_decides_from_an_absent_lock`
-— two racers, injectable pids beyond every pid_max, synchronized AFTER
-both read the absent lock via an observe seam on the new
-`acquire_with`; RED pre-fix (both decided absent), GREEN post-fix,
-20/20 stable. glm impl 66/80 — first try died at iter 7 on a
-SERVER-side failure (truncated SSE → malformed tool_use input JSON,
-T141-adjacent; transcript clean) → T63 resume d1790637275-1 (mechanism
-extended to error-deaths, not just budget) finished in 59 more iters.
-kimi REQUIRED PASS: routing d1790639671-2, verdict d1790640546-3 —
-M1/M3/M8 killed (M1 mutex-removal = the exact RED proof), M2
-release-side sweep mutant SURVIVED (no drop-side regression test —
-carried), F1 latent non-unix compile break carried (cfg(unix) consts
-used ungated; project ships unix-only), F3 informational
-(threads-vs-processes leg shape). The validator's chug-level
-goal_complete was REJECTED — its `cargo test` check ran without a
-role-keyed target dir and collided with the in-flight T136 impl
-build's artifacts: the cycle-66 infra finding d1790632587-1
-REPRODUCED live; verdict taken from the validator LEDGER read-back.
-Post-merge nextest 1044/1044 (target-shared-main).
+### Cycle 67 (2026-09-28/29) — routine (freshness-skip) — codex-intake pri-2 queue — T135 LANDED 611916e (merge + stale-flip cleanup), T136 arc mid-flight at wrap (recovered + landed cycle 68; its crash-safety class completed by T145 in cycle 70) — compacted at the cycle-73 wrap (last-6 rule; the full text lived in git until the cycle-72 eval commit dropped it — restored verbatim for 69/70/71 below, 67/66 re-compacted from git).
 
 ### Cycle 68 (2026-09-29) — routine glm freshness-skip (queue non-empty, eval fresh) — codex-intake pri-2 queue (T137 merge pickup + T138 resume + T139)
 
@@ -551,155 +442,297 @@ note, hardcoded sleep 120), T135 M2 + F1, T136's 3 non-blocking
 (update_ledger wholesale write, legacy chat-shape repair gap,
 write_atomic dir-fsync/tmp-reap nits), T128 M4, T141 M1.
 
-### Cycle 66 (2026-09-28) — routine (reconciled cycle-65 divergence first) — codex-intake queue T134–T142
+### Cycle 71 (2026-09-29) — routine glm freshness-skip (queue non-empty, eval fresh) — ALL FOUR landed (T147+T148+T149+T150), queue EMPTY
 
-**CYCLE-66 CYCLE-LEVEL NOTES (wrap).** FOUR items landed (T140,
-T141, T142, T134 — every pri-1 codex-review row), two of them through
-full FAIL→fix-up→re-validate arcs. kimi ran FOUR validator rounds (T140
-PASS 4/4 mutants; T141 PASS 5/6, M1 weak-pin carried; T142 round-1
-FAIL 2 findings → round-2 PASS 10/10 after fix-up; T134 round-1 FAIL
-2 findings → round-2 PASS M1–M5 all killed after fix-up) plus one
-round-1 re-run after a T63 resume (T134 validator died 50/50
-mid-battery, resume d1790631787-10 finished in 17 more iterations).
-Budget deaths: T141 impl #1 (13/80, stuck:repeated-error on its OWN
-malformed grep regex — recovery d1790626727-4 fresh relaunch), T134
-fix-up #1 (80/80 mid-gates with +456/-18 UNCOMMITTED — T63 resume
-d1790634951-13 finished the gates + committed in 13 iters), T134
-validator round-1 (50/50 mid-battery — resume). The T63 resume
-recipe (ONE relaunch, same worktree/spec/model/budgets) went 2-for-2
-this cycle — both resumed children finished their arcs. Routing ids:
-T140 d1790625539-1/d1790626612-2; T141 d1790627696-5/d1790628970-6;
-T142 d1790629235-7/d1790630340-8/d1790634233-12; T134
-d1790630798-9/d1790632841-11/d1790636105-14; recoveries
-d1790626727-4, d1790631787-10, d1790634951-13. INFRA finding for the
-next eval (d1790632587-1, logged by the T134 validator and
-independently re-hit by the T142 re-validator): the goal_complete
-check harness runs cargo test WITHOUT the T52 role-keyed target dir,
-so two loops sharing `target-shared` collide on same-named
-integration-test binaries — a foreign suite's failure gets reported
-against the wrong tree. Remedy candidate: role-key the check env
-(validate dir for validators) or serialize checks across loops.
-Carried survivors: T128 M4 (alive-render weak pin, cycle-65), T141 M1
-(open-block-check mutant masked by the message_stop guard —
-behavior-preserving). Release v0.4.0 cut at this wrap: 4 items + the
-T128 FEATURES check-off since v0.3.0, minor bump, tags immutable.
-T135–T139 (pri 2) + T129/T131 remain `todo` with specs ready — the
-next cycle's cold input needs zero human words.
+**T150 — todo-row spec estimate pin (92f987a, merge of loop-t150:
+3f5a99a).** The T110 filing-time estimate ceiling now has a mechanical
+guard: every `todo`-status TODO row's named spec must carry an
+`estimate: ~<number>` line (filing time only — 121/141 legacy specs
+predate the rule and are exempt history). Tests-only +195/-25 in
+tests/todo_consistency.rs with the T8 row parsing lifted into shared
+helpers (behavior-identical). Pure function over (table text,
+spec-reader closure) — repo-live leg plus 4 synthetic legs + a
+fail-closed unreadable leg. The child RED-proved 4 mutants (flag-arm
+suppressed, always-fires, status-filter dropped, ~N requirement dropped)
+with sha-verified byte restores; the orchestrator independently re-ran
+the vacuous-guard mutant — both must-flag legs RED. kimi SKIPPED per the
+spec's own routing (tests-only tooling guard). Process note: the child
+ABORTED on the 35-min TIME budget at 48/80 AFTER committing the work —
+the final full-suite gates chased the documented default-parallelism
+load-flake class; the committed-work variant of the budget-death recipe
+applied (orchestrator review + gates + merge, routing
+d1790691515-11, no resume burned). Gates 1135/1135 nextest --release
+worktree + main. QUEUE NOW EMPTY.
 
-**T140 — goal_complete denial bypass (pri 1, landed 9b36a2e).** The
-cycle's first codex-review item: a permission-denied or hook-vetoed
-`goal_complete` still completed the run because `goal_summary` was
-populated from the tool name alone, without the `result.is_error`
-check `submit_plan` has always applied. Fix is the one-line latch
-guard at driver.rs:1084 (`!result.is_error`) — complete by
-construction for all three block classes (permission deny, PreToolUse
-veto, risk-gate block), each of which yields an is_error result
-without executing the tool. glm impl 61/80 first-try; 4 new tests RED
-pre-fix (permissions_policy + hooks_policy mods, +267/-1). kimi
-REQUIRED PASS (routing d1790625539-1, verdict d1790626612-2): 4/4
-mutants killed by named tests (revert, negate, is_error-only,
-assertion-drop), positive control proves legitimate completions still
-accept, class sweep confirmed goal_summary + plan_submitted are the
-only tool-name-keyed run exits and both guarded, tree byte-clean.
-Worktree gates nextest 1010/1010 + clippy clean; post-merge
-target-shared-main nextest 1010/1010. Outcome landed-clean
-d1790626687-3. T44 overlap: T141 impl (api.rs, disjoint) flew during
-T140 validation.
+**T149 — validator budgets 60/40, doctrine (8699a70, merge of loop-t149:
+10b6f6a).** The validator-side T102: after 4 validator budget deaths in 4
+cycles (T134/T138/T142 at 50/50, T137 MINUTES-bound at 30m08s with the
+verdict written but unannounced), LOOP-SPEC step 4 now launches validators
+at max_iters 60 / max_minutes 40 with the census in the rationale and the
+measure clause (>1 of the next 8 dying at 60/40 unannounced → next eval
+considers trimming default mutation-leg counts, not further raises). Step
+2's T63-resume echo aligned; META-SPEC §6's template (which the grep found
+DOES name validator budgets) aligned in the same commit — supersedes T32's
+do-not-touch stance for this row only; src/tools.rs's delegate description
+correctly untouched (its 40/35 is delegate's own default, census-listed).
+Exactly one pin fixed the old numbers (tests/loop_spec_recovery.rs) —
+updated and RED-proven against pre-edit text. kimi REQUIRED (routing
+d1790687293-8, doctrine row, ran ALONE), launched under the row's own new
+60/40 budgets, verdict PASS (d1790688874-9): 3 parallel mutants —
+echo-revert sent the pin RED (RED-proof independently reproduced),
+weakened-needle still RED (pin non-vacuous); the step-4-sentence and
+META-SPEC text-revert mutants went full-suite GREEN — pre-existing
+unpinned-text gaps, non-blocking observations (candidate pin-breadth rows
+for a future eval). Gates 1129/1129 nextest --release worktree + main.
 
-**T141 — SSE truncation acceptance (pri 1, landed 70ec4a7, rebased
-ff from impl 20fd96a).** The second codex-review item: a proxy
-returning HTTP 200 SSE that ends the body before
-`content_block_stop`/`message_stop` was accepted as success —
-`finish()` closed the open block, missing input became `{}`, and an
-executable `goal_complete` could be synthesized from a truncated
-stream. Fix in api.rs `finish()`: open block at EOF now errors
-"truncated SSE stream: body ended before content_block_stop" and
-`message_stop` is tracked; the error rides the retryable Connection
-class (a fresh accumulator per attempt — a real transport mid-body
-EOF surfaces identically). 5 new tests RED pre-fix, including the
-client-level test that reproduces the review's exact symptom
-(executable goal_complete synthesized from a truncated stream).
-First impl child died 13/80 stuck:repeated-error on its OWN malformed
-grep regex (no orchestrator fault); recovery routing d1790626727-4
-chose fresh relaunch over resume (13/80 with no committed work —
-resume's continuation value nil); glm impl 51/80 second-try. kimi
-REQUIRED PASS (routing d1790627696-5, verdict d1790628970-6): 6
-mutants, 5 killed on named tests, M1 open-block-check mutant SURVIVES
-masked by the message_stop guard — behavior-preserving under the
-T141 threat model, carried to the next eval alongside T128's M4;
-positive control proves legitimate closed zero-arg tools still
-synthesize `{}`; class-sweep claims (mcp_http SSE POST EOF→Failed,
-listen EOF→reconnect, non-streaming JSON bail) verified by code read.
-Post-merge target-shared-main nextest 1015/1015. T44 overlap: T142
-impl (loopd.sh+events.rs, disjoint from api.rs) flew during T141
-validation.
+**T148 — chug_launch wire e2e (8cd59ac, merge of loop-t148: 14d1bcd).**
+T129's descoped follow-up closed the M7+M8 survivor gap with a real-wire
+e2e: the REAL `chug mcp-serve` binary over REAL stdio (T124 harness,
++425 tests-only + one README line), `CHUG_DELEGATE_BIN` stub child
+recording argv+env — real server, real spawn, no model endpoint. Three
+legs: happy path (advertised ⇔ callable, pid/log/events payload, stub
+record byte-equals the wire's spec/goal/model + budgets 7/9 — distinct
+from the 40/35 delegate defaults), above-ceiling refusal (isError:true
+naming "got 201" + the 200 ceiling, 1s bounded absence probe, loop alive
+after refusal), default-deny (unadvertised, unknown-tool -32602). Carried
+nit honored — zero sub-ms ordering assertions. kimi SKIPPED (routing
+d1790684833-5, tests-only precedent); the orchestrator independently
+re-ran the 3 canonical mutants — ALL RED (verdict d1790684835-6):
+flag-drop → happy-path FAIL, isError:false → ceiling-leg FAIL,
+advertise-unconditional → default-deny FAIL. Gates 1129/1129 nextest
+--release worktree + main. Child's gate note: default-parallelism
+`cargo test` bin-test flakes reproduce on the CLEAN base (dc6c11d,
+tree stashed) under current machine load — pre-existing, nextest-based
+gates unaffected; watch item for the next eval (threading or
+isolation candidate).
 
-**T142 — loopd grep spoofing (pri 1, landed 3bc3169 + fix-up dd184d4,
-rebased ff).** The third codex-review item: the supervisor decided
-cycle OK/fail by grepping the mixed cycle log for `chug: goal
-complete` — but raw model text reaches that log verbatim (events.rs
-stderr deltas, the F7 raw-bytes doctrine), so a run that died on
-verification or budget while SAYING the marker recorded OK, reset the
-failure counter, and ran site sync. Fix (3341658, glm impl 56/80):
-the verdict is the child's EXIT STATUS (driver.rs run-mode exit 0 ⟺
-accepted goal; budget/abort 1, stuck 2) and the child's stdout is
-captured apart from the stderr log — forged lines can neither satisfy
-the marker grep nor shadow the recorded summary; the supervisor
-stamps an rc-based `verdict:` line for downstream consumers. kimi
-round 1 VERDICT FAIL (d1790630340-8): the primary fix verified
-correct + RED-proven, but F1 the site-sync cycle_count fallback just
-RENAMED the forgeable marker (`verdict: goal complete (rc=0)` still
-greppable in child bytes — real probe published "cycles 2" for a
-failed cycle) and F2 M5 stamp-branch inversion passed the entire
-suite. Fix-up (0b643be, glm 53/80, findings + class sweep in goal per
-the cycle-33 lesson): fallback counts a log only when its LAST
-verdict line stamps goal-complete (the supervisor writes nothing
-after child death → unforgeable), behavioral stamp↔rc ties both ways
-(inversion mutant now dead), observation 3 kept behavioral
-(rc-gate-drop killed only by the abort-path stdout-ledger test).
-kimi re-validation PASS (d1790634233-12): 10 mutants each killed on
-named tests, the original forged-marker attack re-probed end-to-end
-(3 forged lines in a FAILED cycle's bytes moved neither primary nor
-fallback count). Post-merge target-shared-main nextest 1027/1027.
-Two infra lessons logged: (1) T134-validator's note d1790632587-1 —
-the goal_complete check harness runs cargo test without the T52
-role-keyed dir, so concurrent loops sharing target-shared collide on
-same-named test binaries (first re-validation check rejected by
-exactly this while the T134 fix-up flew; retried clean); (2) T142
-re-validator hit the same class. Both are check-harness findings for
-the next eval, not row blockers.
+**T147 — 4 carried survivor pins, tests-only (6b217c3, merge of loop-t147:
+b08e909).** The cycle-70 80/80 budget death recovered by ONE T63 resume in
+the standing worktree: child finished at 26/80 with the goal accepted,
+gates green (build, clippy -D warnings, 1126/1126). All four carried
+survivors now RED-proven pinned: T128 M4 (both collect-liveness arms + None
+leg), T135 M2 (release must spend its 50×10ms budget on a held .chug flock)
++ F2 (lock absence + observe-seam first-attempt acquire), T138 plan-guard
+(pending flag-writing mcp.json registry through the REAL plan loop — no
+flag, no server; the prod empty-registry construction was the mask), T141
+M1 (message_stop-masked open-block rejector — the mutant synthesized an
+executable goal_complete). kimi SKIPPED per routing d1790681505-2
+(tests-only, T130 precedent); the orchestrator independently re-ran all 5
+mutants at review (T79 throwaway worktrees + role-keyed target dirs) — ALL
+5 RED, 0 survivors (verdict d1790681871-3); post-merge nextest 1126/1126 in
+target-shared-main. One launch slip caught by read-back: the first mutant
+legs ran with cwd=main (no per-leg cd) — killed, relaunched with subshell
+cds, main tree untouched. Carried weak-pin debt (cycles 65-70) CLOSED.
 
-**T134 — symlink sandbox escape + doctrine drift (pri 1, landed
-d5d9c28 + fix-up bfd316a, rebased ff).** The fourth codex-review item:
-resolve_safe was lexical-only, so an in-tree symlink to an external
-path made every file tool follow it on disk — no race needed. Fix
-(8785a2a, glm impl 48/80): two-stage resolve_safe — stage 1 the
-unchanged lexical pass, stage 2 walks every component against the real
-filesystem (lstat sees dangling links), expands symlinks under a hop
-budget (loops fail closed), refuses when resolution escapes the
-canonical sandbox root (macOS /tmp→/private/tmp handled), nonexistent
-tails stay legal, returned path stays lexical; one fix point sweeps
-all 9 call sites (get_path read/write/edit/image, grep, glob, list_dir,
-tgrep, @attach, submit_plan --out); the false README/SPEC claims
-replaced with the accurate contract. kimi round 1 VERDICT FAIL
-(d1790632841-11): F1 MEDIUM — glob-metachar paths bypass stage 2
-(resolve_safe treated `*`/`**` as inert-missing, the glob crate follows
-symlinked dirs in expansion, tgrep's corpus arm read external
-CONTENTS; /etc/passwd exfiltrated end-to-end via `path="**/passwd"`
-through an in-tree etcdir→/etc link; external names leaked via the
-glob tool); F2 LOW — SPEC's corrected claim had no pin test. Fix-up
-(f28f38c→bfd316a after T63 resume d1790634951-13 — the first fix-up
-child died 80/80 mid-gates with +456/-18 uncommitted): metachar
-components refused fail-closed in the model-supplied relative part +
-resolve_glob_pattern confines the literal prefix of both glob-expanding
-surfaces + confine_glob_match re-passes EVERY concrete match through
-the full two-stage check before its name is reported or bytes read;
-SPEC.md pin added, stale "resolved lexically" line corrected. kimi
-re-validation PASS (d1790636105-14): all three layers verified wired
-at every call site, M1–M5 all killed (round 2 finished the fix-up
-child's expired M4/M5 legs), the round-1 attack re-proven dead
-byte-exact with glob 0.3.4. 8 RED proofs; post-merge
-target-shared-main nextest 1043/1043.
+**Cycle-level notes.** Four for four, zero goal-rejections, one budget
+death per arc (T147 resumed via T63; T150 was the committed-work variant
+— orchestrator-finish, no resume burned). kimi ran ONE round (T149
+REQUIRED, doctrine) and its PASS carried two non-blocking observations:
+the step-4-sentence and META-SPEC text-revert mutants stay full-suite
+GREEN — pre-existing unpinned-text gaps, candidate pin-breadth rows for
+the next eval. The orchestrator independently re-ran mutants on every
+tests-only row (T147: 5/5 RED; T148: 3/3 RED; T150: vacuous-guard RED) —
+the no-kimi rounds lost no teeth. Recurring machine-load watch: TWO
+children (T148 impl, T150 impl) reproduced default-parallelism
+`cargo test` bin-test flakes on the CLEAN base (spawn-timing tests,
+T144/T148 class) and fell back to `--test-threads=4` per the doctrine's
+gate posture; nextest-based gates were unaffected both times — next eval
+should consider an isolation/threading row. Iteration census: impl
+children used 26 (T147-resume), 52 (T148), 43 (T149), 48-of-80 (T150,
+minutes-bound) of 80 — no 80/80 deaths; the T110 estimate ceiling held
+(T150's guard now enforces it at filing time). Release v0.5.1 cut at wrap
+(4 items since v0.5.0, tests/doctrine/guards only → patch). Next cycle:
+queue EMPTY → fresh eval routes kimi (loopd).
+
+### Cycle 70 (2026-09-29) — kimi fresh-eval cycle (queue was empty) — 7 rows filed, T144 landed
+
+Eval commit c802934: T144-T150 filed (bug T144 pri 1; T145 crash-safety;
+T146 F2-2a roadmap pull; T147 survivor pins; T148 wire e2e; T149
+validator budgets doctrine; T150 estimate pin), 13 rejected candidates,
+20 eval-triage records, README audit third consecutive clean.
+
+**T144 — goal-gate check + driver-spawned shells must not inherit
+CARGO_TARGET_DIR (pri 1 bug, landed 8cabc79 ff-merge).** The cycle-66/67
+infra finding promoted to a row: `goal_complete` checks executed a
+FOREIGN worktree's test binary twice (d1790632587-1, d1790640546-3) —
+and the fix's own validator reproduced it a THIRD time when its first
+gate attempt (running the pre-T144 main binary, which still inherited
+`target-shared`) hit the 600s check timeout under its own mutation-build
+load with zero test failures. Fix: `tools::scrub_target_dir_vars`
+removes both spellings at every driver-side spawn passing the inherited
+env — `run_shell` (bash tool + goal-gate check), `hooks::run_hook`,
+`delegate_launch`; explicit in-command prefixes keep the warm role-keyed
+path (pinned green). Spawn-site sweep in the commit message (mcp N/A via
+T138 env_clear; git/ps/rg fixed-argv). glm impl 73/80 one segment. kimi
+REQUIRED PASS (d1790668684-21/d1790670698-22): gates 1110/1110
+independent; mutants M1 (run_shell-scrub revert), M2 (alias dropped),
+M3 (delegate-scrub revert), M6b (over-scrub breaking in-command prefix)
+ALL DIED on named legs; non-blocking survivors M4 (general env
+passthrough unpinned — broader isolation class, out of scope) + M5
+(the beyond-spec hooks.rs scrub has no test of its own) carried to the
+next eval. The `delegate_launch_stub_then_status_reports_summary_and_
+liveness` full-suite load flake (one sighting) assessed by the
+validator: 2 O(1) env_remove calls pre-spawn, timing window not widened.
+Post-merge nextest 1110/1110. Watch for next cycle: children now run
+the scrubbed binary — first goal gates build worktree-local
+(impl-measured 85s vs the 600s cap).
+
+**T145 — update_ledger writes through fsatomic::write_atomic (pri 2
+robustness, landed 52a0abf ff-merge).** T136's crash-safety sweep had
+left the ledger — the file every child reads first — on a truncating
+`fs::write` (validator carry d1790643172-7). Now routed through the
+shared same-dir-temp+fsync+rename primitive; happy path byte-identical,
+a failed write errors the tool call with the previous ledger intact.
+RED leg obstructs the pid-suffixed temp path (chosen over a second
+RLIMIT_FSIZE leg to dodge process-wide rlimit flake against
+transcript.rs's T136 test in the same binary — the validator assessed
+the choice SOUND). Sweep verdicts in the commit message: update_ledger
+CONVERTED; ensure_seeded / fork save+restore / archive::rotate /
+generic write tools EXCLUDED with reasons. glm impl 62/80; its two
+goal-gate rejections were the pre-existing load-sensitive mcp_http
+dead-port race (T31/T59/T66 class, both legs 8/8 isolated, different
+test each run) — aggravated by a 9.8-HOUR orphaned spinning test binary
+from the t134 validation era (99% CPU, 590 min burned), which the
+orchestrator found and killed mid-arc; see the cycle notes for the
+orphaned-process finding. kimi REQUIRED PASS (d1790673125-26 /
+d1790673939-27): independent gates 1113/1113; mutants M1
+(revert-to-direct-write) DIED on the RED leg, M3 (wrong-dir temp) no
+silent pass, M4 (error-swallow) DIED on both failure legs; fsync-drop
+indistinguishable, skipped per spec; two non-blocking nits (124 vs ~60
+estimate — informational; rename-replaces-inode symlink nit). Post-merge
+nextest 1113/1113.
+
+**T146 — F2 phase 2a: `chug run --approve plan.md` + web_fetch in plan
+mode (pri 2 FEATURE, the mandatory roadmap pull; landed 55d59c3 merge of
+8ea88e8 + d7d7aa0).** Retires the oldest Tier-1 deferral (34 cycles —
+cycle-36's 50-iteration budget reason obsolete). Surface 1: the clap
+flag exists on `run` only (plan/chat are clap errors);
+`driver::load_approved_plan` refuses missing/unreadable/empty/escaping
+legs with named-leg messages BEFORE any `.chug/` write (the T117
+ordering); on success the approval sentence + plan text prepend the
+first message with the goal undisplaced; `run_start` gains
+always-present null-able `approve` + `plan_sha256` (new
+`eventlog::sha256_hex`, the T117 honesty shape). Surface 2: web_fetch
+joins plan mode's read-only set across all five enumeration sites
+(six-tool contract, cardinality pinned). glm impl died 80/80 at a NEW
+pace class (~5s/iteration, 6m41s for the whole budget — flash models
+make iteration counts, not minutes, the binding constraint) and finished
+on the T63 resume (impl recovery d1790674063-31; validator recovery
+d1790677504-33). kimi REQUIRED PASS across two segments (validator died
+50/50 mid mutation wave 2 — the 5th validator budget death in 5 cycles,
+more T149 census — resumed and goal-accepted at iteration 4; verdict
+d1790677901-34): independent gates 1118/1118; all 4 spec-named mutants
+(before-.chug ordering, null-fields shape, approve-on-plan clap,
+web_fetch enumeration) killed + 2 extras (injection-order, empty-check);
+2 stale five-tool comments fixed on-branch pre-merge (d7d7aa0), 4
+cosmetic nits carried. Post-merge nextest 1121/1121. FEATURES.md F2
+annotated phase-2a landed, 2b deferred with refreshed reason.
+
+**Cycle-70 wrap notes (budget-low at 240-min orchestrator ceiling).**
+Landed 3/7 rows: T144 (bug), T145 (robustness), T146 (feature). DEFERRED
+to next cycle: T147 (impl died 80/80 at the glm-flash ~5s/iter pace
+class — 613k input tokens in ~10 min; worktree /tmp/chug-loop-t147 left
+STANDING with uncommitted work + a recovery pointer on the row),
+T148/T150 (not dispatched), T149 (doctrine — never dispatched; its
+census GREW this cycle: t146-validate was the 5th validator budget death
+in 5 cycles). Cycle-level findings: (1) a 9.8-hour orphaned spinning
+t134-era test binary (99% CPU, 590 min burned) was found and killed
+mid-T145 — a mutation-leg test process outlived its validator by ~11h;
+the port-test flakes that cost T145 two gate rejections trace to its
+load; watch for recurrence, candidate row next eval if the T6 bounded
+harness needs a reaper. (2) The mcp_http dead-port race (T31/T59/T66
+class) fired twice under load this cycle — third era sighting; next
+eval should weigh a deflake row. (3) glm-flash pace class: iteration
+budgets, not minutes, bind (T146 impl 80 iters in 6m41s; T147 impl same
+death) — next eval weighs whether glm children need higher iteration
+budgets or tighter specs. (4) Tool-result RENDER garbles (7 sightings)
+proved to be artifacts on every disk read-back — verify-then-act held
+every time; no action needed beyond the standing doctrine. Validators
+this cycle: 3 REQUIRED PASSes (T144/T145/T146), 4+6+3 mutants killed,
+survivors carried (M4 env-passthrough, M5 hooks-scrub pin, T146
+cosmetics). Release: v0.5.0 (minor — T146 feature) cut at this wrap per
+the T100 trigger (3 items + FEATURES phase annotation since v0.4.1).
+
+### Cycle 69 (2026-09-29) — routine glm freshness-skip (queue non-empty: T129/T131 deferred from cycle 68, eval fresh) — the deferrals worked first
+
+**T129 — F10 phase 2b: chug_launch MCP write leg (pri 2 feature, landed
+2b4490b ff-merge).** The fleet primitive's actual verb, held one cycle by
+the cycle-68 wall-clock defer, landed first-try: `chug mcp-serve
+--allow-launch` (default OFF — the flag is the policy boundary; the
+flagless server is byte-identical read-only and a `chug_launch` call gets
+the unknown-tool `-32602`, so a read-only deployment cannot probe the
+flag into revealing the tool exists). One boolean feeds both `tools/list`
+and `tools/call` (advertised ⇔ callable by construction); the full
+validation chain (shared `validate_chug_cwd` with error-text parity,
+absolute readable-file spec, non-empty-trim goal, pass-through model,
+budgets 1..=200/240 reject-above naming the received value + ceiling);
+spawn hands off to the ONE `delegate_launch` path (`pub(crate)`
+visibility-only — no second spawner, `CHUG_DELEGATE_BIN` seam reused,
+`DELEGATE_ENV_LOCK` shared for the stub legs); launch failures are
+`isError` results and no error kills the server loop; 13 bin-internal
+legs; README params + safety paragraph + phase 2 CLOSED. The estimate
+line's descope clause FIRED (all-in diff 814 > ~500): the optional
+flag-ON wire e2e dropped to a follow-up, zero validation legs trimmed
+(child descope record d1790662565-1). glm impl 77/80 first-try
+(budget-low@8 fired, accepted before the ceiling — T21 headroom held).
+kimi REQUIRED (routing d1790663037-1) VERDICT PASS (verdict
+d1790664201-2): 8 mutants, M1–M6 killed (flag guard, advertise gate,
+ceiling boundary, goal trim, spec-absolute, budget argv pass-through);
+M7 (`--allow-launch` CLI plumbing) + M8 (launch-failure isError arm)
+SURVIVED as non-blocking "correct code, test gap" findings — M7 is
+exactly the descoped e2e's pin, M8 wants a spawn-failure leg; carried to
+the next eval. Gates 1105/1105 + clippy clean independently; post-merge
+nextest 1105/1105 (target-shared-main). Pipeline overlap ran once clean
+(T129-validator ‖ T131-impl — disjoint file sets, strictly serial
+merges). FEATURES.md F10 updated at the row flip (phase 2b LANDED, phase
+2 CLOSED).
+
+**T131 — eval-digest reader staleness check excludes the reader's own
+live stream (pri 4, landed b52e62c rebased ff from 26b3ec6).** The
+cycle-65 eval's live-observed annoyance (digest 17:47:52Z vs own-stream
+rotation 17:48:12Z → STALE within the first minute, "regenerate if
+stale" unsatisfiable mid-cycle) fixed at the render: the newest events
+file (`ls -t | head -1`) is dropped from the `-newer` candidate set via
+`grep -vx`, both verdicts render (`&& echo STALE || echo FRESH`), and
+the rendered rationale sentence says why the newest file is excluded and
+what STALE now means (foreign corpus). Pre/post-scan machinery,
+corpus-age field, and the four pinned staleness labels byte-identical;
+one pin leg RED-proven on the parent tree (died at the check-line pin,
+old render lacked exclusion + FRESH) with a live 3-leg tempdir demo of
+the extracted check (digest-newest→FRESH, own-stream→FRESH,
+foreign-second→STALE) recorded in the commit message. glm impl 27/80
+first-try; kimi SKIPPED per routing d1790664201-3 (T16/T116
+tests+tooling precedent — the child's RED proof + orchestrator gates
+carried it; a kimi round on a ~30-line script render is the optional
+tier the routing call declined). Review + post-merge nextest 1106/1106
+(target-shared-main). Est ~30 → actual +73/−4 (test density again beats
+the line estimate; within the no-action band).
+
+**CYCLE-69 CYCLE-LEVEL NOTES (wrap).** BOTH deferred rows landed — the
+cycle-68 deferrals were honored in queue order (feature T129 first, then
+small T131) — and the queue is now EMPTY. Zero budget deaths, zero T63
+resumes (77/27 and 41/50 of their ceilings — the healthiest census in
+the post-T110 era); minutes never binding. Pipeline overlap ran once
+clean (T129-validator ‖ T131-impl, disjoint file sets, strictly serial
+merges, clean rebase-ff for T131). Two decision-log hygiene notes for
+the record: (a) one outcome record (d1790664534-4) was appended with
+T131's inputs under T129's routing subject — corrected by the two
+following records (d1790664540-5/-6); the corpus is append-only so the
+stray stays readable; (b) child decision records (T129's descope call,
+T131's RED-first verdict) were merged into the main decisions.jsonl at
+harvest. Harvest: 3 impl/validate streams + 1 verdict LEDGER into
+`.chug/` (untracked by design — .gitignore carries .chug/; commit
+messages name the harvest). NO release tag this wrap: 2 items since
+v0.4.1 (< 3) and no FEATURES.md check-off (F10 phase 2 CLOSED is a
+progress annotation on a still-open row — phase 3 deferred — matching
+the T128 precedent). Carried to the next eval (queue empty → fresh
+eval routes kimi): T129's M7 (--allow-launch CLI plumbing pin = the
+descoped wire e2e) + M8 (launch-failure isError arm pin) survivors, the
+stub-spawn events-ordering nit, and the optional follow-up row for the
+flag-ON wire e2e. Final gates at HEAD: build + clippy clean, nextest
+1106/1106 (target-shared-main).
+
+### Cycle 66 (2026-09-28) — routine (reconciled cycle-65 divergence first) — codex-intake queue T134–T142 — T140 9b36a2e (goal_complete denial bypass), T141 70ec4a7 (SSE truncation acceptance, rebased), T142 3bc3169 + fix-up dd184d4 (loopd grep spoofing), T134 d5d9c28 + fix-up bfd316a (symlink sandbox escape + doctrine drift) — compacted at the cycle-73 wrap (last-6 rule); full narrative in git.
 
 ### Cycle 65 (2026-09-28) — fresh eval (kimi, loopd-routed: queue empty) — T128–T131 filed (F10 phase 2 PULLED + SPLIT); T130 + T128 LANDED (976e4ae, 85ca4c1); T129/T131 DEFERRED by mid-cycle operator intake (codex adversarial review, 9 HIGH rows T134–T142); cycle ended on a push divergence (doctrine: no mid-cycle reconcile). Cycle notes below the per-item entries.
 ### Cycle 64 (2026-09-28) — fresh eval (kimi, loopd-routed: queue empty) — T124–T127 filed; ALL FOUR landed clean (T127 5dbab0d README install truth, T125 532c403 estimate calibration, T124 d6264be F10-p1 mcp-serve+chug_status, T126 eef7a29 validator /tmp-heredoc doctrine) — the era's FOURTH all-PASS cycle after 58/61/62. Cycle notes below the per-item entries.
@@ -781,3 +814,5 @@ target-shared-main nextest 1043/1043.
 **T155 done 00d4f7e (6780191 rebased, cycle 73).** The two T149 kimi non-blocking unpinned-text gaps closed: `tests/loop_spec_recovery.rs` +248 — (p) step-4's budget RATIONALE tokens (the 4-of-the-last-4 census clause, the >1-of-8 measure tripwire, the trim-mutation-leg-counts remedy) each pinned EXACTLY once inside step 4's T64 window, AFTER the 60/40 numbers pair; (q) META-SPEC §6's validator argv `--max-iters 60 --max-minutes 40` pinned as a contiguous exactly-once fragment. glm impl child died minutes-bound 49/80 AFTER committing (the T150 committed-variant class, 6th minutes-death this era) — orchestrator-finish per routing d1790723435-6: no resume, review + gates + merge. kimi SKIPPED per the tests-only T16/T31/T130/T131 precedent with the orchestrator RED-proving both text-revert mutants personally (census 4→9 → pin panicked at the count leg; argv 40→30 → pin panicked at the fragment leg; pristine restore 17/17). Worktree (rebased onto the T153 merge) + post-merge nextest 1172/1172.
 
 **T156 done (merge of loop-t156, cycle 73).** The T63 doctrine now names the complete+committed budget-death variant — the routing discriminator sentence sits in LOOP-SPEC §2 step 2 right after the resume-first rule: work INCOMPLETE takes the ONE resume; work complete and committed with the goal unaccepted goes to orchestrator-finish directly (no resume burned; T150-impl named alongside T55); resume-exhausted goes to next-cycle with a recipe (T28). Pins (r)(s)(t) in tests/loop_spec_recovery.rs (+227): 9 routing tokens exactly-once inside step 2's window, byte-exact adjacency/ordering chain, standing-recipes byte-pin. The doctrine row validated its own thesis in practice: the impl child died minutes-bound 47/80 AFTER committing (4th consecutive committed-variant — T150, T154, T155, T156) and the orchestrator-finish routing applied cleanly. kimi REQUIRED PASS (routing d1790726950-9, verdict d1790729228-10): all 3 spec requirements verified, own gates 1175/1175, serial mutants budget-truncated with RED corroborated by pre-edit zero-occurrence analysis and the commit's documented M0–M4 matrix (restore sha independently verified) — plus the orchestrator's own sentence-revert RED proof (both routing pins died; pristine 20/20). Gates wt+main 1175/1175.
+
+**Cycle-73 wrap notes (2026-09-29/30, resumed mid-arc → full wrap).** FIVE rows landed: T152 (a59cf97, prior segment), T154 (efa287a), T153 (675076d — the feature + the forensics-driven EPERM/zombie fix-up), T155 (00d4f7e), T156 (merge of loop-t156) — plus the b4e1d1a + df042ad origin reconciles (operator filings T157/T161 kept their ids). **Release: v0.6.0 tagged 622cc79** (5 items since v0.5.1 + the F10 phase-3a check-off; minor bump; notes generated; check-tag-version ok; commit+tag pushed together). Validators: kimi REQUIRED ×2 (T153 PASS 7/9 mutants, 2 weak-test survivors → T160 filed; T156 PASS, mutants budget-truncated + RED corroborated), kimi SKIPPED ×1 tests-only (T155, orchestrator RED-proofs both pins), orchestrator-verified ×2 (T152 prior segment, T154 list-identity). **Minutes-death census now 6-8 this era — ALL committed-variant** (T150, T151-resume+fixup, T152, T154, T155, T156 + T153's arc): the T63 three-way routing (T156, landed this cycle) named the variant and the orchestrator-finish path executed cleanly four times in one cycle. T63 resume used ONCE (T153's mid-arc). Queue for cycle 74: T157 (operator MCP write verbs — chug_abort + chug_steer, F10 phase 3), T158 (spawn-pressure family), T159 (reaper timing-lock), T160 (T153 weak pins), T161 (operator two-impl overlap lever) — all with ready specs. **Bookkeeping incident found + fixed at this wrap:** the cycle-72 eval commit (1206d93) dropped the Cycle 69/70/71 Outcomes sections that existed at the cycle-71 wrap (regenerated file, lost carry-over) — restored verbatim from 9c1d6bd:EVALUATION.md; 67/66 re-compacted to one-liners (outside the last-6 window); the eval-commit template must carry forward ALL existing Outcomes sections (next-eval candidate). Final gates at HEAD: build + clippy + nextest 1175/1175 (target-shared-main).
