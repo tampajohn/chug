@@ -179,6 +179,16 @@ enum CliCommand {
         /// The operator who starts the server decides whether writes exist.
         #[arg(long, default_value_t = false)]
         allow_launch: bool,
+        /// F10 phase 3 (T157): advertise and serve the CONTROL verbs —
+        /// `chug_abort` (cancel a launched run by id, run-level: the abort
+        /// is recorded in the child's events stream and the terminal state
+        /// is reported) and `chug_steer` (inject an `[operator]` steering
+        /// note into a running child). Same policy family as
+        /// `--allow-launch`: default-deny, advertised ⇔ callable, and
+        /// INDEPENDENT of it — the operator who grants launching need not
+        /// grant control of running children.
+        #[arg(long, default_value_t = false)]
+        allow_control: bool,
     },
     /// Start an interactive chat session in the TUI: type a request, chug
     /// works it with tools, returns to idle, repeat.
@@ -266,7 +276,9 @@ fn main() -> ExitCode {
         // dispatches STRAIGHT to the server loop — no banner, no ledger, no
         // driver lock, no events write on this path; stdout carries only
         // protocol messages.
-        CliCommand::McpServe { allow_launch } => cmd_mcp_serve(allow_launch),
+        CliCommand::McpServe { allow_launch, allow_control } => {
+            cmd_mcp_serve(allow_launch, allow_control)
+        }
         CliCommand::Fork { action } => cmd_fork(action),
         CliCommand::Plan {
             goal,
@@ -673,10 +685,14 @@ fn cmd_ledger(cwd: Option<PathBuf>) -> anyhow::Result<i32> {
 
 /// F10 phase 1 (T124): run the stdio MCP server until stdin EOF, then exit 0.
 /// T129 + T153: `allow_launch` gates the write tools (`chug_launch`,
-/// `chug_cancel`) — default OFF, the read-only server is byte-identical to
-/// pre-T129 without the flag.
-fn cmd_mcp_serve(allow_launch: bool) -> anyhow::Result<i32> {
-    mcp_serve::serve(allow_launch)?;
+/// `chug_cancel`). T157: `allow_control` gates the control verbs
+/// (`chug_abort`, `chug_steer`) — both default OFF; the flagless server is
+/// byte-identical to pre-T129.
+fn cmd_mcp_serve(allow_launch: bool, allow_control: bool) -> anyhow::Result<i32> {
+    mcp_serve::serve(mcp_serve::Gates {
+        allow_launch,
+        allow_control,
+    })?;
     Ok(0)
 }
 

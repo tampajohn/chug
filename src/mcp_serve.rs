@@ -38,6 +38,24 @@
 //! before SIGTERM-ing the whole detached process group with one bounded
 //! SIGKILL escalation.
 //!
+//! T157 (F10 phase 3, the control verbs) adds the THIRD and FOURTH write
+//! verbs behind a SECOND flag, `--allow-control` — same policy family
+//! (default-deny, advertised ⇔ callable), separate boundary: the operator
+//! who grants launch need not grant control of running children.
+//! `chug_abort` is the RUN-level counterpart of `chug_cancel`: after the
+//! same fail-closed ownership re-derivation and the same TERM→grace→KILL
+//! group discipline it RECORDS the abort in the child's
+//! `.chug/events.jsonl`, so `chug_status`/`chug_collect` report the run as
+//! aborted — and it reports the terminal state (`aborted` | `already-done`
+//! | `not-found`) instead of a signal payload. `chug_steer` injects an
+//! operator steering note into a running child through the driver's
+//! EXISTING `[operator]` mechanism: the note is appended to the child's
+//! cross-process queue `.chug/steer.jsonl` and the child's
+//! [`crate::driver::drive_loop`] drains that queue at its next iteration
+//! boundary into the same `append_steering_notes` path the TUI chat dock
+//! feeds — a detached child has a dead in-process channel, so the queue
+//! file is the transport, not a new mechanism.
+//!
 //! `chug_status` reads `<cwd>/.chug/events.jsonl` through the
 //! delegate seams and renders a COMPACT summary; `chug_collect` answers
 //! the structured-result question over the SAME file — the latest
@@ -90,6 +108,44 @@ const CHUG_LAUNCH_TOOL: &str = "chug_launch";
 /// leg rides the same policy boundary as [`CHUG_LAUNCH_TOOL`].
 const CHUG_CANCEL_TOOL: &str = "chug_cancel";
 
+/// The phase-3 control verb (T157): abort a previously launched detached
+/// `chug run` by id (the pid a `chug_launch` result carried) — the
+/// run-level counterpart of [`CHUG_CANCEL_TOOL`] that RECORDS the abort in
+/// the child's `.chug/events.jsonl` and reports the terminal state.
+/// Advertised and callable ONLY under `--allow-control`.
+const CHUG_ABORT_TOOL: &str = "chug_abort";
+
+/// The phase-3 control verb (T157): inject an operator steering note into a
+/// running detached `chug run` — the driver's existing `[operator]`
+/// mechanism, over the cross-process queue file. Advertised and callable
+/// ONLY under `--allow-control`.
+const CHUG_STEER_TOOL: &str = "chug_steer";
+
+/// T157: the `reason` recorded in the child's `.chug/events.jsonl` abort
+/// line by [`chug_abort`] — distinctive (T130), so a postmortem can tell an
+/// MCP abort from the driver's own "operator abort".
+const CHUG_ABORT_REASON: &str = "operator abort via chug_abort";
+
+/// T157: the steering-note size ceiling — a note is an operator sentence,
+/// not a payload; above it the call is REJECTED naming the received length
+/// (never clamped), so a runaway caller cannot flood the child's transcript
+/// through the queue.
+const CHUG_STEER_NOTE_MAX_CHARS: usize = 4000;
+
+/// T157: the write-surface policy — which write tools this server
+/// advertises and serves. Every leg is default-deny (`Gates::default()` is
+/// the byte-identical read-only server). Two independent boundaries:
+/// `allow_launch` gates [`CHUG_LAUNCH_TOOL`] + [`CHUG_CANCEL_TOOL`]
+/// (T129/T153), `allow_control` gates [`CHUG_ABORT_TOOL`] +
+/// [`CHUG_STEER_TOOL`] (T157) — the operator who grants spawning need not
+/// grant control of running children. Advertised ⇔ callable by
+/// construction: the same gates feed `tools/list` and `tools/call`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct Gates {
+    pub allow_launch: bool,
+    pub allow_control: bool,
+}
+
 /// T153: the one escalation grace — how long a TERM'd process group has to
 /// empty before the group is SIGKILLed. Polled at
 /// [`CHUG_CANCEL_POLL_MS`]; `~5 s` per the spec.
@@ -116,36 +172,33 @@ const CHUG_LAUNCH_MAX_MINUTES_CEILING: u64 = 240;
 /// maps that to exit 0). Responses are written and flushed one at a time —
 /// an unflushed response is a wedged client.
 ///
-/// T129: `allow_launch` gates the `chug_launch` write tool. `false` (the
-/// default, and every flagless invocation) is byte-identical to the
-/// pre-T129 read-only server.
-pub(crate) fn serve(allow_launch: bool) -> anyhow::Result<()> {
+/// T129/T153/T157: `gates` decides which write tools exist (see
+/// [`Gates`]). The default (`Gates::default()`, and every flagless
+/// invocation) is byte-identical to the pre-T129 read-only server.
+pub(crate) fn serve(gates: Gates) -> anyhow::Result<()> {
     // Stdout purity by construction: the ONLY stdout writer in the module
     // is the protocol `writeln!` inside serve_from (see the module doc).
     let stdin = std::io::stdin();
     let stdout = std::io::stdout();
     let mut out = stdout.lock();
-    serve_from_with(&mut stdin.lock(), &mut out, allow_launch)
+    serve_from_with(&mut stdin.lock(), &mut out, gates)
 }
 
 /// The loop over an injected reader/writer pair, so the EOF and
 /// blank-line-skipping behavior is unit-testable without touching real
-/// stdio. Serial dispatch (read-only tools are fast; no concurrency in
-/// phase 1). The flagless entry the framing test legs ride lives in the
-/// test module (`serve_from` there → this with `false`), so the production
-/// half carries only the flag-aware loop.
-fn serve_from_with(
-    read: &mut impl BufRead,
-    out: &mut impl Write,
-    allow_launch: bool,
-) -> anyhow::Result<()> {
+/// stdio. Serial dispatch (read-only tools are fast; the write legs'
+/// bounded waits are rare). The flagless entry the framing test legs ride
+/// lives in the test module (`serve_from` there → this with
+/// `Gates::default()`), so the production half carries only the gated
+/// loop.
+fn serve_from_with(read: &mut impl BufRead, out: &mut impl Write, gates: Gates) -> anyhow::Result<()> {
     for line in read.lines() {
         let line = line?;
         // Blank lines are framing noise, not messages — skip them.
         if line.trim().is_empty() {
             continue;
         }
-        if let Some(response) = handle_message_with(&line, allow_launch) {
+        if let Some(response) = handle_message_with(&line, gates) {
             // The single protocol writer. Flushed per response so a client
             // blocked on read never waits on a buffer.
             writeln!(out, "{response}")?;
@@ -171,13 +224,16 @@ fn serve_from_with(
 /// - unknown method on a request → `-32601`
 /// - `tools/call` naming an unlisted tool (or missing a usable name) → `-32602`
 ///
-/// T129: `allow_launch` decides whether `chug_launch` exists — advertised
-/// in `tools/list` ⇔ callable in `tools/call`, both fed by this one boolean
-/// (capability honesty by construction). The flagless entry the phase-1/2a
-/// test legs ride lives in the test module (`handle_message` there → this
-/// with `false`), so the production half carries only the flag-aware
-/// dispatch.
-fn handle_message_with(line: &str, allow_launch: bool) -> Option<String> {
+/// T129/T153/T157: the gates decide which write tools exist — advertised
+/// in `tools/list` ⇔ callable in `tools/call`, both fed by the same
+/// [`Gates`] value (capability honesty by construction). `allow_launch`
+/// gates `chug_launch` and `chug_cancel`; `allow_control` gates the
+/// control verbs (`chug_abort`, `chug_steer`). An ungated write tool falls
+/// through to the unknown-tool
+/// arm — the SAME `-32602` a never-existing tool gets, so a read-only
+/// deployment cannot be probed into revealing that a write tool exists
+/// behind a flag (and no error kills the loop).
+fn handle_message_with(line: &str, gates: Gates) -> Option<String> {
     let value: Value = match serde_json::from_str(line) {
         Ok(value) => value,
         // A line we cannot parse has no id to echo — the spec-mandated null.
@@ -205,8 +261,8 @@ fn handle_message_with(line: &str, allow_launch: bool) -> Option<String> {
     match method {
         "initialize" => Some(ok_response(id, initialize_result())),
         "ping" => Some(ok_response(id, json!({}))),
-        "tools/list" => Some(ok_response(id, json!({ "tools": tools_list(allow_launch) }))),
-        "tools/call" => Some(call_tool(id, obj, allow_launch)),
+        "tools/list" => Some(ok_response(id, json!({ "tools": tools_list(gates) }))),
+        "tools/call" => Some(call_tool(id, obj, gates)),
         other => Some(error_response(
             id,
             -32601,
@@ -225,16 +281,22 @@ fn initialize_result() -> Value {
     })
 }
 
-/// The `tools/list` tool set. Capability honesty (T129, carried by T153):
-/// the write legs are advertised ONLY when the server was started with
-/// `--allow-launch` — the same boolean feeds `tools/call`, so advertised ⇔
-/// callable by construction. The flag gates the write surface, not
-/// individual tools: both `chug_launch` and `chug_cancel` ride it.
-fn tools_list(allow_launch: bool) -> Vec<Value> {
+/// The `tools/list` tool set. Capability honesty (T129, carried by T153 +
+/// T157): a write leg is advertised ONLY when the server was started with
+/// its flag — the same [`Gates`] value feeds `tools/call`, so advertised ⇔
+/// callable by construction. Two independent boundaries: `--allow-launch`
+/// gates the write surface (`chug_launch` + `chug_cancel`), `--allow-control`
+/// gates the control surface (`chug_abort` + `chug_steer`) — the operator
+/// who grants spawning need not grant control of running children.
+fn tools_list(gates: Gates) -> Vec<Value> {
     let mut tools = vec![chug_status_schema(), chug_collect_schema()];
-    if allow_launch {
+    if gates.allow_launch {
         tools.push(chug_launch_schema());
         tools.push(chug_cancel_schema());
+    }
+    if gates.allow_control {
+        tools.push(chug_abort_schema());
+        tools.push(chug_steer_schema());
     }
     tools
 }
@@ -406,18 +468,118 @@ fn chug_cancel_schema() -> Value {
     })
 }
 
+/// The `chug_abort` listing entry (T157): the run-level control verb,
+/// behind `--allow-control`. Same required input shape as `chug_cancel`
+/// (the id a `chug_launch` result carried), a different CONTRACT: the
+/// terminal state is reported (`aborted` | `already-done` | `not-found`)
+/// and a successful abort is RECORDED in the child's `.chug/events.jsonl`
+/// so the read tools report the run as aborted.
+fn chug_abort_schema() -> Value {
+    json!({
+        "name": CHUG_ABORT_TOOL,
+        "description":
+            "Abort a previously launched detached `chug run` by id — the pid \
+             a chug_launch result carried (the control leg; requires the \
+             server to be started with --allow-control). The run-level \
+             counterpart of chug_cancel: the same fail-closed ownership \
+             re-derivation (alive, own process-group leader, `chug run` \
+             command line) and the same SIGTERM-group → ~5 s grace → \
+             SIGKILL-group discipline, plus the abort RECORDED in the \
+             child's .chug/events.jsonl so chug_status/chug_collect report \
+             the run as aborted. The result names the terminal state: \
+             `aborted` (signalled and recorded), `already-done` (the latest \
+             segment has a verdict AND the process is gone — idempotent, \
+             nothing signalled; a LIVE child is never already-done, even \
+             when its stream latched a mid-run goal rejection), or \
+             `not-found` (no such process, no verdict — nothing \
+             signalled).",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "cwd": {
+                    "type": "string",
+                    "description":
+                        "Absolute path to the chug working directory the \
+                         child was launched in (must exist and contain \
+                         .chug/); the abort record is written here"
+                },
+                "pid": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description":
+                        "The child pid to abort — the pid returned by \
+                         chug_launch"
+                }
+            },
+            "required": ["cwd", "pid"]
+        }
+    })
+}
+
+/// The `chug_steer` listing entry (T157): the second control verb, behind
+/// `--allow-control`. The note rides the driver's EXISTING `[operator]`
+/// mechanism — queued in the child's `.chug/steer.jsonl`, drained at the
+/// child's next iteration boundary, landed as a user message in the
+/// child's transcript. Required: cwd, pid, note.
+fn chug_steer_schema() -> Value {
+    json!({
+        "name": CHUG_STEER_TOOL,
+        "description":
+            "Inject an operator steering note into a running detached `chug \
+             run` (the control leg; requires the server to be started with \
+             --allow-control). The note lands through the driver's EXISTING \
+             `[operator]` mechanism: appended to the child's cross-process \
+             queue (.chug/steer.jsonl), drained at the child's next \
+             iteration boundary, and delivered as a user message in the \
+             child's transcript context. The result reports `queued` with \
+             the queue path, or `undeliverable` when the pid is not alive \
+             (with the latest segment's verdict named when the stream \
+             carries one) — a LIVE child is never undeliverable, even when \
+             its stream latched a mid-run goal rejection — in which case \
+             NOTHING is written.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "cwd": {
+                    "type": "string",
+                    "description":
+                        "Absolute path to the chug working directory the \
+                         child was launched in (must exist and contain \
+                         .chug/); the queue lives at .chug/steer.jsonl"
+                },
+                "pid": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description":
+                        "The child pid to steer — the pid returned by \
+                         chug_launch"
+                },
+                "note": {
+                    "type": "string",
+                    "description":
+                        "The operator steering note (non-empty after trim, \
+                         at most 4000 characters — rejected above, never \
+                         clamped)"
+                }
+            },
+            "required": ["cwd", "pid", "note"]
+        }
+    })
+}
+
 /// Dispatch `tools/call`. A known tool's OWN failure (bad cwd, unreadable
 /// events, refused launch) is a tool RESULT with `isError: true` — not a
 /// JSON-RPC error — so the caller sees the tool ran and failed, the shape
 /// the client side already parses (`isError` + text content).
 ///
-/// T129: `chug_launch` is routable only under the flag; without
-/// `allow_launch` its name falls through to the unknown-tool arm — the
+/// T129: `chug_launch` is routable only under `--allow-launch`; without
+/// the flag its name falls through to the unknown-tool arm — the
 /// SAME `-32602` a never-existing tool gets, so a read-only deployment
 /// cannot be probed into revealing that a launch tool exists behind a
 /// flag (and no error kills the loop). T153: `chug_cancel` rides the
-/// same arm — the second write leg is equally invisible flagless.
-fn call_tool(id: Value, req: &Map<String, Value>, allow_launch: bool) -> String {
+/// same arm. T157: the control verbs (`chug_abort`, `chug_steer`) ride
+/// the same shape under the SECOND boundary, `--allow-control`.
+fn call_tool(id: Value, req: &Map<String, Value>, gates: Gates) -> String {
     let params = req.get("params").cloned().unwrap_or(Value::Null);
     let Some(name) = params.get("name").and_then(Value::as_str) else {
         return error_response(id, -32602, "Invalid params: tools/call requires a tool name");
@@ -426,8 +588,10 @@ fn call_tool(id: Value, req: &Map<String, Value>, allow_launch: bool) -> String 
     let (text, is_error) = match name {
         CHUG_STATUS_TOOL => chug_status(&arguments),
         CHUG_COLLECT_TOOL => chug_collect(&arguments),
-        CHUG_LAUNCH_TOOL if allow_launch => chug_launch(&arguments),
-        CHUG_CANCEL_TOOL if allow_launch => chug_cancel(&arguments),
+        CHUG_LAUNCH_TOOL if gates.allow_launch => chug_launch(&arguments),
+        CHUG_CANCEL_TOOL if gates.allow_launch => chug_cancel(&arguments),
+        CHUG_ABORT_TOOL if gates.allow_control => chug_abort(&arguments),
+        CHUG_STEER_TOOL if gates.allow_control => chug_steer(&arguments),
         other => {
             return error_response(id, -32602, &format!("unknown tool: {other}"));
         }
@@ -755,47 +919,14 @@ fn chug_cancel(args: &Value) -> (String, bool) {
     if let Err(message) = validate_chug_cwd(CHUG_CANCEL_TOOL, raw_cwd) {
         return (message, true);
     }
-    // pid: a positive integer. Non-integer / non-positive / missing is the
-    // validation-chain error naming what was RECEIVED (the T129
-    // received-value honesty pattern).
-    let Some(pid_value) = args.get("pid") else {
-        return (
-            format!(
-                "{CHUG_CANCEL_TOOL}: missing required argument: pid (a positive \
-                 integer — the child pid returned by chug_launch) — nothing \
-                 signalled"
-            ),
-            true,
-        );
+    // pid: a positive integer — the shared control-verb contract (T153 +
+    // T157). Non-integer / non-positive / missing is the validation-chain
+    // error naming what was RECEIVED (the T129 received-value honesty
+    // pattern).
+    let pid = match parse_pid_argument(CHUG_CANCEL_TOOL, args) {
+        Ok(pid) => pid,
+        Err(message) => return (message, true),
     };
-    let Some(pid) = pid_value.as_u64() else {
-        return (
-            format!(
-                "{CHUG_CANCEL_TOOL}: `pid` must be a positive integer, got \
-                 {pid_value} — nothing signalled"
-            ),
-            true,
-        );
-    };
-    if pid == 0 {
-        return (
-            format!(
-                "{CHUG_CANCEL_TOOL}: `pid` must be a positive integer, got 0 — \
-                 nothing signalled"
-            ),
-            true,
-        );
-    }
-    if pid > i32::MAX as u64 {
-        return (
-            format!(
-                "{CHUG_CANCEL_TOOL}: `pid` must be a valid pid (at most {}), \
-                 got {pid} — nothing signalled",
-                i32::MAX
-            ),
-            true,
-        );
-    }
     #[cfg(unix)]
     {
         cancel_unix(pid)
@@ -813,12 +944,54 @@ fn chug_cancel(args: &Value) -> (String, bool) {
     }
 }
 
-/// The unix ownership + signal legs (T153). Every failure leg is an
-/// `isError` text naming the FIRST failed leg and stating that nothing was
-/// signalled; the server loop survives every leg (the T129 refusal
-/// posture — a tool failure is never a JSON-RPC error, never fatal).
+/// The shared `pid` input contract of the signal verbs (T153 `chug_cancel`
+/// and T157 `chug_abort`): required, a positive integer, at most i32::MAX
+/// (a pid must fit the kill(2) pid_t). Every violation names the RECEIVED
+/// value and states that nothing was signalled (the T129 honesty pattern;
+/// the T130 distinctive-phrase rule). The byte-identical chug_cancel texts
+/// are pinned by the T153 tests — the tool name is interpolated, the rest
+/// is shared verbatim.
+fn parse_pid_argument(tool: &str, args: &Value) -> Result<u64, String> {
+    let Some(pid_value) = args.get("pid") else {
+        return Err(format!(
+            "{tool}: missing required argument: pid (a positive integer — the \
+             child pid returned by chug_launch) — nothing signalled"
+        ));
+    };
+    let Some(pid) = pid_value.as_u64() else {
+        return Err(format!(
+            "{tool}: `pid` must be a positive integer, got {pid_value} — nothing \
+             signalled"
+        ));
+    };
+    if pid == 0 {
+        return Err(format!(
+            "{tool}: `pid` must be a positive integer, got 0 — nothing signalled"
+        ));
+    }
+    if pid > i32::MAX as u64 {
+        return Err(format!(
+            "{tool}: `pid` must be a valid pid (at most {}), got {pid} — nothing \
+             signalled",
+            i32::MAX
+        ));
+    }
+    Ok(pid)
+}
+
+/// The three fail-closed ownership legs (T153, shared with T157's
+/// `chug_abort`): (a) alive, (b) own process-group leader (the delegate
+/// detached-spawn fingerprint), (c) the command line names a `chug run`
+/// invocation. `Ok(pgid)` = all legs hold, signalling may proceed;
+/// `Err(text)` = the FIRST failed leg, an `isError` text naming it — the
+/// caller's contract is that nothing was signalled.
+///
+/// The server is stateless across requests and keeps no launch registry,
+/// so "is this pid mine to signal?" is answered fresh from PROCESS IDENTITY
+/// on every call, never from server-side state. A wrong cancel/abort is
+/// un-undoable; a refused one is retryable.
 #[cfg(unix)]
-fn cancel_unix(pid: u64) -> (String, bool) {
+fn ownership_pgid(tool: &str, pid: u64) -> Result<i32, String> {
     let pid_i = pid as i32;
     // Leg (a) — alive: `kill(pid, 0)` through the T28 zombie-reap seam (an
     // exited child of THIS server is reaped first, so a zombie never reads
@@ -827,22 +1000,16 @@ fn cancel_unix(pid: u64) -> (String, bool) {
     match crate::delegate::reap_and_alive(pid) {
         Some(true) => {}
         Some(false) => {
-            return (
-                format!(
-                    "{CHUG_CANCEL_TOOL}: pid {pid} is not alive (no such \
-                     process) — nothing signalled"
-                ),
-                true,
-            );
+            return Err(format!(
+                "{tool}: pid {pid} is not alive (no such process) — nothing \
+                 signalled"
+            ));
         }
         None => {
-            return (
-                format!(
-                    "{CHUG_CANCEL_TOOL}: pid {pid} liveness could not be \
-                     probed — fail-closed, nothing signalled"
-                ),
-                true,
-            );
+            return Err(format!(
+                "{tool}: pid {pid} liveness could not be probed — fail-closed, \
+                 nothing signalled"
+            ));
         }
     }
     // Leg (b) — the pid is its OWN process-group leader: the delegate
@@ -852,72 +1019,71 @@ fn cancel_unix(pid: u64) -> (String, bool) {
     // SAFETY: getpgid(2) on one bounded pid — a pure query, no side effects.
     let pgid = unsafe { libc::getpgid(pid_i) };
     if pgid < 0 {
-        return (
-            format!(
-                "{CHUG_CANCEL_TOOL}: pid {pid} process group could not be \
-                 resolved — fail-closed, nothing signalled"
-            ),
-            true,
-        );
+        return Err(format!(
+            "{tool}: pid {pid} process group could not be resolved — \
+             fail-closed, nothing signalled"
+        ));
     }
     if pgid != pid_i {
-        return (
-            format!(
-                "{CHUG_CANCEL_TOOL}: pid {pid} is not its own process-group \
-                 leader (pgid {pgid} != pid) — not a delegate-detached child, \
-                 nothing signalled"
-            ),
-            true,
-        );
+        return Err(format!(
+            "{tool}: pid {pid} is not its own process-group leader (pgid {pgid} \
+             != pid) — not a delegate-detached child, nothing signalled"
+        ));
     }
     // Leg (c) — the command line names a `chug run` invocation, resolved
     // via `ps -o command=` (the driver-lock precedent: ps, NEVER pgrep).
     // Unresolvable → fail closed (skip, name the leg).
     let Some(command) = ps_command_line(pid) else {
-        return (
-            format!(
-                "{CHUG_CANCEL_TOOL}: pid {pid} command line could not be \
-                 resolved — fail-closed, nothing signalled"
-            ),
-            true,
-        );
+        return Err(format!(
+            "{tool}: pid {pid} command line could not be resolved — \
+             fail-closed, nothing signalled"
+        ));
     };
     if !command_names_chug_run(&command) {
-        return (
-            format!(
-                "{CHUG_CANCEL_TOOL}: pid {pid} command line is not a `chug \
-                 run` invocation ({command:?}) — nothing signalled"
-            ),
-            true,
-        );
+        return Err(format!(
+            "{tool}: pid {pid} command line is not a `chug run` invocation \
+             ({command:?}) — nothing signalled"
+        ));
     }
-    // All legs hold: SIGTERM the whole process GROUP (negative-pid kill —
-    // the detached tree dies, not just the driver).
+    Ok(pgid)
+}
+
+/// The outcome of the shared TERM→grace→KILL group discipline (T153,
+/// shared with T157's `chug_abort`).
+#[cfg(unix)]
+enum GroupSignal {
+    /// The group emptied within the [`CHUG_CANCEL_GRACE_MS`] grace.
+    Term { waited_ms: u64 },
+    /// The grace expired; the SIGKILL escalation fired.
+    Kill { waited_ms: u64 },
+    /// The grace expired AND the escalation kill(2) itself failed — the
+    /// group WAS TERM-signalled; the caller reports the failure honestly.
+    KillFailed { err: std::io::Error, waited_ms: u64 },
+}
+
+/// The signal discipline shared by `chug_cancel` (T153) and `chug_abort`
+/// (T157): SIGTERM to the whole process GROUP (negative-pid kill — the
+/// detached tree dies, not just the driver), then ONE bounded escalation —
+/// up to [`CHUG_CANCEL_GRACE_MS`] (polled at [`CHUG_CANCEL_POLL_MS`]) for
+/// the group to empty, then SIGKILL to the group. `pid` is the group
+/// leader (the ownership legs proved pgid == pid) — the T28 reap inside
+/// [`group_gone`] needs it.
+#[cfg(unix)]
+fn term_group_with_escalation(pgid: i32) -> Result<GroupSignal, String> {
     // SAFETY: kill(2) with SIGTERM on a negated, resolved pgid.
     if unsafe { libc::kill(-pgid, libc::SIGTERM) } != 0 {
         let err = std::io::Error::last_os_error();
-        return (
-            format!(
-                "{CHUG_CANCEL_TOOL}: signalling process group {pgid} failed \
-                 ({err}) — nothing signalled"
-            ),
-            true,
-        );
+        return Err(format!(
+            "signalling process group {pgid} failed ({err}) — nothing signalled"
+        ));
     }
-    // ONE bounded escalation: wait (polled) for the group to empty, then
-    // SIGKILL if it is still alive.
     let started = std::time::Instant::now();
     let deadline = started + std::time::Duration::from_millis(CHUG_CANCEL_GRACE_MS);
     loop {
-        if group_gone(pid_i, pgid) {
-            let waited_ms = started.elapsed().as_millis() as u64;
-            return (
-                format!(
-                    "{CHUG_CANCEL_TOOL}: pid {pid}\nsignaled: term\nwaited_ms: \
-                     {waited_ms}"
-                ),
-                false,
-            );
+        if group_gone(pgid, pgid) {
+            return Ok(GroupSignal::Term {
+                waited_ms: started.elapsed().as_millis() as u64,
+            });
         }
         if std::time::Instant::now() >= deadline {
             break;
@@ -929,8 +1095,40 @@ fn cancel_unix(pid: u64) -> (String, bool) {
     let kill_rc = unsafe { libc::kill(-pgid, libc::SIGKILL) };
     let waited_ms = started.elapsed().as_millis() as u64;
     if kill_rc != 0 {
-        let err = std::io::Error::last_os_error();
-        return (
+        return Ok(GroupSignal::KillFailed {
+            err: std::io::Error::last_os_error(),
+            waited_ms,
+        });
+    }
+    Ok(GroupSignal::Kill { waited_ms })
+}
+
+/// The unix ownership + signal legs (T153). Every failure leg is an
+/// `isError` text naming the FIRST failed leg and stating that nothing was
+/// signalled; the server loop survives every leg (the T129 refusal
+/// posture — a tool failure is never a JSON-RPC error, never fatal).
+#[cfg(unix)]
+fn cancel_unix(pid: u64) -> (String, bool) {
+    let pgid = match ownership_pgid(CHUG_CANCEL_TOOL, pid) {
+        Ok(pgid) => pgid,
+        Err(message) => return (message, true),
+    };
+    // All legs hold: the shared signal discipline, mapped back into the
+    // chug_cancel payload voice.
+    match term_group_with_escalation(pgid) {
+        Err(failure) => (
+            format!("{CHUG_CANCEL_TOOL}: {failure}"),
+            true,
+        ),
+        Ok(GroupSignal::Term { waited_ms }) => (
+            format!("{CHUG_CANCEL_TOOL}: pid {pid}\nsignaled: term\nwaited_ms: {waited_ms}"),
+            false,
+        ),
+        Ok(GroupSignal::Kill { waited_ms }) => (
+            format!("{CHUG_CANCEL_TOOL}: pid {pid}\nsignaled: kill\nwaited_ms: {waited_ms}"),
+            false,
+        ),
+        Ok(GroupSignal::KillFailed { err, waited_ms }) => (
             format!(
                 "{CHUG_CANCEL_TOOL}: pid {pid} survived the \
                  {CHUG_CANCEL_GRACE_MS} ms grace and the escalation kill of \
@@ -938,15 +1136,343 @@ fn cancel_unix(pid: u64) -> (String, bool) {
                  at {waited_ms} ms"
             ),
             true,
+        ),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// T157: the control verbs — chug_abort + chug_steer (--allow-control)
+// ---------------------------------------------------------------------------
+
+/// `chug_abort` (T157): the RUN-level counterpart of [`chug_cancel`].
+///
+/// Same fail-closed ownership re-derivation and the same TERM→grace→KILL
+/// group discipline — the differences are the CONTRACT around them:
+///
+/// 1. **Terminal states, not a signal payload.** The result names what the
+///    run's terminal state now is: `aborted` (this call signalled the
+///    group and recorded the abort), `already-done` (the child's latest
+///    run segment already carries a verdict — goal accepted/rejected or an
+///    abort — AND the process is verifiably gone, so the run is over;
+///    IDEMPOTENT, `isError: false`, nothing signalled, a retried abort
+///    lands here), or `not-found` (the pid is dead with no verdict on
+///    record — `isError: true`, nothing signalled, same distinctive phrase
+///    `chug_cancel` uses).
+/// 2. **The abort is RECORDED.** After the group is verified dying, an
+///    `abort` line is appended to the child's `.chug/events.jsonl` (the
+///    reason names this verb, [`CHUG_ABORT_REASON`], so a postmortem can
+///    tell an MCP abort from the driver's own "operator abort"). This is
+///    what makes abort run-level: `chug_status`/`chug_collect` then report
+///    the run as aborted instead of a run that reads `running` forever
+///    after its process was killed (the exact gap a bare `chug_cancel`
+///    leaves). The write is best-effort telemetry: the process IS dead
+///    either way, so a record-write failure degrades to `recorded: false`
+///    naming the path — never `isError`, never a killed loop.
+/// 3. **Liveness wins over the stream** (the T157 fix-up class rule). The
+///    pid's real aliveness — the same T28 reap seam the signal legs serve
+///    — is consulted BEFORE any events-derived terminal state:
+///    `summarize_events().state()` latches "done" on ANY goal line,
+///    including a mid-run `outcome:"rejected"`, after which the driver
+///    KEEPS RUNNING — keying the already-done leg on the stream alone
+///    reported live children as finished and signalled nothing (the
+///    validator's d1-demo). An events terminal state may only shorten the
+///    path when the process is actually gone; a live child stays
+///    abortable whatever the stream says, and a gone child with NO
+///    verdict falls through to the ownership legs' not-found refusal. An
+///    unreadable or missing events file degrades to "no verdict" —
+///    telemetry failure must never block the operator's stop button.
+fn chug_abort(args: &Value) -> (String, bool) {
+    // cwd: the SAME fail-fast validator every tool serves — it names the
+    // chug cwd the child was launched in AND where the abort record goes.
+    let Some(raw_cwd) = args.get("cwd").and_then(Value::as_str) else {
+        return (
+            format!("{CHUG_ABORT_TOOL}: missing required argument: cwd (an absolute path to a chug working directory)"),
+            true,
+        );
+    };
+    let cwd = match validate_chug_cwd(CHUG_ABORT_TOOL, raw_cwd) {
+        Ok(cwd) => cwd,
+        Err(message) => return (message, true),
+    };
+    // pid: the shared control-verb input contract.
+    let pid = match parse_pid_argument(CHUG_ABORT_TOOL, args) {
+        Ok(pid) => pid,
+        Err(message) => return (message, true),
+    };
+    // The events read comes first (one bounded tail read, then the delegate
+    // summaries over it) — but the stream only DECIDES anything when the
+    // process is actually gone (see doc point 3).
+    let events_path = cwd.join(".chug").join("events.jsonl");
+    // Unreadable events degrade to "no verdict" — the abort proceeds on
+    // process identity alone.
+    let lines: Vec<String> = crate::delegate::read_events_tail(&events_path).unwrap_or_default();
+    let refs: Vec<&str> = lines.iter().map(String::as_str).collect();
+    let segment = crate::delegate::summarize_events(&refs);
+    // LIVENESS FIRST (the T157 fix-up class rule): consult the pid's real
+    // aliveness BEFORE trusting an events-derived terminal state. The
+    // stream's "done" latches on ANY goal line — including a mid-run
+    // `outcome:"rejected"`, after which the driver keeps running — so a
+    // LIVE child is never already-done, whatever the stream says; it falls
+    // through to the signal legs. A verifiably GONE child with a terminal
+    // verdict shortens the path here (idempotent, nothing signalled); a
+    // gone child with NO verdict falls through to the ownership legs'
+    // not-found refusal.
+    let events_terminal = segment.state() == "done" || segment.state() == "aborted";
+    if events_terminal && crate::delegate::reap_and_alive(pid) == Some(false) {
+        let verdict = crate::delegate::summarize_collect(&refs).verdict().to_string();
+        return (
+            format!(
+                "{CHUG_ABORT_TOOL}: pid {pid}\nstate: already-done\nverdict: \
+                 {verdict}\nnothing signalled"
+            ),
+            false,
         );
     }
-    (
-        format!(
-            "{CHUG_CANCEL_TOOL}: pid {pid}\nsignaled: kill\nwaited_ms: \
-             {waited_ms}"
-        ),
-        false,
-    )
+    #[cfg(unix)]
+    {
+        abort_unix(&cwd, pid, &events_path, refs.is_empty())
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (pid, refs.is_empty());
+        (
+            format!(
+                "{CHUG_ABORT_TOOL}: not supported on this platform (process \
+                 groups and signals are unix-only) — nothing signalled"
+            ),
+            true,
+        )
+    }
+}
+
+/// The unix abort legs: ownership re-derivation → shared signal discipline
+/// → the abort record (T157).
+#[cfg(unix)]
+fn abort_unix(cwd: &Path, pid: u64, events_path: &Path, events_absent: bool) -> (String, bool) {
+    let pgid = match ownership_pgid(CHUG_ABORT_TOOL, pid) {
+        Ok(pgid) => pgid,
+        Err(message) => return (message, true),
+    };
+    match term_group_with_escalation(pgid) {
+        Err(failure) => (format!("{CHUG_ABORT_TOOL}: {failure}"), true),
+        Ok(signal) => {
+            let (signaled, waited_ms) = match signal {
+                GroupSignal::Term { waited_ms } => ("term", waited_ms),
+                GroupSignal::Kill { waited_ms } => ("kill", waited_ms),
+                GroupSignal::KillFailed { err, waited_ms } => {
+                    return (
+                        format!(
+                            "{CHUG_ABORT_TOOL}: pid {pid} survived the \
+                             {CHUG_CANCEL_GRACE_MS} ms grace and the \
+                             escalation kill of group {pgid} failed ({err}) — \
+                             the group was TERM-signalled at {waited_ms} ms"
+                        ),
+                        true,
+                    );
+                }
+            };
+            // The group was signalled — record the abort so the run's
+            // events stream carries the terminal state (the run-level half
+            // of the verb). Best-effort: the process is dead either way.
+            let (recorded, record_note) = match append_abort_record(cwd) {
+                Ok(()) => (true, None),
+                Err(why) => (false, Some(why)),
+            };
+            let mut out = format!(
+                "{CHUG_ABORT_TOOL}: pid {pid}\nstate: aborted\nsignaled: \
+                 {signaled}\nwaited_ms: {waited_ms}\nrecorded: {recorded}"
+            );
+            if events_absent {
+                // The child never wrote an events stream (a stub/crashed
+                // child) — the record CREATED it; say so, so a reader does
+                // not expect a run_start line before the abort.
+                out.push_str("\nevents_created: true");
+            }
+            if let Some(why) = record_note {
+                out.push_str(&format!("\nrecord_failed: {why}"));
+            }
+            out.push_str(&format!("\nevents: {}", events_path.display()));
+            (out, false)
+        }
+    }
+}
+
+/// The abort record (T157): one `abort` line appended to the child's
+/// `.chug/events.jsonl`, the shape the driver's own `abort_exit` writes
+/// (type/ts/reason/model) with the distinctive [`CHUG_ABORT_REASON`] and
+/// `model: null` (the aborting server does not know the child's model).
+/// A single small append-write is line-atomic against the child's own
+/// O_APPEND writes.
+fn append_abort_record(cwd: &Path) -> Result<(), String> {
+    let path = cwd.join(".chug").join("events.jsonl");
+    let line = json!({
+        "type": "abort",
+        "ts": crate::observ::now_rfc3339(),
+        "reason": CHUG_ABORT_REASON,
+        "model": Value::Null,
+    });
+    fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .and_then(|mut file| writeln!(file, "{line}"))
+        .map_err(|e| format!("{} ({e:#})", path.display()))
+}
+
+/// `chug_steer` (T157): inject an operator steering note into a running
+/// detached `chug run` through the driver's EXISTING `[operator]`
+/// mechanism — no new mechanism. The in-process transport (the TUI chat
+/// dock's mpsc channel) is dead for a detached child (its sender was
+/// dropped at spawn), so the note goes over the CROSS-PROCESS queue file
+/// `.chug/steer.jsonl`: one `{"note": …}` JSON object per line, appended
+/// here, drained by the child's [`crate::driver::drive_loop`] at its next
+/// iteration boundary and fed through the same `append_steering_notes`
+/// path that lands channel notes as `[operator] …` user messages in the
+/// transcript (steering stays OUT of events.jsonl by the T10 pin — the
+/// note lands in the transcript, which is the "next-iteration context").
+///
+/// Delivery report: `queued` (the note is durably on the queue the child
+/// drains) vs `undeliverable` (`isError: true`, distinctive phrase, and
+/// NOTHING written) — the pid is verifiably GONE (the child-done phrase
+/// when the stream carries a terminal verdict, the child-gone phrase when
+/// it does not) or its liveness could not be probed (fail-closed).
+/// Deliverability keys on REAL process liveness FIRST (the T157 fix-up
+/// class rule): a live child is never undeliverable, whatever the stream
+/// latched — a mid-run goal rejection keeps the driver running, and the
+/// queued note lands at its next boundary. A note queued for a child that
+/// died without a verdict lingers undrained; the queue is the cwd's, so
+/// the next driver in that cwd consumes it at its first boundary — the
+/// documented boundary of file-based steering.
+fn chug_steer(args: &Value) -> (String, bool) {
+    let Some(raw_cwd) = args.get("cwd").and_then(Value::as_str) else {
+        return (
+            format!("{CHUG_STEER_TOOL}: missing required argument: cwd (an absolute path to a chug working directory)"),
+            true,
+        );
+    };
+    let cwd = match validate_chug_cwd(CHUG_STEER_TOOL, raw_cwd) {
+        Ok(cwd) => cwd,
+        Err(message) => return (message, true),
+    };
+    let pid = match parse_pid_argument(CHUG_STEER_TOOL, args) {
+        Ok(pid) => pid,
+        Err(message) => return (message, true),
+    };
+    // The note: required, non-empty after trim, bounded — rejected above
+    // the ceiling naming the received length, never clamped (the launch
+    // budget rule).
+    let Some(note) = args.get("note").and_then(Value::as_str) else {
+        return (
+            format!(
+                "{CHUG_STEER_TOOL}: missing required argument: note (the \
+                 operator steering note)"
+            ),
+            true,
+        );
+    };
+    if note.trim().is_empty() {
+        return (
+            format!(
+                "{CHUG_STEER_TOOL}: note must be a non-empty string after \
+                 trim, got {note:?}"
+            ),
+            true,
+        );
+    }
+    let note_chars = note.chars().count();
+    if note_chars > CHUG_STEER_NOTE_MAX_CHARS {
+        return (
+            format!(
+                "{CHUG_STEER_TOOL}: note must be at most \
+                 {CHUG_STEER_NOTE_MAX_CHARS} characters, got {note_chars}"
+            ),
+            true,
+        );
+    }
+    // LIVENESS FIRST (the T157 fix-up class rule): deliverability keys on
+    // the pid's REAL aliveness — the same T28 reap seam the signal verbs
+    // serve — never on the stream alone. `summarize_events().state()`
+    // latches "done" on ANY goal line, including a mid-run
+    // `outcome:"rejected"` after which the driver KEEPS RUNNING, so keying
+    // the undeliverable leg on the stream alone refused notes to live
+    // children (the validator's d1-demo). A LIVE child — whatever the
+    // stream says — gets the note queued; it drains at the child's next
+    // iteration boundary. Only a verifiably GONE child consults the
+    // stream, and only to pick the refusal's phrase: a terminal verdict
+    // there means the run is over (the child-done phrase); no verdict
+    // means the child died mid-run (the child-gone phrase). An
+    // unresolvable probe fails closed.
+    match crate::delegate::reap_and_alive(pid) {
+        Some(true) => {}
+        Some(false) => {
+            // Gone: the stream picks the phrase — and NOTHING is written
+            // either way (a stale note must not sit in the queue for the
+            // cwd's NEXT driver). Unreadable events degrade to "no
+            // verdict" — the child-gone phrase, never a crash.
+            let events_path = cwd.join(".chug").join("events.jsonl");
+            let lines: Vec<String> =
+                crate::delegate::read_events_tail(&events_path).unwrap_or_default();
+            let refs: Vec<&str> = lines.iter().map(String::as_str).collect();
+            let segment = crate::delegate::summarize_events(&refs);
+            if segment.state() == "done" || segment.state() == "aborted" {
+                let verdict =
+                    crate::delegate::summarize_collect(&refs).verdict().to_string();
+                return (
+                    format!(
+                        "{CHUG_STEER_TOOL}: pid {pid} already completed its \
+                         latest run segment (verdict: {verdict}) — note NOT \
+                         queued"
+                    ),
+                    true,
+                );
+            }
+            return (
+                format!(
+                    "{CHUG_STEER_TOOL}: pid {pid} is not alive (no such \
+                     process) — note NOT queued"
+                ),
+                true,
+            );
+        }
+        None => {
+            return (
+                format!(
+                    "{CHUG_STEER_TOOL}: pid {pid} liveness could not be \
+                     probed — fail-closed, note NOT queued"
+                ),
+                true,
+            );
+        }
+    }
+    // Queue it: one JSON line appended (create if absent). A write failure
+    // is an isError naming the path — never a silent "queued" lie.
+    let queue_path = crate::driver::steering_queue_path(&cwd);
+    let line = json!({ "note": note, "ts": crate::observ::now_rfc3339() });
+    if let Err(e) = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&queue_path)
+        .and_then(|mut file| writeln!(file, "{line}"))
+    {
+        return (
+            format!(
+                "{CHUG_STEER_TOOL}: queue write failed: {} ({e:#}) — note NOT \
+                 queued",
+                queue_path.display()
+            ),
+            true,
+        );
+    }
+    let mut out = format!(
+        "{CHUG_STEER_TOOL}: pid {pid}\nqueued: true\nqueue: {}\nnote_chars: \
+         {note_chars}",
+        queue_path.display()
+    );
+    // A tail preview (the T115 launch-goal precedent): the note's LAST
+    // chars are where truncation and quoting damage cluster.
+    let tail = crate::delegate::tail_preview(note, 120);
+    out.push_str(&format!("\nnote_tail: {tail}"));
+    (out, false)
 }
 
 /// Has the process group emptied? The T153 fix-up predicate: ONLY a probe
