@@ -52,12 +52,13 @@ Features are first-class: the mandate is closing capability gaps (a missing
 When the queue holds both a credible feature row and a DX-friction row of
 the same pri, work the feature first.
 
-ONE impl child at a time (backgrounded + polled, per step 2) — one child
-per row by default, though up to 3 trivial same-area rows MAY share one
-child under the **Trivial-row bundling** rule at the end of this phase;
-adjacent children may overlap ONLY under the **Pipeline overlap** rule at
-the end of this phase — at most 2 children in flight (1 validator + 1
-impl, never 2 impls):
+Impl children run backgrounded + polled (per step 2) — one child per row
+by default, though up to 3 trivial same-area rows MAY share one child
+under the **Trivial-row bundling** rule at the end of this phase; adjacent
+children may overlap ONLY under the **Pipeline overlap** rule at the end
+of this phase — at most 2 children in flight, of which at most 1
+validator (two impl children only when the disjointness gate passes;
+never 3+, never 2 validators):
 
 1. **Worktree.** `git -C /Users/jadams/workspace/chug worktree add
    /tmp/chug-loop-t<N> -b loop-t<N>`; build warm (T47): `export
@@ -119,7 +120,16 @@ impl, never 2 impls):
    quality bar, not further iteration raises.)
    The goal carries the T47 export because delegate cannot pass env — a child
    that skips it just builds cold into its own worktree's target dir
-   (harmless, slow).
+   (harmless, slow). T161: an impl child launched INTO the 2-impl overlap
+   (the Pipeline overlap rule's pattern ii) swaps its goal's export for the
+   role-keyed slot — `export
+   CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-impl-a`
+   before every cargo command, or
+   `CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-impl-b`
+   when the impl already in flight holds impl-a — the same dir its step-1
+   warm build used, never the shared default while another impl flies (the
+   T52 lesson: never one shared slot for concurrent impls); the template
+   above is the solo default and stays.
    Poll every ~60–110s with `delegate{action: "status", cwd:
    "/tmp/chug-loop-t<N>", pid: <pid launch returned>}` — each poll is a
    single non-blocking tool call reporting liveness, a summary of the
@@ -405,31 +415,49 @@ the loop/spec doctrine), that REQUIRED validation covers the set, while a
 bundle of docs/pins-only rows may skip the kimi round and rely on the
 orchestrator gates of step 4. At merge time the bundled rows may flip in
 ONE `todo:` commit naming every row + its ref (step 5). For the Pipeline
-overlap rule below, a bundle counts as its ONE impl child — the cap stays
-1 validator + 1 impl — and a bundle containing a doctrine row still never
-overlaps (it runs alone).
+overlap rule below, a bundle counts as ONE impl child under the same cap
+(at most 2 children, of which at most 1 validator) — and a bundle
+containing a doctrine row still never overlaps (it runs alone).
 
-**Pipeline overlap (T44) — when a second child may fly.** Steps 1–6 remain
-the per-row arc; adjacent rows may overlap in exactly one pattern. After
-impl child N completes (its step-3 review passed) and its validator
+**Pipeline overlap (T44, T161) — when a second child may fly.** Steps 1–6
+remain the per-row arc; adjacent rows may overlap in two patterns, both
+gated by the SAME disjointness check: read both specs, list the files
+each names as its targets, and overlap only when
+no file appears on both lists. (i) T44's {1 impl + 1 validator} overlap:
+after impl child N completes (its step-3 review passed) and its validator
 (step 4) has launched, you MAY create item N+1's worktree (step 1) and
-launch impl child N+1 (step 2) — **iff** the two items' spec-named target
-files are DISJOINT: read both specs, list the files each names as its
-targets, and overlap only when no file appears on both lists. The safety
-basis: the validator reads main read-only and impl N+1 writes only its own
-worktree, so no two processes ever write the same file — the merge into
-main is the one shared surface, and it stays serial (below). Doctrine
-items NEVER overlap: a spec touching LOOP-SPEC.md, META-SPEC.md,
-META-META-SPEC.md, SELF-SPEC.md, or TODO.md's row format runs alone, with
-NO other child in flight (a mid-flight doctrine change would govern work
-that was launched under the old rules). Hard cap: at most 2 children in
-flight — 1 validator + 1 impl, never 2 impls, never 3+. Merges stay
+launch impl child N+1 (step 2). (ii) T161's 2-impl overlap: impl child
+N+1 MAY launch while impl child N is STILL FLYING, iff the disjointness
+gate passes. The
+safety basis: each impl writes only its own worktree and a validator
+reads main read-only, so no two processes ever write the same file — the
+merge into main is the one shared surface, and it stays serial (below).
+Concurrent impls also never share a build slot (the T52 lesson one level
+down — cargo's artifact filename excludes the checkout path, so one
+shared dir is last-builder-wins): the impl launched INTO an overlap
+exports `CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-impl-a`
+before every cargo command — unless the impl already in flight holds
+impl-a, in which case
+`CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-impl-b` — and its
+step-1 warm build goes to the SAME dir; the impl already flying keeps the
+slot it launched with (the T47/T52 default `target-shared` when it
+launched solo). Doctrine items NEVER overlap: a spec touching
+LOOP-SPEC.md, META-SPEC.md, META-META-SPEC.md, SELF-SPEC.md, TODO.md's
+row format, or loopd.sh runs alone, with NO other child in flight (a
+mid-flight doctrine change would govern work that was launched under the
+old rules). Hard cap: at most 2 children in flight — of which at most 1
+validator; 2 impls only under the disjointness gate;
+never 3+ and never 2 validators. When the two queued items are NOT
+disjoint, the orchestrator
+falls back to pattern (i) — the {1 impl + 1 validator} overlap — T161
+widens T44, never narrows it, and never forces overlap. Merges stay
 STRICTLY serial in queue order: N merges (step 5) before N+1 even if N+1
-finished first; a FAIL verdict on N blocks N+1's merge until the fix-up
-arc resolves — N+1's branch may need a rebase onto the updated main, and
-you own that. Harvest still precedes removal for BOTH children (step 5,
-T19): no worktree — N's or N+1's — is removed until every child run it
-hosted (impl and validator alike) has been harvested.
+finished first; a FAIL verdict on N pauses N+1's MERGE — never N+1's
+impl, which may keep flying — until the fix-up arc resolves; N+1's branch
+may need a rebase onto the updated main, and you own that. Harvest still
+precedes removal for BOTH children (step 5, T19): no worktree — N's or
+N+1's — is removed until every child run it hosted (impl and validator
+alike) has been harvested.
 
 ## Phase 3 — Wrap
 
@@ -501,13 +529,22 @@ hosted (impl and validator alike) has been harvested.
 
 ## Hard rules
 
-- ONE WRITER per file set, serial merges, bounded gates (T44): at most 2
-  children in flight — 1 validator + 1 impl, never 2 impls (a Trivial-row
-  bundle counts as that ONE impl child) — and an impl
-  may overlap a validator only when the two items' spec-named target files
-  are disjoint; doctrine items (LOOP/META/META-META/SELF-SPEC or TODO.md
-  row format) never overlap, and merges stay strictly serial in queue
-  order. This overrides META-SPEC's "ONE child at a time" for launch
+- ONE WRITER per file set, serial merges, bounded gates (T44, T161):
+  **at most 2 children, ≤1 validator, disjoint-gated** — at most 2 children
+  in flight, of which at most 1 validator; two impl children may fly
+  together iff the two items' spec-named target files are disjoint — both
+  specs read, file lists compared; never 3+ children, never 2 validators
+  (a Trivial-row bundle counts as ONE impl child). An impl may overlap a
+  validator only when the two items' spec-named target files are disjoint;
+  concurrent impls never share a build slot (target-shared-impl-a /
+  target-shared-impl-b, the T52 lesson); doctrine items (LOOP/META/
+  META-META/SELF-SPEC, TODO.md row format, loopd.sh) never overlap with
+  anything; merges stay strictly serial in queue order — a FAIL on N's
+  validator pauses N+1's MERGE (never its impl) until the fix-up arc
+  resolves, and the orchestrator owns any rebase; when the queued items
+  are NOT disjoint the orchestrator falls back to the {1 impl + 1
+  validator} overlap — T161 widens T44, never narrows, and never forces
+  overlap. This overrides META-SPEC's "ONE child at a time" for launch
   concurrency ONLY; all of META-SPEC's other hard rules apply (never
   reset/remove worktrees with unmerged work, never force-push, wedge
   protocol); `delegate` (launch + status) is each child's
