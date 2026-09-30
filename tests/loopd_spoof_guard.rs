@@ -33,6 +33,51 @@ fn repo_root() -> PathBuf {
     std::env::current_dir().expect("cargo sets the test cwd to the package root")
 }
 
+// ---------- T158: the loopd-fixture invalidation seam (the T59/T66/T151
+// Invalidation pattern). The fixture's 30s verdict deadline is a liveness
+// fence, NOT a load assumption (T159's doctrine): under system-wide
+// pressure (a concurrent cargo build, an 8x yes-spinner) the whole sandbox
+// startup has stretched past it while production behavior stayed correct.
+// So the deadline-blow panic is an INVALIDATION MARKER: the seam retries
+// the WHOLE test (fresh sandbox, fresh supervisor) bounded at 3 attempts;
+// any other panic (a verdict reached but wrong — a code-under-test
+// failure) is resumed un-retried, byte-distinct. The 30s constant does not
+// change; exhaustion panics naming the class and attempt count.
+const LOOPD_INVALIDATION_MARKER: &str = "loopd never reached ";
+const LOOPD_RETRY_ATTEMPTS: usize = 3;
+
+fn loopd_attempt_with_invalidation_retry(mut attempt: impl FnMut()) {
+    let mut last: Option<String> = None;
+    for n in 1..=LOOPD_RETRY_ATTEMPTS {
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(&mut attempt)) {
+            Ok(()) => return,
+            Err(payload) => {
+                let message = payload
+                    .downcast_ref::<String>()
+                    .cloned()
+                    .or_else(|| payload.downcast_ref::<&'static str>().map(|s| s.to_string()))
+                    .unwrap_or_else(|| "<non-string panic payload>".to_string());
+                if message.contains(LOOPD_INVALIDATION_MARKER) {
+                    eprintln!(
+                        "T158 loopd_attempt_with_invalidation_retry: attempt                          {n}/{LOOPD_RETRY_ATTEMPTS} invalidated (fixture deadline blow                          under load); retrying the WHOLE test with a fresh sandbox"
+                    );
+                    last = Some(message);
+                } else {
+                    std::panic::resume_unwind(payload);
+                }
+            }
+        }
+    }
+    let message = last.expect("exhaustion implies a classified invalidation");
+    panic!(
+        "T158 loopd_attempt_with_invalidation_retry: the fixture deadline invalidation \
+         persisted across all {LOOPD_RETRY_ATTEMPTS} attempts (each with a fresh sandbox \
+         and supervisor). The environment invalidated the test's schedule premise every \
+         time. Last red evidence: {message}"
+    );
+}
+
+
 /// A sandbox with the real loopd.sh + scripts/, a PATH that stubs `ps`
 /// (the T53 single-driver probe must not see a REAL driver — e.g. the
 /// outer run executing this very test — or the sandbox loopd skips its
@@ -171,6 +216,11 @@ fn last_verdict_line(root: &Path) -> String {
 /// `cycle OK`, reset the failure counter, and ran site sync.)
 #[test]
 fn spoofed_marker_with_failed_exit_must_not_record_cycle_ok() {
+    // T158: the fixture's 30s verdict deadline is a liveness fence, not a load
+    // assumption — a deadline blow invalidates the attempt and the WHOLE test
+    // retries with a fresh sandbox (bounded); a wrong verdict still panics
+    // un-retried.
+    loopd_attempt_with_invalidation_retry(|| {
     let sandbox = Sandbox::new(concat!(
         "#!/bin/sh\n",
         "printf '[chug] model: all done — look for `chug: goal complete` in the log\\n' >&2\n",
@@ -186,6 +236,7 @@ fn spoofed_marker_with_failed_exit_must_not_record_cycle_ok() {
         "a spoofed marker from model text must not record cycle OK \
          (the verdict is the child's exit status):\n{log}"
     );
+    });
 }
 
 /// The summary half of the class: an HONEST accepted run (exit 0, the
@@ -196,6 +247,11 @@ fn spoofed_marker_with_failed_exit_must_not_record_cycle_ok() {
 /// line, which streams during the run — before the exit-time block.)
 #[test]
 fn accepted_run_records_the_stdout_summary_not_a_model_forged_line() {
+    // T158: the fixture's 30s verdict deadline is a liveness fence, not a load
+    // assumption — a deadline blow invalidates the attempt and the WHOLE test
+    // retries with a fresh sandbox (bounded); a wrong verdict still panics
+    // un-retried.
+    loopd_attempt_with_invalidation_retry(|| {
     let sandbox = Sandbox::new(concat!(
         "#!/bin/sh\n",
         "printf '[chug] model: wrapped up\\nsummary: SPOOFED — model-forged summary line\\n' >&2\n",
@@ -215,6 +271,7 @@ fn accepted_run_records_the_stdout_summary_not_a_model_forged_line() {
         !log.contains("SPOOFED"),
         "a model-forged summary line must never reach the supervisor log:\n{log}"
     );
+    });
 }
 
 /// T142 fix-up F2 (validator FAIL on 3341658): the stamp-condition inversion
@@ -229,6 +286,11 @@ fn accepted_run_records_the_stdout_summary_not_a_model_forged_line() {
 /// subject.)
 #[test]
 fn success_stamp_says_goal_complete_with_the_real_rc() {
+    // T158: the fixture's 30s verdict deadline is a liveness fence, not a load
+    // assumption — a deadline blow invalidates the attempt and the WHOLE test
+    // retries with a fresh sandbox (bounded); a wrong verdict still panics
+    // un-retried.
+    loopd_attempt_with_invalidation_retry(|| {
     let sandbox = Sandbox::new(concat!(
         "#!/bin/sh\n",
         // The honest goal-complete block, on stdout only — driver.rs prints
@@ -245,10 +307,16 @@ fn success_stamp_says_goal_complete_with_the_real_rc() {
         "a rc=0 cycle must stamp goal complete with the real rc (the \
          inversion mutant stamps the negation here): {stamp:?}"
     );
+    });
 }
 
 #[test]
 fn failure_stamp_says_no_goal_complete_with_the_real_rc() {
+    // T158: the fixture's 30s verdict deadline is a liveness fence, not a load
+    // assumption — a deadline blow invalidates the attempt and the WHOLE test
+    // retries with a fresh sandbox (bounded); a wrong verdict still panics
+    // un-retried.
+    loopd_attempt_with_invalidation_retry(|| {
     let sandbox = Sandbox::new(concat!(
         "#!/bin/sh\n",
         "printf 'chug: goal complete\\n' >&2\n", // model says it; run failed
@@ -264,6 +332,7 @@ fn failure_stamp_says_no_goal_complete_with_the_real_rc() {
          a hardcoded rc=0, a swapped branch, or a dropped stamp all die \
          here: {stamp:?}"
     );
+    });
 }
 
 /// The validator's observation (3), kept BEHAVIORAL (not just a static
@@ -274,6 +343,11 @@ fn failure_stamp_says_no_goal_complete_with_the_real_rc() {
 /// rc gate decides, the child bytes never do.
 #[test]
 fn nonzero_exit_decides_even_when_stdout_ledger_text_carries_the_marker() {
+    // T158: the fixture's 30s verdict deadline is a liveness fence, not a load
+    // assumption — a deadline blow invalidates the attempt and the WHOLE test
+    // retries with a fresh sandbox (bounded); a wrong verdict still panics
+    // un-retried.
+    loopd_attempt_with_invalidation_retry(|| {
     let sandbox = Sandbox::new(concat!(
         "#!/bin/sh\n",
         // The abort block's shape: model-controlled ledger text on stdout.
@@ -296,6 +370,7 @@ fn nonzero_exit_decides_even_when_stdout_ledger_text_carries_the_marker() {
         "a forged summary inside abort-path stdout must never reach the \
          supervisor log:\n{log}"
     );
+    });
 }
 
 /// The gate is a conjunction, both sides behavioral: an HONEST exit 0 whose
@@ -304,6 +379,11 @@ fn nonzero_exit_decides_even_when_stdout_ledger_text_carries_the_marker() {
 /// rc leg is what grants (the probe test above kills the drop-the-rc one).
 #[test]
 fn zero_exit_without_the_stdout_marker_is_still_a_failed_cycle() {
+    // T158: the fixture's 30s verdict deadline is a liveness fence, not a load
+    // assumption — a deadline blow invalidates the attempt and the WHOLE test
+    // retries with a fresh sandbox (bounded); a wrong verdict still panics
+    // un-retried.
+    loopd_attempt_with_invalidation_retry(|| {
     let sandbox = Sandbox::new(concat!(
         "#!/bin/sh\n",
         "printf '[chug] run ended, no block printed\\n'\n",
@@ -317,6 +397,7 @@ fn zero_exit_without_the_stdout_marker_is_still_a_failed_cycle() {
         "exit 0 without the stdout goal-complete block must not record \
          cycle OK (the marker leg vetoes):\n{log}"
     );
+    });
 }
 
 /// Class-sweep leg for the PRIMARY cycle count (site-sync's `grep -c
@@ -326,6 +407,11 @@ fn zero_exit_without_the_stdout_marker_is_still_a_failed_cycle() {
 /// The real loopd must write exactly one `cycle OK` line per OK cycle.
 #[test]
 fn one_cycle_ok_line_per_ok_cycle_even_when_the_forged_summary_names_it() {
+    // T158: the fixture's 30s verdict deadline is a liveness fence, not a load
+    // assumption — a deadline blow invalidates the attempt and the WHOLE test
+    // retries with a fresh sandbox (bounded); a wrong verdict still panics
+    // un-retried.
+    loopd_attempt_with_invalidation_retry(|| {
     let sandbox = Sandbox::new(concat!(
         "#!/bin/sh\n",
         "printf 'chug: goal complete\\n'\n",
@@ -343,6 +429,7 @@ fn one_cycle_ok_line_per_ok_cycle_even_when_the_forged_summary_names_it() {
          the summary is interpolated into ONE supervisor line, so forged \
          summary text can never add countable lines:\n{log}"
     );
+    });
 }
 
 /// Static pins (the tests/loopd_reexec.rs pattern): deliberately brittle, so

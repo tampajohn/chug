@@ -1,7 +1,7 @@
 // T104 family: image — read_file image leg through the loop: degrade, previews, plan mode (T91). Moved bytes byte-identical (T84 rule)
 // from driver.rs's test module; every test here lives in exactly one family
 // file.
-    use super::*; // the shared harness (driver::tests) + driver's own imports
+use super::*; // the shared harness (driver::tests) + driver's own imports
 // ---- T91: read_file image leg through the loop ----
 
 /// Count image blocks in an outgoing request: standalone image blocks plus
@@ -150,7 +150,14 @@ fn image_endpoint_400_rejection_retries_once_with_placeholder_and_latches() {
 
     let (_utx, urx) = mpsc::channel::<SlashUpdate>();
     let controls = Controls::detached();
-    let ctx = ctx_for(&tmp, Mode::Autonomous, &controls, &urx, None, &observ::Sink::Noop);
+    let ctx = ctx_for(
+        &tmp,
+        Mode::Autonomous,
+        &controls,
+        &urx,
+        None,
+        &observ::Sink::Noop,
+    );
     let mut knobs = knobs_with(10);
     let mut llm = ImageDegradeLlm::new(vec![
         tool_use_response("read_file", json!({"path": "a.png"})),
@@ -171,12 +178,23 @@ fn image_endpoint_400_rejection_retries_once_with_placeholder_and_latches() {
         &mut McpRegistry::new(tmp.path(), true, None).unwrap(),
     )
     .unwrap();
-    assert!(matches!(outcome, DriveOutcome::RunFinished(0)), "{outcome:?}");
+    assert!(
+        matches!(outcome, DriveOutcome::RunFinished(0)),
+        "{outcome:?}"
+    );
 
     // Call 2 — the first request carrying a.png's image block — failed; the
     // retry is call 3; the final call is 4.
-    assert_eq!(llm.calls.len(), 4, "failed call + retry + one per scripted turn");
-    assert_eq!(count_image_blocks(&llm.calls[0]), 0, "kick request has no images");
+    assert_eq!(
+        llm.calls.len(),
+        4,
+        "failed call + retry + one per scripted turn"
+    );
+    assert_eq!(
+        count_image_blocks(&llm.calls[0]),
+        0,
+        "kick request has no images"
+    );
     assert_eq!(
         count_image_blocks(&llm.calls[1]),
         1,
@@ -194,7 +212,10 @@ fn image_endpoint_400_rejection_retries_once_with_placeholder_and_latches() {
             wire.contains(crate::api::IMAGE_REMOVED_PLACEHOLDER),
             "call {i} carries the placeholder text: {wire}"
         );
-        assert!(!wire.contains(base64_of(a_bytes).as_str()), "call {i} leaks no a.png base64");
+        assert!(
+            !wire.contains(base64_of(a_bytes).as_str()),
+            "call {i} leaks no a.png base64"
+        );
     }
     // The latch downgraded b.png's result at WRAP time: its tool_result is
     // the short note STRING, never an array with an image block.
@@ -202,7 +223,9 @@ fn image_endpoint_400_rejection_retries_once_with_placeholder_and_latches() {
         .iter()
         .flat_map(|m| m.content.iter())
         .find_map(|b| match b {
-            ContentBlock::Known(KnownBlock::ToolResult { content, is_error, .. }) => content
+            ContentBlock::Known(KnownBlock::ToolResult {
+                content, is_error, ..
+            }) => content
                 .as_str()
                 .filter(|s| s.contains("b.png"))
                 .map(|s| (s, *is_error)),
@@ -222,7 +245,10 @@ fn image_endpoint_400_rejection_retries_once_with_placeholder_and_latches() {
         .iter()
         .filter(|e| matches!(e, Event::ImageDegraded))
         .count();
-    assert_eq!(degraded, 1, "exactly one image_degraded note, not per request");
+    assert_eq!(
+        degraded, 1,
+        "exactly one image_degraded note, not per request"
+    );
 }
 
 /// Control leg: an unrelated 400 body keeps today's fail-fast error path —
@@ -232,7 +258,14 @@ fn image_unrelated_400_keeps_fail_fast_error_path() {
     let tmp = tempfile::tempdir().unwrap();
     let (_utx, urx) = mpsc::channel::<SlashUpdate>();
     let controls = Controls::detached();
-    let ctx = ctx_for(&tmp, Mode::Autonomous, &controls, &urx, None, &observ::Sink::Noop);
+    let ctx = ctx_for(
+        &tmp,
+        Mode::Autonomous,
+        &controls,
+        &urx,
+        None,
+        &observ::Sink::Noop,
+    );
     let mut knobs = knobs_with(10);
     let mut llm = UnrelatedErrLlm { calls: 0 };
     let mut gate = None;
@@ -250,7 +283,10 @@ fn image_unrelated_400_keeps_fail_fast_error_path() {
     )
     .unwrap_err();
     assert!(err.to_string().contains("HTTP 400"), "{err}");
-    assert_eq!(llm.calls, 1, "fail fast: no degrade retry on an unrelated 400");
+    assert_eq!(
+        llm.calls, 1,
+        "fail fast: no degrade retry on an unrelated 400"
+    );
     assert!(
         !sink.0.iter().any(|e| matches!(e, Event::ImageDegraded)),
         "no degrade note on an unrelated 400"
@@ -269,9 +305,19 @@ fn degraded_retry_error_path_still_clears_the_text_delta_hook() {
     let tmp = tempfile::tempdir().unwrap();
     let (_utx, urx) = mpsc::channel::<SlashUpdate>();
     let controls = Controls::detached();
-    let ctx = ctx_for(&tmp, Mode::Autonomous, &controls, &urx, None, &observ::Sink::Noop);
+    let ctx = ctx_for(
+        &tmp,
+        Mode::Autonomous,
+        &controls,
+        &urx,
+        None,
+        &observ::Sink::Noop,
+    );
     let mut knobs = knobs_with(10);
-    let mut llm = HookLeakProbeLlm { calls: 0, hook_armed: false };
+    let mut llm = HookLeakProbeLlm {
+        calls: 0,
+        hook_armed: false,
+    };
     let mut gate = None;
     let mut messages = Vec::new();
     let mut sink = RecordingSink::default();
@@ -305,7 +351,14 @@ fn image_result_events_preview_carries_short_note_no_base64() {
 
     let (_utx, urx) = mpsc::channel::<SlashUpdate>();
     let controls = Controls::detached();
-    let ctx = ctx_for(&tmp, Mode::Autonomous, &controls, &urx, None, &observ::Sink::Noop);
+    let ctx = ctx_for(
+        &tmp,
+        Mode::Autonomous,
+        &controls,
+        &urx,
+        None,
+        &observ::Sink::Noop,
+    );
     let mut knobs = knobs_with(10);
     let mut llm = ScriptedLlm::new(vec![
         tool_use_response("read_file", json!({"path": "a.png"})),
@@ -325,7 +378,10 @@ fn image_result_events_preview_carries_short_note_no_base64() {
         &mut McpRegistry::new(tmp.path(), true, None).unwrap(),
     )
     .unwrap();
-    assert!(matches!(outcome, DriveOutcome::RunFinished(0)), "{outcome:?}");
+    assert!(
+        matches!(outcome, DriveOutcome::RunFinished(0)),
+        "{outcome:?}"
+    );
 
     let note = format!(
         "[image: {} ({} bytes, image/png)]",
@@ -336,16 +392,19 @@ fn image_result_events_preview_carries_short_note_no_base64() {
         .0
         .iter()
         .find_map(|e| match e {
-            Event::ToolResult { name, ok, preview, .. } if name == "read_file" => {
-                Some((*ok, preview.clone()))
-            }
+            Event::ToolResult {
+                name, ok, preview, ..
+            } if name == "read_file" => Some((*ok, preview.clone())),
             _ => None,
         })
         .expect("read_file tool_result event");
     assert!(ok, "the image read is ok");
     assert_eq!(preview, note, "the preview IS the short note");
     assert!(preview.len() < 100, "preview stays short: {preview}");
-    assert!(!preview.contains(base64_of(png).as_str()), "no base64 in the preview");
+    assert!(
+        !preview.contains(base64_of(png).as_str()),
+        "no base64 in the preview"
+    );
     // The `.chug/events.jsonl` tool_result line rides the same short note.
     let lines: Vec<Value> = fs::read_to_string(tmp.path().join(".chug/events.jsonl"))
         .unwrap()
@@ -391,15 +450,22 @@ fn image_read_works_in_plan_mode() {
         &mut McpRegistry::new(ctx.cwd, true, None).unwrap(),
     )
     .unwrap();
-    assert!(matches!(outcome, DriveOutcome::RunFinished(0)), "{outcome:?}");
-    assert_eq!(count_image_blocks(&messages), 1, "no degrade in plan mode: the image rides");
+    assert!(
+        matches!(outcome, DriveOutcome::RunFinished(0)),
+        "{outcome:?}"
+    );
+    assert_eq!(
+        count_image_blocks(&messages),
+        1,
+        "no degrade in plan mode: the image rides"
+    );
     let block = messages
         .iter()
         .flat_map(|m| m.content.iter())
         .find_map(|b| match b {
-            ContentBlock::Known(KnownBlock::ToolResult { content, is_error, .. }) => {
-                content.as_array().map(|items| (items, *is_error))
-            }
+            ContentBlock::Known(KnownBlock::ToolResult {
+                content, is_error, ..
+            }) => content.as_array().map(|items| (items, *is_error)),
             _ => None,
         })
         .expect("the image tool result uses array content");
