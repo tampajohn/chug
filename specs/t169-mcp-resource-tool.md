@@ -1,6 +1,6 @@
 # T169 — F11 phase 1b-i: model-facing `mcp_resource` tool (list/read server resources)
 
-check: export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared && cargo test --bin chug mcp && cargo test --test mcp_serve
+check: export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-impl-a && cargo test --bin chug mcp && cargo test --test mcp_serve
 
 ## Repo context
 
