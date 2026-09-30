@@ -1012,8 +1012,14 @@
 
     /// Poll (deadline-bounded) for the stub's atomically-published dump —
     /// launch returns at spawn, so the dump lands milliseconds later.
+    ///
+    /// T158 (req 3): the deadline assert names the OBSERVED launch outcome,
+    /// so a miss says WHICH failure happened — a >10s miss of a live stub is
+    /// a failed/starved spawn, and the assertion must say whether the launch
+    /// already reported an error (`isError` payload) or reported a pid whose
+    /// stub never produced the dump. No deadline change (10s stays).
     #[cfg(unix)]
-    fn wait_for_stub_dump(path: &Path) -> Vec<String> {
+    fn wait_for_stub_dump(path: &Path, launch_text: &str, launch_is_error: Option<bool>) -> Vec<String> {
         use std::time::{Duration, Instant};
         let deadline = Instant::now() + Duration::from_secs(10);
         loop {
@@ -1025,8 +1031,19 @@
             }
             assert!(
                 Instant::now() < deadline,
-                "stub never wrote {}",
-                path.display()
+                "stub never wrote {} in 10s AND the launch outcome was: {}",
+                path.display(),
+                if launch_is_error == Some(true) {
+                    format!("isError: {launch_text}")
+                } else {
+                    match launch_text
+                        .lines()
+                        .find_map(|l| l.strip_prefix("launched: pid "))
+                    {
+                        Some(pid) => format!("reported pid {pid} but no dump appeared"),
+                        None => format!("no pid line at all: {launch_text}"),
+                    }
+                }
             );
             std::thread::sleep(Duration::from_millis(25));
         }
@@ -1098,7 +1115,11 @@
         // stdout+stderr before spawn).
         assert!(log_path.is_file(), "log must exist: {text}");
         // The EXACT child argv, in order, with the boundary budgets verbatim.
-        let argv = wait_for_stub_dump(&target.path().join("argv.txt"));
+        let argv = wait_for_stub_dump(
+            &target.path().join("argv.txt"),
+            &text,
+            is_error,
+        );
         let expected = [
             "run",
             "--spec",

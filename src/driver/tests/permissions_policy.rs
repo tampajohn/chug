@@ -166,6 +166,10 @@ fn non_matching_command_executes_and_hooks_still_fire() {
     // T151: hold the shared timing domain across the whole body (first
     // acquisition — see crate::testsupport's lock-order rule). Named T151 sighting + siblings whose asserts inspect bash/hook/MCP child outcomes (spawn timing).
     let _timing = crate::testsupport::timing_guard();
+    // T158: the whole scripted attempt (fresh tempdir -> drive -> asserts) is
+    // spawn-invalidation retried; red legs embed the observed evidence so a
+    // spawn failure under pressure classifies as invalidation.
+    drive_attempt_with_spawn_retry(|| {
 
     let tmp = tempfile::tempdir().unwrap();
     write_permissions_json(
@@ -218,6 +222,7 @@ fn non_matching_command_executes_and_hooks_still_fire() {
         2,
         "hooks fire on an allowed call: {lines:?}"
     );
+    });
 }
 
 /// A whole-tool deny keeps the run alive too: the denied web_fetch call
@@ -475,6 +480,10 @@ fn malformed_permissions_config_fails_open_once_and_run_continues() {
     // T151: hold the shared timing domain across the whole body (first
     // acquisition — see crate::testsupport's lock-order rule). Named T151 sighting + siblings whose asserts inspect bash/hook/MCP child outcomes (spawn timing).
     let _timing = crate::testsupport::timing_guard();
+    // T158: the whole scripted attempt (fresh tempdir -> drive -> asserts) is
+    // spawn-invalidation retried; red legs embed the observed evidence so a
+    // spawn failure under pressure classifies as invalidation.
+    drive_attempt_with_spawn_retry(|| {
 
     let tmp = tempfile::tempdir().unwrap();
     write_permissions_raw(tmp.path(), "{ not json !!!");
@@ -521,6 +530,7 @@ fn malformed_permissions_config_fails_open_once_and_run_continues() {
         !lines.iter().any(|l| l["type"] == "permission_denied"),
         "zero rules → zero denies: {lines:?}"
     );
+    });
 }
 
 /// Absent config = zero cost: a clean run produces no permission lines
@@ -686,6 +696,10 @@ fn unrelated_deny_still_spawns_repo_mcp_server() {
     // T151: hold the shared timing domain across the whole body (first
     // acquisition — see crate::testsupport's lock-order rule). Named T151 sighting + siblings whose asserts inspect bash/hook/MCP child outcomes (spawn timing).
     let _timing = crate::testsupport::timing_guard();
+    // T158: the whole scripted attempt (fresh tempdir -> drive -> asserts) is
+    // spawn-invalidation retried; red legs embed the observed evidence so a
+    // spawn failure under pressure classifies as invalidation.
+    drive_attempt_with_spawn_retry(|| {
 
     let tmp = tempfile::tempdir().unwrap();
     write_flag_spawning_mcp_server(tmp.path());
@@ -720,4 +734,5 @@ fn unrelated_deny_still_spawns_repo_mcp_server() {
             .any(|t| t["name"] == "mcp__fake__echo"),
         "the allowed server must register its tools"
     );
+    });
 }

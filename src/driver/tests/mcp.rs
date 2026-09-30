@@ -4,6 +4,10 @@
 use super::*; // the shared harness (driver::tests) + driver's own imports
 #[test]
 fn mcp_schemas_merged_and_mcp_tool_use_routed_to_registry() {
+    // T158: the whole scripted attempt (fresh tempdir -> drive -> asserts) is
+    // spawn-invalidation retried; red legs embed the observed evidence so a
+    // spawn failure under pressure classifies as invalidation.
+    drive_attempt_with_spawn_retry(|| {
     let tmp = tempfile::tempdir().unwrap();
     write_echo_server(tmp.path());
     let mut mcp = McpRegistry::new(tmp.path(), false, None).expect("registry with fake server");
@@ -47,9 +51,13 @@ fn mcp_schemas_merged_and_mcp_tool_use_routed_to_registry() {
 
     // The tools array the model saw merges MCP schemas with the built-ins.
     let offered = &client.recorded_tools[0];
+    // T158 evidence: the server's own fail-soft start log rides the message,
+    // so a `spawning mcp server …` / `failed to start: …` under pressure
+    // classifies as spawn invalidation and the attempt retries.
+    let mcp_log = mcp_server_log(tmp.path(), "fake");
     assert!(
         offered.iter().any(|t| t["name"] == "mcp__fake__echo"),
-        "mcp schema missing: {offered:?}"
+        "mcp schema missing: {offered:?}\n--- mcp-fake.log ---\n{mcp_log}"
     );
     assert!(offered.iter().any(|t| t["name"] == "bash"));
 
@@ -58,6 +66,7 @@ fn mcp_schemas_merged_and_mcp_tool_use_routed_to_registry() {
     let (content, is_error) = tool_result_text(&messages).expect("tool result in transcript");
     assert!(!is_error, "{content}");
     assert!(content.contains(r#""text": "hello mcp""#), "{content}");
+    });
 }
 
 #[test]
