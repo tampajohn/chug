@@ -147,7 +147,15 @@ impl, never 2 impls):
    SAME worktree with `resume: true` — same spec, same goal (the goal
    re-carries the T47 `CARGO_TARGET_DIR` export), same model, same
    budgets (80/35 impl, 60/40 validate) — which continues the child's
-   prior transcript in that worktree instead of starting cold. Resume
+   prior transcript in that worktree instead of starting cold. The
+   routing discriminator is the work's state at death: work INCOMPLETE
+   (uncommitted or partial) takes the resume relaunch above; work
+   complete and committed with the goal still unaccepted goes to
+   orchestrator-finish directly — review the branch, run the gates,
+   merge if green, NO resume burned (T150-impl precedent, cycle 71
+   routing d1790691515-11, alongside T55); resume-exhausted or
+   unrecoverable goes to next-cycle recovery with a recipe written on
+   the row (T28 precedent). Resume
    works because the worktree is never removed pre-harvest (T19), so the
    child's untracked `.chug/` transcript persists, and `delegate status`
    reads the LATEST run segment (T58), so the pre-resume abort no longer
