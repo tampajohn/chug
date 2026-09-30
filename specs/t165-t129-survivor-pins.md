@@ -1,6 +1,6 @@
 # T165 — pin the T129 validator's two weak-test survivors (M7 CLI plumbing, M8 isError arm)
 
-check: export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared && cargo test --test mcp_serve && cargo test --bin chug mcp_serve
+check: export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-impl-a && cargo test --test mcp_serve && cargo test --bin chug mcp_serve
 
 ## Repo context
 
