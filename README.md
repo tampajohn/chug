@@ -695,6 +695,47 @@ and a still-alive group is SIGKILLed once. Success payload: `pid` +
 `kill` = the escalation fired) + `waited_ms`. Failures are `isError`
 tool results — never JSON-RPC errors, never fatal.
 
+The control verbs (T157, F10 phase 3) live behind a SECOND policy flag,
+`chug mcp-serve --allow-control` — the same default-deny family,
+advertised ⇔ callable, and INDEPENDENT of `--allow-launch` (the operator
+who grants launching need not grant control of running children). With
+it, `tools/list` advertises two more tools:
+
+- `chug_abort` — the RUN-level counterpart of `chug_cancel`. Input:
+  `{"cwd": "<absolute path>", "pid": <positive int>}`. Same fail-closed
+  ownership re-derivation and the same TERM→~5 s grace→KILL group
+  discipline, three contract differences: the result names the terminal
+  state (`aborted` — signalled and recorded; `already-done` — the child's
+  latest run segment already has a verdict, idempotent and unsignalled;
+  `not-found` — dead pid, no verdict, `isError`, nothing signalled); and
+  a successful abort is RECORDED in the child's `.chug/events.jsonl`
+  (reason `operator abort via chug_abort`) so `chug_status`/`chug_collect`
+  report the run as aborted — the gap a bare signal leaves. A verdict
+  wins over liveness: a finished run is `already-done` even if its pid
+  still answers. The record write is best-effort (`recorded: false`
+  degrades, never errors).
+- `chug_steer` — inject an operator steering note into a running child
+  through the driver's EXISTING `[operator]` mechanism, no new mechanism.
+  Input: `{"cwd": "<absolute path>", "pid": <positive int>, "note":
+  "<1..=4000 chars>"}` (rejected above the ceiling naming the received
+  length, never clamped; empty-after-trim rejected). The note is appended
+  to the child's cross-process queue `.chug/steer.jsonl` (a detached
+  child's in-process channel is dead) and the child's
+  `drive_loop` drains that queue at its NEXT iteration boundary into the
+  same path the TUI chat dock feeds — it lands as an `[operator] …` user
+  message in the child's transcript (steering stays out of
+  events.jsonl by design; the queue is consumed by the rename-away
+  drain, and a note queued for a child that died without a verdict
+  lingers for the cwd's next driver). The result is `queued: true` or
+  `undeliverable` (`isError` — the latest segment already has a verdict,
+  or the pid is not alive — with NOTHING written, so a stale note never
+  poisons the next driver).
+
+Both verbs are ordinary MCP tools on the client side —
+`mcp__<server>__chug_abort` etc. — so T90's `.chug/permissions.json`
+glob rules (`mcp__*`, `mcp__<server>__*`, per-tool) gate them like every
+other MCP tool name, no new permission surface.
+
 **Launch safety**: the spawned child is an ordinary `chug run` in the
 target cwd — it runs that cwd's OWN policy chain (`.chug/permissions.json`
 deny rules, `.chug/hooks.json` vetoes, risk gate) exactly as if a human
@@ -711,10 +752,14 @@ the above-ceiling refusal's `isError` arm (received value named, nothing
 spawned, loop alive), and the default-deny boundary (`chug_launch`
 unadvertised, its call answered by the unknown-tool error).
 
-Phase 2 (the read tools plus `chug_launch`) is CLOSED, and phase 3a —
-cancellation, `chug_cancel` — has landed (T153). Phase 3b (resources,
-notifications, a server log) is still deferred: no consumer pulls
-MCP-spec-completeness surfaces (the cycle-72 EVALUATION §4 reason).
+Phase 2 (the read tools plus `chug_launch`) is CLOSED, phase 3a —
+cancellation, `chug_cancel` — landed (T153), and phase 3's control verbs
+— `chug_abort` + `chug_steer` behind `--allow-control` — have landed
+(T157). Phase 3b (resources, notifications, a server log) is still
+deferred: no consumer pulls MCP-spec-completeness surfaces (the
+cycle-72 EVALUATION §4 reason). `chug_delegate` (spawning into an
+EXISTING run instead of a fresh one) was EVALUATED for phase 3 and
+DEFERRED with a written reason — see the T157 commit message.
 
 **stdout purity**: a stdio MCP server's stdout IS the wire — `chug
 mcp-serve` prints nothing but protocol messages (no banner, no log
