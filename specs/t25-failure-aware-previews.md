@@ -1,6 +1,6 @@
 # T25 — Failure-aware event previews: error tool results keep a tail window
 
-check: cd /Users/jadams/workspace/chug && cargo test
+check: cargo test
 
 ## Why (evidence)
 
