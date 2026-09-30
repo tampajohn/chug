@@ -7,15 +7,49 @@
 
     /// The flagless dispatch — the pre-T129 entry, byte-identical read-only
     /// behavior, and the call site every phase-1/2a leg already rides
-    /// (unchanged by T129). The flag-ON legs call
+    /// (unchanged by T129/T153/T157). The flag-ON legs call
     /// [`handle_message_with`](super::handle_message_with) directly.
     fn handle_message(line: &str) -> Option<String> {
-        super::handle_message_with(line, false)
+        super::handle_message_with(line, super::Gates::default())
+    }
+
+    /// The launch-gated dispatch (T129/T153): `allow_launch` on, control
+    /// off — the T153 write legs' entry.
+    fn handle_message_launch(line: &str) -> Option<String> {
+        super::handle_message_with(
+            line,
+            super::Gates {
+                allow_launch: true,
+                allow_control: false,
+            },
+        )
+    }
+
+    /// The control-gated dispatch (T157): `allow_control` on, launch off.
+    fn handle_message_control(line: &str) -> Option<String> {
+        super::handle_message_with(
+            line,
+            super::Gates {
+                allow_launch: false,
+                allow_control: true,
+            },
+        )
+    }
+
+    /// Both gates on (T157): the full six-tool surface.
+    fn handle_message_full(line: &str) -> Option<String> {
+        super::handle_message_with(
+            line,
+            super::Gates {
+                allow_launch: true,
+                allow_control: true,
+            },
+        )
     }
 
     /// The flagless serve loop — the pre-T129 entry for the framing legs.
     fn serve_from(read: &mut impl BufRead, out: &mut impl Write) -> anyhow::Result<()> {
-        super::serve_from_with(read, out, false)
+        super::serve_from_with(read, out, super::Gates::default())
     }
 
     /// Parse a response line into its envelope parts.
@@ -647,7 +681,7 @@
             "jsonrpc": "2.0", "id": 129, "method": "tools/call",
             "params": {"name": "chug_launch", "arguments": arguments}
         });
-        let line = handle_message_with(&req.to_string(), allow_launch).expect("responds");
+        let line = if allow_launch { handle_message_launch(&req.to_string()) } else { handle_message(&req.to_string()) }.expect("responds");
         let (_, id, _, error) = parts(&line);
         assert_eq!(id, Some(json!(129)), "id echoed: {line}");
         assert!(
@@ -705,7 +739,7 @@
 
     #[test]
     fn chug_launch_flag_on_advertised_with_the_exact_schema() {
-        let line = handle_message_with(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#, true)
+        let line = handle_message_launch(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)
             .expect("responds");
         let (_, _, result, _) = parts(&line);
         let tools = result.expect("result")["tools"]
@@ -1088,7 +1122,7 @@
             "jsonrpc": "2.0", "id": 153, "method": "tools/call",
             "params": {"name": "chug_cancel", "arguments": arguments}
         });
-        let line = handle_message_with(&req.to_string(), allow_launch).expect("responds");
+        let line = if allow_launch { handle_message_launch(&req.to_string()) } else { handle_message(&req.to_string()) }.expect("responds");
         let (_, id, _, error) = parts(&line);
         assert_eq!(id, Some(json!(153)), "id echoed: {line}");
         assert!(
@@ -1244,7 +1278,7 @@
 
     #[test]
     fn chug_cancel_flag_on_advertised_with_the_exact_schema() {
-        let line = handle_message_with(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#, true)
+        let line = handle_message_launch(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)
             .expect("responds");
         let (_, _, result, _) = parts(&line);
         let tools = result.expect("result")["tools"]
@@ -1785,7 +1819,7 @@
         // boundary legitimately builds fixtures (tempdir mkdirs, doc-mention
         // needles), which are not the serve path. Everything up to the test
         // boundary must be free of the banner / events-writer / driver-lock
-        // / filesystem-write surface `chug run` starts with.
+        // surface `chug run` starts with.
         let prod = src
             .split("#[cfg(test)]")
             .next()
@@ -1799,9 +1833,40 @@
         let mkdir_needle = concat!("create_dir", "_all");
         let write_needle = concat!("fs::", "write(");
         let open_needle = concat!("Open", "Options");
-        for needle in [mkdir_needle, write_needle, open_needle] {
-            assert!(!prod.contains(needle), "phase 1 writes nothing ({needle})");
-        }
+        // Phase 1 wrote nothing; T129/T153 kept it that way (the launch
+        // spawn lives in the delegate seam). T157's control verbs are the
+        // module's FIRST and ONLY filesystem-write surface: two APPEND-only
+        // writes under the operator-named cwd's .chug/ (the abort record in
+        // the child's events stream + the steering queue line). Still
+        // refused outright: any mkdir (the cwd validator already guarantees
+        // .chug/ exists — a mkdir would paper over a refused address space)
+        // and any truncate-write (fs::write) over a child's file.
+        assert!(!prod.contains(mkdir_needle), "no mkdir on the mcp-serve path");
+        assert!(!prod.contains(write_needle), "no truncate-write on the mcp-serve path");
+        // The append surface is EXACTLY the two helpers — one OpenOptions
+        // each, nowhere else (the read tools read through the delegate
+        // seams and never open for write).
+        assert_eq!(
+            prod.matches(open_needle).count(),
+            2,
+            "the write surface is exactly the two T157 append helpers"
+        );
+        let abort_helper = prod
+            .split(concat!("fn append_", "abort_record("))
+            .nth(1)
+            .expect("the abort-record helper exists");
+        assert!(
+            abort_helper.contains(open_needle),
+            "the abort record writes append-only"
+        );
+        let steer_impl = prod
+            .split(concat!("fn chug_", "steer(args"))
+            .nth(1)
+            .expect("the chug_steer impl exists");
+        assert!(
+            steer_impl.contains(open_needle),
+            "the steering queue writes append-only"
+        );
     }
 
     // ---------- EOF / framing ----------
@@ -1850,4 +1915,564 @@
         let (_, id, result, _) = parts(lines[1]);
         assert_eq!(id, Some(json!(3)));
         assert_eq!(result, Some(json!({})));
+    }
+
+    // ---------- chug_abort + chug_steer (T157, --allow-control) ----------
+
+    /// Route a `chug_abort` tools/call through the FULL dispatch with the
+    /// control gate, returning (text, isError) — the cancel_call mirror.
+    fn abort_call(allow_control: bool, arguments: &Value) -> (String, Option<bool>) {
+        let req = json!({
+            "jsonrpc": "2.0", "id": 157, "method": "tools/call",
+            "params": {"name": "chug_abort", "arguments": arguments}
+        });
+        let line = if allow_control {
+            handle_message_control(&req.to_string())
+        } else {
+            handle_message(&req.to_string())
+        }
+        .expect("responds");
+        let (_, id, _, error) = parts(&line);
+        assert_eq!(id, Some(json!(157)), "id echoed: {line}");
+        assert!(
+            error.is_none(),
+            "a routed abort call is a tool result, not a JSON-RPC error: {line}"
+        );
+        tool_result(&line)
+    }
+
+    /// Route a `chug_steer` tools/call the same way.
+    fn steer_call(allow_control: bool, arguments: &Value) -> (String, Option<bool>) {
+        let req = json!({
+            "jsonrpc": "2.0", "id": 158, "method": "tools/call",
+            "params": {"name": "chug_steer", "arguments": arguments}
+        });
+        let line = if allow_control {
+            handle_message_control(&req.to_string())
+        } else {
+            handle_message(&req.to_string())
+        }
+        .expect("responds");
+        let (_, id, _, error) = parts(&line);
+        assert_eq!(id, Some(json!(158)), "id echoed: {line}");
+        assert!(
+            error.is_none(),
+            "a routed steer call is a tool result, not a JSON-RPC error: {line}"
+        );
+        tool_result(&line)
+    }
+
+    /// A RUNNING-segment events fixture (run_start + iterations, NO
+    /// terminal verdict) — the shape a live detached child's stream has.
+    fn running_segment_fixture() -> Vec<String> {
+        [
+            r#"{"type":"run_start","ts":"t0","mode":"run","model":"m","max_iters":50,"max_minutes":35,"max_tokens":null}"#,
+            r#"{"type":"iteration","ts":"t1","n":1,"input_tokens":1,"output_tokens":1}"#,
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect()
+    }
+
+    #[test]
+    fn control_verbs_flagless_are_the_unknown_tool_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join(".chug")).unwrap();
+        let args = json!({
+            "cwd": tmp.path().display().to_string(),
+            "pid": 1,
+            "note": "n"
+        });
+        // Both control verbs are invisible flagless — the SAME -32602 a
+        // never-existing tool gets, with VALID-shaped arguments (so a
+        // gate-neutered mutant that routes anyway would produce a tool
+        // result, not this error).
+        for (name, id) in [("chug_abort", 701), ("chug_steer", 702)] {
+            let req = json!({
+                "jsonrpc": "2.0", "id": id, "method": "tools/call",
+                "params": {"name": name, "arguments": args}
+            });
+            let line = handle_message(&req.to_string()).expect("responds");
+            let (_, echoed, _, error) = parts(&line);
+            assert_eq!(echoed, Some(json!(id)), "{line}");
+            let error = error.expect("the flagless call is the unknown-tool error");
+            assert_eq!(error["code"], -32602, "{line}");
+            let message = error["message"].as_str().unwrap();
+            assert!(message.contains("unknown tool"), "{line}");
+            assert!(message.contains(name), "{line}");
+        }
+        // And the flagless tools/list carries neither — the read-only set.
+        let list = handle_message(r#"{"jsonrpc":"2.0","id":703,"method":"tools/list"}"#)
+            .expect("responds");
+        let (_, _, result, _) = parts(&list);
+        let tools = result.expect("result")["tools"].as_array().unwrap().clone();
+        let names: Vec<String> = tools.iter().filter_map(|t| t["name"].as_str().map(str::to_string)).collect();
+        assert_eq!(names, ["chug_status", "chug_collect"], "{names:?}");
+    }
+
+    #[test]
+    fn control_flag_advertises_exactly_the_two_control_verbs_with_their_schemas() {
+        // ONLY --allow-control: the launch legs stay invisible (the
+        // boundaries are independent).
+        let line = handle_message_control(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)
+            .expect("responds");
+        let (_, _, result, _) = parts(&line);
+        let tools = result.expect("result")["tools"].as_array().unwrap().clone();
+        let names: Vec<String> = tools.iter().filter_map(|t| t["name"].as_str().map(str::to_string)).collect();
+        assert_eq!(
+            names,
+            ["chug_status", "chug_collect", "chug_abort", "chug_steer"],
+            "{names:?}"
+        );
+        // chug_abort's schema: cwd + pid required, pid a positive integer.
+        let abort = &tools[2];
+        assert_eq!(abort["inputSchema"]["required"], json!(["cwd", "pid"]));
+        assert_eq!(abort["inputSchema"]["properties"]["pid"]["minimum"], 1);
+        // chug_steer's schema: cwd + pid + note required.
+        let steer = &tools[3];
+        assert_eq!(
+            steer["inputSchema"]["required"],
+            json!(["cwd", "pid", "note"])
+        );
+        assert_eq!(steer["inputSchema"]["properties"]["note"]["type"], "string");
+    }
+
+    #[test]
+    fn both_gates_on_advertise_all_six_tools_in_landing_order() {
+        let line = handle_message_full(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)
+            .expect("responds");
+        let (_, _, result, _) = parts(&line);
+        let tools = result.expect("result")["tools"].as_array().unwrap().clone();
+        let names: Vec<String> = tools.iter().filter_map(|t| t["name"].as_str().map(str::to_string)).collect();
+        assert_eq!(
+            names,
+            [
+                "chug_status",
+                "chug_collect",
+                "chug_launch",
+                "chug_cancel",
+                "chug_abort",
+                "chug_steer"
+            ],
+            "{names:?}"
+        );
+    }
+
+    #[test]
+    fn chug_abort_input_contract_legs_are_is_error_results() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join(".chug")).unwrap();
+        let cwd = tmp.path().display().to_string();
+        for (args, needle) in [
+            (json!({}), "missing required argument: cwd"),
+            (json!({ "cwd": cwd.clone() }), "missing required argument: pid"),
+            (
+                json!({ "cwd": cwd.clone(), "pid": "abc" }),
+                "`pid` must be a positive integer, got \"abc\"",
+            ),
+            (
+                json!({ "cwd": cwd.clone(), "pid": 0 }),
+                "`pid` must be a positive integer, got 0",
+            ),
+            (
+                json!({ "cwd": cwd.clone(), "pid": 9_999_999_999u64 }),
+                "`pid` must be a valid pid (at most 2147483647), got 9999999999",
+            ),
+            (
+                json!({ "cwd": "relative/path", "pid": 1 }),
+                "cwd must be an absolute directory, got \"relative/path\"",
+            ),
+        ] {
+            let (text, is_error) = abort_call(true, &args);
+            assert_eq!(is_error, Some(true), "{args}: {text}");
+            assert!(text.starts_with("chug_abort:"), "{args}: {text}");
+            assert!(text.contains(needle), "{args}: wanted {needle:?} in {text}");
+        }
+        // And a refused contract NEVER creates the events file (the abort
+        // record is written only after a real signal).
+        assert!(
+            !tmp.path().join(".chug/events.jsonl").exists(),
+            "a refused abort must not write the events file"
+        );
+    }
+
+    /// The not-found leg: a dead pid (2_000_000_000 — dead by construction)
+    /// with no verdict on record → `isError` naming "no such process",
+    /// nothing signalled, nothing written.
+    #[cfg(unix)]
+    #[test]
+    fn chug_abort_dead_pid_without_verdict_is_not_found() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join(".chug")).unwrap();
+        let dead_pid: u64 = 2_000_000_000;
+        let (text, is_error) = abort_call(
+            true,
+            &json!({ "cwd": tmp.path().display().to_string(), "pid": dead_pid }),
+        );
+        assert_eq!(is_error, Some(true), "{text}");
+        assert!(text.starts_with("chug_abort:"), "{text}");
+        assert!(text.contains("not alive (no such process)"), "{text}");
+        assert!(text.contains("nothing signalled"), "{text}");
+        assert!(
+            !tmp.path().join(".chug/events.jsonl").exists(),
+            "a not-found abort must not create the events file"
+        );
+    }
+
+    /// The already-done leg: the latest segment has a verdict → idempotent
+    /// success (`isError: false`), the verdict named, and NOTHING signalled
+    /// — the live fixture survives the call.
+    #[cfg(unix)]
+    #[test]
+    fn chug_abort_already_done_is_idempotent_and_unsignalled() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_fixture(tmp.path(), &as_str_refs(&run_then_iterations_then_goal()));
+        // A LIVE group-leader fixture the verdict leg must NOT signal (the
+        // argv shape is irrelevant here — the verdict leg fires before the
+        // ownership legs).
+        let script = "while :; do sleep 0.2; done".to_string();
+        let child = spawn_group_leader_fixture(&script, &["sleep", "30"]);
+        let pid = child.id();
+        let _guard = FixtureGuard {
+            pid,
+            group_kill: true,
+            child,
+        };
+        let pid = pid as u64;
+        assert_eq!(unsafe { libc::kill(pid as i32, 0) }, 0, "fixture up");
+        let (text, is_error) = abort_call(
+            true,
+            &json!({ "cwd": tmp.path().display().to_string(), "pid": pid }),
+        );
+        assert_eq!(is_error, Some(false), "already-done is NOT an error: {text}");
+        assert!(text.contains("state: already-done"), "{text}");
+        assert!(text.contains("verdict: goal-accepted"), "{text}");
+        assert!(text.contains("nothing signalled"), "{text}");
+        // PROOF nothing was signalled: the fixture is STILL ALIVE.
+        assert_eq!(
+            unsafe { libc::kill(pid as i32, 0) },
+            0,
+            "an already-done abort must not signal the fixture"
+        );
+    }
+
+    /// The graceful path: a live group-leader `chug run`-shaped fixture in
+    /// a RUNNING segment → `state: aborted`, `signaled: term`, `recorded:
+    /// true`, and the child's events.jsonl carries the abort line with the
+    /// distinctive reason AFTER the segment's own lines.
+    #[cfg(unix)]
+    #[test]
+    fn chug_abort_graceful_term_records_the_abort_in_the_childs_events() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_fixture(tmp.path(), &as_str_refs(&running_segment_fixture()));
+        let record = tmp.path().join("fixture-record.txt");
+        let ready = tmp.path().join("fixture-ready.txt");
+        let script = format!(
+            "trap 'echo term > {}; exit 0' TERM; : > {}; while :; do sleep 0.2; done",
+            record.display(),
+            ready.display()
+        );
+        let child = spawn_group_leader_fixture(
+            &script,
+            &[
+                "chug",
+                "run",
+                "--spec",
+                "/tmp/t157-fake-spec.md",
+                "--goal",
+                "g",
+                "--model",
+                "m",
+            ],
+        );
+        let pid = child.id();
+        let _guard = FixtureGuard {
+            pid,
+            group_kill: true,
+            child,
+        };
+        let pid = pid as u64;
+        assert_eq!(unsafe { libc::kill(pid as i32, 0) }, 0, "fixture up");
+        wait_for_settled_fixture(pid as u32, Some(&ready));
+
+        let (text, is_error) = abort_call(
+            true,
+            &json!({ "cwd": tmp.path().display().to_string(), "pid": pid }),
+        );
+        assert_eq!(is_error, Some(false), "{text}");
+        assert!(text.contains("state: aborted"), "{text}");
+        assert!(text.contains("signaled: term"), "{text}");
+        assert!(text.contains("recorded: true"), "{text}");
+        assert!(text.contains("events: "), "{text}");
+        // The trap saw the TERM and the fixture is gone.
+        assert_eq!(wait_for_record(&record).trim(), "term", "the trap saw the TERM");
+        assert_ne!(
+            unsafe { libc::kill(pid as i32, 0) },
+            0,
+            "the fixture did not survive the abort"
+        );
+        // THE run-level half: the child's events stream now records the
+        // abort — after the segment's own lines, with the distinctive
+        // reason, model null.
+        let events = std::fs::read_to_string(tmp.path().join(".chug/events.jsonl"))
+            .expect("events readable");
+        let lines: Vec<&str> = events.lines().collect();
+        let last: serde_json::Value = serde_json::from_str(lines.last().unwrap())
+            .expect("the abort line parses as JSON");
+        assert_eq!(last["type"], "abort", "{last}");
+        assert_eq!(last["reason"], "operator abort via chug_abort", "{last}");
+        assert!(last["model"].is_null(), "{last}");
+        assert!(last["ts"].is_string(), "{last}");
+        // The segment's own lines are still FIRST (append, never rewrite).
+        let first: serde_json::Value =
+            serde_json::from_str(lines[0]).expect("run_start intact");
+        assert_eq!(first["type"], "run_start", "{first}");
+    }
+
+    /// The escalation leg: a TERM-ignoring group-leader fixture → the
+    /// SIGKILL escalation fires (~5 s grace), payload `signaled: kill`,
+    /// and the abort is still recorded.
+    #[cfg(unix)]
+    #[test]
+    fn chug_abort_term_ignoring_fixture_escalates_to_sigkill_and_records() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_fixture(tmp.path(), &as_str_refs(&running_segment_fixture()));
+        let ready = tmp.path().join("fixture-ready.txt");
+        // trap '' TERM — the TERM is swallowed; only the SIGKILL can stop
+        // the sleep loop.
+        let script = format!(
+            "trap '' TERM; : > {}; while :; do sleep 0.2; done",
+            ready.display()
+        );
+        let child = spawn_group_leader_fixture(
+            &script,
+            &[
+                "chug",
+                "run",
+                "--spec",
+                "/tmp/t157-fake-spec.md",
+                "--goal",
+                "g",
+                "--model",
+                "m",
+            ],
+        );
+        let pid = child.id();
+        let guard = FixtureGuard {
+            pid,
+            group_kill: true,
+            child,
+        };
+        let pid = pid as u64;
+        wait_for_settled_fixture(pid as u32, Some(&ready));
+
+        let (text, is_error) = abort_call(
+            true,
+            &json!({ "cwd": tmp.path().display().to_string(), "pid": pid }),
+        );
+        assert_eq!(is_error, Some(false), "{text}");
+        assert!(text.contains("signaled: kill"), "{text}");
+        assert!(text.contains("recorded: true"), "{text}");
+        drop(guard);
+        assert_ne!(
+            unsafe { libc::kill(pid as i32, 0) },
+            0,
+            "the SIGKILLed fixture is fully reaped"
+        );
+        let events =
+            std::fs::read_to_string(tmp.path().join(".chug/events.jsonl")).unwrap();
+        let last = events.lines().last().unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(last).unwrap();
+        assert_eq!(parsed["type"], "abort", "{parsed}");
+    }
+
+    /// The ownership refusals are fail-closed for abort too: a fixture that
+    /// is NOT its own group leader is refused at the pgid leg, unsignalled.
+    #[cfg(unix)]
+    #[test]
+    fn chug_abort_non_group_leader_fixture_is_refused_unsignalled() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join(".chug")).unwrap();
+        let child = std::process::Command::new("sh")
+            .arg("-c")
+            .arg("while :; do sleep 0.5; done")
+            .spawn()
+            .expect("spawn non-group-leader fixture");
+        let pid = child.id();
+        let _guard = FixtureGuard {
+            pid,
+            group_kill: false,
+            child,
+        };
+        let pid = pid as u64;
+        let (text, is_error) = abort_call(
+            true,
+            &json!({ "cwd": tmp.path().display().to_string(), "pid": pid }),
+        );
+        assert_eq!(is_error, Some(true), "{text}");
+        assert!(text.contains("not its own process-group leader"), "{text}");
+        assert!(text.contains("nothing signalled"), "{text}");
+        assert_eq!(
+            unsafe { libc::kill(pid as i32, 0) },
+            0,
+            "a pgid-leg refusal must not signal the fixture"
+        );
+    }
+
+    #[test]
+    fn chug_steer_input_contract_legs_are_is_error_results() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join(".chug")).unwrap();
+        let cwd = tmp.path().display().to_string();
+        let long_note = "x".repeat(4001);
+        for (args, needle) in [
+            (json!({}), "missing required argument: cwd"),
+            (json!({ "cwd": cwd.clone() }), "missing required argument: pid"),
+            (
+                json!({ "cwd": cwd.clone(), "pid": 1 }),
+                "missing required argument: note",
+            ),
+            (
+                json!({ "cwd": cwd.clone(), "pid": 1, "note": "   " }),
+                "note must be a non-empty string after trim",
+            ),
+            (
+                json!({ "cwd": cwd.clone(), "pid": 1, "note": long_note }),
+                "note must be at most 4000 characters, got 4001",
+            ),
+            (
+                json!({ "cwd": cwd.clone(), "pid": "nope", "note": "n" }),
+                "`pid` must be a positive integer, got \"nope\"",
+            ),
+        ] {
+            let (text, is_error) = steer_call(true, &args);
+            assert_eq!(is_error, Some(true), "{args}: {text}");
+            assert!(text.starts_with("chug_steer:"), "{args}: {text}");
+            assert!(text.contains(needle), "{args}: wanted {needle:?} in {text}");
+        }
+        // No contract-violating call ever created the queue.
+        assert!(
+            !tmp.path().join(".chug/steer.jsonl").exists(),
+            "a refused steer must not write the queue"
+        );
+    }
+
+    /// The happy path: a live child + a running (or absent) segment → the
+    /// note is durably queued, FIFO across calls, each line a parseable
+    /// `{"note": …, "ts": …}` object, and the payload names the queue path
+    /// + a tail preview.
+    #[cfg(unix)]
+    #[test]
+    fn chug_steer_happy_path_queues_notes_fifo_and_names_the_queue() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join(".chug")).unwrap();
+        let script = "while :; do sleep 0.2; done".to_string();
+        let child = spawn_group_leader_fixture(&script, &["sleep", "30"]);
+        let pid = child.id();
+        let _guard = FixtureGuard {
+            pid,
+            group_kill: true,
+            child,
+        };
+        let pid = pid as u64;
+
+        let note = "check the failing gate before committing";
+        let (text, is_error) = steer_call(
+            true,
+            &json!({ "cwd": tmp.path().display().to_string(), "pid": pid, "note": note }),
+        );
+        assert_eq!(is_error, Some(false), "{text}");
+        assert!(text.contains(&format!("chug_steer: pid {pid}")), "{text}");
+        assert!(text.contains("queued: true"), "{text}");
+        let queue_path = tmp.path().join(".chug/steer.jsonl");
+        assert!(
+            text.contains(&format!("queue: {}", queue_path.display())),
+            "{text}"
+        );
+        assert!(text.contains("note_tail: "), "{text}");
+        assert!(text.ends_with(note), "the tail preview ends at the note: {text}");
+
+        // A second call appends — FIFO across calls.
+        let (text2, is_error2) = steer_call(
+            true,
+            &json!({ "cwd": tmp.path().display().to_string(), "pid": pid, "note": "second" }),
+        );
+        assert_eq!(is_error2, Some(false), "{text2}");
+
+        let body = std::fs::read_to_string(&queue_path).expect("queue readable");
+        let lines: Vec<serde_json::Value> = body
+            .lines()
+            .map(|l| serde_json::from_str(l).expect("every queue line parses"))
+            .collect();
+        assert_eq!(lines.len(), 2, "two queued notes, FIFO: {body}");
+        assert_eq!(lines[0]["note"], note, "{lines:?}");
+        assert_eq!(lines[1]["note"], "second", "{lines:?}");
+        assert!(lines[0]["ts"].is_string(), "{lines:?}");
+    }
+
+    /// The done leg: a latest-segment verdict → undeliverable (distinctive
+    /// phrase), NOTHING written, the (live) fixture unsignalled.
+    #[cfg(unix)]
+    #[test]
+    fn chug_steer_done_child_is_undeliverable_and_writes_nothing() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_fixture(tmp.path(), &as_str_refs(&run_then_iterations_then_goal()));
+        let script = "while :; do sleep 0.2; done".to_string();
+        let child = spawn_group_leader_fixture(&script, &["sleep", "30"]);
+        let pid = child.id();
+        let _guard = FixtureGuard {
+            pid,
+            group_kill: true,
+            child,
+        };
+        let pid = pid as u64;
+        let (text, is_error) = steer_call(
+            true,
+            &json!({
+                "cwd": tmp.path().display().to_string(),
+                "pid": pid,
+                "note": "too late"
+            }),
+        );
+        assert_eq!(is_error, Some(true), "{text}");
+        assert!(text.starts_with("chug_steer:"), "{text}");
+        assert!(
+            text.contains("already completed its latest run segment"),
+            "{text}"
+        );
+        assert!(text.contains("verdict: goal-accepted"), "{text}");
+        assert!(text.contains("note NOT queued"), "{text}");
+        assert!(
+            !tmp.path().join(".chug/steer.jsonl").exists(),
+            "an undeliverable steer must not write the queue"
+        );
+        assert_eq!(
+            unsafe { libc::kill(pid as i32, 0) },
+            0,
+            "steering never signals the fixture"
+        );
+    }
+
+    /// The gone leg: a dead pid → undeliverable, nothing written.
+    #[cfg(unix)]
+    #[test]
+    fn chug_steer_dead_pid_is_undeliverable() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join(".chug")).unwrap();
+        let dead_pid: u64 = 2_000_000_000;
+        let (text, is_error) = steer_call(
+            true,
+            &json!({
+                "cwd": tmp.path().display().to_string(),
+                "pid": dead_pid,
+                "note": "gone"
+            }),
+        );
+        assert_eq!(is_error, Some(true), "{text}");
+        assert!(text.contains("is not alive (no such process)"), "{text}");
+        assert!(text.contains("note NOT queued"), "{text}");
+        assert!(
+            !tmp.path().join(".chug/steer.jsonl").exists(),
+            "an undeliverable steer must not write the queue"
+        );
     }
