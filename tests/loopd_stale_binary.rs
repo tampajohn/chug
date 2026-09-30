@@ -41,6 +41,52 @@ fn repo_root() -> PathBuf {
     std::env::current_dir().expect("cargo sets the test cwd to the package root")
 }
 
+// ---------- T158: the loopd-fixture invalidation seam (the spoof_guard twin;
+// the T59/T66/T151 Invalidation pattern). The fixture's 30s verdict deadline
+// is a liveness fence, NOT a load assumption (T159's doctrine): under
+// system-wide pressure (a concurrent cargo build, an 8x yes-spinner) the
+// whole sandbox startup has stretched past it while production behavior
+// stayed correct. So the deadline-blow panic is an INVALIDATION MARKER: the
+// seam retries the WHOLE test (fresh sandbox, fresh supervisor) bounded at 3
+// attempts; any other panic (a needle reached but a wrong outcome — a
+// code-under-test failure) is resumed un-retried, byte-distinct. The 30s
+// constant does not change; exhaustion panics naming the class and attempt
+// count.
+const LOOPD_INVALIDATION_MARKER: &str = "loopd never reached ";
+const LOOPD_RETRY_ATTEMPTS: usize = 3;
+
+fn loopd_attempt_with_invalidation_retry(mut attempt: impl FnMut()) {
+    let mut last: Option<String> = None;
+    for n in 1..=LOOPD_RETRY_ATTEMPTS {
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(&mut attempt)) {
+            Ok(()) => return,
+            Err(payload) => {
+                let message = payload
+                    .downcast_ref::<String>()
+                    .cloned()
+                    .or_else(|| payload.downcast_ref::<&'static str>().map(|s| s.to_string()))
+                    .unwrap_or_else(|| "<non-string panic payload>".to_string());
+                if message.contains(LOOPD_INVALIDATION_MARKER) {
+                    eprintln!(
+                        "T158 loopd_attempt_with_invalidation_retry: attempt {n}/{LOOPD_RETRY_ATTEMPTS} invalidated (fixture deadline blow under load); retrying the WHOLE test with a fresh sandbox"
+                    );
+                    last = Some(message);
+                } else {
+                    std::panic::resume_unwind(payload);
+                }
+            }
+        }
+    }
+    let message = last.expect("exhaustion implies a classified invalidation");
+    panic!(
+        "T158 loopd_attempt_with_invalidation_retry: the fixture deadline invalidation \
+         persisted across all {LOOPD_RETRY_ATTEMPTS} attempts (each with a fresh sandbox \
+         and supervisor). The environment invalidated the test's schedule premise every \
+         time. Last red evidence: {message}"
+    );
+}
+
+
 /// A sandbox with the real loopd.sh + scripts/, a PATH that stubs `ps`
 /// (the T53 single-driver probe must not see a REAL driver — e.g. the
 /// outer run executing this very test — or the sandbox loopd skips its
@@ -202,6 +248,11 @@ fn stub(path: &Path, body: &str) {
 /// recorded `cycle OK`.)
 #[test]
 fn failed_build_must_not_launch_the_stale_binary() {
+    // T158: the fixture's 30s verdict deadline is a liveness fence, not a load
+    // assumption — a deadline blow invalidates the attempt and the WHOLE test
+    // retries with a fresh sandbox (bounded); a wrong verdict still panics
+    // un-retried.
+    loopd_attempt_with_invalidation_retry(|| {
     let sandbox = Sandbox::new(concat!(
         "#!/bin/sh\n",
         "echo 'error[E0432]: unresolved import — the merged change does not compile' >&2\n",
@@ -230,6 +281,7 @@ fn failed_build_must_not_launch_the_stale_binary() {
          exist for a cycle that never launched: {:?}",
         sandbox.cycle_logs()
     );
+    });
 }
 
 /// The review's second leg: "An inherited `CARGO_TARGET_DIR` can also send a
@@ -243,6 +295,11 @@ fn failed_build_must_not_launch_the_stale_binary() {
 /// while the stale one runs the cycle.)
 #[test]
 fn inherited_cargo_target_dir_cannot_leave_the_stale_binary_running() {
+    // T158: the fixture's 30s verdict deadline is a liveness fence, not a load
+    // assumption — a deadline blow invalidates the attempt and the WHOLE test
+    // retries with a fresh sandbox (bounded); a wrong verdict still panics
+    // un-retried.
+    loopd_attempt_with_invalidation_retry(|| {
     // A green build that installs the NEW binary into whatever
     // CARGO_TARGET_DIR it is handed — never into ./target by accident: the
     // stub does not know the supervisor's layout, it only honors the var.
@@ -296,6 +353,7 @@ exit 0
     );
     // And the pin must be a per-invocation prefix, not an export — pinned
     // statically below; the inherited var itself stays a decoy here.
+    });
 }
 
 /// The gate must count its refusals: 3 consecutive failed builds trip the
@@ -305,6 +363,11 @@ exit 0
 /// seconds, not the production 3×300s.
 #[test]
 fn three_consecutive_failed_builds_halt_the_supervisor() {
+    // T158: the fixture's 30s verdict deadline is a liveness fence, not a load
+    // assumption — a deadline blow invalidates the attempt and the WHOLE test
+    // retries with a fresh sandbox (bounded); a wrong verdict still panics
+    // un-retried.
+    loopd_attempt_with_invalidation_retry(|| {
     let sandbox = Sandbox::new(concat!(
         "#!/bin/sh\n",
         "echo 'error: could not compile chug' >&2\n",
@@ -330,6 +393,7 @@ fn three_consecutive_failed_builds_halt_the_supervisor() {
         "the HALT must fire on the THIRD consecutive refused build — two \
          refusals mean the guard tripped early, four mean it never fired:\n{log}"
     );
+    });
 }
 
 /// Validator F1 (T137 fix-up) — the single-driver probe must survive
@@ -352,6 +416,11 @@ fn three_consecutive_failed_builds_halt_the_supervisor() {
 /// the active driver and skip.
 #[test]
 fn an_early_driver_match_must_survive_a_sigpoled_ps_leg() {
+    // T158: the fixture's 30s verdict deadline is a liveness fence, not a load
+    // assumption — a deadline blow invalidates the attempt and the WHOLE test
+    // retries with a fresh sandbox (bounded); a wrong verdict still panics
+    // un-retried.
+    loopd_attempt_with_invalidation_retry(|| {
     let ps_body = concat!(
         "#!/bin/sh\n",
         // The live driver: the needle sits on line 1, so `grep -q` exits at
@@ -390,6 +459,7 @@ fn an_early_driver_match_must_survive_a_sigpoled_ps_leg() {
         "no cycle may be logged while a driver is active: {:?}",
         sandbox.cycle_logs()
     );
+    });
 }
 
 /// The sweep's other leg (T137 fix-up): the probe FAILING must fail CLOSED.
@@ -401,6 +471,11 @@ fn an_early_driver_match_must_survive_a_sigpoled_ps_leg() {
 /// driver": skip, say why, retry.
 #[test]
 fn a_failing_driver_probe_must_fail_closed_not_open() {
+    // T158: the fixture's 30s verdict deadline is a liveness fence, not a load
+    // assumption — a deadline blow invalidates the attempt and the WHOLE test
+    // retries with a fresh sandbox (bounded); a wrong verdict still panics
+    // un-retried.
+    loopd_attempt_with_invalidation_retry(|| {
     let sandbox = Sandbox::with_ps(
         "#!/bin/sh\necho 'ps: stub boom' >&2\nexit 7\n",
         "#!/bin/sh\nexit 0\n",
@@ -426,6 +501,7 @@ fn a_failing_driver_probe_must_fail_closed_not_open() {
         "no cycle may be logged when the driver enumeration failed: {:?}",
         sandbox.cycle_logs()
     );
+    });
 }
 
 /// Static pins (the tests/loopd_reexec.rs pattern): deliberately brittle, so
