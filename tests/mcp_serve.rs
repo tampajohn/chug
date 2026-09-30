@@ -1051,3 +1051,244 @@ fn mcp_serve_chug_cancel_dead_pid_is_error_and_loop_alive_over_the_wire() {
 
     close_stdin_and_expect_success_exit(child, "cancel dead-pid leg");
 }
+
+// ---------------------------------------------------------------------------
+// T157 — the control verbs wire e2e: real stdio, real server, stubbed child
+// ---------------------------------------------------------------------------
+
+/// Leg 1 — default-deny for the control surface: a flagless server does not
+/// advertise `chug_abort`/`chug_steer` and a call for either gets the
+/// unknown-tool error — and the loop is alive afterwards (ping round-trips).
+#[test]
+fn mcp_serve_control_verbs_default_deny_over_the_real_wire() {
+    let target = tempfile::tempdir().expect("target tempdir");
+    std::fs::create_dir_all(target.path().join(".chug")).expect("target .chug");
+    let (mut child, rx) = spawn_server_with(&[], &[]);
+    {
+        let mut stdin = child.stdin.take().expect("piped stdin");
+        send(&mut stdin, r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#);
+        send(&mut stdin, r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#);
+        let args = serde_json::json!({
+            "cwd": target.path().display().to_string(), "pid": 1, "note": "n"
+        });
+        for (name, id) in [("chug_abort", 3), ("chug_steer", 4)] {
+            let call = serde_json::json!({
+                "jsonrpc": "2.0", "id": id, "method": "tools/call",
+                "params": {"name": name, "arguments": args}
+            });
+            send(&mut stdin, &call.to_string());
+        }
+        send(&mut stdin, r#"{"jsonrpc":"2.0","id":5,"method":"ping","params":{}}"#);
+    }
+
+    let init = next_response(&rx, "default-deny initialize");
+    assert_eq!(init["id"], 1, "{init}");
+    let list = next_response(&rx, "default-deny tools/list");
+    let names: Vec<&str> = list["result"]["tools"]
+        .as_array()
+        .expect("tools array")
+        .iter()
+        .filter_map(|t| t["name"].as_str())
+        .collect();
+    assert_eq!(
+        names,
+        ["chug_status", "chug_collect"],
+        "neither control verb may appear flagless: {list}"
+    );
+
+    for (id, name) in [(3, "chug_abort"), (4, "chug_steer")] {
+        let call = next_response(&rx, "default-deny control-verb call");
+        assert_eq!(call["id"], id, "{call}");
+        let error = call.get("error").unwrap_or_else(|| {
+            panic!("the default-deny {name} call must be the unknown-tool error: {call}")
+        });
+        assert_eq!(error["code"], -32602, "{call}");
+        let message = error["message"].as_str().expect("message string");
+        assert!(message.contains("unknown tool"), "{call}");
+        assert!(message.contains(name), "{call}");
+    }
+    // And the queue file was never created by the refused steer.
+    assert!(
+        !target.path().join(".chug/steer.jsonl").exists(),
+        "a default-deny steer must not write anything"
+    );
+
+    let ping = next_response(&rx, "ping after default-deny calls");
+    assert_eq!(ping["id"], 5, "{ping}");
+    assert_eq!(ping["result"], serde_json::json!({}), "{ping}");
+    close_stdin_and_expect_success_exit(child, "control default-deny");
+}
+
+/// Leg 2 — THE acceptance arc over a REAL stdio wire, one conversation, a
+/// fleet consumer's whole lifecycle without touching the host shell:
+/// launch (a LIVE delegate-shaped stub child) → steer (the note lands in
+/// the child's `.chug/steer.jsonl` queue) → abort (the stub provably dead,
+/// the abort recorded in the child's events stream) → re-abort
+/// (`already-done`, idempotent) — every response a tool result, the loop
+/// alive throughout.
+#[cfg(unix)]
+#[test]
+fn mcp_serve_launch_then_steer_then_abort_over_the_real_wire() {
+    let _guard = LAUNCH_LEG_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let scratch = tempfile::tempdir().expect("scratch tempdir");
+    let target = tempfile::tempdir().expect("target tempdir");
+    std::fs::create_dir_all(target.path().join(".chug")).expect("target .chug");
+    let (spec, stub) = write_cancel_spec_and_stub(scratch.path());
+
+    // BOTH gates on: this consumer may launch AND control.
+    let (mut child, rx) = spawn_server_with(&["--allow-launch", "--allow-control"], &[
+        ("CHUG_DELEGATE_BIN", stub.to_string_lossy().as_ref()),
+    ]);
+    let mut stdin = child.stdin.take().expect("piped stdin");
+    send(&mut stdin, r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#);
+    send(&mut stdin, r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#);
+
+    // Advertised: all six tools, the two control verbs at the tail.
+    let init = next_response(&rx, "initialize with both flags");
+    assert_eq!(init["id"], 1, "{init}");
+    let list = next_response(&rx, "tools/list with both flags");
+    assert_eq!(list["id"], 2, "{list}");
+    let names: Vec<String> = list["result"]["tools"]
+        .as_array()
+        .expect("tools array")
+        .iter()
+        .filter_map(|t| t["name"].as_str().map(str::to_string))
+        .collect();
+    assert_eq!(
+        names,
+        [
+            "chug_status",
+            "chug_collect",
+            "chug_launch",
+            "chug_cancel",
+            "chug_abort",
+            "chug_steer"
+        ],
+        "{list}"
+    );
+
+    // --- launch: a LIVE delegate-shaped stub child ---
+    let launch = serde_json::json!({
+        "jsonrpc": "2.0", "id": 3, "method": "tools/call",
+        "params": {"name": "chug_launch", "arguments": {
+            "cwd": target.path().display().to_string(),
+            "spec": spec.to_string_lossy(),
+            "goal": GOAL,
+            "model": "kimi"
+        }}
+    });
+    send(&mut stdin, &launch.to_string());
+    let launch = next_response(&rx, "launch response");
+    assert_eq!(launch["id"], 3, "{launch}");
+    assert_eq!(launch["result"]["isError"], false, "{launch}");
+    let launch_text = launch["result"]["content"][0]["text"]
+        .as_str()
+        .expect("text content block");
+    let child_pid_line = launch_text
+        .lines()
+        .find_map(|l| l.strip_prefix("launched: pid "))
+        .unwrap_or_else(|| panic!("the launch payload names the pid: {launch_text}"));
+    let child_pid: u64 = child_pid_line.trim().parse().expect("pid integer");
+
+    // The stub child is alive (a LIVE target for the control verbs).
+    poll_pid_state(child_pid as u32, true, "the launched stub stays alive");
+
+    // --- steer: the note lands in the child's cross-process queue ---
+    let note = "check the spec check-cmd before declaring the goal";
+    let steer_call = serde_json::json!({
+        "jsonrpc": "2.0", "id": 4, "method": "tools/call",
+        "params": {"name": "chug_steer", "arguments": {
+            "cwd": target.path().display().to_string(),
+            "pid": child_pid,
+            "note": note
+        }}
+    });
+    send(&mut stdin, &steer_call.to_string());
+    let steer = next_response(&rx, "steer response");
+    assert_eq!(steer["id"], 4, "{steer}");
+    assert_eq!(steer["result"]["isError"], false, "{steer}");
+    let steer_text = steer["result"]["content"][0]["text"]
+        .as_str()
+        .expect("text content block");
+    assert!(
+        steer_text.contains(&format!("chug_steer: pid {child_pid}")),
+        "{steer_text}"
+    );
+    assert!(steer_text.contains("queued: true"), "{steer_text}");
+    // The queue file REALLY carries the note — one parseable JSON line.
+    let queue_path = target.path().join(".chug/steer.jsonl");
+    let queue_body = std::fs::read_to_string(&queue_path).expect("the queue file exists");
+    let queue_line: serde_json::Value = serde_json::from_str(
+        queue_body.lines().last().expect("one line"),
+    )
+    .expect("parses");
+    assert_eq!(queue_line["note"], note, "{queue_line}");
+    assert!(queue_line["ts"].is_string(), "{queue_line}");
+
+    // --- abort: the run-level stop ---
+    let abort_call = serde_json::json!({
+        "jsonrpc": "2.0", "id": 5, "method": "tools/call",
+        "params": {"name": "chug_abort", "arguments": {
+            "cwd": target.path().display().to_string(),
+            "pid": child_pid
+        }}
+    });
+    send(&mut stdin, &abort_call.to_string());
+    let abort = next_response(&rx, "abort response");
+    assert_eq!(abort["id"], 5, "{abort}");
+    assert_eq!(abort["result"]["isError"], false, "{abort}");
+    let abort_text = abort["result"]["content"][0]["text"]
+        .as_str()
+        .expect("text content block");
+    assert!(
+        abort_text.contains(&format!("chug_abort: pid {child_pid}")),
+        "{abort_text}"
+    );
+    assert!(abort_text.contains("state: aborted"), "{abort_text}");
+    assert!(abort_text.contains("signaled: term"), "{abort_text}");
+    assert!(abort_text.contains("recorded: true"), "{abort_text}");
+
+    // The stub is PROVABLY dead (TERM'd within the grace).
+    poll_pid_state(child_pid as u32, false, "the abort stops the stub child");
+
+    // The run-level half: the child's events stream records the abort with
+    // the distinctive reason — a stub child that wrote no events gets its
+    // stream CREATED by the abort (events_created: true).
+    assert!(abort_text.contains("events_created: true"), "{abort_text}");
+    let events = std::fs::read_to_string(target.path().join(".chug/events.jsonl"))
+        .expect("the abort record created the events file");
+    let record: serde_json::Value =
+        serde_json::from_str(events.lines().last().expect("one line")).expect("parses");
+    assert_eq!(record["type"], "abort", "{record}");
+    assert_eq!(record["reason"], "operator abort via chug_abort", "{record}");
+
+    // --- re-abort: idempotent already-done, nothing signalled ---
+    let abort_again = serde_json::json!({
+        "jsonrpc": "2.0", "id": 6, "method": "tools/call",
+        "params": {"name": "chug_abort", "arguments": {
+            "cwd": target.path().display().to_string(),
+            "pid": child_pid
+        }}
+    });
+    send(&mut stdin, &abort_again.to_string());
+    let again = next_response(&rx, "re-abort response");
+    assert_eq!(again["id"], 6, "{again}");
+    assert_eq!(
+        again["result"]["isError"], false,
+        "already-done is a success result: {again}"
+    );
+    let again_text = again["result"]["content"][0]["text"]
+        .as_str()
+        .expect("text content block");
+    assert!(again_text.contains("state: already-done"), "{again_text}");
+    assert!(again_text.contains("nothing signalled"), "{again_text}");
+
+    // The loop survived the whole arc: the ping answers, then stdin EOF is
+    // a clean exit 0.
+    send(&mut stdin, r#"{"jsonrpc":"2.0","id":7,"method":"ping","params":{}}"#);
+    let ping = next_response(&rx, "ping after the full arc");
+    assert_eq!(ping["id"], 7, "{ping}");
+    assert_eq!(ping["result"], serde_json::json!({}), "{ping}");
+    drop(stdin);
+    close_stdin_and_expect_success_exit(child, "control arc");
+}

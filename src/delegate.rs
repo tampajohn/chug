@@ -61,7 +61,9 @@ const GOAL_TAIL_CHARS: usize = 120;
 /// launch `goal_tail` echo re-renders this over the exact goal string passed
 /// to the child argv, so the sender's next iteration sees the goal's ending
 /// bytes — including a duplicated tail — without re-reading its own payload.
-fn tail_preview(text: &str, max_chars: usize) -> String {
+/// T157: lifted to pub(crate) so `chug_steer`'s `note_tail` echo uses the
+/// SAME preview (visibility-only — no body change).
+pub(crate) fn tail_preview(text: &str, max_chars: usize) -> String {
     let total = text.chars().count();
     text.chars().skip(total.saturating_sub(max_chars)).collect()
 }

@@ -978,8 +978,15 @@ pub(crate) fn drive_loop(
         }
 
         // Steering notes queued by the operator are consumed here, at the
-        // iteration boundary, before the next LLM call.
-        let notes = drain_steering(&ctx.controls.steering_rx);
+        // iteration boundary, before the next LLM call. Two transports feed
+        // the SAME `[operator]` mechanism (T157): the in-process channel
+        // (the TUI chat dock) and — for a DETACHED child, whose channel
+        // sender was dropped at spawn — the cross-process queue file
+        // `.chug/steer.jsonl` that `chug mcp-serve`'s `chug_steer` appends
+        // to. Channel notes drain first (the live session surface), then
+        // the queue FIFO; the order is pinned by test.
+        let mut notes = drain_steering(&ctx.controls.steering_rx);
+        notes.extend(drain_steering_queue(ctx.cwd));
         if !notes.is_empty() {
             append_steering_notes(ctx.cwd, messages, &notes, sink)?;
             if let Some(trace) = ctx.trace {
@@ -1520,6 +1527,58 @@ fn drain_steering(rx: &Receiver<String>) -> Vec<String> {
         notes.push(note);
     }
     notes
+}
+
+/// T157: the cross-process steering queue — `.chug/steer.jsonl`, one
+/// `{"note": …}` JSON object per line, appended by `chug mcp-serve`'s
+/// `chug_steer` (and any fleet consumer of the same contract) for a
+/// DETACHED child, whose in-process steering channel sender was dropped at
+/// spawn. Drained by [`drive_loop`] at the same iteration boundary as the
+/// channel, then fed through the SAME `append_steering_notes` path — one
+/// `[operator]` mechanism, two transports.
+pub(crate) fn steering_queue_path(cwd: &Path) -> PathBuf {
+    cwd.join(".chug").join("steer.jsonl")
+}
+
+/// Take the whole queue in one atomic step and parse its notes, FIFO.
+///
+/// The take is a RENAME-AWAY: the queue file is renamed to a pid-suffixed
+/// staging name and the staging copy is read and deleted. A note appended
+/// while the drain reads lands in a FRESH `steer.jsonl` (rename is atomic,
+/// so the append goes to whichever file currently carries that name) and is
+/// consumed at the NEXT boundary — never lost, never torn. A pid suffix
+/// keeps two independent drainers (a run plus a chat in the same cwd — chat
+/// never holds the driver lock) from overwriting each other's staging copy.
+///
+/// Every failure leg degrades to "nothing to drain" — steering is an input
+/// nicety, never a run-killer (T20): an absent queue (the common case) or
+/// an unrenamable one yields an empty vec and leaves the file for the next
+/// boundary; a staging read failure or a malformed line drops just that
+/// line. Notes parse from the `note` field only; empty-after-trim notes are
+/// skipped (a junk line must not inject an empty `[operator]` message).
+fn drain_steering_queue(cwd: &Path) -> Vec<String> {
+    let queue = steering_queue_path(cwd);
+    let staging = cwd.join(".chug").join(format!(
+        "steer.jsonl.draining-{}",
+        std::process::id()
+    ));
+    if fs::rename(&queue, &staging).is_err() {
+        return Vec::new();
+    }
+    let text = fs::read_to_string(&staging).unwrap_or_default();
+    // Consumed either way — a failed read must not leave the staging copy
+    // behind to be re-drained next boundary.
+    let _ = fs::remove_file(&staging);
+    text.lines()
+        .filter_map(|line| {
+            serde_json::from_str::<Value>(line.trim())
+                .ok()?
+                .get("note")?
+                .as_str()
+                .map(str::to_string)
+        })
+        .filter(|note| !note.trim().is_empty())
+        .collect()
 }
 
 /// The exact operator override phrase recognized by the risk gate.
