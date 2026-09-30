@@ -81,7 +81,12 @@ worktree cwd, never `cd` to the main repo (content checks grep worktree;
 `cargo test --lib`: this crate is binary-only (`src/main.rs`, no lib
 target), so `--lib` exits 101 (`no library targets found in package
 chug`) at the goal gate — write plain `cargo test` or
-`cargo test --bin chug [<filter>]` instead. Bites: T21 (self-merge
+`cargo test --bin chug [<filter>]` instead. And a `check:` line that
+pipes a build/test command (`cargo …`) through `tail`, `head`, or
+`grep` MUST set `pipefail` first (`set -o pipefail; …`): a pipeline's
+exit status is the last command's, so the filter masks a RED
+build/test leg (t160's `--lib … | tail -3` leg exited 101 and its goal
+gate passed). Bites: T21 (self-merge
 anomaly), T26 (`1d6780d` pre-dispatch fix), and nine child streams
 (t22/t25/t26/t29/t39/t42/t58/t59/t64) whose otherwise-green
 `goal_complete` was rejected by a `--lib` gate — latest t64, which had

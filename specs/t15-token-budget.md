@@ -86,4 +86,4 @@ budgets can miss. EVALUATION.md cycle 3, K1.
   die).
 - README documents the knob.
 
-check: cd /Users/jadams/workspace/chug && cargo test
+check: cargo test
