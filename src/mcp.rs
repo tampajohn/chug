@@ -2047,6 +2047,35 @@ for line in sys.stdin:
 "#
     }
 
+    /// T174 (the list-err-drop pin): a stub that ADVERTISES the resources
+    /// capability (so the registry's gate sends the leg) but REFUSES
+    /// `resources/list` with a server-defined JSON-RPC error. The mapped
+    /// outcome must carry the server's own message text — dropping it from
+    /// the mapping is the T162 informational survivor this pin kills.
+    fn resources_list_error_server_body() -> &'static str {
+        r#"
+import sys, json
+def send(o):
+    sys.stdout.write(json.dumps(o) + "\n"); sys.stdout.flush()
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    req = json.loads(line)
+    if "method" not in req or "id" not in req:
+        continue
+    m, i = req["method"], req["id"]
+    if m == "initialize":
+        send({"jsonrpc": "2.0", "id": i, "result": {"protocolVersion": "2025-06-18", "capabilities": {"tools": {}, "resources": {"listChanged": True}}, "serverInfo": {"name": "fake", "version": "0.0.1"}}})
+    elif m == "tools/list":
+        send({"jsonrpc": "2.0", "id": i, "result": {"tools": []}})
+    elif m == "resources/list":
+        send({"jsonrpc": "2.0", "id": i, "error": {"code": -32000, "message": "resource catalog unavailable: store offline"}})
+    else:
+        send({"jsonrpc": "2.0", "id": i, "error": {"code": -32601, "message": "method not found: " + m}})
+"#
+    }
+
     /// Tools-only stub (echo capabilities) that appends EVERY received
     /// method name to a log file — the (e) witness: the test reads the file
     /// at the stub side and asserts zero resources/list requests.
@@ -2319,6 +2348,71 @@ for line in sys.stdin:
 
         let contents = reg.read_resource("fake", "mem://greeting").unwrap();
         assert_eq!(contents[0].text.as_deref(), Some("hello from the stub"));
+    }
+
+    // ---------- T174: the resources/list error-reply message surface ----------
+    // T162's informational survivor (the list-err-drop class): nothing
+    // pinned that a JSON-RPC ERROR reply to `resources/list` keeps the
+    // server's own message text through the response mapping. The mutant
+    // this pin kills: dropping the `{err}` from parse_resources_list's
+    // bail — the error then degrades to the generic "returned no resources
+    // array" context, which still names the server but LOSES the message.
+
+    /// (transport) A capable stub that refuses `resources/list` with a
+    /// server-defined JSON-RPC error: the surfaced error (a) names the
+    /// server and (b) carries the server's error message text.
+    #[test]
+    fn resources_list_error_reply_names_server_and_carries_message() {
+        let tmp = TempDir::new().unwrap();
+        let mut srv = McpServer::spawn(
+            tmp.path(),
+            "fake",
+            server_config(tmp.path(), "fake", resources_list_error_server_body()),
+        )
+        .unwrap();
+        srv.initialize().unwrap();
+        let err = McpBackend::list_resources(&mut srv).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("mcp server fake"), "{msg}");
+        assert!(
+            msg.contains("resource catalog unavailable: store offline"),
+            "server's own error message lost from the mapped error: {msg}"
+        );
+    }
+
+    /// (registry) The same wire error through the structured per-server
+    /// outcome: the failing entry names the server (`out[0].server`) and
+    /// its error carries the server's message — on BOTH the all-servers
+    /// list and the single-server `list_resources_on` leg (one mapping,
+    /// no fork). Kill check for the list-err-drop mutant: with the message
+    /// dropped from the mapping, (a) still passes but (b) fails RED.
+    #[test]
+    fn registry_list_resources_surfaces_error_reply_per_server() {
+        let tmp = TempDir::new().unwrap();
+        write_mcp_json(tmp.path(), "fake", resources_list_error_server_body());
+        let mut reg = McpRegistry::new(tmp.path(), false, None).unwrap();
+        reg.start(&Permissions::empty());
+        assert_eq!(reg.servers.len(), 1);
+
+        let out = reg.list_resources();
+        assert_eq!(out.len(), 1, "every started server appears exactly once");
+        assert_eq!(out[0].server, "fake");
+        let err = out[0].resources.as_ref().unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("mcp server fake"), "{msg}");
+        assert!(
+            msg.contains("resource catalog unavailable: store offline"),
+            "server's own error message lost from the mapped outcome: {msg}"
+        );
+
+        // The single-server leg routes through the same mapping.
+        let one = reg.list_resources_on("fake");
+        assert_eq!(one.server, "fake");
+        let err = one.resources.as_ref().unwrap_err();
+        assert!(
+            err.to_string().contains("resource catalog unavailable: store offline"),
+            "{err}"
+        );
     }
 
     /// Phase-1b honesty is covered where the HTTP backend lives: the
