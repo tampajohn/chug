@@ -181,6 +181,23 @@ pub fn tool_schemas() -> Vec<Value> {
         crate::webfetch::schema(),
         // T76: schema lives in tgrep.rs (same single-source pattern).
         crate::tgrep::schema(),
+        // T169: the model-facing MCP resources tool (list/read over the
+        // T162 registry legs). Builtin — NOT an mcp__ server tool — so T90
+        // deny rules can match the plain name; read-only like the mcp__
+        // calls (the laya risk gate judges bash only, same bypass posture).
+        json!({
+            "name": "mcp_resource",
+            "description": "List or read resources from configured MCP servers. action=list: the resource catalog, one resource per line (`server uri — description (mimeType)`), across all servers or one named `server` (optional). action=read: one resource's contents from `server` at `uri` (both required) — text contents inline, binary contents as base64 with the mimeType named, output char-capped with a truncation note. Capability-gated: only servers whose initialize handshake advertised `resources` are queried — a non-capable server, an unknown server name, or a dead server is a named tool error, never a hang; with no servers connected, list says so plainly.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "enum": ["list", "read"], "description": "list: the resource catalog (all servers, or one when `server` is given); read: one resource's contents"},
+                    "server": {"type": "string", "description": "MCP server name (list: optional, filters to one server; read: required)"},
+                    "uri": {"type": "string", "description": "Resource uri (read only, required)"}
+                },
+                "required": ["action"]
+            }
+        }),
         json!({
             "name": "goal_complete",
             "description": "Assert that the goal is fully met and verified. Verification runs the spec's `check:` command if present; a failing check rejects the claim and the loop continues.",
@@ -265,8 +282,10 @@ fn json_type_name(value: &Value) -> &'static str {
 /// self-reported as a tool bug) self-corrects in one iteration. Object input
 /// → the received keys, sorted, capped at [`RECEIVED_KEYS_CAP`] with a
 /// `, … (+N more)` suffix; an empty object → `(received keys: none)`. Any
-/// non-object input → the JSON type: `(received: array)`.
-fn received_hint(input: &Value) -> String {
+/// non-object input → the JSON type: `(received: array)`. T169: pub(crate)
+/// so the `mcp_resource` tool's T88 errors carry the same received-shape
+/// hint (one shape everywhere, no per-module copy).
+pub(crate) fn received_hint(input: &Value) -> String {
     match input {
         Value::Object(map) => {
             let mut keys: Vec<&str> = map.keys().map(String::as_str).collect();

@@ -1226,6 +1226,15 @@ pub(crate) fn drive_loop(
             } else if name.starts_with("mcp__") {
                 // MCP tools bypass the laya risk gate (it judges bash only).
                 mcp.dispatch(name, input.clone())
+            } else if name == "mcp_resource" {
+                // T169: the builtin resources tool (list/read over the
+                // registry's resource legs). Read-only like the mcp__ calls
+                // it rides beside: the laya risk gate (which judges bash
+                // commands only) is bypassed — the same posture, stated in
+                // the T169 commit message. The T90 permission check above
+                // already ran, so a `mcp_resource` deny rule blocks here
+                // before this dispatch.
+                mcp.dispatch_resource(input)
             } else if name == "bash" {
                 if let Some(gate) = gate.as_mut()
                     && let Some(command) = input.get("command").and_then(Value::as_str)
