@@ -610,10 +610,11 @@ transport, unreachable server) is skipped with a note in
 Server tools appear as `mcp__<name>__<tool>` alongside the builtins.
 
 Resources (F11 phase 1a + 1b-i): chug consumes tools AND reads resources
-from servers that advertise them — `resources/list` + `resources/read` on
-servers whose initialize handshake advertised the `resources` capability
-(capped at 200 per server, like tools); a server without the capability is
-never asked. The model-facing surface is the builtin **`mcp_resource`**
+from servers that advertise them — `resources/list` + `resources/read`
+over BOTH stdio and streamable HTTP, on servers whose initialize
+handshake advertised the `resources` capability (capped at 200 per
+server, like tools); a server without the capability is never asked. The
+model-facing surface is the builtin **`mcp_resource`**
 tool: `{"action": "list", "server"?}` returns the resource catalog, one
 resource per line (`server uri — description (mimeType)`; all servers, or
 one named server), and `{"action": "read", "server", "uri"}` returns one
@@ -625,13 +626,13 @@ servers connected, `list` says so plainly. The tool is a builtin (not an
 `mcp__`-prefixed server tool), so T90 deny rules can match the plain
 `mcp_resource` name, and it is read-only: it bypasses the laya risk gate
 exactly like `mcp__` tool calls (the gate judges bash commands only).
-Prompts (F11 phase 1b-ii): chug also consumes prompts from servers that
-advertise the `prompts` capability — `prompts/list` (capped at 200 per
+Prompts (F11 phase 1b-ii + 1b-iii): chug also consumes prompts from servers
+that advertise the `prompts` capability — `prompts/list` (capped at 200 per
 server, like tools and resources) and `prompts/get` with the prompt's
-optional arguments map; a server without the capability is never asked.
-The legs are registry-internal for now — a model-facing prompts surface
-(slash-pack surfacing) is a later F11/F9 phase. Still to come in F11:
-the resource+prompt legs over the HTTP transport.
+optional arguments map, over BOTH stdio and streamable HTTP; a server
+without the capability is never asked. The legs are registry-internal for
+now — a model-facing prompts surface (slash-pack surfacing) is a later
+F11/F9 phase.
 
 Per-server fail-soft at runtime too: a stdio server that dies mid-run errors
 its calls without killing the run; a remote server that refuses connection

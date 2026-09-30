@@ -2321,9 +2321,11 @@ for line in sys.stdin:
         assert_eq!(contents[0].text.as_deref(), Some("hello from the stub"));
     }
 
-    /// Phase-1b honesty is covered where the HTTP backend lives: the
-    /// transport captures the shared capability catalog but speaks no
-    /// resource legs yet (see mcp_http.rs tests).
+    /// Transport parity: both transports capture the shared capability
+    /// catalog, and since T171 the HTTP backend speaks the same
+    /// resource+prompt legs over it (gated through the registry — see the
+    /// mcp_http.rs tests). The parse shape is pinned here so a transport
+    /// fork fails loudly.
     #[test]
     fn capabilities_parse_is_the_shared_shape_between_transports() {
         // The HTTP transport parses the SAME struct (mcp_http.rs initialize);
