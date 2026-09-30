@@ -23,7 +23,7 @@ use std::sync::{Arc, Mutex, MutexGuard, mpsc};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime};
 
-use crate::mcp::{McpBackend, McpTool};
+use crate::mcp::{McpBackend, McpCapabilities, McpTool};
 use crate::sse::{PostRetrySchedule, SseParser, SseReconnectBackoff};
 use crate::tools::ToolResult;
 
@@ -78,6 +78,11 @@ pub struct HttpMcpServer {
     session_id: Arc<Mutex<Option<String>>>,
     next_id: u64,
     tools: Vec<McpTool>,
+    /// Capabilities the server advertised at initialize — the SAME shared
+    /// struct the stdio transport parses (F11 phase 1a). Captured here so
+    /// phase 1b's HTTP resource legs can gate on it; no resource legs are
+    /// spoken over HTTP yet (the trait defaults answer phase-1b errors).
+    capabilities: McpCapabilities,
     alive: Arc<Mutex<bool>>,
     /// Sleep between POST retries and listen-stream backoff chunks;
     /// injectable so tests never really sleep.
@@ -184,6 +189,7 @@ impl HttpMcpServer {
             session_id: Arc::new(Mutex::new(None)),
             next_id: 0,
             tools: Vec::new(),
+            capabilities: McpCapabilities::default(),
             alive: Arc::new(Mutex::new(true)),
             sleeper,
             log_path: None,
@@ -219,15 +225,24 @@ impl HttpMcpServer {
 
     /// `initialize` → capture Mcp-Session-Id → `notifications/initialized`
     /// (expecting 202) → `tools/list`. Any failure aborts the handshake; the
-    /// caller skips the server (fail-soft).
+    /// caller skips the server (fail-soft). The initialize response's
+    /// `capabilities` object is parsed into the shared [`McpCapabilities`]
+    /// catalog — the same struct the stdio transport keeps (F11 phase 1a);
+    /// HTTP resource legs themselves are phase 1b.
     pub fn initialize(&mut self) -> anyhow::Result<()> {
         let params = json!({
             "protocolVersion": PROTOCOL_VERSION,
             "capabilities": {},
             "clientInfo": { "name": "chug", "version": "0.1.0" }
         });
-        self.send_request("initialize", params, INIT_TIMEOUT)
+        let init_resp = self
+            .send_request("initialize", params, INIT_TIMEOUT)
             .context("initialize handshake")?;
+        self.capabilities = McpCapabilities::parse(
+            init_resp
+                .get("result")
+                .and_then(|r| r.get("capabilities")),
+        );
         self.send_notification("notifications/initialized", json!({}), INIT_TIMEOUT)
             .context("initialized notification")?;
         let list_resp = self
@@ -998,6 +1013,12 @@ impl McpBackend for HttpMcpServer {
     fn call(&mut self, tool_name: &str, arguments: Value) -> anyhow::Result<ToolResult> {
         HttpMcpServer::call(self, tool_name, arguments)
     }
+    fn capabilities(&self) -> &McpCapabilities {
+        &self.capabilities
+    }
+    // list_resources / read_resource: inherited trait defaults — the HTTP
+    // transport does not speak resources yet (F11 phase 1b reuses the shared
+    // mapping), so they answer the named phase-1b error.
 }
 
 impl Drop for HttpMcpServer {
@@ -1873,6 +1894,22 @@ pub(crate) mod tests {
 
     fn new_server(name: &str, url: String) -> HttpMcpServer {
         HttpMcpServer::new(name.to_string(), url, vec![]).unwrap()
+    }
+
+    /// F11 phase 1b honesty: the HTTP transport captures the shared
+    /// capability catalog, but it speaks no resource legs yet — the trait
+    /// defaults answer with a named error (and never touch the network).
+    #[test]
+    fn http_resource_legs_are_phase_1b_named_errors() {
+        let mut srv = new_server("remote", "http://127.0.0.1:9/mcp".to_string());
+        let err = McpBackend::list_resources(&mut srv).unwrap_err();
+        assert!(err.to_string().contains("mcp server remote"), "{err}");
+        assert!(err.to_string().contains("phase 1b"), "{err}");
+        let err = McpBackend::read_resource(&mut srv, "mem://x").unwrap_err();
+        assert!(err.to_string().contains("mcp server remote"), "{err}");
+        assert!(err.to_string().contains("phase 1b"), "{err}");
+        // The catalog starts empty (no handshake yet) — all false.
+        assert!(!srv.capabilities().resources);
     }
 
     type Sleeper = Arc<dyn Fn(Duration) + Send + Sync>;
