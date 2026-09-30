@@ -122,27 +122,30 @@
 //!
 //! T155 doctrine: T149 (8699a70) raised the validator-child budgets
 //! 50/30 → 60/40 on three surfaces and pinned only the bare numbers — the
-//! step-2 T63-resume echo's "80/35 impl, 60/40 validate" (leg (d) above).
-//! Its kimi validator PASSed with two non-blocking unpinned-text
+//! step-2 T63-resume echo's "80/50 impl, 60/50 validate" (leg (d) above;
+//! the echo read "80/35 impl, 60/40 validate" when T149 pinned it —
+//! T173's minutes raise re-keyed it, see the T173 block). Its kimi
+//! validator PASSed with two non-blocking unpinned-text
 //! observations (verdict d1790688874-9): text-revert mutants on (a)
 //! LOOP-SPEC step 4's budget RATIONALE — the census sentence ("4 of the
 //! last 4 validator children died at budget in cycles 66–69") and the
-//! measure clause (">1 of the next 8 validator runs still dies at 60/40 …
-//! trim default mutation-leg counts") — and (b) META-SPEC §6's
-//! validator-template budget argv, stayed full-suite GREEN. The rationale
+//! measure clause (">1 of the next 8 validator runs still dies at 60/50 …
+//! trim default mutation-leg counts" — "60/40" pre-T173) — and (b)
+//! META-SPEC §6's validator-template budget argv, stayed full-suite
+//! GREEN. The rationale
 //! is the teeth that make the budgets self-governing (the census is the
 //! evidence; the measure clause is the pre-committed remedy), and §6's
 //! argv is the template line every validator actually launches from — a
 //! future edit can currently drop either with every gate green. Legs
 //! (p)–(q) pin both texts in place, extending — never replacing — the
 //! T149 numbers pin: the step-4 tokens are asserted in the SAME paragraph
-//! region as step 4's own `max_iters: 60`, `max_minutes: 40` pair
-//! (adjacency, not two disjoint file-wide greps — the T24 whole-file-grep
-//! non-localizing observation), and the §6 argv is one contiguous
-//! fragment on the kimi launch line. No doctrine text is edited by this
-//! row: LOOP-SPEC.md and META-SPEC.md must stay byte-identical
-//! before/after (any wording drift the pin exposes is reported, not
-//! fixed).
+//! region as step 4's own `max_iters: 60`, `max_minutes: 50` pair
+//! (pre-T173 40; adjacency, not two disjoint file-wide greps — the T24
+//! whole-file-grep non-localizing observation), and the §6 argv is one
+//! contiguous fragment on the kimi launch line. No doctrine text is
+//! edited by this row: LOOP-SPEC.md and META-SPEC.md must stay
+//! byte-identical before/after (any wording drift the pin exposes is
+//! reported, not fixed).
 //!
 //! T156 doctrine: cycle 71 practiced a THIRD budget-death variant the T63
 //! paragraph did not name — T150-impl died on the 35-minute MINUTES
@@ -168,6 +171,36 @@
 //! resume-first rule and the ONE-cap/standing-recipes sentences, and the
 //! standing recipes' bytes — the T55/T28 fallback list the sentence
 //! extends, never rewrites.
+//!
+//! T173 doctrine: the cycle-79 eval (EVALUATION.md §2.1) found MINUTES —
+//! not iterations — are now the BINDING child budget: 5 of 7 impl
+//! children in the cycles-76–78 delta died at the 35-minute wall with
+//! iterations to spare (t162 54/80, t163 46/80, t164 50/80
+//! uncommitted→resume, t165 65/80, t167 47/80; the two survivors are the
+//! small rows) and 3 of 5 validators finished within ~1–4.5 min of the
+//! 40-minute wall (t167-val 39m16s, t168-val 38m22s, t162-val 35m46s).
+//! glm throughput runs ~1.3–1.9 iters/min, so an 80-iter budget needs
+//! 42–62 min, and a kimi validator needs ~45–50 min for a full 60-iter
+//! run. Both templates' minutes moved to 50 in ONE commit (impl 35→50,
+//! validator 40→50; max_iters stay 80/60, delegate's built-in defaults
+//! stay 40/35, META-SPEC.md is untouched — the T21/T24 precedent: the
+//! LOOP-SPEC §6-override paragraph governs the live budget, so leg (q)'s
+//! §6 argv pin does NOT move). Legs (u)–(x) pin the raise: (u) the
+//! step-2 launch block's budget lines as ONE contiguous fragment — the
+//! step-2 template's minutes had NO pin before, so a revert to 35 stayed
+//! full-suite GREEN; (v) the explicitness sentence naming 50 with
+//! delegate's defaults staying 40/35 (the template overrides minutes
+//! explicitly); (w) the NEW impl-side measure clause, the T21-class
+//! pattern: the cycles-76–78 census (5 of 7 impl children at the
+//! 35-minute wall, 4 committed + 1 resume) as the raise's evidence, a
+//! tripwire (>2 of the next 8 impl children still die at the 50-minute
+//! budget), and the spec-size-discipline remedy; (x) the step-4 evidence
+//! extension — 3 of 5 validators within ~1–4.5 min of the wall, the
+//! raise's reason — with the measure clause re-keyed 60/40 → 60/50 (the
+//! T155 threshold needle carries the pair now). Every needle and comment
+//! quoting the old numbers moves with the doctrine in this same commit;
+//! the T156 block's historical 35-minute reference (T150-impl's death)
+//! stays as history.
 
 /// The leg's signature phrase: "resume" + the one-attempt cap language in
 /// one contiguous run. Must occur EXACTLY once in LOOP-SPEC.md.
@@ -283,7 +316,7 @@ fn leg_names_mechanics_and_scope_guards_inside_step_2() {
         "`resume: true`",
         "SAME worktree",
         "re-carries the T47",
-        "80/35 impl, 60/40 validate",
+        "80/50 impl, 60/50 validate",
         "continues the child's",
         "never removed pre-harvest (T19)",
         "LATEST run segment (T58)",
@@ -1094,22 +1127,41 @@ fn cross_tree_write_rule_needles_occur_exactly_once_after_read_sentence() {
 
 /// Step 4's budget numbers — the pair the rationale hangs on, contiguous
 /// as written (backticks, comma-space). Leg (d) pins the step-2
-/// T63-resume echo's budgets ("80/35 impl, 60/40 validate"); THIS needle
-/// pins step 4's own launch bytes as the adjacency anchor for the
-/// census/measure tokens — the first step-4 numbers pin, not a duplicate
-/// of leg (d). Presence is asserted via the in-window find (below), not a
+/// T63-resume echo's budgets ("80/50 impl, 60/50 validate" — pre-T173
+/// "80/35 impl, 60/40 validate"); THIS needle pins step 4's own launch
+/// bytes as the adjacency anchor for the census/measure tokens — the
+/// first step-4 numbers pin, not a duplicate of leg (d). T173 moved the
+/// minutes digit 40→50; the needle moved with the doctrine in the same
+/// commit. Presence is asserted via the in-window find (below), not a
 /// separate file-wide count leg — the numbers are already pinned once and
 /// this row does not duplicate that pin.
-const STEP4_BUDGET_NUMBERS: &str = "`max_iters: 60`, `max_minutes: 40`";
+const STEP4_BUDGET_NUMBERS: &str = "`max_iters: 60`, `max_minutes: 50`";
 
-/// The census clause's stable core tokens — the evidence the 60/40 budgets
-/// stand on (four budget deaths in four cycles, 66–69). Contiguous as
+/// The census clause's stable core tokens — the evidence the 60/50 budgets
+/// stand on (four budget deaths in four cycles, 66–69; T173's leg (x)
+/// extends the paragraph with the cycle-79 census without touching this
+/// sentence). Contiguous as
 /// written; must occur EXACTLY once in LOOP-SPEC.md.
 const STEP4_CENSUS_NEEDLE: &str = "4 of the last 4 validator children died at budget";
 
 /// The measure clause's census-threshold token — the tripwire that keeps
-/// the budgets self-governing. Contiguous as written; EXACTLY once.
-const STEP4_MEASURE_THRESHOLD_NEEDLE: &str = ">1 of the next 8 validator runs";
+/// the budgets self-governing, EXTENDED by T173 to carry the re-keyed
+/// budget pair (">1 of the next 8 validator runs still dies at 60/50" —
+/// reverting the measure clause to the pre-T173 60/40 goes red here, the
+/// exact unpinned-revert class T155's verdict flagged). Contiguous as
+/// written; EXACTLY once.
+const STEP4_MEASURE_THRESHOLD_NEEDLE: &str =
+    ">1 of the next 8 validator runs still dies at 60/50";
+
+/// The step-4 evidence extension's census token (T173) — the cycle-79
+/// validator census (3 of 5 validators finished within ~1–4.5 min of the
+/// wall), the raise's reason. Contiguous as written; EXACTLY once.
+const STEP4_EVIDENCE_NEEDLE: &str = "3 of 5 validators";
+
+/// The step-4 evidence extension's wall token (T173) — the 40-minute wall
+/// the raise moved (validator minutes 40→50). Contiguous as written;
+/// EXACTLY once.
+const STEP4_EVIDENCE_WALL_NEEDLE: &str = "40-minute wall";
 
 /// The measure clause's remedy token — trim default mutation-leg counts.
 /// Byte-identical INCLUDING its wrapped line break (the file wraps between
@@ -1129,22 +1181,25 @@ const STEP4_HEADING_LOOSE: &str = "4. **";
 /// rationalizes: the census clause and both measure-clause tokens occur
 /// EXACTLY once each in LOOP-SPEC.md, inside step 4's window (the T64
 /// loose-heading scope pattern), AFTER the `max_iters: 60`,
-/// `max_minutes: 40` numbers pair — the same paragraph region (the budget
-/// parenthetical), not a disjoint section (the T24 non-localizing
-/// observation). Delete the rationale text — T149's observed text-revert
-/// mutant — and every needle goes red at count 0 / window-miss; move the
-/// rationale out of step 4 and it dies on the window find; reorder
-/// census/measure and it dies on the ordering assert. Leg (d)'s step-2
-/// echo pin is untouched and stays green under this row's mutants — that
-/// co-green gap is exactly what T149's verdict flagged.
+/// `max_minutes: 50` numbers pair (pre-T173 40) — the same paragraph
+/// region (the budget parenthetical), not a disjoint section (the T24
+/// non-localizing observation). Delete the rationale text — T149's
+/// observed text-revert mutant — and every needle goes red at count 0 /
+/// window-miss; move the rationale out of step 4 and it dies on the
+/// window find; reorder census/measure and it dies on the ordering
+/// assert; revert the measure clause's budget pair to the pre-T173 60/40
+/// and the extended threshold needle goes red (T173's re-key is
+/// load-bearing). Leg (d)'s step-2 echo pin is untouched and stays green
+/// under this row's mutants — that co-green gap is exactly what T149's
+/// verdict flagged.
 #[test]
 fn step4_budget_rationale_tokens_occur_once_beside_the_budget_numbers() {
     // Needle self-checks (T48 idiom): a mangled needle must not let this
     // pin pass silently.
     assert!(
         STEP4_BUDGET_NUMBERS.starts_with("`max_iters: 60`")
-            && STEP4_BUDGET_NUMBERS.ends_with("`max_minutes: 40`"),
-        "the numbers needle must be step 4's contiguous 60/40 pair verbatim"
+            && STEP4_BUDGET_NUMBERS.ends_with("`max_minutes: 50`"),
+        "the numbers needle must be step 4's contiguous 60/50 pair verbatim"
     );
     assert!(
         STEP4_CENSUS_NEEDLE.starts_with("4 of the last 4")
@@ -1153,8 +1208,9 @@ fn step4_budget_rationale_tokens_occur_once_beside_the_budget_numbers() {
     );
     assert!(
         STEP4_MEASURE_THRESHOLD_NEEDLE.starts_with(">1 of the next 8")
-            && STEP4_MEASURE_THRESHOLD_NEEDLE.ends_with("validator runs"),
-        "the measure threshold needle must carry the >1-of-8 tripwire verbatim"
+            && STEP4_MEASURE_THRESHOLD_NEEDLE.ends_with("60/50"),
+        "the measure threshold needle must carry the >1-of-8 tripwire and \
+         the re-keyed 60/50 pair verbatim"
     );
     assert!(
         STEP4_MEASURE_REMEDY_NEEDLE.starts_with("trimming default")
@@ -1195,7 +1251,7 @@ fn step4_budget_rationale_tokens_occur_once_beside_the_budget_numbers() {
     let window = &spec[start..end];
     let numbers = window.find(STEP4_BUDGET_NUMBERS).unwrap_or_else(|| {
         panic!(
-            "step-4 window must carry {STEP4_BUDGET_NUMBERS:?} — the 60/40 \
+            "step-4 window must carry {STEP4_BUDGET_NUMBERS:?} — the 60/50 \
              numbers pair was deleted or moved out of step 4 (leg (d)'s \
              step-2 echo pin is unaffected either way)"
         )
@@ -1223,7 +1279,7 @@ fn step4_budget_rationale_tokens_occur_once_beside_the_budget_numbers() {
     });
     assert!(
         numbers < census && census < threshold && threshold < remedy,
-        "the rationale must sit in the SAME paragraph region as the 60/40 \
+        "the rationale must sit in the SAME paragraph region as the 60/50 \
          numbers, reading in the written order — numbers ({numbers}), \
          census ({census}), measure tripwire ({threshold}), measure remedy \
          ({remedy})"
@@ -1235,7 +1291,11 @@ fn step4_budget_rationale_tokens_occur_once_beside_the_budget_numbers() {
 /// 40`. T149 raised §6's template 40/30 → 60/40 in the same commit as the
 /// LOOP-SPEC numbers, but nothing pinned the template's bytes — reverting
 /// the argv to the pre-T149 `--max-iters 40 --max-minutes 30` stayed
-/// full-suite GREEN. The fragment is asserted contiguously (one
+/// full-suite GREEN. T173 did NOT touch §6's argv (META-SPEC.md is
+/// untouched — the T21/T24 precedent: the LOOP-SPEC §6-override paragraph
+/// governs the live budget at 60/50, while §6's own template stays
+/// byte-identical and this pin stays at 60/40). The fragment is asserted
+/// contiguously (one
 /// substring, not two separate greps), exactly once in META-SPEC.md,
 /// inside §6's Validate-step window (the T64 loose-heading pattern over
 /// the existing STEP6_VALIDATE_HEADING / STEP7_HEADING bounds), on the
@@ -1507,5 +1567,344 @@ fn standing_recipes_sentence_survives_byte_identical() {
          (wrapping included) exactly once — the T156 routing sentence \
          supplements the T55/T28 fallback list, never rewrites or rewraps \
          it"
+    );
+}
+
+// ---- T173 — the child minutes budgets: 35/40 → 50/50, both roles ----
+//
+// The cycle-79 eval found MINUTES the binding child budget (5 of 7 impl
+// children died at the 35-minute wall with iterations to spare; 3 of 5
+// validators finished within ~1–4.5 min of the 40-minute wall), so both
+// templates' minutes moved to 50 in ONE commit with these pins. max_iters
+// stay 80/60, delegate's built-in defaults stay 40/35, and META-SPEC.md
+// is untouched (the T21/T24 precedent — leg (q)'s argv pin stays 60/40).
+
+/// The step-2 launch template's budget lines as ONE contiguous fragment,
+/// byte-identical INCLUDING the wrapped line break and the delegate
+/// block's 5-space indentation ("max_iters:" + three spaces before the
+/// 80 — the template's argv shape, not the prose pairs). The step-2
+/// template's minutes had NO pin before this leg, so a revert to 35
+/// stayed full-suite GREEN — the RED-proof gap this leg closes. Must
+/// occur EXACTLY once in LOOP-SPEC.md.
+const IMPL_TEMPLATE_BUDGETS: &str = concat!(
+    "     max_iters:   80\n",
+    "     max_minutes: 50"
+);
+
+/// The explicitness sentence's budget pair — the reworded sentence
+/// naming 50 on both surfaces of the template's intro line. Contiguous
+/// as written; EXACTLY once.
+const IMPL_EXPLICIT_PAIR: &str =
+    "`max_iters: 80` and `max_minutes: 50` are explicit";
+
+/// The explicitness sentence's defaults token — delegate's built-in
+/// defaults STAY 40/35 (the template overrides minutes explicitly; the
+/// pre-T173 wording was "defaults are 40/35"). Contiguous as written;
+/// EXACTLY once.
+const IMPL_DEFAULTS_UNCHANGED: &str = "defaults stay 40/35";
+
+/// The impl measure clause's census token — the raise's evidence (the
+/// cycles-76–78 census: 5 of 7 impl children dead at the wall). The
+/// T21-class pattern: a budget's parenthetical carries its own census.
+/// Contiguous as written; EXACTLY once.
+const IMPL_CENSUS_NEEDLE: &str = "5 of 7 impl children";
+
+/// The impl measure clause's old-wall token — the 35-minute wall the
+/// census died on (the raise's baseline; also the T156 history's
+/// T150-impl wall — this needle pins the LIVE census sentence's wall,
+/// whose count is asserted exactly-once here). Contiguous as written;
+/// EXACTLY once.
+const IMPL_OLD_WALL_NEEDLE: &str = "35-minute wall";
+
+/// The impl measure clause's tripwire+budget token, byte-identical
+/// INCLUDING its wrapped line break (the file wraps between "impl" and
+/// "children"; the concat! spells the wrap so a rewrap cannot silently
+/// unpin it — the T47_EXPORT_PREFIX idiom): >2 of the next 8 impl
+/// children dying at the 50-MINUTE budget trips the clause.
+const IMPL_MEASURE_TRIPWIRE: &str = concat!(
+    ">2 of the next 8 impl\n",
+    "   children still die at the 50-minute budget"
+);
+
+/// The impl measure clause's remedy token — spec-size discipline instead
+/// of further raises (T110's ceiling already governs iterations; this
+/// clause governs minutes). Contiguous as written; EXACTLY once.
+const IMPL_MEASURE_REMEDY: &str = "spec-size discipline";
+
+/// (u) T173 — the step-2 launch template carries the raised minutes as
+/// ONE contiguous fragment inside step 2's launch block (the T64
+/// loose-heading window), BEFORE the explicitness sentence that explains
+/// it. Reverting the template's minutes to 35 — the eval's observed
+/// binding-budget death class — goes red here at count 0 (the fragment
+/// is byte-pinned, so any renumber or reindent dies too); moving the
+/// fragment out of step 2 dies on the window find.
+#[test]
+fn impl_template_budget_fragment_survives_in_step2_launch_block() {
+    // Needle self-check (T48 idiom): a mangled needle must not let this
+    // pin pass silently.
+    assert!(
+        IMPL_TEMPLATE_BUDGETS.starts_with("     max_iters:")
+            && IMPL_TEMPLATE_BUDGETS.ends_with("max_minutes: 50"),
+        "the template-budgets needle must be the step-2 launch block's \
+         contiguous 80/50 lines verbatim, indentation included"
+    );
+    let spec = loop_spec();
+    assert_eq!(
+        spec.matches(IMPL_TEMPLATE_BUDGETS).count(),
+        1,
+        "LOOP-SPEC's step-2 launch template must carry the 80/50 budget \
+         lines byte-identically exactly once — zero means the minutes were \
+         reverted (the pre-T173 35) or the block was rewrapped/reindented, \
+         more than one means the template is stated twice"
+    );
+    let start = spec
+        .find(STEP2_HEADING_LOOSE)
+        .expect("step-2 heading (`2. **`) present");
+    let end = start
+        + spec[start..]
+            .find(STEP3_HEADING)
+            .expect("step-3 heading present after step 2's");
+    let window = &spec[start..end];
+    let budgets = window
+        .find(IMPL_TEMPLATE_BUDGETS)
+        .unwrap_or_else(|| {
+            panic!(
+                "step-2 window must carry the template budget fragment \
+                 {IMPL_TEMPLATE_BUDGETS:?} (moved out of step 2?)"
+            )
+        });
+    let explicit = window
+        .find(IMPL_EXPLICIT_PAIR)
+        .unwrap_or_else(|| {
+            panic!(
+                "step-2 window must carry {IMPL_EXPLICIT_PAIR:?} (leg (v) \
+                 covers its census; this leg pins the template-first order)"
+            )
+        });
+    assert!(
+        budgets < explicit,
+        "the launch template must precede the explicitness sentence — \
+         template fragment ({budgets}), then the sentence naming 50 \
+         ({explicit})"
+    );
+}
+
+/// (v) T173 — the explicitness sentence names 50 and keeps delegate's
+/// defaults at 40/35: both tokens occur EXACTLY once each in LOOP-SPEC.md,
+/// inside step 2's window, pair first then the defaults clause — the
+/// template overrides minutes explicitly WITHOUT raising the tool's
+/// built-in defaults (req: defaults stay 40/35). Reverting the sentence's
+/// numbers (either digit) or restoring the pre-T173 "defaults are 40/35"
+/// wording goes red at count 0.
+#[test]
+fn impl_explicitness_sentence_names_50_with_defaults_unchanged() {
+    // Needle self-checks (T48 idiom).
+    assert!(
+        IMPL_EXPLICIT_PAIR.starts_with("`max_iters: 80`")
+            && IMPL_EXPLICIT_PAIR.ends_with("are explicit"),
+        "the explicitness needle must be the template-intro sentence's \
+         80/50 pair verbatim"
+    );
+    assert!(
+        IMPL_DEFAULTS_UNCHANGED.starts_with("defaults stay")
+            && IMPL_DEFAULTS_UNCHANGED.ends_with("40/35"),
+        "the defaults needle must carry the stay-40/35 language verbatim"
+    );
+    let spec = loop_spec();
+    for (needle, what) in [
+        (
+            IMPL_EXPLICIT_PAIR,
+            "the step-2 explicitness sentence's 80/50 pair",
+        ),
+        (
+            IMPL_DEFAULTS_UNCHANGED,
+            "the step-2 defaults-stay-40/35 clause",
+        ),
+    ] {
+        assert_eq!(
+            spec.matches(needle).count(),
+            1,
+            "LOOP-SPEC must state {what} exactly once — zero means the \
+             sentence was reverted (the pre-T173 35/`defaults are 40/35` \
+             wording) or rewrapped across a line break, more than one \
+             means it is stated twice"
+        );
+    }
+    let start = spec
+        .find(STEP2_HEADING_LOOSE)
+        .expect("step-2 heading (`2. **`) present");
+    let end = start
+        + spec[start..]
+            .find(STEP3_HEADING)
+            .expect("step-3 heading present after step 2's");
+    let window = &spec[start..end];
+    let pair = window
+        .find(IMPL_EXPLICIT_PAIR)
+        .expect("step-2 window carries the explicitness pair (leg (u) orders it)");
+    let defaults = window
+        .find(IMPL_DEFAULTS_UNCHANGED)
+        .expect("step-2 window carries the defaults clause");
+    assert!(
+        pair < defaults,
+        "the explicitness sentence must read pair-then-defaults — pair \
+         ({pair}), defaults stay 40/35 ({defaults})"
+    );
+}
+
+/// (w) T173 — the NEW impl-side measure clause (the T21-class pattern)
+/// survives in step 2 with its census evidence, old-wall baseline,
+/// tripwire, and remedy in written order: the cycles-76–78 census (5 of 7
+/// impl children at the 35-minute wall), the >2-of-8 tripwire at the
+/// 50-minute budget (wrapped line break included), and the
+/// spec-size-discipline remedy. Delete the clause — T155's observed
+/// unpinned-rationale class — and every needle goes red at count 0;
+/// move it out of step 2 and it dies on the window find; reorder and it
+/// dies on the ordering assert.
+#[test]
+fn impl_minutes_measure_clause_census_tripwire_remedy_in_step2() {
+    // Needle self-checks (T48 idiom).
+    assert!(
+        IMPL_CENSUS_NEEDLE.starts_with("5 of 7")
+            && IMPL_CENSUS_NEEDLE.ends_with("impl children"),
+        "the impl census needle must carry the five-of-seven evidence \
+         verbatim"
+    );
+    assert!(
+        IMPL_OLD_WALL_NEEDLE.starts_with("35-minute")
+            && IMPL_OLD_WALL_NEEDLE.ends_with("wall"),
+        "the old-wall needle must be the 35-minute wall verbatim"
+    );
+    assert!(
+        IMPL_MEASURE_TRIPWIRE.starts_with(">2 of the next 8")
+            && IMPL_MEASURE_TRIPWIRE.ends_with("50-minute budget"),
+        "the tripwire needle must carry the >2-of-8 tripwire and the \
+         50-minute budget verbatim, wrapped line break included"
+    );
+    assert!(
+        IMPL_MEASURE_REMEDY.starts_with("spec-size")
+            && IMPL_MEASURE_REMEDY.ends_with("discipline"),
+        "the remedy needle must carry the spec-size-discipline remedy \
+         verbatim"
+    );
+    let spec = loop_spec();
+    for (needle, what) in [
+        (IMPL_CENSUS_NEEDLE, "the impl measure clause's 5-of-7 census"),
+        (
+            IMPL_OLD_WALL_NEEDLE,
+            "the impl measure clause's 35-minute-wall baseline",
+        ),
+        (
+            IMPL_MEASURE_TRIPWIRE,
+            "the impl measure clause's >2-of-8 tripwire at the 50-minute \
+             budget",
+        ),
+        (
+            IMPL_MEASURE_REMEDY,
+            "the impl measure clause's spec-size-discipline remedy",
+        ),
+    ] {
+        assert_eq!(
+            spec.matches(needle).count(),
+            1,
+            "LOOP-SPEC must state {what} exactly once — zero means the \
+             impl measure clause was deleted (or a needle was rewrapped \
+             across a line break), more than one means it is stated twice"
+        );
+    }
+    let start = spec
+        .find(STEP2_HEADING_LOOSE)
+        .expect("step-2 heading (`2. **`) present");
+    let end = start
+        + spec[start..]
+            .find(STEP3_HEADING)
+            .expect("step-3 heading present after step 2's");
+    let window = &spec[start..end];
+    let census = window
+        .find(IMPL_CENSUS_NEEDLE)
+        .expect("step-2 window carries the impl census");
+    let wall = window
+        .find(IMPL_OLD_WALL_NEEDLE)
+        .expect("step-2 window carries the 35-minute wall");
+    let tripwire = window
+        .find(IMPL_MEASURE_TRIPWIRE)
+        .expect("step-2 window carries the impl tripwire (wrapped)");
+    let remedy = window
+        .find(IMPL_MEASURE_REMEDY)
+        .expect("step-2 window carries the impl remedy");
+    assert!(
+        census < wall && wall < tripwire && tripwire < remedy,
+        "the impl measure clause must read census-wall-tripwire-remedy — \
+         census ({census}), 35-minute wall ({wall}), tripwire ({tripwire}), \
+         remedy ({remedy})"
+    );
+}
+
+/// (x) T173 — step 4's evidence EXTENSION survives between the T155
+/// census clause and the re-keyed measure tripwire: the cycle-79
+/// validator census (3 of 5 validators finishing within ~1–4.5 min of the
+/// 40-minute wall — the raise's reason) occurs EXACTLY once in
+/// LOOP-SPEC.md, inside step 4's window, ordered census → evidence →
+/// 40-minute wall → measure tripwire. Deleting the extension — the
+/// T149/T155 unpinned-rationale class — goes red at count 0; reverting
+/// the measure clause's budget pair is leg (p)'s extended threshold
+/// needle, not this leg.
+#[test]
+fn step4_evidence_extension_sits_between_census_and_tripwire() {
+    // Needle self-checks (T48 idiom).
+    assert!(
+        STEP4_EVIDENCE_NEEDLE.starts_with("3 of 5")
+            && STEP4_EVIDENCE_NEEDLE.ends_with("validators"),
+        "the evidence needle must carry the three-of-five validator census \
+         verbatim"
+    );
+    assert!(
+        STEP4_EVIDENCE_WALL_NEEDLE.starts_with("40-minute")
+            && STEP4_EVIDENCE_WALL_NEEDLE.ends_with("wall"),
+        "the evidence wall needle must be the 40-minute wall verbatim"
+    );
+    let spec = loop_spec();
+    for (needle, what) in [
+        (
+            STEP4_EVIDENCE_NEEDLE,
+            "the step-4 cycle-79 validator census (3 of 5)",
+        ),
+        (
+            STEP4_EVIDENCE_WALL_NEEDLE,
+            "the step-4 40-minute-wall baseline",
+        ),
+    ] {
+        assert_eq!(
+            spec.matches(needle).count(),
+            1,
+            "LOOP-SPEC must state {what} exactly once — zero means the \
+             cycle-79 evidence extension was deleted, more than one means \
+             it is stated twice"
+        );
+    }
+    let start = spec
+        .find(STEP4_HEADING_LOOSE)
+        .expect("step-4 heading (`4. **`) present");
+    let end = start
+        + spec[start..]
+            .find(STEP5_HEADING_LOOSE)
+            .expect("step-5 heading present after step 4's");
+    let window = &spec[start..end];
+    let census = window
+        .find(STEP4_CENSUS_NEEDLE)
+        .expect("step-4 window carries the T155 census clause (leg (p))");
+    let evidence = window
+        .find(STEP4_EVIDENCE_NEEDLE)
+        .expect("step-4 window carries the cycle-79 evidence");
+    let wall = window
+        .find(STEP4_EVIDENCE_WALL_NEEDLE)
+        .expect("step-4 window carries the 40-minute wall");
+    let threshold = window
+        .find(STEP4_MEASURE_THRESHOLD_NEEDLE)
+        .expect("step-4 window carries the re-keyed measure tripwire (leg (p))");
+    assert!(
+        census < evidence && evidence < wall && wall < threshold,
+        "the evidence extension must sit between the T155 census and the \
+         re-keyed measure tripwire — census ({census}), 3-of-5 evidence \
+         ({evidence}), 40-minute wall ({wall}), 60/50 tripwire ({threshold})"
     );
 }

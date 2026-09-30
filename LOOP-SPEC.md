@@ -103,10 +103,11 @@ never 3+, never 2 validators):
              or LEDGER.md — bookkeeping is the orchestrator's."
      model:       "anthropic-system.ai.glm-5-3-flash"
      max_iters:   80
-     max_minutes: 35
+     max_minutes: 50
    ```
-   `max_iters: 80` and `max_minutes: 35` are explicit — delegate's
-   defaults are 40/35, and T21's headroom must survive the migration.
+   `max_iters: 80` and `max_minutes: 50` are explicit — delegate's
+   defaults stay 40/35, and the template overrides minutes explicitly;
+   T21's headroom must survive the migration.
    (80, not 65: 3 of 12 post-T92 impl children died at 65/65 with the work
    done — T91/T99/T100 run1s, totals 84/93/67; T63 resumes 21/21; minutes
    never binding, t90 used 8m24s of 35 for 60 iterations. Measure: if >1 of
@@ -118,6 +119,15 @@ never 3+, never 2 validators):
    iterations, t108-fixup post-commit); the remedy is the
    filing-time ~500-line estimate ceiling in META-META-SPEC's spec
    quality bar, not further iteration raises.)
+   The minutes raise (T173, cycle-79 eval): minutes are now the BINDING
+   child budget — the cycles-76–78 census found 5 of 7 impl children
+   dead at the 35-minute wall with iterations to spare (4 committed →
+   orchestrator-finish, 1 uncommitted → T63 resume; glm throughput
+   ~1.3–1.9 iters/min needs 42–62 min for 80 iterations), so the
+   template's minutes moved 35→50. Measure: if >2 of the next 8 impl
+   children still die at the 50-minute budget with the goal unaccepted,
+   the next eval considers spec-size discipline instead of further
+   raises.
    The goal carries the T47 export because delegate cannot pass env — a child
    that skips it just builds cold into its own worktree's target dir
    (harmless, slow). T161: an impl child launched INTO the 2-impl overlap
@@ -156,7 +166,7 @@ never 3+, never 2 validators):
    incomplete work, the FIRST recovery is ONE `delegate` relaunch in the
    SAME worktree with `resume: true` — same spec, same goal (the goal
    re-carries the T47 `CARGO_TARGET_DIR` export), same model, same
-   budgets (80/35 impl, 60/40 validate) — which continues the child's
+   budgets (80/50 impl, 60/50 validate) — which continues the child's
    prior transcript in that worktree instead of starting cold. The
    routing discriminator is the work's state at death: work INCOMPLETE
    (uncommitted or partial) takes the resume relaunch above; work
@@ -278,12 +288,16 @@ never 3+, never 2 validators):
    model orchestrates (T81 family independence: glm implements, so a
    glm-orchestrated cycle never lets glm validate glm — a routine cycle
    still launches this child on kimi) — with
-   `max_iters: 60`, `max_minutes: 40` (§6's budgets, passed explicitly —
-   minutes is 40, still ABOVE delegate's 35 default. 60/40, not 50/30:
+   `max_iters: 60`, `max_minutes: 50` (§6's budgets, passed explicitly —
+   minutes is 50, still ABOVE delegate's 35 default. 60/50, not 50/30:
    4 of the last 4 validator children died at budget in cycles 66–69 —
    T134/T138/T142 at 50/50 with work in flight, T137 minutes-bound at
-   30m08s with its verdict already written but unannounced. Measure: if
-   >1 of the next 8 validator runs still dies at 60/40 with the verdict
+   30m08s with its verdict already written but unannounced — and the
+   cycles-76–78 census found 3 of 5 validators finishing within ~1–4.5
+   min of the 40-minute wall (t167-val 39m16s, t168-val 38m22s, t162-val
+   35m46s of 40), one slow mutant from the same unannounced-verdict
+   death — the raise's reason. Measure: if
+   >1 of the next 8 validator runs still dies at 60/50 with the verdict
    unannounced, the next eval considers trimming default mutation-leg
    counts instead of further raises), and §6's goal text
    verbatim except its export line, which becomes
