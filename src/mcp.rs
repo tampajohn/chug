@@ -13,7 +13,7 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use crate::permissions::Permissions;
-use crate::tools::{ToolResult, kill_process_group};
+use crate::tools::{ToolResult, get_str, kill_process_group, received_hint};
 
 pub(crate) const PROTOCOL_VERSION: &str = "2025-06-18";
 const INIT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -34,6 +34,12 @@ pub struct McpTool {
 /// Defensive cap on registered resources per server (mirror of the HTTP
 /// transport's MAX_MCP_TOOLS: a broken server must not flood the registry).
 pub(crate) const MAX_MCP_RESOURCES: usize = 200;
+
+/// T169: char cap for one `mcp_resource` read render — pinned to
+/// web_fetch's cap constant so the two model-facing read surfaces cannot
+/// drift (same number, same `[truncated at N chars]` marker).
+pub(crate) const MCP_RESOURCE_READ_MAX_CHARS: usize =
+    crate::webfetch::WEB_FETCH_DEFAULT_MAX_CHARS;
 
 /// Server capabilities advertised at `initialize` (F11 phase 1a). One
 /// shared shape for every transport — stdio parses it now, the HTTP
@@ -82,7 +88,6 @@ impl McpCapabilities {
 /// One advertised MCP resource (a `resources/list` entry) — metadata only;
 /// the content itself comes from `resources/read`.
 #[derive(Debug, Clone)]
-#[allow(dead_code)] // registry surface is internal until phase 1b wires a model-facing consumer
 pub struct McpResource {
     pub uri: String,
     pub name: String,
@@ -92,9 +97,8 @@ pub struct McpResource {
 
 /// One content block from `resources/read`: exactly one of `text`/`blob`
 /// carries the payload (`blob` is the server's base64 string, kept verbatim
-/// — decoding is the consumer's job, phase 1b).
+/// — decoding is the consumer's job; the `mcp_resource` tool names it).
 #[derive(Debug, Clone)]
-#[allow(dead_code)] // registry surface is internal until phase 1b wires a model-facing consumer
 pub struct McpResourceContents {
     pub uri: String,
     pub mime_type: String,
@@ -458,7 +462,6 @@ struct PendingServer {
 /// failure is data, never a panic and never a wire request the server did
 /// not advertise.
 #[derive(Debug)]
-#[allow(dead_code)] // phase 1b wires a model-facing surface over this result
 pub struct McpServerResources {
     pub server: String,
     /// This server's resources, or the error that failed its leg (the
@@ -625,32 +628,56 @@ impl McpRegistry {
     /// `resources` is NEVER sent resources/list — its entry carries the
     /// named error instead. Dead or timed-out servers degrade to a named
     /// error in their own entry (the run continues); capable servers reuse
-    /// the LIST timeout.
-    #[allow(dead_code)] // internal surface until phase 1b wires a model-facing tool
+    /// the LIST timeout. T169 wires the model-facing `mcp_resource` tool
+    /// over both legs (below); the surface is no longer internal-only.
     pub fn list_resources(&mut self) -> Vec<McpServerResources> {
         self.servers
             .iter_mut()
             .map(|srv| {
                 let server = srv.name().to_string();
-                // The capability gate IS the (e) contract: a server that did
-                // not advertise `resources` is never sent resources/list —
-                // RED-proven (the always-query mutant made the stub see the
-                // request) and now enforced here.
-                let resources = if srv.capabilities().resources {
-                    srv.list_resources()
-                } else {
-                    Err(anyhow!("mcp server {server} does not advertise resources"))
-                };
+                let resources = Self::resources_leg(&mut **srv);
                 McpServerResources { server, resources }
             })
             .collect()
     }
 
+    /// T169: the single-server leg of the `mcp_resource` list action — only
+    /// the named server is queried (the model asked for one catalog, not
+    /// every server's wire traffic); an unknown name is the registry's
+    /// named error in the entry. The capability gate is the SAME
+    /// [`McpRegistry::resources_leg`] as the all-servers leg — one gate, no
+    /// fork.
+    pub fn list_resources_on(&mut self, server: &str) -> McpServerResources {
+        match self.servers.iter_mut().find(|s| s.name() == server) {
+            Some(srv) => {
+                let resources = Self::resources_leg(&mut **srv);
+                McpServerResources { server: server.to_string(), resources }
+            }
+            None => McpServerResources {
+                server: server.to_string(),
+                resources: Err(anyhow!("mcp server {server} not found")),
+            },
+        }
+    }
+
+    /// One server's resources leg — THE CAPABILITY GATE (single source,
+    /// shared by the all-servers and single-server surfaces): a server
+    /// that did not advertise `resources` is never sent resources/list —
+    /// RED-proven (the always-query mutant made the stub see the request)
+    /// and now enforced here.
+    fn resources_leg(srv: &mut dyn McpBackend) -> anyhow::Result<Vec<McpResource>> {
+        let server = srv.name().to_string();
+        if srv.capabilities().resources {
+            srv.list_resources()
+        } else {
+            Err(anyhow!("mcp server {server} does not advertise resources"))
+        }
+    }
+
     /// F11 phase 1a: read one resource from the named server. Unknown
     /// server, missing capability, and dead server all produce named
     /// errors — never a panic, never a hang (the leg reuses the CALL
-    /// timeout).
-    #[allow(dead_code)] // internal surface until phase 1b wires a model-facing tool
+    /// timeout). T169: the `mcp_resource` read action rides this leg.
     pub fn read_resource(
         &mut self,
         server: &str,
@@ -664,6 +691,178 @@ impl McpRegistry {
         }
         srv.read_resource(uri)
     }
+
+    /// F11 phase 1b-i (T169): the model-facing `mcp_resource` builtin tool
+    /// — list/read over the phase-1a registry legs. Parameter validation is
+    /// the T88 shape (the error names the missing field and what was
+    /// received); every failure is a named tool error the model routes
+    /// around — never a panic, never a hang (the legs reuse the
+    /// LIST/CALL timeout consts). Read-only like the `mcp__` calls it rides
+    /// beside: the laya risk gate (which judges bash commands only) is
+    /// bypassed at the driver dispatch — the same posture, stated in the
+    /// T169 commit message.
+    pub fn dispatch_resource(&mut self, input: &Value) -> ToolResult {
+        match self.dispatch_resource_inner(input) {
+            Ok(res) => res,
+            Err(e) => ToolResult {
+                content: format!("tool error: {e:#}"),
+                is_error: true,
+                images: Vec::new(),
+            },
+        }
+    }
+
+    fn dispatch_resource_inner(&mut self, input: &Value) -> anyhow::Result<ToolResult> {
+        let action = get_str(input, "action")?;
+        match action {
+            "list" => self.resource_list(input),
+            "read" => self.resource_read(input),
+            other => Err(anyhow!(
+                "mcp_resource: unknown action {other:?}; expected \"list\" or \"read\""
+            )),
+        }
+    }
+
+    /// `{"action": "list", "server"?}` — the resource catalog. Omitted
+    /// `server` lists every started server (one `resources/list` per
+    /// capable server); a named server queries ONLY that server. Zero
+    /// connected servers says so plainly (not an error — the model did
+    /// nothing wrong). A server whose leg failed renders one named error
+    /// line; when NO server returned a catalog, the result is a tool error.
+    fn resource_list(&mut self, input: &Value) -> anyhow::Result<ToolResult> {
+        let server = optional_server(input)?;
+        if self.servers.is_empty() {
+            return Ok(ToolResult {
+                content: "no MCP servers are connected; mcp_resource has nothing to list \
+                          (check the mcp.json config; spawn failures log to .chug/mcp-<name>.log)"
+                    .to_string(),
+                is_error: false,
+                images: Vec::new(),
+            });
+        }
+        let out = match &server {
+            Some(name) => vec![self.list_resources_on(name)],
+            None => self.list_resources(),
+        };
+        let ok_count = out.iter().filter(|e| e.resources.is_ok()).count();
+        Ok(ToolResult {
+            content: render_resource_list(&out),
+            is_error: ok_count == 0,
+            images: Vec::new(),
+        })
+    }
+
+    /// `{"action": "read", "server", "uri"}` — one resource's contents via
+    /// the registry read leg (unknown server / missing capability / dead
+    /// server are that leg's named errors).
+    fn resource_read(&mut self, input: &Value) -> anyhow::Result<ToolResult> {
+        let server = get_str(input, "server")?.to_string();
+        let uri = get_str(input, "uri")?.to_string();
+        let contents = self.read_resource(&server, &uri)?;
+        Ok(ToolResult {
+            content: render_resource_read(&server, &contents),
+            is_error: false,
+            images: Vec::new(),
+        })
+    }
+}
+
+/// The `mcp_resource` list action's optional `server` filter: absent or
+/// null = all servers; any other non-string is the T88 named error (the
+/// field is named, and the error shows what WAS received).
+fn optional_server(input: &Value) -> anyhow::Result<Option<String>> {
+    match input.get("server") {
+        None | Some(Value::Null) => Ok(None),
+        Some(v) => match v.as_str() {
+            Some(s) => Ok(Some(s.to_string())),
+            None => Err(anyhow!(
+                "missing or non-string field: server {}",
+                received_hint(input)
+            )),
+        },
+    }
+}
+
+/// One list line (T169 req 4): `server uri — description (mimeType)`. A
+/// resource with no description falls back to its name (req 1's catalog
+/// names as compact text); empty fields drop their slots — no dangling
+/// separators, no empty parens.
+fn resource_list_line(server: &str, r: &McpResource) -> String {
+    let what = if r.description.is_empty() {
+        r.name.as_str()
+    } else {
+        r.description.as_str()
+    };
+    let mime = if r.mime_type.is_empty() {
+        String::new()
+    } else {
+        format!(" ({})", r.mime_type)
+    };
+    if what.is_empty() {
+        format!("{server} {}{mime}", r.uri)
+    } else {
+        format!("{server} {} — {what}{mime}", r.uri)
+    }
+}
+
+/// The list render: one resource per line; a server whose leg failed
+/// renders one named error line instead of its catalog; a capable server
+/// with an empty catalog says so.
+fn render_resource_list(out: &[McpServerResources]) -> String {
+    let mut lines = Vec::new();
+    for entry in out {
+        match &entry.resources {
+            Ok(resources) if resources.is_empty() => {
+                lines.push(format!("{} — no resources advertised", entry.server));
+            }
+            Ok(resources) => {
+                for r in resources {
+                    lines.push(resource_list_line(&entry.server, r));
+                }
+            }
+            Err(e) => lines.push(format!("{} — error: {e:#}", entry.server)),
+        }
+    }
+    lines.join("\n")
+}
+
+/// The read render (T169 req 4): a `server/uri (mimeType)` header per
+/// contents block, text inline, blobs as NAMED base64; the whole output is
+/// char-capped at [`MCP_RESOURCE_READ_MAX_CHARS`] with web_fetch's
+/// truncation marker.
+fn render_resource_read(server: &str, contents: &[McpResourceContents]) -> String {
+    let mut blocks = Vec::new();
+    for c in contents {
+        let mime = if c.mime_type.is_empty() {
+            String::new()
+        } else {
+            format!(" ({})", c.mime_type)
+        };
+        let header = format!("{server}/{}{mime}", c.uri);
+        let payload = if let Some(text) = &c.text {
+            text.clone()
+        } else if let Some(blob) = &c.blob {
+            format!("[blob, base64]: {blob}")
+        } else {
+            "(no text or blob content)".to_string()
+        };
+        blocks.push(format!("{header}\n{payload}"));
+    }
+    if blocks.is_empty() {
+        return "no contents returned".to_string();
+    }
+    let full = blocks.join("\n\n");
+    truncate_chars(&full, MCP_RESOURCE_READ_MAX_CHARS)
+}
+
+/// Char-cap `s` at `max` with web_fetch's marker (same wording, same
+/// shape: a newline then `[truncated at N chars]`).
+fn truncate_chars(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        return s.to_string();
+    }
+    let head: String = s.chars().take(max).collect();
+    format!("{head}\n[truncated at {max} chars]")
 }
 
 /// Build and handshake a remote (streamable-HTTP) MCP server from an already
@@ -1847,6 +2046,403 @@ for line in sys.stdin:
         let caps = McpCapabilities::parse(Some(&json!({"resources": {"listChanged": true}})));
         assert!(caps.resources && caps.resources_list_changed);
         assert!(!caps.tools && !caps.prompts);
+    }
+
+    // ---------- F11 phase 1b-i (T169): the model-facing mcp_resource tool ----------
+
+    /// (a) Schema pin (T22 precedent): the LIVE `tool_schemas()` output —
+    /// not a copy — carries `mcp_resource` with both actions documented.
+    #[test]
+    fn mcp_resource_is_pinned_in_live_tool_schemas() {
+        let schemas = crate::tools::tool_schemas();
+        let names: Vec<&str> = schemas.iter().filter_map(|s| s["name"].as_str()).collect();
+        let schema = schemas
+            .iter()
+            .find(|s| s["name"] == "mcp_resource")
+            .unwrap_or_else(|| panic!("mcp_resource missing from live tool_schemas(): {names:?}"));
+        // Both actions documented in the enum.
+        let actions: Vec<&str> = schema["input_schema"]["properties"]["action"]["enum"]
+            .as_array()
+            .expect("action enum")
+            .iter()
+            .filter_map(Value::as_str)
+            .collect();
+        assert_eq!(actions, ["list", "read"], "{schema}");
+        let desc = schema["description"].as_str().unwrap_or_default();
+        assert!(desc.contains("list") && desc.contains("read"), "{desc}");
+        // Capability-gated honesty is part of the model-facing contract.
+        assert!(desc.contains("Capability-gated"), "{desc}");
+        // Only `action` is required: `server` is optional on list.
+        let required: Vec<&str> = schema["input_schema"]["required"]
+            .as_array()
+            .expect("required array")
+            .iter()
+            .filter_map(Value::as_str)
+            .collect();
+        assert_eq!(required, ["action"], "{schema}");
+    }
+
+    /// (b) RED-proven: list over the tool surface returns the capable
+    /// stub's catalog as parsed `server uri — description (mimeType)`
+    /// lines, capped at MAX_MCP_RESOURCES. RED: pre-T169 the builtin did
+    /// not exist (compile-RED) and the live-schema pin (a) failed; the
+    /// render mutant (description dropped from the line) is re-proven
+    /// serially in the commit message.
+    #[test]
+    fn mcp_resource_tool_lists_capable_server() {
+        let tmp = TempDir::new().unwrap();
+        write_mcp_json(tmp.path(), "fake", resources_server_body());
+        let mut reg = McpRegistry::new(tmp.path(), false, None).unwrap();
+        reg.start(&Permissions::empty());
+        assert_eq!(reg.servers.len(), 1);
+
+        let res = reg.dispatch_resource(&json!({"action": "list"}));
+        assert!(!res.is_error, "{}", res.content);
+        // First and last line of the capped catalog parse into the shape.
+        assert!(
+            res.content.contains("fake mem://r0 — resource 0 (text/plain)"),
+            "{}",
+            res.content
+        );
+        assert!(
+            res.content.contains("fake mem://r199 — resource 199 (text/plain)"),
+            "{}",
+            res.content
+        );
+        assert!(
+            !res.content.contains("mem://r200"),
+            "catalog capped at {MAX_MCP_RESOURCES}: {}",
+            res.content
+        );
+
+        // A named `server` filters the catalog to that server.
+        let res = reg.dispatch_resource(&json!({"action": "list", "server": "fake"}));
+        assert!(!res.is_error, "{}", res.content);
+        assert!(res.content.contains("fake mem://r0"), "{}", res.content);
+    }
+
+    /// (c) read over the tool surface: text contents inline under the
+    /// `server/uri (mimeType)` header, blob contents as named base64.
+    #[test]
+    fn mcp_resource_tool_reads_text_and_blob_contents() {
+        let tmp = TempDir::new().unwrap();
+        write_mcp_json(tmp.path(), "fake", resources_server_body());
+        let mut reg = McpRegistry::new(tmp.path(), false, None).unwrap();
+        reg.start(&Permissions::empty());
+
+        let res = reg.dispatch_resource(&json!({
+            "action": "read", "server": "fake", "uri": "mem://greeting"
+        }));
+        assert!(!res.is_error, "{}", res.content);
+        assert!(
+            res.content.starts_with("fake/mem://greeting (text/plain)"),
+            "{}",
+            res.content
+        );
+        assert!(res.content.contains("hello from the stub"), "{}", res.content);
+
+        let res = reg.dispatch_resource(&json!({
+            "action": "read", "server": "fake", "uri": "mem://bytes"
+        }));
+        assert!(!res.is_error, "{}", res.content);
+        assert!(
+            res.content
+                .starts_with("fake/mem://bytes (application/octet-stream)"),
+            "{}",
+            res.content
+        );
+        assert!(res.content.contains("aGVsbG8="), "{}", res.content);
+        // The blob is NAMED as base64, never silently inlined.
+        assert!(res.content.contains("base64"), "{}", res.content);
+    }
+
+    /// (d) THE TOOL-LEVEL CAPABILITY GATE: a server WITHOUT the resources
+    /// capability gets a named tool error from BOTH actions and is NEVER
+    /// queried — asserted at the stub side (zero resources/* requests in
+    /// its method log). The gate itself lives in the registry leg
+    /// (T162, single source); this test proves the TOOL surface cannot
+    /// bypass it — RED-proven serially: a gate-bypass mutant made the
+    /// stub see resources/list and this test failed.
+    #[test]
+    fn mcp_resource_tool_gates_on_capability_and_never_queries() {
+        let tmp = TempDir::new().unwrap();
+        let requests = tmp.path().join("requests.log");
+        write_mcp_json(tmp.path(), "fake", &method_log_body(&requests));
+        let mut reg = McpRegistry::new(tmp.path(), false, None).unwrap();
+        reg.start(&Permissions::empty());
+        assert_eq!(reg.servers.len(), 1);
+
+        let res = reg.dispatch_resource(&json!({"action": "list"}));
+        assert!(res.is_error, "{}", res.content);
+        assert!(
+            res.content.contains("mcp server fake does not advertise resources"),
+            "{}",
+            res.content
+        );
+
+        let res = reg.dispatch_resource(&json!({
+            "action": "read", "server": "fake", "uri": "mem://x"
+        }));
+        assert!(res.is_error, "{}", res.content);
+        assert!(
+            res.content.contains("does not advertise resources"),
+            "{}",
+            res.content
+        );
+
+        // The stub-side witness: initialize + tools/list only — zero
+        // resources/* requests ever went on the wire.
+        let seen = fs::read_to_string(&requests).unwrap_or_default();
+        assert!(seen.contains("initialize"), "{seen}");
+        assert!(seen.contains("tools/list"), "{seen}");
+        assert!(
+            !seen.contains("resources/"),
+            "a server without the resources capability was queried through the tool: {seen}"
+        );
+    }
+
+    /// (e) Unknown server and dead server are named tool errors through
+    /// the tool surface — never a panic, never a hang.
+    #[test]
+    fn mcp_resource_tool_names_unknown_and_dead_servers() {
+        let tmp = TempDir::new().unwrap();
+        write_mcp_json(tmp.path(), "fake", resources_server_body());
+        let mut reg = McpRegistry::new(tmp.path(), false, None).unwrap();
+        reg.start(&Permissions::empty());
+
+        // Unknown server name, both actions.
+        let res = reg.dispatch_resource(&json!({"action": "list", "server": "nosuch"}));
+        assert!(res.is_error, "{}", res.content);
+        assert!(
+            res.content.contains("mcp server nosuch not found"),
+            "{}",
+            res.content
+        );
+        let res = reg.dispatch_resource(&json!({
+            "action": "read", "server": "nosuch", "uri": "mem://x"
+        }));
+        assert!(res.is_error, "{}", res.content);
+        assert!(
+            res.content.contains("mcp server nosuch not found"),
+            "{}",
+            res.content
+        );
+
+        // Dead server: the stub exits after its first resources/read, so
+        // the SECOND read degrades to the named "is down" error — and the
+        // list action renders the same named error line.
+        let tmp2 = TempDir::new().unwrap();
+        write_mcp_json(tmp2.path(), "fake", resources_server_dies_after_first_read_body());
+        let mut reg2 = McpRegistry::new(tmp2.path(), false, None).unwrap();
+        reg2.start(&Permissions::empty());
+        let res = reg2.dispatch_resource(&json!({
+            "action": "read", "server": "fake", "uri": "mem://greeting"
+        }));
+        assert!(!res.is_error, "{}", res.content);
+        for _ in 0..50 {
+            if !reg2.servers[0].is_alive() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(!reg2.servers[0].is_alive(), "the stub should have exited");
+        let res = reg2.dispatch_resource(&json!({
+            "action": "read", "server": "fake", "uri": "mem://greeting"
+        }));
+        assert!(res.is_error, "{}", res.content);
+        assert!(
+            res.content.contains("mcp server fake is down"),
+            "{}",
+            res.content
+        );
+        let res = reg2.dispatch_resource(&json!({"action": "list"}));
+        assert!(res.is_error, "{}", res.content);
+        assert!(
+            res.content.contains("mcp server fake is down"),
+            "{}",
+            res.content
+        );
+    }
+
+    /// T88-pattern param errors name the missing field (and what was
+    /// received); an unknown action lists the two actions.
+    #[test]
+    fn mcp_resource_tool_param_and_action_errors_are_corrective() {
+        let tmp = TempDir::new().unwrap();
+        write_mcp_json(tmp.path(), "fake", resources_server_body());
+        let mut reg = McpRegistry::new(tmp.path(), false, None).unwrap();
+        reg.start(&Permissions::empty());
+
+        // Missing action entirely.
+        let res = reg.dispatch_resource(&json!({}));
+        assert!(res.is_error, "{}", res.content);
+        assert!(
+            res.content.contains("missing or non-string field: action"),
+            "{}",
+            res.content
+        );
+        assert!(res.content.contains("(received keys: none)"), "{}", res.content);
+
+        // Unknown action lists the two actions.
+        let res = reg.dispatch_resource(&json!({"action": "lst"}));
+        assert!(res.is_error, "{}", res.content);
+        assert!(res.content.contains("unknown action"), "{}", res.content);
+        assert!(
+            res.content.contains("\"list\"") && res.content.contains("\"read\""),
+            "{}",
+            res.content
+        );
+
+        // read without server / without uri / with a non-string server.
+        let res = reg.dispatch_resource(&json!({"action": "read", "uri": "mem://greeting"}));
+        assert!(res.is_error, "{}", res.content);
+        assert!(
+            res.content.contains("missing or non-string field: server"),
+            "{}",
+            res.content
+        );
+        let res = reg.dispatch_resource(&json!({"action": "read", "server": "fake"}));
+        assert!(res.is_error, "{}", res.content);
+        assert!(
+            res.content.contains("missing or non-string field: uri"),
+            "{}",
+            res.content
+        );
+        let res = reg.dispatch_resource(&json!({
+            "action": "read", "server": 3, "uri": "mem://greeting"
+        }));
+        assert!(res.is_error, "{}", res.content);
+        assert!(
+            res.content.contains("missing or non-string field: server"),
+            "{}",
+            res.content
+        );
+        assert!(
+            res.content.contains("(received keys: action, server, uri)"),
+            "{}",
+            res.content
+        );
+
+        // list with a non-string server names the field too.
+        let res = reg.dispatch_resource(&json!({"action": "list", "server": 7}));
+        assert!(res.is_error, "{}", res.content);
+        assert!(
+            res.content.contains("missing or non-string field: server"),
+            "{}",
+            res.content
+        );
+    }
+
+    /// Req 2: with zero configured servers (`--mcp-off`) the tool still
+    /// exists — list says so plainly (not an error), read names the
+    /// missing server (the delegate/web_fetch posture).
+    #[test]
+    fn mcp_resource_tool_with_no_servers_says_so_plainly() {
+        let tmp = TempDir::new().unwrap();
+        let mut reg = McpRegistry::new(tmp.path(), true, None).unwrap();
+        let res = reg.dispatch_resource(&json!({"action": "list"}));
+        assert!(!res.is_error, "{}", res.content);
+        assert!(res.content.contains("no MCP servers"), "{}", res.content);
+        let res = reg.dispatch_resource(&json!({
+            "action": "read", "server": "fake", "uri": "mem://x"
+        }));
+        assert!(res.is_error, "{}", res.content);
+        assert!(
+            res.content.contains("mcp server fake not found"),
+            "{}",
+            res.content
+        );
+    }
+
+    /// Req 4: read output is char-capped with web_fetch's truncation
+    /// marker (same wording, same cap constant); the header still leads.
+    #[test]
+    fn mcp_resource_read_render_is_capped_with_truncation_note() {
+        let big = "x".repeat(MCP_RESOURCE_READ_MAX_CHARS + 500);
+        let contents = vec![McpResourceContents {
+            uri: "mem://big".to_string(),
+            mime_type: "text/plain".to_string(),
+            text: Some(big),
+            blob: None,
+        }];
+        let out = render_resource_read("fake", &contents);
+        assert!(
+            out.starts_with("fake/mem://big (text/plain)"),
+            "{}",
+            &out[..out.len().min(40)]
+        );
+        let marker = format!("[truncated at {MCP_RESOURCE_READ_MAX_CHARS} chars]");
+        assert!(out.contains(&marker), "tail: {}", &out[out.len() - 80..]);
+        assert_eq!(
+            out.chars().count(),
+            MCP_RESOURCE_READ_MAX_CHARS + marker.chars().count() + 1,
+            "capped to exactly the cap plus the marker line"
+        );
+    }
+
+    /// Req 4 line shape: description when present, name as the fallback,
+    /// empty slots dropped (no dangling separators).
+    #[test]
+    fn mcp_resource_list_line_shape_description_name_fallback() {
+        let resource = |uri: &str, name: &str, desc: &str, mime: &str| McpResource {
+            uri: uri.to_string(),
+            name: name.to_string(),
+            description: desc.to_string(),
+            mime_type: mime.to_string(),
+        };
+        assert_eq!(
+            resource_list_line(
+                "fake",
+                &resource("mem://r0", "r0", "resource 0", "text/plain")
+            ),
+            "fake mem://r0 — resource 0 (text/plain)"
+        );
+        // No description: the name is the fallback.
+        assert_eq!(
+            resource_list_line("fake", &resource("file:///tmp/x", "notes.txt", "", "text/markdown")),
+            "fake file:///tmp/x — notes.txt (text/markdown)"
+        );
+        // No mime: no parens. No description or name: bare uri.
+        assert_eq!(
+            resource_list_line("fake", &resource("mem://a", "", "d", "")),
+            "fake mem://a — d"
+        );
+        assert_eq!(
+            resource_list_line("fake", &resource("mem://b", "", "", "")),
+            "fake mem://b"
+        );
+    }
+
+    /// Stub that serves the capable resource surface, then EXITS after its
+    /// first resources/read — the (e) dead-server leg needs a server that
+    /// dies mid-run while the registry still holds it.
+    fn resources_server_dies_after_first_read_body() -> &'static str {
+        r#"
+import sys, json
+def send(o):
+    sys.stdout.write(json.dumps(o) + "\n"); sys.stdout.flush()
+RESOURCES = [{"uri": "mem://r%d" % i, "name": "r%d" % i, "mimeType": "text/plain", "description": "resource %d" % i} for i in range(250)]
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    req = json.loads(line)
+    if "method" not in req or "id" not in req:
+        continue
+    m, i = req["method"], req["id"]
+    if m == "initialize":
+        send({"jsonrpc": "2.0", "id": i, "result": {"protocolVersion": "2025-06-18", "capabilities": {"tools": {}, "resources": {}, "prompts": {}}, "serverInfo": {"name": "fake", "version": "0.0.1"}}})
+    elif m == "tools/list":
+        send({"jsonrpc": "2.0", "id": i, "result": {"tools": []}})
+    elif m == "resources/list":
+        send({"jsonrpc": "2.0", "id": i, "result": {"resources": RESOURCES}})
+    elif m == "resources/read":
+        uri = req["params"].get("uri")
+        send({"jsonrpc": "2.0", "id": i, "result": {"contents": [{"uri": uri, "mimeType": "text/plain", "text": "bye"}]}})
+        sys.exit(0)
+    else:
+        send({"jsonrpc": "2.0", "id": i, "error": {"code": -32601, "message": "method not found: " + m}})
+"#
     }
 
     // ---------- spec-9 config extension ----------
