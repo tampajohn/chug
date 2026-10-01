@@ -76,6 +76,18 @@ environment, so a bare `cargo test` builds the run cwd's own `target/` —
 set the variable inside the `check:` line itself if you want a shared build
 cache (an explicit choice, never an inheritance accident).
 
+No spec yet? `chug run --goal "Fix the flaky login test" --auto-spec` (or
+`chug quick`) drafts one for you: one read-only model call (plan mode's
+loop) writes `.chug/auto-spec.md` — concern, requirements, tests,
+acceptance, plus the `check:` and `estimate:` lines — and the draft's check
+is dry-run executed before the run starts. A check that can't exit 0 on the
+current tree is refused and redrafted once; a second refusal aborts with
+the draft and the failing output, never a loosened check. In chat mode the
+same flow is `/auto-spec <request>` then `/auto-spec-approve` (the approve
+gate re-runs the dry-run; editing the check to something vacuous is
+refused). Auto-spec is for task-class work — chores, small features;
+adversarial and loop work keeps hand-written specs.
+
 ## Interactive mode (`chug chat`)
 
 A conversational session in the TUI: type a request, chug works it with tools,

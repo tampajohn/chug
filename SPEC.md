@@ -13,6 +13,8 @@ re-read every iteration, so context trimming can never lose them.
 ```
 chug run --spec <path> --goal "<text>" [--cwd <dir>] [--model <id>]
          [--max-iters <n=40>] [--max-minutes <n=120>] [--resume]
+         [--auto-spec]            # no --spec: draft one from --goal first
+chug quick --goal "<text>"        # = run --auto-spec --goal <text>
 chug ledger [--cwd <dir>]     # print current LEDGER.md
 ```
 
@@ -27,6 +29,14 @@ chug ledger [--cwd <dir>]     # print current LEDGER.md
   filesystem-confined: it can touch absolute paths and inherits chug's
   environment (API credentials included).
 - `--resume` reloads `<cwd>/.chug/transcript.jsonl` and continues from it.
+- `--auto-spec` (or `chug quick`, T188): no `--spec` is required — one
+  read-only model call (plan mode's loop) drafts `.chug/auto-spec.md`
+  (concern/requirements/tests/acceptance + `check:` + `estimate:`) from the
+  goal + a repo scan, and the draft's `check:` is dry-run executed before the
+  run starts: refuse → one redraft with the failure as feedback → abort with
+  the draft + the failing output. Never loosened to pass. For task-class
+  work (chores, small features); adversarial and loop work keeps
+  hand-written specs.
 - Model resolution order: `--model` flag → `CHUG_MODEL` env → default
   `claude-sonnet-4-6`.
 
