@@ -94,7 +94,7 @@ never 3+, never 2 validators):
              CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared before
              every cargo command (T47 shared build cache — delegate has no env
              parameter, so the goal carries the export). Keep cargo build +
-             clippy + test green. Commit your work here. Always
+             clippy `-D warnings` + test green. Commit your work here. Always
              commit ONLY from your worktree cwd (the /tmp/chug-loop-t<N>
              you were launched in): if you cd to the main repo for
              read-only checks, cd back before committing —
@@ -105,6 +105,12 @@ never 3+, never 2 validators):
      max_iters:   80
      max_minutes: 50
    ```
+   The clippy bar in that goal is the `-D warnings` form — the child runs
+   `cargo clippy --all-targets -- -D warnings` and must reach zero
+   warnings, not merely exit-0 clippy (the cycle-77 T166 instance is the
+   evidence: an impl committed with a `needless_lifetimes` warning under a
+   "clippy clean" claim, caught by the kimi validator and fixed on-branch
+   at 7911b3c — a mechanical nit the child's own gate should have caught).
    `max_iters: 80` and `max_minutes: 50` are explicit — delegate's
    defaults stay 40/35, and the template overrides minutes explicitly;
    T21's headroom must survive the migration.
