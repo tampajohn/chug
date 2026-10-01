@@ -37,6 +37,21 @@ use serde_json::{json, Value};
 
 use crate::tools::{self, ToolCtx, ToolResult};
 
+/// Which product a plan-shaped session drafts: an implementation plan
+/// (T73, `chug plan`) or a drafted spec (T188, the `--auto-spec` draft
+/// phase). Both run the SAME read-only loop — the kind only picks the
+/// preamble, the first message, and the system-prompt contract; the tool
+/// surface (six read-only tools + `submit_plan`) is byte-identical, and
+/// `submit_plan` writes the product verbatim to `--out` either way.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlanKind {
+    /// T73: draft an implementation plan.
+    Plan,
+    /// T188: draft a chug spec (concern/requirements/tests/acceptance +
+    /// `check:` + `estimate:`) from a bare goal.
+    SpecDraft,
+}
+
 /// The read-only exploration tools plan mode inherits from the builtin
 /// registry (filtered from `tools::tool_schemas()` by name). T146: web_fetch
 /// joins them — read-only by design (GET-only, http/https, size-capped, the

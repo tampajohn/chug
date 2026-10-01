@@ -177,6 +177,7 @@ pub(crate) fn ctx_for<'a>(
         trace,
         obs,
         plan_out: None,
+        plan_kind: crate::plan::PlanKind::Plan,
     }
 }
 
@@ -229,6 +230,7 @@ fn ctx_for_plan<'a>(
         trace: None,
         obs: &observ::Sink::Noop,
         plan_out,
+        plan_kind: crate::plan::PlanKind::Plan,
     }
 }
 

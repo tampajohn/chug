@@ -2,6 +2,7 @@ mod api;
 mod archive;
 mod attach;
 mod auth;
+mod autospec;
 mod build_info;
 mod chat;
 mod commands;
@@ -39,13 +40,13 @@ mod websearch;
 #[cfg(test)]
 mod testsupport;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, mpsc};
 use std::thread;
 
-use anyhow::{Context, anyhow};
+use anyhow::{Context, anyhow, bail};
 use clap::{Parser, Subcommand};
 
 /// chug: autonomous coding harness — the loop is code, not conversation.
@@ -61,8 +62,15 @@ enum CliCommand {
     /// Run the agent loop against a spec + goal until verified done or a budget/tripwire fires.
     Run {
         /// Path to the spec file (re-read every iteration; may contain a `check:` line).
-        #[arg(long)]
-        spec: PathBuf,
+        /// Required unless `--auto-spec` drafts the spec first (T188).
+        #[arg(long, required_unless_present = "auto_spec")]
+        spec: Option<PathBuf>,
+        /// T188: draft the spec from the goal with one read-only plan
+        /// session, gate it (structure + non-vacuous check + dry-run), and
+        /// run against the drafted spec at <cwd>/.chug/auto-spec.md. With
+        /// `--resume` the existing draft is reused, never redrafted.
+        #[arg(long, default_value_t = false)]
+        auto_spec: bool,
         /// Goal text.
         #[arg(long)]
         goal: String,
@@ -152,6 +160,46 @@ enum CliCommand {
         /// 32768.
         #[arg(long)]
         max_tokens_per_request: Option<u32>,
+    },
+    /// T188: the zero-setup alias — `chug quick --goal "<task>"` drafts the
+    /// spec (one read-only session), gates it (structure + non-vacuous
+    /// check + dry-run), and runs the task against it. Headless only.
+    Quick {
+        /// Goal text: the task, in one sentence or ten.
+        #[arg(long)]
+        goal: String,
+        /// Working directory; all file/bash tools are sandboxed here. Defaults to `.`.
+        #[arg(long)]
+        cwd: Option<PathBuf>,
+        /// Model id. Order: --model, $CHUG_MODEL, claude-sonnet-4-6.
+        #[arg(long)]
+        model: Option<String>,
+        /// Iteration budget.
+        #[arg(long, default_value_t = 40)]
+        max_iters: u32,
+        /// Wall-clock budget in minutes.
+        #[arg(long, default_value_t = 120)]
+        max_minutes: u64,
+        /// Token budget: cumulative input+output tokens across the run.
+        /// 0 = unlimited.
+        #[arg(long, default_value_t = 0)]
+        max_tokens: u64,
+        /// Per-request output-token cap sent as `max_tokens` on every API call.
+        #[arg(long)]
+        max_tokens_per_request: Option<u32>,
+        /// Classify every bash command with the laya risk judge before executing.
+        #[arg(long)]
+        risk_gate: bool,
+        /// Per-command bash timeout in seconds. Overrides $CHUG_BASH_TIMEOUT
+        /// (default 120).
+        #[arg(long)]
+        bash_timeout: Option<u64>,
+        /// Path to MCP config JSON. Overrides discovery.
+        #[arg(long)]
+        mcp_config: Option<PathBuf>,
+        /// Disable MCP servers even if config exists.
+        #[arg(long, default_value_t = false)]
+        mcp_off: bool,
     },
     /// Save/list/restore named session fork slots over the live transcript
     /// + LEDGER.md (F6 phase 1): explore two approaches from one state.
@@ -322,6 +370,7 @@ fn main() -> ExitCode {
         ),
         CliCommand::Run {
             spec,
+            auto_spec,
             goal,
             cwd,
             model,
@@ -338,6 +387,7 @@ fn main() -> ExitCode {
             approve,
         } => cmd_run(
             spec,
+            auto_spec,
             goal,
             cwd,
             model,
@@ -352,6 +402,36 @@ fn main() -> ExitCode {
             mcp_config,
             mcp_off,
             approve,
+        ),
+        CliCommand::Quick {
+            goal,
+            cwd,
+            model,
+            max_iters,
+            max_minutes,
+            max_tokens,
+            max_tokens_per_request,
+            risk_gate,
+            bash_timeout,
+            mcp_config,
+            mcp_off,
+        } => cmd_run(
+            None,      // no --spec: the draft phase writes it
+            true,      // auto_spec
+            goal,
+            cwd,
+            model,
+            max_iters,
+            max_minutes,
+            max_tokens,
+            max_tokens_per_request,
+            false,     // no --resume on quick
+            false,     // headless
+            risk_gate,
+            bash_timeout,
+            mcp_config,
+            mcp_off,
+            None,      // no --approve
         ),
     }));
     observ::shutdown_global();
@@ -435,8 +515,15 @@ fn resolve_max_tokens(flag: Option<u32>) -> anyhow::Result<u32> {
 }
 
 #[allow(clippy::too_many_arguments)]
+/// T188: where an auto-spec'd run's draft lands (under the resolved cwd).
+fn auto_spec_path(cwd: &Path) -> PathBuf {
+    cwd.join(autospec::AUTO_SPEC_REL)
+}
+
+#[allow(clippy::too_many_arguments)]
 fn cmd_run(
-    spec: PathBuf,
+    spec: Option<PathBuf>,
+    auto_spec: bool,
     goal: String,
     cwd: Option<PathBuf>,
     model: Option<String>,
@@ -467,13 +554,45 @@ fn cmd_run(
         Some(path) => Some(driver::load_approved_plan(&cwd, &path)?),
         None => None,
     };
-    let spec = spec
-        .canonicalize()
-        .with_context(|| format!("spec file {} not found", spec.display()))?;
     let model = model
         .filter(|m| !m.trim().is_empty())
         .or_else(|| std::env::var("CHUG_MODEL").ok().filter(|m| !m.trim().is_empty()))
         .unwrap_or_else(|| driver::DEFAULT_MODEL.to_string());
+    // T188: --spec and --auto-spec are mutually exclusive — a hand-written
+    // spec is the operator's word; the draft phase only ever runs bare.
+    if auto_spec && spec.is_some() {
+        bail!("--spec and --auto-spec are mutually exclusive: drop --spec to let the draft phase write the spec");
+    }
+    let spec = if auto_spec {
+        let drafted = auto_spec_path(&cwd);
+        if resume {
+            // Resumable: the draft lives in .chug (gitignored) — a resumed
+            // --auto-spec run reuses it, never redrafts.
+            if !drafted.is_file() {
+                bail!(
+                    "--auto-spec --resume: no drafted spec at {} — run without --resume to draft one",
+                    drafted.display()
+                );
+            }
+            drafted.canonicalize()?
+        } else {
+            let mut sink = events::ConsoleSink::new(cwd.clone());
+            let mut client = api::Client::new(&model, max_tokens_per_request)?;
+            autospec::draft_and_gate(
+                &cwd,
+                &goal,
+                &model,
+                max_tokens_per_request,
+                &mut client,
+                &mut sink,
+            )?
+            .canonicalize()?
+        }
+    } else {
+        spec.expect("--spec is required without --auto-spec (clap enforces)")
+            .canonicalize()
+            .with_context(|| "spec file not found")?
+    };
     // T11: one stderr line naming the build so a stale binary is obvious.
     // T20: resolve the cwd's checkout identity at runtime so the same line
     // also names the branch@commit this process actually runs in — children
@@ -620,6 +739,9 @@ fn cmd_chat(
     let (steer_tx, steer_rx) = mpsc::channel::<String>();
     let (objective_tx, objective_rx) = mpsc::channel::<String>();
     let (update_tx, update_rx) = mpsc::channel::<driver::SlashUpdate>();
+    // T188: auto-spec requests ride their own channel (the worker serves
+    // them while idle without consuming buffered session updates).
+    let (autospec_tx, autospec_rx) = mpsc::channel::<chat::AutoSpecRequest>();
     let abort = Arc::new(AtomicBool::new(false));
     let driver_done = Arc::new(AtomicBool::new(false));
 
@@ -641,6 +763,7 @@ fn cmd_chat(
         },
         objective_rx,
         update_rx,
+        autospec_rx,
     };
 
     let worker = {
@@ -668,6 +791,7 @@ fn cmd_chat(
             budget: (max_iters, max_minutes),
             objective_tx,
             update_tx,
+            autospec_tx,
         }),
     });
 
@@ -754,6 +878,7 @@ fn cmd_plan(
 
     let cfg = driver::PlanConfig {
         cwd,
+        kind: plan::PlanKind::Plan,
         spec_path: spec,
         goal,
         model,
@@ -1168,7 +1293,8 @@ mod tests {
 
         for (path, needles) in legs {
             let err = cmd_run(
-                spec.clone(),
+                Some(spec.clone()),
+                false,
                 "g".into(),
                 Some(tmp.path().to_path_buf()),
                 Some("test-model".into()),

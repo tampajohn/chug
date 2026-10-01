@@ -14,7 +14,7 @@ use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 use ratatui::{Frame, Terminal};
 
 use crate::attach;
-use crate::chat::{self, ChatState, SlashCommand};
+use crate::chat::{self, AutoSpecRequest, ChatState, SlashCommand};
 use crate::commands;
 use crate::complete::{self, CandidateStrip, FileIndex};
 use crate::driver::SlashUpdate;
@@ -29,6 +29,8 @@ const HELP_TEXT: &str = concat!(
     "  /spec <path>   load/replace spec file (/spec alone clears)\n",
     "  /goal <text>   set persistent goal (/goal alone clears)\n",
     "  /check <cmd>   verification command for goal_complete (/check clears)\n",
+    "  /auto-spec <request>  draft a spec for the request (then edit + approve)\n",
+    "  /auto-spec-approve    gate the draft (dry-run) and run the request\n",
     "  /model <id>    switch model\n",
     "  /budget <i> <m> per-turn iteration/minute budgets\n",
     "  /ledger        focus ledger pane\n",
@@ -83,6 +85,9 @@ pub struct ChatWiring {
     pub budget: (u32, u64),
     pub objective_tx: Sender<String>,
     pub update_tx: Sender<SlashUpdate>,
+    /// T188: auto-spec requests (its own channel — see
+    /// `chat::AutoSpecRequest`).
+    pub autospec_tx: Sender<chat::AutoSpecRequest>,
 }
 
 /// Chat-mode UI state: the Idle/Working state machine plus the channels used
@@ -95,6 +100,9 @@ pub struct ChatUi {
     pub cwd: std::path::PathBuf,
     pub objective_tx: Sender<String>,
     pub update_tx: Sender<SlashUpdate>,
+    /// T188: auto-spec requests (its own channel — see
+    /// `chat::AutoSpecRequest`).
+    pub autospec_tx: Sender<chat::AutoSpecRequest>,
     /// Reason string of the most recent Aborted event, used for the
     /// `─ turn interrupted: <reason> ─` banner.
     pub last_abort_reason: Option<String>,
@@ -213,6 +221,7 @@ impl App {
             cwd: wiring.cwd.clone(),
             objective_tx: wiring.objective_tx,
             update_tx: wiring.update_tx,
+            autospec_tx: wiring.autospec_tx,
             last_abort_reason: None,
             file_index: FileIndex::new(&wiring.cwd),
             strip: None,
@@ -432,6 +441,14 @@ impl App {
                     };
                     self.push_activity(Activity::Notice { text, color });
                 }
+            }
+            // T188: auto-spec status lines land in the activity stream as
+            // notices (harness text, never model output).
+            Event::AutoSpecNote(note) => {
+                self.push_activity(Activity::Notice {
+                    text: format!("▸ auto-spec: {note}"),
+                    color: Color::Cyan,
+                });
             }
         }
     }
@@ -785,6 +802,42 @@ impl App {
                 self.send_update(SlashUpdate::Check(None));
                 self.notice(
                     "check cleared — goal_complete ends the turn unverified".to_string(),
+                    Color::Cyan,
+                );
+            }
+            // T188: auto-spec is a gate — requests only while idle (never
+            // mid-turn), and the approval dry-runs before the turn starts.
+            SlashCommand::AutoSpec(Some(request)) => {
+                let Some(chat) = &self.chat else { return };
+                if !matches!(chat.state, ChatState::Idle) {
+                    self.notice(
+                        "auto-spec: finish the current turn first".to_string(),
+                        Color::Yellow,
+                    );
+                    return;
+                }
+                let _ = chat.autospec_tx.send(AutoSpecRequest::Draft(request.clone()));
+                self.notice(format!("auto-spec: drafting spec for: {request}"), Color::Cyan);
+            }
+            SlashCommand::AutoSpec(None) => {
+                self.notice(
+                    "usage: /auto-spec <request> — then /auto-spec-approve to run it"
+                        .to_string(),
+                    Color::Yellow,
+                );
+            }
+            SlashCommand::AutoSpecApprove => {
+                let Some(chat) = &self.chat else { return };
+                if !matches!(chat.state, ChatState::Idle) {
+                    self.notice(
+                        "auto-spec: finish the current turn first".to_string(),
+                        Color::Yellow,
+                    );
+                    return;
+                }
+                let _ = chat.autospec_tx.send(AutoSpecRequest::Approve);
+                self.notice(
+                    "auto-spec: gating the draft (structure + dry-run)…".to_string(),
                     Color::Cyan,
                 );
             }
@@ -1523,6 +1576,7 @@ mod tests {
         let (steer_tx, steer_rx) = mpsc::channel::<String>();
         let (objective_tx, objective_rx) = mpsc::channel::<String>();
         let (update_tx, update_rx) = mpsc::channel::<SlashUpdate>();
+        let (autospec_tx, _autospec_rx) = mpsc::channel::<chat::AutoSpecRequest>();
         let abort = Arc::new(AtomicBool::new(false));
         let app = App::new_chat(
             "test-model".into(),
@@ -1532,6 +1586,7 @@ mod tests {
                 budget: (40, 120),
                 objective_tx,
                 update_tx,
+                autospec_tx,
             },
         );
         ChatFixture {
@@ -1919,8 +1974,8 @@ mod tests {
         let expected = f.app.help_text();
         let notices = notice_texts(&f.app);
         assert_eq!(notices, vec![expected.clone()]);
-        assert_eq!(HELP_TEXT.lines().count(), 10);
-        assert_eq!(expected.lines().count(), 11, "built-ins + the pack line");
+        assert_eq!(HELP_TEXT.lines().count(), 12);
+        assert_eq!(expected.lines().count(), 13, "built-ins + the pack line");
 
         // ...which the draw path renders as separate rows (SPEC-5 §2).
         let rows = activity_lines(&f.app, 100, 100);
@@ -2064,7 +2119,7 @@ mod tests {
         let help = notices.last().unwrap();
         // Built-ins first, pack line last, exactly one line for it.
         assert!(help.starts_with(HELP_TEXT));
-        assert_eq!(help.lines().count(), 11);
+        assert_eq!(help.lines().count(), 13);
         assert_eq!(
             help.lines().last().unwrap(),
             "  packs          .chug/commands/*.md — 2 discovered (/review, /triage)"

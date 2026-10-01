@@ -168,6 +168,10 @@ pub enum Event {
     /// response. First occurrence per session latched (bounded telemetry for
     /// the tools-proxy compatibility question; no per-response spam).
     StreamFallback,
+    /// T188: an auto-spec status line from the chat worker / headless draft
+    /// phase (drafting, draft written, gate refusal, approval) — harness
+    /// text, never model output (model output rides `ModelText`).
+    AutoSpecNote(String),
 }
 
 /// Which budget killed the loop (T12). `Some` on [`Event::Aborted`] only for
@@ -409,6 +413,11 @@ impl EventSink for ConsoleSink {
             Event::PermissionDenied { .. } | Event::PermissionError { .. } => {}
             // No headless chat: turn-boundary events are TUI-only.
             Event::TurnStart { .. } | Event::TurnEnd { .. } => {}
+            // T188: auto-spec status lines are for the operator — stderr,
+            // matching the other [chug] console lines.
+            Event::AutoSpecNote(note) => {
+                let _ = writeln!(self.err, "[chug] auto-spec: {note}");
+            }
         }
     }
 }
