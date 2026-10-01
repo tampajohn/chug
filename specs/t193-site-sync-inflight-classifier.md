@@ -1,6 +1,6 @@
 # T193 — site-sync: in-flight classifier counts done TODO rows (stale chips)
 
-check: cargo test --test site_sync
+check: export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared && cargo test --test site_sync
 
 estimate: ~120 lines (grep fix + FEATURES annotations + pins)
 
