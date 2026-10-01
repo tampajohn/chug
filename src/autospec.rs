@@ -43,6 +43,14 @@ pub const AUTO_SPEC_REL: &str = ".chug/auto-spec.md";
 const DRAFT_MAX_ITERS: u32 = 15;
 const DRAFT_MAX_MINUTES: u64 = 10;
 
+/// The task-class doctrine sentence (spec req 4): auto-spec is for
+/// task-class work, never adversarial/loop work. It ends DRAFT_PREAMBLE
+/// verbatim (the `draft_preamble_lists` pin asserts the tie) and is the
+/// line the tool-less chat draft prompt injects — see the F3 fix on
+/// `chat_draft_system_prompt` (the old `.lines().nth(1)` injected the
+/// blank line between the preamble's paragraphs, i.e. nothing).
+pub const TASK_CLASS_DOCTRINE: &str = "Keep the spec small and concrete — auto-spec is for task-class work (chores, small features), not adversarial loop work.";
+
 /// Spec-draft preamble: the read-only contract plus the exact spec format
 /// the gate enforces. The headings/lines here and `validate_spec`'s
 /// required set are one contract — drift breaks the `draft_preamble_lists`
@@ -110,20 +118,22 @@ pub fn repo_scan(cwd: &Path) -> String {
 
 /// The chat draft's system prompt: the same spec-format contract as the
 /// headless preamble, but tool-less — the model works from the request and
-/// the inlined scan.
+/// the inlined scan. The contract lines ride verbatim here (the F3 bug:
+/// the injected slot was `DRAFT_PREAMBLE.lines().nth(1)` — the blank line
+/// between paragraphs, always empty, so the doctrine sentence never
+/// reached the model); the `chat_draft_prompt_carries_every_contract_line`
+/// pin asserts every line this contract needs.
 pub fn chat_draft_system_prompt(scan: &str) -> String {
     format!(
         "You are chug drafting a spec for the operator's request. You have NO \
          tools in this call: work from the request and the repository scan \
          below, and answer with ONLY the complete spec markdown — no prose \
-         before or after.\n\n{}\n\n{}\n\nThe spec you draft must follow \
+         before or after.\n\n{TASK_CLASS_DOCTRINE}\n\nThe spec you draft must follow \
          chug's SPEC format EXACTLY: a `check: <shell command>` line that is \
          GREEN ON THE CURRENT TREE and never vacuous (`true`, `exit 0`, \
          `echo ...` are rejected), an `estimate: ~N changed lines (...)` \
          line, and these `## ` sections: Concern, Requirements, Tests, \
-         Acceptance.",
-        DRAFT_PREAMBLE.lines().nth(1).unwrap_or(""),
-        scan
+         Acceptance.\n\n{scan}"
     )
 }
 
@@ -192,10 +202,48 @@ fn has_estimate_line(text: &str) -> bool {
 
 /// One shell segment (no operators left): does it pass without testing the
 /// repo? Conservative — only the certainly-vacuous `check: true` class.
+///
+/// Assignment-only segments (`X=1`, `export A=1 B=2`) are vacuous too (the
+/// F6 class): the assignment exits 0 and asserts nothing about the repo,
+/// and the dry-run gate alone would pass it (exit 0) — without this
+/// classification `check: X=1` bypasses both guards. An assignment PREFIX
+/// on a real command (`X=1 cargo test`) runs the command, so it is not
+/// assignment-only and stays non-vacuous. Invalid identifiers (`export
+/// 1X=2`) would FAIL in bash — a class the dry-run still catches, never
+/// loosened here.
 fn is_vacuous_segment(seg: &str) -> bool {
     let seg = seg.trim();
     if seg.is_empty() || seg.starts_with('#') {
         return true;
+    }
+    // Strip a leading run of env assignments (`X=1`, `X=`, `export X=1`):
+    // whatever remains decides. Nothing remaining = the segment only
+    // assigned. The name must be a valid shell identifier so a
+    // command-not-found (`1X=2`, `--flag=v`) still falls to the dry-run.
+    let mut seg = seg;
+    loop {
+        let mut words = seg.split_whitespace();
+        let first = words.next().unwrap_or_default();
+        let bare_export = first == "export" && seg["export".len()..].trim().is_empty();
+        if bare_export {
+            return true;
+        }
+        let assignment = first.split_once('=').is_some_and(|(name, _)| {
+            !name.is_empty()
+                && !name.starts_with(|c: char| c.is_ascii_digit())
+                && name
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '_')
+        });
+        if first == "export" || assignment {
+            let consumed = if first == "export" { "export".len() } else { first.len() };
+            seg = seg[consumed..].trim_start();
+            if seg.is_empty() {
+                return assignment;
+            }
+            continue;
+        }
+        break;
     }
     let first = seg.split_whitespace().next().unwrap_or_default();
     let rest = seg[first.len()..].trim();
@@ -515,6 +563,107 @@ A dead parameter reads as load-bearing.
         assert!(!has_section("pre Concern\nx", "Concern"));
     }
 
+    // ---------- the draft-prompt contracts (F3/F5) ----------
+
+    /// F5: the `draft_preamble_lists` pin the DRAFT_PREAMBLE doc-comment
+    /// cites. The preamble and `validate_spec`'s required set are ONE
+    /// contract: every piece the gate enforces must be listed in the
+    /// preamble the model drafts against, so a gate addition without a
+    /// preamble line (or a preamble line dropped) is RED here.
+    #[test]
+    fn draft_preamble_lists_the_gate_contract() {
+        // The four sections validate_spec requires.
+        for section in ["Concern", "Requirements", "Tests", "Acceptance"] {
+            assert!(
+                DRAFT_PREAMBLE.contains(&format!("## {section}")) || DRAFT_PREAMBLE.contains(section),
+                "DRAFT_PREAMBLE must name the {section} section: {DRAFT_PREAMBLE}"
+            );
+        }
+        // The check: line contract — real, green on the current tree.
+        assert!(
+            DRAFT_PREAMBLE.contains("check:"),
+            "DRAFT_PREAMBLE must name the check: line"
+        );
+        assert!(
+            DRAFT_PREAMBLE.contains("GREEN ON THE CURRENT TREE"),
+            "DRAFT_PREAMBLE must state the green-on-current-tree bar"
+        );
+        // The estimate: line (T150).
+        assert!(
+            DRAFT_PREAMBLE.contains("estimate:"),
+            "DRAFT_PREAMBLE must name the estimate: line"
+        );
+        // The certainly-vacuous class the gate rejects — the model must be
+        // told, by example.
+        for vacuous in ["`true`", "`exit 0`", "`echo"] {
+            assert!(
+                DRAFT_PREAMBLE.contains(vacuous),
+                "DRAFT_PREAMBLE must name the vacuous example {vacuous}"
+            );
+        }
+        // The one write/exit path and the read-only surface (the plan.rs
+        // web_fetch pin, mirrored for the draft preamble).
+        assert!(
+            DRAFT_PREAMBLE.contains("submit_plan"),
+            "DRAFT_PREAMBLE must name submit_plan"
+        );
+        assert!(
+            DRAFT_PREAMBLE.contains("web_fetch"),
+            "DRAFT_PREAMBLE must name web_fetch (the read-only research tool)"
+        );
+        // The doctrine sentence ends the preamble (req 4) — and is byte
+        // identical to the const the chat prompt injects, so the two
+        // prompts cannot drift apart.
+        assert!(
+            DRAFT_PREAMBLE.ends_with(TASK_CLASS_DOCTRINE),
+            "DRAFT_PREAMBLE must end with TASK_CLASS_DOCTRINE verbatim"
+        );
+    }
+
+    /// F3: the chat draft prompt's contract — EVERY line the tool-less
+    /// call needs is asserted present. The pre-fix bug injected
+    /// `DRAFT_PREAMBLE.lines().nth(1)` — always the blank line between the
+    /// preamble's paragraphs, i.e. an always-empty dead injection — so the
+    /// doctrine sentence (and any injected contract line) never reached the
+    /// model. Each assertion here names one line of the contract; dropping
+    /// the injection (or emptying it again) is RED.
+    #[test]
+    fn chat_draft_prompt_carries_every_contract_line() {
+        let prompt = chat_draft_system_prompt("REPO-SCAN-MARKER");
+        // Tool-less framing: no tools, answer is ONLY the spec markdown.
+        assert!(
+            prompt.contains("NO \\\n         tools") || prompt.contains("NO tools"),
+            "the prompt must state the tool-less call: {prompt}"
+        );
+        assert!(
+            prompt.contains("ONLY the complete spec markdown"),
+            "the prompt must demand only-spec-markdown output: {prompt}"
+        );
+        // The spec-format contract (the gate's required pieces).
+        assert!(prompt.contains("`check: <shell command>`"), "{prompt}");
+        assert!(prompt.contains("GREEN ON THE CURRENT TREE"), "{prompt}");
+        assert!(prompt.contains("`estimate:"), "{prompt}");
+        for section in ["Concern", "Requirements", "Tests", "Acceptance"] {
+            assert!(prompt.contains(section), "missing {section}: {prompt}");
+        }
+        // The vacuous class, by example.
+        for vacuous in ["`true`", "`exit 0`", "`echo"] {
+            assert!(prompt.contains(vacuous), "missing vacuous example {vacuous}: {prompt}");
+        }
+        // THE DEAD INJECTION (F3): the task-class doctrine sentence must
+        // actually reach the chat model — the nth(1) bug injected an empty
+        // string instead.
+        assert!(
+            prompt.contains(TASK_CLASS_DOCTRINE),
+            "the doctrine sentence must be injected live, not as an empty nth(1) line: {prompt}"
+        );
+        // The mechanical scan rides the prompt.
+        assert!(
+            prompt.contains("REPO-SCAN-MARKER"),
+            "the repository scan must be inlined: {prompt}"
+        );
+    }
+
     // ---------- the vacuous predicate ----------
 
     #[test]
@@ -560,6 +709,41 @@ A dead parameter reads as load-bearing.
         }
     }
 
+    /// F6 (validator class): assignment-only segments execute nothing —
+    /// `X=1` exits 0 and asserts nothing about the repo, and the dry-run
+    /// gate alone would PASS it (exit 0), so the vacuous predicate must
+    /// classify it vacuous or the whole guard chain is bypassable. An
+    /// assignment PREFIX on a real command (`X=1 cargo test`) runs the
+    /// command, so it stays non-vacuous.
+    #[test]
+    fn assignment_only_checks_are_vacuous_but_env_prefixed_commands_are_not() {
+        for vacuous in [
+            "X=1",
+            "FOO=bar",
+            "_X=1",
+            "X=1 Y=2",
+            "export X=1",
+            "export",
+            "export A=1 B=2",
+            "X=1; true",
+        ] {
+            assert!(
+                is_vacuous_check(vacuous),
+                "{vacuous:?} must classify as vacuous (it executes nothing)"
+            );
+        }
+        for real in [
+            "X=1 cargo test",
+            "FOO=bar test -f marker.txt",
+            "export X=1; cargo build",
+        ] {
+            assert!(
+                !is_vacuous_check(real),
+                "{real:?} must NOT classify as vacuous (the command runs)"
+            );
+        }
+    }
+
     // ---------- the dry-run gate ----------
 
     #[test]
@@ -577,6 +761,12 @@ A dead parameter reads as load-bearing.
             err.contains("could not execute") || err.contains("127"),
             "command-not-found is a dry-run failure: {err}"
         );
+        // F6 decision pin: the dry-run alone does NOT catch an
+        // assignment-only check — `X=1` exits 0 — so the vacuous
+        // predicate is the guard that rejects it (see
+        // assignment_only_checks_are_vacuous_but_env_prefixed_commands_are_not).
+        dry_run_check(tmp.path(), "X=1")
+            .expect("the dry-run passes `X=1` (exit 0): the vacuous predicate is its guard");
     }
 
     // ---------- the chat draft call (scripted Llm, no network) ----------
