@@ -1345,4 +1345,123 @@ mod tests {
         );
         assert_eq!(plan.text, "# Plan\n\n1. add the flag\n");
     }
+    // ---------- T188 (F7): the auto-spec CLI entry points ----------
+
+    /// `chug quick --goal "<task>"` (the zero-setup alias) and
+    /// `chug run --auto-spec --goal "<task>"` parse: the goal is required on
+    /// both, `--spec` is NOT required under `--auto-spec`
+    /// (required_unless_present — the draft phase writes it), and a bare
+    /// `run`/`quick` without a goal is a clap error. A dropped flag or a
+    /// flipped required-unless wiring is RED here.
+    #[test]
+    fn quick_and_auto_spec_cli_parse_pins() {
+        // The quick alias parses with its documented defaults.
+        let cli = Cli::try_parse_from(["chug", "quick", "--goal", "fix the flaky test"])
+            .expect("quick parses");
+        let CliCommand::Quick {
+            goal,
+            max_iters,
+            max_minutes,
+            ..
+        } = cli.command
+        else {
+            panic!("expected the quick subcommand");
+        };
+        assert_eq!(goal, "fix the flaky test");
+        assert_eq!(max_iters, 40, "the quick iteration default");
+        assert_eq!(max_minutes, 120, "the quick wall-clock default");
+
+        // The goal is required on quick.
+        assert!(
+            Cli::try_parse_from(["chug", "quick"]).is_err(),
+            "bare quick is a clap error (the goal is required)"
+        );
+
+        // run --auto-spec needs no --spec: the draft phase writes it.
+        let cli = Cli::try_parse_from(["chug", "run", "--auto-spec", "--goal", "g"])
+            .expect("run --auto-spec parses without --spec");
+        let CliCommand::Run {
+            spec, auto_spec, ..
+        } = cli.command
+        else {
+            panic!("expected the run subcommand");
+        };
+        assert_eq!(spec, None, "--spec stays absent under --auto-spec");
+        assert!(auto_spec);
+
+        // Bare `run` (no --spec, no --auto-spec) stays a clap error.
+        assert!(
+            Cli::try_parse_from(["chug", "run", "--goal", "g"]).is_err(),
+            "run still requires --spec without --auto-spec"
+        );
+    }
+
+    /// The cmd_run refusals the CLI boundary enforces BEFORE any draft or
+    /// LLM call: a hand-written `--spec` is mutually exclusive with
+    /// `--auto-spec` (the operator's word is never overwritten), and
+    /// `--auto-spec --resume` without a drafted spec on disk refuses with
+    /// the remedy — never a silent fresh draft. Neither leg touches the
+    /// network (both bail before the client is built) and neither leaves a
+    /// draft behind.
+    #[test]
+    fn cmd_run_auto_spec_refusals_before_any_draft() {
+        let tmp = tempfile::tempdir().unwrap();
+        let spec = tmp.path().join("s.md");
+        std::fs::write(&spec, "spec text\ncheck: true\n").unwrap();
+
+        // --spec + --auto-spec: mutually exclusive.
+        let err = cmd_run(
+            Some(spec.clone()),
+            true,
+            "g".into(),
+            Some(tmp.path().to_path_buf()),
+            Some("test-model".into()),
+            5,
+            10,
+            0,
+            None,
+            false,
+            false,
+            false,
+            None,
+            None,
+            true,
+            None,
+        )
+        .expect_err("--spec and --auto-spec refuse");
+        assert!(
+            err.to_string().contains("mutually exclusive"),
+            "the refusal names the exclusivity: {err}"
+        );
+
+        // --auto-spec --resume with no drafted spec: refuses, names the
+        // remedy, drafts nothing.
+        let err = cmd_run(
+            None,
+            true,
+            "g".into(),
+            Some(tmp.path().to_path_buf()),
+            Some("test-model".into()),
+            5,
+            10,
+            0,
+            None,
+            true,
+            false,
+            false,
+            None,
+            None,
+            true,
+            None,
+        )
+        .expect_err("resume without a draft refuses");
+        assert!(
+            err.to_string().contains("no drafted spec"),
+            "the refusal names the missing draft: {err}"
+        );
+        assert!(
+            !tmp.path().join(".chug/auto-spec.md").exists(),
+            "a refused auto-spec run drafts nothing"
+        );
+    }
 }

@@ -256,6 +256,9 @@ fn run_chat_with(
     // T188: the request parked by `/auto-spec` awaiting
     // `/auto-spec-approve`. Session-scoped: a restarted session re-drafts.
     let mut pending_autospec: Option<String> = None;
+    // The UI has quit (the objective channel disconnected). Latched: one
+    // more drain pass serves anything still queued, then the session exits.
+    let mut ui_gone = false;
 
     loop {
         // Idle: serve auto-spec requests first (T188 — they are actionable
@@ -291,18 +294,29 @@ fn run_chat_with(
                         Err(notice) => sink.emit(Event::AutoSpecNote(notice)),
                     }
                 }
+                // Empty queue. If the UI already quit, the drain is
+                // complete: nothing actionable remains — exit the session
+                // gracefully.
+                Err(_) if ui_gone => {
+                    if let Some(trace) = &trace {
+                        obs.trace_finished(trace, observ::outcome::COMPLETED, turns);
+                    }
+                    return Ok(0);
+                }
                 Err(_) => {}
             }
             match cfg.objective_rx.recv_timeout(Duration::from_millis(100)) {
                 Ok(objective) => break objective,
                 Err(RecvTimeoutError::Timeout) => continue,
-                // The UI has quit — exit the session (and finish its trace)
-                // gracefully.
+                // The UI has quit. Latch (never spin) and take one more
+                // drain pass through the serving arms above: a request
+                // queued before the quit is still actionable (T188 — served
+                // exactly while idle) and must never be dropped by the
+                // exit. The pass re-enters the try_recv match; the
+                // `Err(_) if ui_gone` arm exits once the queue is empty.
                 Err(RecvTimeoutError::Disconnected) => {
-                    if let Some(trace) = &trace {
-                        obs.trace_finished(trace, observ::outcome::COMPLETED, turns);
-                    }
-                    return Ok(0);
+                    ui_gone = true;
+                    continue;
                 }
             }
         };
@@ -453,6 +467,39 @@ mod tests {
         assert_eq!(parse_slash("/budget"), Some(SlashCommand::Budget(None)));
         assert_eq!(parse_slash("/quit"), Some(SlashCommand::Quit));
         assert_eq!(parse_slash("/help"), Some(SlashCommand::Help));
+    }
+
+    /// T188 (F7): the auto-spec entry points parse — both slash commands,
+    /// with and without an argument, whitespace-tolerant like every other
+    /// command. A dropped or renamed arm (or an arg swallowed whole) is RED
+    /// here.
+    #[test]
+    fn parse_slash_pins_the_auto_spec_commands() {
+        assert_eq!(
+            parse_slash("/auto-spec fix the flaky test"),
+            Some(SlashCommand::AutoSpec(Some("fix the flaky test".into()))),
+            "/auto-spec carries its request text"
+        );
+        assert_eq!(
+            parse_slash("/auto-spec"),
+            Some(SlashCommand::AutoSpec(None)),
+            "bare /auto-spec parses (the usage leg)"
+        );
+        assert_eq!(
+            parse_slash("  /auto-spec-approve"),
+            Some(SlashCommand::AutoSpecApprove),
+            "the approve command parses (whitespace-tolerant)"
+        );
+        assert_eq!(
+            parse_slash("/auto-spec-approve"),
+            Some(SlashCommand::AutoSpecApprove)
+        );
+        // The two commands are distinct names — an -approve arm that
+        // swallowed the bare command's arg shape (or vice versa) is RED.
+        assert_ne!(
+            parse_slash("/auto-spec x"),
+            parse_slash("/auto-spec-approve")
+        );
     }
 
     #[test]
