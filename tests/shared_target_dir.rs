@@ -229,13 +229,13 @@ fn loop_spec_templates_export_the_shared_dir() {
     //     (nextest leg and fallback leg) carry the T47 prefix.
     count_eq(
         &spec,
-        &format!("{SHARED} perl -e 'alarm 600; exec @ARGV' cargo nextest run --release"),
+        &format!("{SHARED} perl -e 'alarm 280; exec @ARGV' cargo nextest run --release"),
         1,
         "LOOP-SPEC step-3 review-gate prefix, nextest leg (T47+T82)",
     );
     count_eq(
         &spec,
-        &format!("{SHARED} perl -e 'alarm 600; exec @ARGV' cargo test --release"),
+        &format!("{SHARED} perl -e 'alarm 280; exec @ARGV' cargo test --release"),
         1,
         "LOOP-SPEC step-3 review-gate prefix, fallback leg (T47+T82)",
     );
@@ -294,7 +294,7 @@ fn loop_spec_gate_dir_is_role_keyed_for_the_overlap_window() {
     //     live in loop_spec_templates_export_the_shared_dir).
     count_eq(
         &spec,
-        &format!("{SHARED} perl -e 'alarm 600; exec @ARGV' cargo nextest run --release"),
+        &format!("{SHARED} perl -e 'alarm 280; exec @ARGV' cargo nextest run --release"),
         1,
         "LOOP-SPEC step-3 review-gate base prefix, nextest leg (T47+T82)",
     );
@@ -732,7 +732,7 @@ fn launch_paths_and_gates_are_the_release_profile() {
     //     pinned in nextest_gate_runner.rs).
     count_eq(
         &loop_spec,
-        "perl -e 'alarm 600; exec @ARGV' cargo test --release",
+        "perl -e 'alarm 280; exec @ARGV' cargo test --release",
         1,
         "LOOP-SPEC step-3 review-gate template carries the T82 fallback \
          leg under the same bounded cap (T78+T82)",
@@ -880,6 +880,20 @@ fn loopd_and_readme_release_carriers_are_pinned_per_carrier() {
         1,
         "README names the release gate form (wrap-insensitive — the clause \
          line-wraps between `cargo test` and `--release`) (T78)",
+    );
+    // T178: the fleet bash-cap export in loopd.sh + the README bullet that
+    // documents it (--bash-timeout overrides; the 120 default elsewhere).
+    count_eq(
+        &loopd,
+        "export CHUG_BASH_TIMEOUT=300",
+        1,
+        "loopd.sh exports the fleet bash cap (T178)",
+    );
+    count_eq(
+        &flat_readme,
+        "CHUG_BASH_TIMEOUT=300",
+        1,
+        "README documents the fleet bash cap (T178, wrap-insensitive)",
     );
 }
 

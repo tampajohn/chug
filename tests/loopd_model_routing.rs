@@ -161,6 +161,41 @@ fn loopd_launches_the_routed_model_not_a_hardcoded_one() {
     );
 }
 
+/// T178 — loopd exports `CHUG_BASH_TIMEOUT=300` beside the launch block so
+/// the orchestrator AND every delegate child (children inherit the
+/// orchestrator's process env — delegate has no env parameter) get the 300s
+/// bash-tool cap instead of the 120s default. The export must sit BEFORE the
+/// launch it governs (the T81 pre-launch shape, applied to an env knob), and
+/// the comment must name the precedence chain's carrier (flag > env > 120,
+/// src/main.rs:370). RED-proof: reverting the loopd.sh export or its comment
+/// fails this pin.
+#[test]
+fn loopd_exports_bash_timeout_300_before_the_launch() {
+    let loopd = read("loopd.sh");
+    count_eq(
+        &loopd,
+        "export CHUG_BASH_TIMEOUT=300",
+        1,
+        "loopd.sh exports the fleet bash cap exactly once (T178)",
+    );
+    let export = loopd
+        .find("export CHUG_BASH_TIMEOUT=300")
+        .expect("the fleet bash-cap export is present");
+    let invocation = loopd
+        .find("CARGO_TARGET_DIR=\"$ROOT/target-shared\" ./target/release/chug run")
+        .expect("the env-prefixed cycle invocation (T47/T78) is present");
+    assert!(
+        export < invocation,
+        "the CHUG_BASH_TIMEOUT export must precede the chug launch it \
+         governs (T178)"
+    );
+    assert!(
+        loopd.contains("src/main.rs:370"),
+        "the T178 comment must name the precedence carrier (flag > env > 120 \
+         default, src/main.rs:370)"
+    );
+}
+
 // --- LOOP-SPEC doctrine pins --------------------------------------------------
 
 /// The anti-sprint-burn guard (req 2): model-agnostic, >5 consecutive
