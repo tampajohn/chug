@@ -686,8 +686,16 @@ pub fn resume_messages(cwd: &Path) -> anyhow::Result<Vec<Message>> {
         transcript::rewrite(cwd, &messages)?;
     }
     repair_interrupted_tools(cwd, &mut messages)?;
-    if !messages.is_empty() && trim::transcript_trim(&mut messages) {
-        transcript::rewrite(cwd, &messages)?;
+    if !messages.is_empty() {
+        // T184: the resume-path trim seam. `resume_messages` runs before the
+        // loop's EventLogSink exists (no sink is plumbed here), so the Trim
+        // event is written directly through eventlog's best-effort,
+        // never-aborting append — the same serialized line the loop-path
+        // sink arm produces.
+        if let Some(stats) = trim::transcript_trim_stats(&mut messages) {
+            transcript::rewrite(cwd, &messages)?;
+            eventlog::log_trim(cwd, &stats);
+        }
     }
     Ok(messages)
 }
@@ -906,6 +914,9 @@ pub(crate) fn drive_loop(
     let mut spec_text = initial_spec;
     let mut recent: VecDeque<ToolResult> = VecDeque::with_capacity(STUCK_WINDOW);
     let (mut usage_in, mut usage_out) = (0u64, 0u64);
+    // T184: cumulative cache counters, same ride-along as input/output —
+    // the API layer already parses both fields off the response usage.
+    let (mut usage_cache_read, mut usage_cache_creation) = (0u64, 0u64);
     // T13: one-shot latches for the budget-low warning, one per budget kind.
     // Per invocation: a chat turn (or a --resume) gets fresh warnings.
     let (mut warned_iter, mut warned_time, mut warned_tokens) = (false, false, false);
@@ -1146,9 +1157,21 @@ pub(crate) fn drive_loop(
             .get("output_tokens")
             .and_then(Value::as_u64)
             .unwrap_or(0);
+        // T184: the cumulative cache counters serialize onto the iteration
+        // line (eventlog merge seam); 0 when the endpoint reported none.
+        usage_cache_read += usage
+            .get("cache_read_input_tokens")
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
+        usage_cache_creation += usage
+            .get("cache_creation_input_tokens")
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
         sink.emit(Event::Usage {
             input: usage_in,
             output: usage_out,
+            cache_read: usage_cache_read,
+            cache_creation: usage_cache_creation,
         });
 
         // T38: a response cut off at the output-token ceiling is fresh,
@@ -1495,8 +1518,18 @@ pub(crate) fn drive_loop(
             );
         }
 
-        if trim::transcript_trim(messages) {
+        // T184: the loop-path trim seam (chat turns share this loop, so the
+        // Trim event fires under `chug run`, `--resume`, and chat alike).
+        // One event per collapsing pass; the sink's eventlog arm serializes
+        // it (console/TUI stay silent).
+        if let Some(stats) = trim::transcript_trim_stats(messages) {
             transcript::rewrite(ctx.cwd, messages)?;
+            sink.emit(Event::Trim {
+                before_tokens: stats.before_tokens as u64,
+                after_tokens: stats.after_tokens as u64,
+                segments_collapsed: stats.segments_collapsed as u32,
+                marker_count: stats.marker_count as u32,
+            });
         }
 
         // T38: a truncated response injects its advisory here — after this

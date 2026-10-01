@@ -318,11 +318,17 @@ impl App {
                     color: Color::Red,
                 });
             }
-            Event::Usage { input, output } => {
-                // The driver sends cumulative totals after each response.
+            Event::Usage { input, output, .. } => {
+                // The driver sends cumulative totals after each response. The
+                // cache counters (T184) ride the events log only; the title's
+                // token readout stays input/output.
                 self.input_tokens = input;
                 self.output_tokens = output;
             }
+            // T184: telemetry only — the collapse is already recorded in the
+            // transcript as `[trimmed: …]` markers; the activity stream stays
+            // as-is.
+            Event::Trim { .. } => {}
             // T17: telemetry only — the notice already reached the user as a
             // transcript message; the activity stream stays as-is.
             Event::BudgetLow { .. } => {}
@@ -1355,13 +1361,32 @@ mod tests {
         a.apply(Event::Usage {
             input: 100,
             output: 10,
+            cache_read: 0,
+            cache_creation: 0,
         });
         a.apply(Event::Usage {
             input: 250,
             output: 40,
+            cache_read: 90,
+            cache_creation: 7,
         });
         assert_eq!(a.input_tokens, 250);
         assert_eq!(a.output_tokens, 40);
+    }
+
+    /// T184: the Trim event is events-log telemetry only — the TUI activity
+    /// stream and state are untouched (BudgetLow/OutputTruncated precedent).
+    #[test]
+    fn reducer_trim_event_is_silent() {
+        let mut a = app();
+        a.apply(Event::Trim {
+            before_tokens: 130_000,
+            after_tokens: 88_000,
+            segments_collapsed: 2,
+            marker_count: 5,
+        });
+        assert!(a.activity.is_empty(), "no activity notice: {:?}", a.activity);
+        assert_eq!(a.status, Status::Running);
     }
 
     #[test]
@@ -1385,6 +1410,8 @@ mod tests {
         a.apply(Event::Usage {
             input: 12_300,
             output: 4_100,
+            cache_read: 0,
+            cache_creation: 0,
         });
         let t = a.title();
         assert!(t.starts_with(" chug ─ build the thing ─ model: test-model ─ iter 7/40 ─ "));

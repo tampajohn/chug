@@ -152,6 +152,41 @@ pub fn run_start(
 
 static WARNED: AtomicBool = AtomicBool::new(false);
 
+/// T184: the serialized trim line, shared by the [`EventLogSink`] arm and the
+/// resume-path direct write ([`log_trim`]) — one shape, one place.
+fn trim_json(
+    before_tokens: u64,
+    after_tokens: u64,
+    segments_collapsed: u32,
+    marker_count: u32,
+) -> Value {
+    json!({
+        "type": "trim",
+        "ts": now_rfc3339(),
+        "before_tokens": before_tokens,
+        "after_tokens": after_tokens,
+        "segments_collapsed": segments_collapsed,
+        "marker_count": marker_count,
+    })
+}
+
+/// T184: the resume-path trim record. `resume_messages` runs BEFORE the
+/// loop's [`EventLogSink`] exists (no sink is plumbed there — it is called
+/// from the run/chat setup paths ahead of client construction), so this
+/// writes the same serialized line directly through the same best-effort,
+/// never-aborting [`append_line`] machinery every other event rides.
+pub(crate) fn log_trim(cwd: &Path, stats: &crate::trim::TrimStats) {
+    append_line(
+        cwd,
+        trim_json(
+            stats.before_tokens as u64,
+            stats.after_tokens as u64,
+            stats.segments_collapsed as u32,
+            stats.marker_count as u32,
+        ),
+    );
+}
+
 /// Append one JSON object as a line, creating `.chug/` on demand. Failures
 /// warn once and are dropped: telemetry never aborts a run.
 fn append_line(cwd: &Path, line: Value) {
@@ -211,21 +246,48 @@ impl EventSink for EventLogSink<'_> {
                 self.pending_iter = Some(*n);
                 None
             }
-            Event::Usage { input, output } => Some(match self.pending_iter.take() {
+            Event::Usage {
+                input,
+                output,
+                cache_read,
+                cache_creation,
+            } => Some(match self.pending_iter.take() {
                 Some(n) => json!({
                     "type": "iteration",
                     "ts": now_rfc3339(),
                     "n": n,
                     "input_tokens": input,
                     "output_tokens": output,
+                    // T184: cumulative cache counters from the turn's response
+                    // usage — 0 when the endpoint reported none, so every
+                    // consumer can default on old-shape files the same way.
+                    "cache_read_input_tokens": cache_read,
+                    "cache_creation_input_tokens": cache_creation,
                 }),
                 None => json!({
                     "type": "usage",
                     "ts": now_rfc3339(),
                     "input_tokens": input,
                     "output_tokens": output,
+                    "cache_read_input_tokens": cache_read,
+                    "cache_creation_input_tokens": cache_creation,
                 }),
             }),
+            // T184: one line per fired transcript-trim pass (events-sink
+            // JSONL only — console/TUI stay silent). `segments_collapsed` is
+            // THIS pass's marker delta; `marker_count` is the frozen total
+            // after, so a jq pass can reconstruct the marker growth curve.
+            Event::Trim {
+                before_tokens,
+                after_tokens,
+                segments_collapsed,
+                marker_count,
+            } => Some(trim_json(
+                *before_tokens,
+                *after_tokens,
+                *segments_collapsed,
+                *marker_count,
+            )),
             Event::BudgetLow {
                 remaining_iters,
                 remaining_secs,
@@ -810,6 +872,8 @@ mod tests {
         sink.emit(Event::Usage {
             input: 1234,
             output: 56,
+            cache_read: 0,
+            cache_creation: 0,
         });
         let lines = read_lines(tmp.path());
         assert_eq!(lines.len(), 1);
@@ -817,6 +881,77 @@ mod tests {
         assert_eq!(lines[0]["n"], 3);
         assert_eq!(lines[0]["input_tokens"], 1234);
         assert_eq!(lines[0]["output_tokens"], 56);
+        // T184: a turn with no cache fields still serializes both keys — 0,
+        // never absent — so consumers `// 0`-default without shape checks.
+        assert_eq!(lines[0]["cache_read_input_tokens"], 0);
+        assert_eq!(lines[0]["cache_creation_input_tokens"], 0);
+    }
+
+    /// T184: the cumulative cache counters ride the merged iteration line
+    /// alongside input/output (the fields the API layer already parses).
+    #[test]
+    fn sink_merges_iteration_and_usage_with_cache_counters() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut inner = NullSink;
+        let mut sink = EventLogSink::new(tmp.path(), &mut inner);
+        sink.emit(Event::Iteration {
+            n: 7,
+            max: 40,
+            messages: 24,
+        });
+        sink.emit(Event::Usage {
+            input: 8_683_323,
+            output: 1_243_749,
+            cache_read: 7_900_112,
+            cache_creation: 640,
+        });
+        let lines = read_lines(tmp.path());
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0]["type"], "iteration");
+        assert_eq!(lines[0]["n"], 7);
+        assert_eq!(lines[0]["input_tokens"], 8_683_323);
+        assert_eq!(lines[0]["output_tokens"], 1_243_749);
+        assert_eq!(lines[0]["cache_read_input_tokens"], 7_900_112);
+        assert_eq!(lines[0]["cache_creation_input_tokens"], 640);
+        let obj = lines[0].as_object().expect("iteration line is an object");
+        assert!(
+            obj.contains_key("cache_read_input_tokens")
+                && obj.contains_key("cache_creation_input_tokens"),
+            "both cache keys PRESENT even at zero: {lines:?}"
+        );
+    }
+
+    /// T184: one trim event serializes as one jq-mineable `trim` line with
+    /// all four fields. RED-proof leg: reverting this serialization arm to
+    /// `None` turns this test red (the line vanishes).
+    #[test]
+    fn sink_logs_trim_with_all_four_fields() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut inner = NullSink;
+        let mut sink = EventLogSink::new(tmp.path(), &mut inner);
+        sink.emit(Event::Trim {
+            before_tokens: 130_000,
+            after_tokens: 88_000,
+            segments_collapsed: 3,
+            marker_count: 5,
+        });
+        let lines = read_lines(tmp.path());
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0]["type"], "trim");
+        assert_eq!(lines[0]["before_tokens"], 130_000);
+        assert_eq!(lines[0]["after_tokens"], 88_000);
+        assert_eq!(lines[0]["segments_collapsed"], 3);
+        assert_eq!(lines[0]["marker_count"], 5);
+        assert!(lines[0]["ts"].as_str().unwrap().ends_with('Z'));
+        let obj = lines[0].as_object().expect("trim line is an object");
+        for key in [
+            "before_tokens",
+            "after_tokens",
+            "segments_collapsed",
+            "marker_count",
+        ] {
+            assert!(obj.contains_key(key), "{key} must be PRESENT: {lines:?}");
+        }
     }
 
     /// The pre-T25 200-char pin, re-anchored by T25 to the **ok leg**: the
@@ -1029,7 +1164,12 @@ mod tests {
             max: 1,
             messages: 1,
         });
-        sink.emit(Event::Usage { input: 1, output: 1 });
+        sink.emit(Event::Usage {
+            input: 1,
+            output: 1,
+            cache_read: 0,
+            cache_creation: 0,
+        });
         sink.emit(Event::Aborted {
             reason: "operator abort".into(),
             model: "m".into(),

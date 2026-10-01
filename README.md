@@ -268,7 +268,12 @@ today).
   `plan_sha256`, the operator-approved plan's path as typed and its
   file-bytes SHA-256 when the run launched with `--approve`, both `null`
   (fields present) otherwise), one line
-  per iteration with cumulative tokens, tool results (ok/is_error/duration_ms, ≤200-char
+  per iteration with cumulative tokens (plus the cumulative
+  `cache_read_input_tokens`/`cache_creation_input_tokens` the endpoint
+  reports, `0` when it doesn't — the per-call context size the non-cached
+  `input_tokens` alone hides), one `trim` line per fired transcript trim
+  (estimated tokens before/after, segments collapsed this pass, total
+  `[trimmed: …]` markers — events-log telemetry only), tool results (ok/is_error/duration_ms, ≤200-char
   previews — error results keep a tail-anchored ≤2000-char window, so the
   failing test's name or error block at the end of the output is on record),
   verification commands, goal verdicts, budget-low warning
