@@ -1095,8 +1095,13 @@ pub(crate) fn scrub_target_dir_vars(cmd: &mut Command) {
 /// The shell runs in its own process group; when `timeout` elapses the whole
 /// group is SIGKILLed (a plain `child.kill()` would orphan grandchildren that
 /// keep the pipes open and wedge the caller on join). Reader threads are never
-/// joined without a deadline: if a reader has not seen EOF after the grace
-/// period, whatever output was captured is returned with a truncation note.
+/// joined without a deadline: each forwards what it has read so far over its
+/// channel, and the receive side keeps every byte that arrived within the
+/// grace period. When a reader has not seen EOF after the grace period (an
+/// escaped process still holding the pipe), that side's captured output is
+/// returned as-is with a truncation note (`(output truncated: reader did not
+/// drain)`, or the `... after kill` spelling when the group kill fired) —
+/// only the bytes still in flight beyond the grace are lost.
 pub fn run_shell(cwd: &Path, command: &str, timeout: Duration) -> anyhow::Result<ShellOutcome> {
     let mut shell_cmd = Command::new("sh");
     shell_cmd
@@ -1125,22 +1130,16 @@ pub fn run_shell(cwd: &Path, command: &str, timeout: Duration) -> anyhow::Result
         .spawn()
         .with_context(|| format!("spawning sh -c {command}"))?;
 
-    // Readers hand their buffers over a channel instead of being joined, so a
-    // stuck reader (orphan holding the pipe) can never block the caller.
+    // Readers forward chunks over a channel instead of being joined, so a
+    // stuck reader (orphan holding the pipe) can never block the caller —
+    // and every chunk read before the grace cutoff is already on its way to
+    // the receive side (T185), not held hostage in the reader's local buffer.
     let (out_tx, out_rx) = mpsc::channel::<Vec<u8>>();
     let (err_tx, err_rx) = mpsc::channel::<Vec<u8>>();
-    let mut out_pipe = child.stdout.take().context("stdout not captured")?;
-    let mut err_pipe = child.stderr.take().context("stderr not captured")?;
-    thread::spawn(move || {
-        let mut buf = Vec::new();
-        let _ = out_pipe.read_to_end(&mut buf);
-        let _ = out_tx.send(buf);
-    });
-    thread::spawn(move || {
-        let mut buf = Vec::new();
-        let _ = err_pipe.read_to_end(&mut buf);
-        let _ = err_tx.send(buf);
-    });
+    let out_pipe = child.stdout.take().context("stdout not captured")?;
+    let err_pipe = child.stderr.take().context("stderr not captured")?;
+    thread::spawn(move || drain_pipe(out_pipe, out_tx));
+    thread::spawn(move || drain_pipe(err_pipe, err_tx));
 
     let deadline = Instant::now() + timeout;
     let mut timed_out = false;
@@ -1247,14 +1246,48 @@ pub(crate) fn kill_process_group(child: &mut std::process::Child) {
     let _ = child.kill();
 }
 
-/// Wait up to [`READER_GRACE`] for one reader buffer; never blocks longer.
-/// Returns `(buffer, drained)` where `drained` is false when the grace period
-/// expired with the pipe still held open by an escaped process.
+/// Read `pipe` to EOF, forwarding every chunk to `tx` AS IT ARRIVES (T185):
+/// a reader blocked on a pipe held open by an escaped grandchild must not
+/// hold already-read bytes hostage in its local buffer, so each completed
+/// read is handed over immediately. Dropping `tx` at EOF is the clean-drain
+/// signal (the channel disconnects). A read error is treated as EOF — the
+/// same ignore-the-error shape `read_to_end` had, with `Interrupted` retried.
+fn drain_pipe(mut pipe: impl Read, tx: mpsc::Sender<Vec<u8>>) {
+    let mut chunk = vec![0u8; 64 * 1024];
+    loop {
+        match pipe.read(&mut chunk) {
+            Ok(0) => break, // EOF
+            Ok(n) => {
+                let _ = tx.send(chunk[..n].to_vec());
+            }
+            // read_to_end retried interrupted reads; so does this loop.
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(_) => break,
+        }
+    }
+}
+
+/// Accumulate one reader's forwarded chunks for up to [`READER_GRACE`]; never
+/// blocks longer. Returns `(buffer, drained)` where `drained` is false when
+/// the grace period expired with the pipe still held open by an escaped
+/// process — the chunks received SO FAR are kept (T185), only the tail still
+/// in flight beyond the grace is lost. Channel disconnect (the reader dropped
+/// its sender at EOF) means a clean drain regardless of how many chunks
+/// arrived; a reader that died without ever forwarding yields the same
+/// `(empty, drained)` shape the one-send-at-EOF version produced.
 fn recv_capped(rx: mpsc::Receiver<Vec<u8>>) -> (Vec<u8>, bool) {
-    match rx.recv_timeout(READER_GRACE) {
-        Ok(buf) => (buf, true),
-        Err(mpsc::RecvTimeoutError::Timeout) => (Vec::new(), false),
-        Err(mpsc::RecvTimeoutError::Disconnected) => (Vec::new(), true),
+    let deadline = Instant::now() + READER_GRACE;
+    let mut acc = Vec::new();
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return (acc, false);
+        }
+        match rx.recv_timeout(remaining) {
+            Ok(chunk) => acc.extend_from_slice(&chunk),
+            Err(mpsc::RecvTimeoutError::Timeout) => return (acc, false),
+            Err(mpsc::RecvTimeoutError::Disconnected) => return (acc, true),
+        }
     }
 }
 
@@ -2112,6 +2145,158 @@ mod tests {
         // run_shell returns the raw combined output (the bash tool wrapper
         // appends the exit-code line); stdout keeps its trailing newline.
         assert_eq!(outcome.output, "hi\n");
+    }
+
+    // ---- T185: already-read output survives a grandchild holding the pipe ----
+
+    // The orphan legs below are each capped at ~READER_GRACE of wall clock by
+    // construction (the direct `sh` exits immediately; only the reader grace
+    // remains), and each asserts that bound — the same load-sensitivity
+    // family as the T31 legs above, so they serialize on the one shared
+    // timing domain (crate::testsupport, T151). The `sleep 60` orphans
+    // outlive the test on purpose (the shape under test: a process the
+    // command failed to redirect keeps the pipe open) and die on their own,
+    // mirroring the setsid escapee's bounded `time.sleep(60)` above.
+
+    /// T185 orphan leg, stdout held: a grandchild inherits the stdout pipe and
+    /// outlives the direct `sh` (the alarm-killed-cargo/rustc shape — an
+    /// alarm kill only SIGKILLs the direct child, and a backgrounded process
+    /// the command forgot to redirect does the same on the fast path). The
+    /// result must CONTAIN the bytes the command wrote before exiting AND
+    /// carry the drain note. RED-proof: against the pre-fix receive path
+    /// (`recv_capped`'s timeout leg returned `(Vec::new(), false)`) the
+    /// bytes assertion below fails — the whole buffer was discarded.
+    #[test]
+    fn run_shell_orphan_holding_stdout_keeps_already_read_bytes() {
+        let _timing = crate::testsupport::timing_guard();
+        let tmp = tempfile::tempdir().unwrap();
+        // The orphan's stderr is pointed at /dev/null so ONLY the stdout pipe
+        // stays held; stderr drains clean via sh's exit.
+        let start = Instant::now();
+        let outcome = run_shell(
+            tmp.path(),
+            "printf 't185-stdout-bytes\\n'; sleep 60 2>/dev/null &",
+            Duration::from_secs(10),
+        )
+        .unwrap();
+        let elapsed = start.elapsed();
+        assert!(!outcome.timed_out);
+        assert_eq!(outcome.exit_code, Some(0));
+        // Already-read bytes survive the grace expiry (the RED-proof leg).
+        assert!(
+            outcome.output.contains("t185-stdout-bytes"),
+            "already-read stdout lost: {:?}",
+            outcome.output
+        );
+        // The undrained side still carries the note (exact bytes, T185 req 3).
+        assert!(
+            outcome
+                .output
+                .contains("(output truncated: reader did not drain)"),
+            "missing drain note: {:?}",
+            outcome.output
+        );
+        // The orphan never EOFs, so the wait is capped at the grace plus
+        // scheduler slack — never the orphan's lifetime.
+        assert!(
+            elapsed < READER_GRACE + Duration::from_secs(5),
+            "run_shell blocked for {elapsed:?}"
+        );
+    }
+
+    /// T185 orphan leg, stderr held (the symmetric shape): the grandchild
+    /// keeps only the stderr pipe open. The drained stdout side stays
+    /// byte-identical, the stderr side's already-read bytes survive (the
+    /// RED-proof leg — pre-fix the stderr buffer was discarded whole), and
+    /// the note is present exactly once for the undrained side.
+    #[test]
+    fn run_shell_orphan_holding_stderr_keeps_already_read_bytes() {
+        let _timing = crate::testsupport::timing_guard();
+        let tmp = tempfile::tempdir().unwrap();
+        // The orphan's stdout is pointed at /dev/null so ONLY the stderr pipe
+        // stays held; stdout drains clean via sh's exit.
+        let outcome = run_shell(
+            tmp.path(),
+            "printf 't185-stdout-clean\\n'; printf 't185-stderr-bytes\\n' >&2; \
+             sleep 60 >/dev/null &",
+            Duration::from_secs(10),
+        )
+        .unwrap();
+        assert!(!outcome.timed_out);
+        assert_eq!(outcome.exit_code, Some(0));
+        // The clean side is untouched by the fix.
+        assert!(
+            outcome.output.contains("t185-stdout-clean"),
+            "clean stdout lost: {:?}",
+            outcome.output
+        );
+        // Already-read stderr bytes survive the grace expiry (RED-proof leg).
+        assert!(
+            outcome.output.contains("t185-stderr-bytes"),
+            "already-read stderr lost: {:?}",
+            outcome.output
+        );
+        assert!(
+            outcome
+                .output
+                .contains("(output truncated: reader did not drain)"),
+            "missing drain note: {:?}",
+            outcome.output
+        );
+    }
+
+    /// T185 fast-path leg: when both sides reach EOF inside the grace, the
+    /// output is byte-identical to the pre-fix shape and carries NO note —
+    /// the chunked-send restructure must not disturb the clean path.
+    #[test]
+    fn run_shell_clean_drain_fast_path_has_no_note_and_identical_bytes() {
+        let _timing = crate::testsupport::timing_guard();
+        let tmp = tempfile::tempdir().unwrap();
+        let outcome = run_shell(
+            tmp.path(),
+            "printf 'out-line\\n'; printf 'err-line\\n' >&2",
+            Duration::from_secs(10),
+        )
+        .unwrap();
+        assert!(!outcome.timed_out);
+        assert_eq!(outcome.exit_code, Some(0));
+        // Byte-identical to the pre-fix fast path — combine_out_err's
+        // separator (`"\n--- stderr ---\n"`) after a newline-terminated
+        // stdout doubles the newline by long-standing design; the exact
+        // bytes pin that the restructure changes nothing on this path.
+        assert_eq!(outcome.output, "out-line\n\n--- stderr ---\nerr-line\n");
+    }
+
+    /// T185 bound leg: a never-EOF orphan (writes nothing, holds the stdout
+    /// pipe forever) must not deadlock or stretch the caller — run_shell
+    /// returns within a small multiple of [`READER_GRACE`], with the note
+    /// and an empty-but-honest result. The leaked reader thread remains the
+    /// accepted tradeoff (blocking the driver is the non-negotiable).
+    #[test]
+    fn run_shell_never_eof_orphan_returns_within_reader_grace_bound() {
+        let _timing = crate::testsupport::timing_guard();
+        let tmp = tempfile::tempdir().unwrap();
+        let start = Instant::now();
+        let outcome = run_shell(
+            tmp.path(),
+            "sleep 60 2>/dev/null &",
+            Duration::from_secs(10),
+        )
+        .unwrap();
+        let elapsed = start.elapsed();
+        assert!(!outcome.timed_out);
+        assert_eq!(outcome.exit_code, Some(0));
+        assert!(
+            outcome
+                .output
+                .contains("(output truncated: reader did not drain)"),
+            "missing drain note: {:?}",
+            outcome.output
+        );
+        assert!(
+            elapsed < READER_GRACE + Duration::from_secs(5),
+            "run_shell blocked for {elapsed:?}"
+        );
     }
 
     // ---- T144: driver-spawned shells must not inherit CARGO_TARGET_DIR ----
