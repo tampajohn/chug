@@ -37,13 +37,30 @@ fn git_short_hash() -> Option<String> {
 
 /// Rebuild when the checked-out commit moves. In a plain checkout `.git` is
 /// a directory: watch HEAD (branch switches) and the loose ref it points at
-/// (new commits). In a worktree `.git` is a file — nothing useful to watch,
-/// so skip silently (the hash is still captured correctly at build time).
+/// (new commits). In a worktree `.git` is a FILE pointing at the main
+/// repo's worktree gitdir, so `.git/HEAD` never exists as a path — and
+/// cargo treats a missing rerun-if-changed target as ALWAYS stale, which
+/// made the pre-T179 shape (hint emitted before the read) rebuild this
+/// build script and all its dependents on EVERY cargo invocation in any
+/// worktree (the cycle-81 discovery, confirmed with
+/// `CARGO_LOG=cargo::core::compiler::fingerprint=trace cargo build`,
+/// which logs `StaleItem(MissingFile { path: ".../.git/HEAD" })`; the tax
+/// was the full crate, ~40-95s release per invocation, behind slow
+/// worktree gates, eaten gate windows, and child budget deaths). So the
+/// read comes FIRST and the hints are emitted ONLY when it succeeded: a
+/// worktree build watches nothing and stays cache-clean, while the main
+/// tree — where `.git/HEAD` exists — still watches HEAD and the ref, so
+/// commit moves still rebuild the binary and the banner hash stays honest
+/// where it worked before. Known gap (T179 out of scope, follow-up if
+/// wanted): a worktree commit no longer retriggers the build script, so
+/// its baked hash can go stale. Cycle 81 also found that exporting
+/// CHUG_GIT_HASH in a gate env breaks the delegate-launch stub tests
+/// (via the rerun-if-env-changed above) — documented, not changed here.
 fn emit_git_rerun_hints() {
-    println!("cargo:rerun-if-changed=.git/HEAD");
     let Ok(head) = fs::read_to_string(".git/HEAD") else {
         return;
     };
+    println!("cargo:rerun-if-changed=.git/HEAD");
     if let Some(reference) = head.trim().strip_prefix("ref: ") {
         println!("cargo:rerun-if-changed=.git/{}", reference.trim());
     }
