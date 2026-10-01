@@ -3339,4 +3339,30 @@ mod tests {
             .collect();
         assert_eq!(entries, vec!["LEDGER.md".to_string()], "no temp siblings: {entries:?}");
     }
+    #[test]
+    fn run_shell_output_over_one_chunk_keeps_every_chunk_in_order() {
+        // T185 gap-closer (kimi validator m6 survivor): recv_capped must
+        // ACCUMULATE chunks (`acc.extend_from_slice(&chunk)`) — the mutant
+        // `acc = chunk` overwrite keeps only the final <=64KiB chunk and
+        // survived the whole pre-existing suite because no test pushed more
+        // than one drain_pipe chunk (64KiB) through a pipe. Push ~200KiB
+        // (>3 chunks) through stdout and assert the full ordered sequence
+        // survives: head, middle, and tail intact.
+        let total = 200 * 1024usize;
+        let cmd = "awk 'BEGIN{for(i=0;i<200*1024;i++)printf \"%c\", 65+(i%26)}'";
+        let outcome = run_shell(std::path::Path::new("."), cmd, Duration::from_secs(30)).unwrap();
+        assert!(!outcome.timed_out, "multi-chunk command timed out");
+        assert_eq!(outcome.exit_code, Some(0));
+        let expected: String = (0..total).map(|i| (b'A' + (i % 26) as u8) as char).collect();
+        assert_eq!(
+            outcome.output.len(),
+            expected.len(),
+            "byte count must survive across chunk boundaries (an overwrite mutant keeps <=64KiB)"
+        );
+        assert_eq!(
+            outcome.output, expected,
+            "every chunk in order: head/middle/tail all intact"
+        );
+    }
+
 }
