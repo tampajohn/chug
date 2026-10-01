@@ -287,6 +287,28 @@ untouched this delta. No docs row filed.
   stub family's EXTERNAL-load blindness (T151's timing_guard is in-process
   only) — fed to the next eval's flake watch.
 
+- **T184** (pri 2, feature — F14 phase 1 reframed to telemetry) —
+  context-economy telemetry: landed `198d664` (impl `7c77d85`, +507/-19,
+  9 files — Event::Trim 4-field events-sink-only + cache_read/
+  cache_creation on Event::Usage + trim.rs caller-side TrimStats seam
+  keeping transcript_trim's bool signature + eventlog serialization
+  incl. the resume-path log_trim + driver both call sites + digest
+  cache counters and "trim fires: N" + README bullet). Impl glm died at
+  80/80 with the work uncommitted-but-nearly-complete → ONE T63 resume →
+  accepted; the child HONORED the growth-stop clause (dropped an
+  over-cap scripted end-to-end leg itself — the filing-time discipline
+  working). kimi REQUIRED PASS (routing d1790870669-21): 4 reqs traced
+  incl. the api.rs→driver data chain; m1-m3 mutants CAUGHT in T79
+  parallel legs; m4 (loop-path Trim emission leg) unrun — the spec's own
+  120k-token-run prohibition made it review-asserted (sanctioned gap);
+  the validator ALSO caught a stale pre-T184 release binary in
+  target-shared-validate silently skipping all 6 new legs on its first
+  green run — the THIRD T55-class artifact event this cycle. Cycle-level
+  lesson: role-keyed dirs bound the class but do not end it — a dir
+  shared across TIME by different checkouts stays last-builder-wins;
+  touch-the-target-file before review/validation gates is the cheap
+  guard (feeds the next eval).
+
 ### Cycle 84 (2026-10-01) — glm routine freshness-skip cycle (freshness held: EVALUATION.md same UTC day, 1 todo row T181; skip record d1790856978-1) — 1 landed (T181) — queue DRAINED
 
 **Wrap note.** Routine glm freshness-skip cycle (skip record d1790856978-1; T81 routing — glm never evaluates). The whole cycle was the T181 arc, end to end in ~70 min wall: worktree+warm build 49s → impl glm first-try goal-accepted 20/80 (~10 min child wall) → kimi REQUIRED PASS 4/4 mutants (32/60, ~44 min wall, zero blocking findings) → merge, flip, push. Queue DRAINED — TODO.md has zero todo rows for the first time since the cycle-82 wrap; the next cycle (fresh-eval, kimi-routed per T81 since the queue half of the predicate fails) files from the delta corpus + FEATURES.md (F12 phase 2 keyed providers is the standing roadmap pull). Bookkeeping: 4 decision_log records (skip, routing, verdict, outcome); harvest events-t181-impl-validate + LEDGER-t181-validate in .chug/ (local, gitignored by design); leftover /tmp/chug-loop-t183 worktree from the cycle-83 mid-arc handoff removed post-harvest-check. **No release tag:** 1 item since v0.11.0 < 3, no FEATURES check-off. Final gates at HEAD (target-shared-main): build ✓, clippy -D ✓, nextest --release 1311/1311 ✓, todo_consistency 19/19, eval_outcomes_carry 4/4.
