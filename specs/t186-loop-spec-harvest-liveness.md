@@ -60,7 +60,13 @@ estimate: ~70 changed lines (doctrine text + pin legs).
 2. **Removal precondition (§2 step 5).** Before any
    `git worktree remove`, verify NO child pid launched in that
    worktree is still alive — via `delegate status` liveness or
-   `kill -0 <pid>`, never a truncated `ps` pipeline. A live child
+   `kill -0 <pid>`, never a truncated `ps` pipeline; a plain
+   `ps -p <pid>` / `kill -0` liveness test must ALSO exclude the
+   defunct-zombie state (`ps -p <pid> -o stat=` showing `Z`), which
+   satisfies kill -0 while holding no files (the cycle-85 inverse
+   incident: two defunct validator pids read ALIVE on a bare ps -p
+   moments before a safe removal — the safe-direction error, but the
+   check must be exact both ways). A live child
    blocks the removal: harvest what exists, leave the worktree, note
    the row for the next cycle. The cycle-84 zombie (pid 6260) is
    named as the evidence.
