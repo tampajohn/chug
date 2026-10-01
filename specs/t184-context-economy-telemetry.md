@@ -1,6 +1,6 @@
 # T184 — Context-economy telemetry: cache tokens on iteration events + a Trim event + digest surfacing (F14 phase 1)
 
-check: export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared && cargo test
+check: export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-impl-a && cargo test
 
 ## Repo context
 
