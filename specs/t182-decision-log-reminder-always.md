@@ -1,6 +1,6 @@
 # T182 — decision_log validation errors always carry the full contract
 
-check: export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared && cargo test --bin chug decision_log
+check: export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-impl-a && cargo test --bin chug decision_log
 
 ## Repo context
 
