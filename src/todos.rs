@@ -934,8 +934,12 @@ mod tests {
         // Plan mode renders nothing about todos by construction (its builder
         // takes no todos text) — assert the plan prompt stays todos-free
         // even when the store has content.
-        let plan =
-            crate::driver::build_plan_system_prompt(Some("PSPEC"), "goal", "LEDGER BODY");
+        let plan = crate::driver::build_plan_system_prompt(
+            Some("PSPEC"),
+            "goal",
+            "LEDGER BODY",
+            crate::plan::PlanKind::Plan,
+        );
         assert!(!plan.contains("## Todos"), "{plan}");
     }
 }

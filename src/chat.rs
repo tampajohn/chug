@@ -6,11 +6,12 @@
 
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
-use std::sync::mpsc::Receiver;
+use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::time::Duration;
 
 use crate::api::{Client, ContentBlock, Llm, Message};
 use crate::attach;
+use crate::autospec;
 use crate::driver::{self, Controls, SlashUpdate, TurnKnobs};
 use crate::eventlog;
 use crate::events::{Event, EventSink};
@@ -57,6 +58,14 @@ pub enum SlashCommand {
     Goal(Option<String>),
     /// `/check <cmd>` sets the goal_complete gate; `/check` alone clears it.
     Check(Option<String>),
+    /// T188: `/auto-spec <request>` — draft a spec for the request (worker
+    /// calls the LLM once, tool-less), show it, park it pending approval.
+    /// `/auto-spec` alone prints the usage line.
+    AutoSpec(Option<String>),
+    /// T188: `/auto-spec-approve` — gate the drafted spec (structure +
+    /// non-vacuous check + dry-run; never loosened) and start the pending
+    /// request as a turn with the draft loaded as the spec.
+    AutoSpecApprove,
     /// `/ledger` refocuses the ledger pane.
     Ledger,
     /// `/model <id>` switches model; `/model` alone shows the current one.
@@ -97,6 +106,8 @@ pub fn parse_slash(line: &str) -> Option<SlashCommand> {
         "spec" => SlashCommand::Spec(arg),
         "goal" => SlashCommand::Goal(arg),
         "check" => SlashCommand::Check(arg),
+        "auto-spec" => SlashCommand::AutoSpec(arg),
+        "auto-spec-approve" => SlashCommand::AutoSpecApprove,
         "ledger" => SlashCommand::Ledger,
         "model" => SlashCommand::Model(arg),
         "budget" => match arg {
@@ -149,6 +160,24 @@ pub struct ChatConfig {
     pub objective_rx: Receiver<String>,
     /// Slash-command session updates (drained at every iteration boundary).
     pub update_rx: Receiver<SlashUpdate>,
+    /// T188: auto-spec requests from the UI (its own channel — see
+    /// [`AutoSpecRequest`]).
+    pub autospec_rx: Receiver<AutoSpecRequest>,
+}
+
+/// T188: a chat-side auto-spec request from the UI. Rides its OWN channel
+/// (`ChatConfig::autospec_rx`) — never the `SlashUpdate` channel — so the
+/// worker can act on it while idle without consuming (and losing) regular
+/// session updates, which stay buffered until the next turn boundary.
+#[derive(Debug, Clone, PartialEq)]
+pub enum AutoSpecRequest {
+    /// `/auto-spec <request>`: draft a spec for the request (worker-side one
+    /// LLM call, no tools), show it, park it pending approval.
+    Draft(String),
+    /// `/auto-spec-approve`: gate the (possibly operator-edited) draft at
+    /// `.chug/auto-spec.md` — same validation + vacuous + dry-run rules, the
+    /// check is never loosened — and start the pending request as a turn.
+    Approve,
 }
 
 /// Production entry point: build the API client + risk gate + MCP registry,
@@ -224,17 +253,48 @@ fn run_chat_with(
         max_minutes: cfg.max_minutes,
         max_tokens: cfg.max_tokens,
     };
+    // T188: the request parked by `/auto-spec` awaiting
+    // `/auto-spec-approve`. Session-scoped: a restarted session re-drafts.
+    let mut pending_autospec: Option<String> = None;
 
     loop {
-        // Idle: wait for the next objective. A closed channel means the UI
-        // has quit — exit the session (and finish its trace) gracefully.
-        let objective = match cfg.objective_rx.recv() {
-            Ok(objective) => objective,
-            Err(_) => {
-                if let Some(trace) = &trace {
-                    obs.trace_finished(trace, observ::outcome::COMPLETED, turns);
+        // Idle: serve auto-spec requests first (T188 — they are actionable
+        // exactly while idle), then wait for the next objective. The poll
+        // wakes every 100 ms so a request sent while idle is served without
+        // waiting for an objective.
+        let objective = loop {
+            match cfg.autospec_rx.try_recv() {
+                Ok(AutoSpecRequest::Draft(request)) => {
+                    pending_autospec =
+                        handle_auto_spec_draft(&cfg, client, trace.as_deref(), sink, request);
+                    continue;
                 }
-                return Ok(0);
+                Ok(AutoSpecRequest::Approve) => {
+                    match handle_auto_spec_approve(
+                        &cfg,
+                        sink,
+                        pending_autospec.as_deref(),
+                        &mut knobs,
+                    ) {
+                        // Approved: start the turn with the pending request.
+                        Ok(request) => break request,
+                        // The gate refused: stay idle (the notice landed).
+                        Err(notice) => sink.emit(Event::AutoSpecNote(notice)),
+                    }
+                }
+                Err(_) => {}
+            }
+            match cfg.objective_rx.recv_timeout(Duration::from_millis(100)) {
+                Ok(objective) => break objective,
+                Err(RecvTimeoutError::Timeout) => continue,
+                // The UI has quit — exit the session (and finish its trace)
+                // gracefully.
+                Err(RecvTimeoutError::Disconnected) => {
+                    if let Some(trace) = &trace {
+                        obs.trace_finished(trace, observ::outcome::COMPLETED, turns);
+                    }
+                    return Ok(0);
+                }
             }
         };
         // Clear any abort flag left over from keys pressed between turns so
@@ -272,6 +332,74 @@ fn run_chat_with(
         turns += 1;
         sink.emit(Event::TurnEnd { reason });
     }
+}
+
+/// T188 worker side of `/auto-spec <request>`: one direct LLM call (no
+/// tools — a nested plan session would rotate the live chat transcript),
+/// the same validation + vacuous gate as the headless draft, the draft
+/// written to `.chug/auto-spec.md` and shown in the activity stream.
+/// Returns `Some(request)` to park pending `/auto-spec-approve`.
+fn handle_auto_spec_draft(
+    cfg: &ChatConfig,
+    client: &mut dyn Llm,
+    trace: Option<&str>,
+    sink: &mut dyn EventSink,
+    request: String,
+) -> Option<String> {
+    sink.emit(Event::AutoSpecNote(format!(
+        "drafting spec for: {} (one tool-less call…)",
+        crate::events::preview(&request, 120)
+    )));
+    match autospec::chat_draft(&cfg.cwd, &request, client, trace) {
+        Ok(draft) => {
+            sink.emit(Event::ModelText(draft.clone()));
+            sink.emit(Event::AutoSpecNote(format!(
+                "draft written to {} — edit it, then /auto-spec-approve to run",
+                autospec::AUTO_SPEC_REL
+            )));
+            Some(request)
+        }
+        Err(why) => {
+            sink.emit(Event::AutoSpecNote(format!("auto-spec draft refused: {why}")));
+            // Nothing parks: the operator re-runs /auto-spec.
+            None
+        }
+    }
+}
+
+/// T188 worker side of `/auto-spec-approve`: gate the draft at
+/// `.chug/auto-spec.md` through the SAME rules the headless gate uses
+/// (structure, non-vacuous check, dry-run — the check is never loosened),
+/// then load the spec + check knobs and hand back the pending request as
+/// the turn's objective. `Err` is the operator-facing refusal; the session
+/// stays idle.
+fn handle_auto_spec_approve(
+    cfg: &ChatConfig,
+    sink: &mut dyn EventSink,
+    pending: Option<&str>,
+    knobs: &mut TurnKnobs,
+) -> Result<String, String> {
+    let request = pending.ok_or_else(|| {
+        "auto-spec: nothing pending — /auto-spec <request> first, then approve".to_string()
+    })?;
+    let spec_path = cfg.cwd.join(autospec::AUTO_SPEC_REL);
+    let text = std::fs::read_to_string(&spec_path).map_err(|e| {
+        format!(
+            "auto-spec: no draft at {} ({e}) — /auto-spec <request> first",
+            autospec::AUTO_SPEC_REL
+        )
+    })?;
+    let check = autospec::approve_gate(&cfg.cwd, &text)?;
+    // Load the drafted spec as the session spec and its check as the
+    // goal_complete gate — the T146 pattern: the operator approved the file,
+    // the turn runs against exactly that file.
+    knobs.spec_path = Some(spec_path);
+    knobs.check_cmd = Some(check);
+    sink.emit(Event::AutoSpecNote(format!(
+        "auto-spec approved — running with {} as the spec; its check gates goal_complete",
+        autospec::AUTO_SPEC_REL
+    )));
+    Ok(request.to_string())
 }
 
 #[cfg(test)]
@@ -400,6 +528,7 @@ mod tests {
     fn harness(tmp: &tempfile::TempDir, responses: Vec<Value>) -> Harness {
         let (objective_tx, objective_rx) = mpsc::channel();
         let (update_tx, update_rx) = mpsc::channel();
+        let (_autospec_tx, autospec_rx) = mpsc::channel();
         let (_steer_tx, steering_rx) = mpsc::channel();
         let abort = Arc::new(AtomicBool::new(false));
         let cfg = ChatConfig {
@@ -422,6 +551,7 @@ mod tests {
             },
             objective_rx,
             update_rx,
+            autospec_rx,
         };
         Harness {
             cfg,
@@ -962,6 +1092,7 @@ mod tests {
         let (objective_tx, objective_rx) = mpsc::channel();
         let (update_tx, update_rx) = mpsc::channel();
         let (_steer_tx, steering_rx) = mpsc::channel();
+        let (_autospec_tx, autospec_rx) = mpsc::channel();
         let cfg = ChatConfig {
             cwd: tmp.path().to_path_buf(),
             model: "scripted-model".into(),
@@ -978,6 +1109,7 @@ mod tests {
             },
             objective_rx,
             update_rx,
+            autospec_rx,
             // Tests must never pick up the developer's ~/.config/chug/mcp.json.
             mcp_config: None,
             mcp_off: true,

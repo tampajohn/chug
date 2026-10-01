@@ -297,6 +297,10 @@ pub(crate) struct LoopCtx<'a> {
     /// T73 plan mode only: where `submit_plan` writes the plan (`None` → the
     /// plan surfaces on stdout). Always `None` in run/chat modes.
     plan_out: Option<&'a Path>,
+    /// Plan-shaped sessions only: which product the session drafts (T73
+    /// plan vs the T188 spec draft) — picks the preamble/kick wording.
+    /// `Plan` in run/chat modes.
+    plan_kind: crate::plan::PlanKind,
 }
 
 enum VerifyOutcome {
@@ -455,6 +459,7 @@ fn run_loop(
         trace: trace.as_deref(),
         obs,
         plan_out: None,
+        plan_kind: crate::plan::PlanKind::Plan,
     };
     // T10: first line of the run's events log (model/spec/cwd/mode), plus
     // the configured budget ceilings (T17), the cwd's checkout HEAD (T20,
@@ -501,6 +506,9 @@ fn run_loop(
 /// when the model calls `submit_plan` (exit 0), or on a budget abort.
 pub struct PlanConfig {
     pub cwd: PathBuf,
+    /// Which product this plan-shaped session drafts (T73 plan vs the T188
+    /// spec draft) — same read-only loop, different preamble/first message.
+    pub kind: crate::plan::PlanKind,
     /// Optional spec file, same resolution as `run` (absent = no spec section).
     pub spec_path: Option<PathBuf>,
     pub goal: String,
@@ -542,8 +550,9 @@ pub fn run_plan(cfg: PlanConfig, sink: &mut dyn EventSink) -> anyhow::Result<i32
 /// `run_turn` seam pattern): everything a real plan session does — driver
 /// lock, fresh rotation, the `run_start` event naming mode "plan", budget
 /// enforcement, the submit_plan exit — except the concrete `Client` and the
-/// (prod: empty) MCP registry, which arrive as parameters.
-fn run_plan_loop(
+/// (prod: empty) MCP registry, which arrive as parameters. `pub(crate)` so
+/// the T188 auto-spec draft phase (src/autospec.rs) runs the same loop.
+pub(crate) fn run_plan_loop(
     cfg: PlanConfig,
     client: &mut dyn Llm,
     sink: &mut dyn EventSink,
@@ -591,11 +600,22 @@ fn run_plan_loop(
         ),
         None => None,
     };
-    let first = Message::user(vec![ContentBlock::text_block(format!(
-        "Goal: {}\n\nThe goal (and spec, when given) are in your system prompt. \
-         Explore read-only, then call submit_plan with the complete plan.",
-        cfg.goal
-    ))]);
+    let first = Message::user(vec![ContentBlock::text_block(match cfg.kind {
+        crate::plan::PlanKind::Plan => format!(
+            "Goal: {}\n\nThe goal (and spec, when given) are in your system prompt. \
+             Explore read-only, then call submit_plan with the complete plan.",
+            cfg.goal
+        ),
+        // T188 spec draft: the goal text IS the draft brief (operator request
+        // + redraft feedback, built by src/autospec.rs).
+        crate::plan::PlanKind::SpecDraft => format!(
+            "{}\n\nExplore the repository read-only, then call submit_plan ONCE \
+             with the complete drafted spec as markdown — submit_plan's `plan` \
+             argument carries the whole spec file content (it is written to the \
+             spec file verbatim), not an implementation plan.",
+            cfg.goal
+        ),
+    })]);
     transcript::append(&cfg.cwd, &first)?;
     let mut messages = vec![first];
 
@@ -647,6 +667,7 @@ fn run_plan_loop(
         trace: trace.as_deref(),
         obs,
         plan_out: cfg.out_path.as_deref(),
+        plan_kind: cfg.kind,
     };
     match drive_loop(
         &ctx,
@@ -799,6 +820,7 @@ pub fn run_turn(
         trace,
         obs,
         plan_out: None,
+        plan_kind: crate::plan::PlanKind::Plan,
     };
     match drive_loop(&ctx, knobs, client, gate, messages, None, sink, mcp)? {
         DriveOutcome::TurnEnded(reason) => Ok(reason),
@@ -1091,6 +1113,7 @@ pub(crate) fn drive_loop(
                 spec_text.as_deref(),
                 knobs.goal.as_deref().unwrap_or_default(),
                 &ledger_text,
+                ctx.plan_kind,
             ),
         };
 
@@ -1402,9 +1425,13 @@ pub(crate) fn drive_loop(
                 return Ok(DriveOutcome::TurnEnded(TurnEndReason::Completed));
             }
             // Model stopped talking without finishing — the anti-stall kick
-            // (plan mode names its own exit: submit_plan, not goal_complete).
+            // (plan mode names its own exit: submit_plan, not goal_complete;
+            // the T188 spec draft names the spec, not an implementation plan).
             user_blocks.push(ContentBlock::text_block(match ctx.mode {
-                Mode::Plan => crate::plan::PLAN_KICK,
+                Mode::Plan => match ctx.plan_kind {
+                    crate::plan::PlanKind::Plan => crate::plan::PLAN_KICK,
+                    crate::plan::PlanKind::SpecDraft => crate::autospec::DRAFT_KICK,
+                },
                 _ => KICK,
             }));
         } else if let Some(plan) = plan_submitted {
@@ -1910,9 +1937,19 @@ pub fn build_system_prompt(spec: &str, goal: &str, ledger_text: &str, todos_text
 /// T73 plan-mode system prompt: the read-only contract preamble, optional
 /// spec section, the goal, and the ledger as READ-ONLY context (plan mode
 /// never writes it — the ledger is read with the usual seed fallback, so a
-/// worktree without one still gets a prompt).
-pub fn build_plan_system_prompt(spec: Option<&str>, goal: &str, ledger_text: &str) -> String {
-    let mut prompt = crate::plan::PLAN_PREAMBLE.to_string();
+/// worktree without one still gets a prompt). T188: the kind picks the
+/// preamble — the T73 plan contract, or the T188 spec-draft contract.
+pub fn build_plan_system_prompt(
+    spec: Option<&str>,
+    goal: &str,
+    ledger_text: &str,
+    kind: crate::plan::PlanKind,
+) -> String {
+    let preamble = match kind {
+        crate::plan::PlanKind::Plan => crate::plan::PLAN_PREAMBLE.to_string(),
+        crate::plan::PlanKind::SpecDraft => crate::autospec::DRAFT_PREAMBLE.to_string(),
+    };
+    let mut prompt = preamble;
     if let Some(spec) = spec {
         prompt.push_str(&format!("\n\n## Spec\n\n{spec}"));
     }

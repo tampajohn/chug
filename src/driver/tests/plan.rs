@@ -173,6 +173,7 @@ fn plan_mode_rejects_every_excluded_tool_and_the_loop_continues() {
 fn plan_cfg(tmp: &tempfile::TempDir, out: Option<PathBuf>, max_iters: u32) -> PlanConfig {
     PlanConfig {
         cwd: tmp.path().to_path_buf(),
+        kind: crate::plan::PlanKind::Plan,
         spec_path: None,
         goal: "draft a plan".to_string(),
         model: "scripted-model".to_string(),
