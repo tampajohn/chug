@@ -835,6 +835,94 @@ fn t99_f21_reference_must_not_make_f2_inflight() {
     assert!(!ft.contains("in-flight"), "no F-item may be in-flight off an F21 reference: {ft}");
 }
 
+/// T193: the in-flight refinement grepped ALL of TODO.md, but done rows keep
+/// their F-references forever (T105's done row names F6; T180's names F12) —
+/// every feature a completed item ever touched rendered in-flight permanently
+/// on chug.sh. The refinement now reads OPEN rows only (status cell `todo` or
+/// `in-progress` — the same -F'|' field conventions as todo_facts), and the
+/// FEATURES.md rows that masked the bug are brought to the uppercase-LANDED
+/// convention. Pinned legs: (a) a done-row-only F-reference never yields
+/// in-flight; (b) an open-row (todo OR in-progress) reference does; (c) a
+/// SPLIT row with the uppercase LANDED annotation plus an OPEN referencing
+/// row still renders landed — landed wins, the refinement is skipped for
+/// landed rows (req 3). F14's live shape (done T184 ref + open T192 ref) is
+/// the (b)-leg in the wild: the open reference is what keeps it honest.
+#[test]
+fn t193_inflight_classifier_reads_open_todo_rows_only_and_landed_wins() {
+    let (f, _refs, _orig) = fixture_t99();
+    // Five reference shapes across the two files: F9 done-row-only, F10
+    // todo-row, F11 in-progress-row, F12 LANDED + an OPEN referencing row,
+    // F13 unreferenced (control), F14 LANDED + done-row-only (the real F6
+    // shape that the lowercase "landed" annotation left permanently in-flight).
+    std::fs::write(
+        f.chug.join("TODO.md"),
+        concat!(
+            "# TODO\n\n| id | title | spec | pri | status | notes |\n",
+            "|----|-------|------|-----|--------|-------|\n",
+            "| T105 | F9 phase 1: done-row feature shipped | specs/t105.md | 3 | done | done dd29137 — x |\n",
+            "| T106 | F14 phase 1: also shipped | specs/t106.md | 3 | done | done ee29137 — x |\n",
+            "| T184 | context-economy telemetry (F10 phase 1) | specs/t184.md | 2 | todo | operator |\n",
+            "| T192 | live-context editing (F11 phase 2, CLM port) | specs/t192.md | 3 | in-progress | started |\n",
+            "| T193 | in-flight classifier (F12 phase 2) | specs/t193.md | 3 | todo | operator |\n"
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        f.chug.join("FEATURES.md"),
+        concat!(
+            "# FEATURES\n\n",
+            "| # | Feature | What | Benchmark |\n",
+            "|---|---------|------|-----------|\n",
+            "| F9 | **Done-only feature** | Referenced only by a done row. | n/a |\n",
+            "| F10 | **Open-row feature** | Referenced by an open todo row. | n/a |\n",
+            "| F11 | **In-progress feature** | Referenced by an in-progress row. | n/a |\n",
+            "| F12 | **Landed wins** — SPLIT: **phase 1 LANDED (T193, cafe567, cycle 93)** — shipped | An OPEN row references it; landed wins. | n/a |\n",
+            "| F13 | **Untouched feature** | No TODO references at all. | n/a |\n",
+            "| F14 | **Done-row landed** — SPLIT: **phase 1 LANDED (T106, deadbee, cycle 94)** — shipped | Landed with only a done-row reference. | n/a |\n"
+        ),
+    )
+    .unwrap();
+    let out = run_sync(&f, true);
+    assert!(out.status.success(), "run: {:?}", String::from_utf8_lossy(&out.stderr));
+    let ft = region(&page(&f), "FEATURES");
+    // (a) done-row-only F-reference: the done row is invisible to the grep —
+    // queued, never in-flight (the T193 defect made this in-flight forever)
+    assert!(
+        ft.contains("<h3><span>Done-only feature</span><i class=\"q\">queued</i></h3>"),
+        "(a) done-row-only reference must stay queued: {ft}"
+    );
+    // (b) open-row reference yields in-flight — both open statuses
+    assert!(
+        ft.contains("<h3><span>Open-row feature</span><i class=\"q\">in-flight</i></h3>"),
+        "(b) todo-row reference must be in-flight: {ft}"
+    );
+    assert!(
+        ft.contains("<h3><span>In-progress feature</span><i class=\"q\">in-flight</i></h3>"),
+        "(b) in-progress row must count as open: {ft}"
+    );
+    // (c) landed wins: F12 carries the uppercase LANDED annotation AND is
+    // referenced by OPEN T193 — the landed classification must survive the
+    // refinement (the pre-T193 refinement only skipped landed rows; this pin
+    // holds that ordering against regressions in either direction)
+    assert!(
+        ft.contains("<h3><span>Landed wins</span><i class=\"q\">landed</i></h3>"),
+        "(c) LANDED annotation + open referencing row must stay landed: {ft}"
+    );
+    // control: an unreferenced row stays queued
+    assert!(
+        ft.contains("<h3><span>Untouched feature</span><i class=\"q\">queued</i></h3>"),
+        "unreferenced row stays queued: {ft}"
+    );
+    // the real F6 shape: LANDED annotation + done-row-only reference — landed,
+    // and the done reference must not flip it (lowercase "landed" is what hid
+    // this from the classifier in the wild)
+    assert!(
+        ft.contains("<h3><span>Done-row landed</span><i class=\"q\">landed</i></h3>"),
+        "LANDED + done-row-only reference must be landed: {ft}"
+    );
+    assert_eq!(count(&ft, "<i class=\"q\">in-flight</i>"), 2, "exactly the two open-referenced rows");
+}
+
 #[test]
 fn t99_best_effort_on_malformed_and_missing_blocks() {
     // missing .tl/.grid blocks (T98 fixture): bootstrap warns, cycle still fine
