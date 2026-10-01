@@ -2039,3 +2039,182 @@ fn overlap_check_rekey_tokens_exactly_once_inside_pipeline_overlap_paragraph() {
     );
 }
 
+// ---- T176 — the impl goal template's clippy bar: `-D warnings` ----
+//
+// The template's "Keep cargo build + clippy + test green" sentence named no
+// lint level, so an impl child could honestly claim clippy-green while
+// warnings stood: cycle 77's T166 impl committed with a `needless_lifetimes`
+// warning under a "clippy clean" claim and the kimi validator caught it
+// (finding 1), the fix landing on-branch at 7911b3c — validator time spent
+// on a mechanical nit the child's own gate should have caught. The
+// validator-side gates and the orchestrator's post-merge gates already run
+// clippy with `-D` clean; only the child's self-check bar was unspecified.
+// The template sentence now names the level, and a prose sentence after the
+// launch block spells the semantics (zero warnings, not exit-0 clippy) and
+// names the evidence. The sweep-the-family check found exactly ONE goal-
+// template surface carrying the bare phrase — step 2's impl-child template;
+// step 4's FAIL-arc fix-up child has no template of its own (its goal is
+// step 2's with the findings pasted in), so this one edit covers both.
+
+/// The template's lint sentence, byte-identical INCLUDING its wrapped line
+/// break (13-space indent — the goal string's continuation indent). Must
+/// occur EXACTLY once in LOOP-SPEC.md.
+const CLIPPY_DENY_SENTENCE: &str = concat!(
+    "Keep cargo build +\n",
+    "             clippy `-D warnings` + test green."
+);
+
+/// The load-bearing lint level. Must occur EXACTLY once inside the goal
+/// string's window (the template surface) — one template, one level; the
+/// prose evidence sentence repeats the flag, so the count is scoped to the
+/// goal string, not the whole file.
+const CLIPPY_DENY_FLAG: &str = "-D warnings";
+
+/// The OLD bare phrase, wrap-insensitive: the pinned sentence reads
+/// "clippy `-D warnings` + test green", so this substring survives a revert
+/// under ANY rewrapping. Must occur ZERO times in LOOP-SPEC.md.
+const BARE_CLIPPY_PHRASE: &str = "clippy + test green";
+
+/// The evidence clause's instance tag — the cycle and TODO item.
+const T166_INSTANCE: &str = "cycle-77 T166";
+
+/// The evidence clause's warning lint — the nit the T166 impl shipped.
+const T166_WARNING: &str = "needless_lifetimes";
+
+/// The evidence clause's on-branch fix ref.
+const T166_FIX_REF: &str = "7911b3c";
+
+/// (z) T176 — the goal template's clippy bar names the lint level. The new
+/// sentence occurs EXACTLY once (byte-identical, wrap included) inside
+/// step 2's window, ordered after the T47 export prefix it extends and
+/// before the `Commit your work here.` sentence it precedes; `-D warnings`
+/// occurs EXACTLY once inside the goal string's window (one template
+/// surface, one level); the OLD bare phrase occurs ZERO times anywhere in
+/// LOOP-SPEC.md (the wrap-insensitive revert detector); and the evidence
+/// clause's three tokens (instance tag, warning lint, fix ref) each occur
+/// EXACTLY once, inside step 2's window. Revert the template sentence and
+/// TWO legs go red at once — the sentence's count drops to 0 AND the bare
+/// phrase reappears (the RED proof); duplicate the sentence and the count-2
+/// leg fires; move the evidence clause out of step 2 and the window leg
+/// fires.
+#[test]
+fn goal_template_clippy_bar_denies_warnings() {
+    // Needle self-checks (T48 idiom): a mangled needle must not let this
+    // pin pass silently.
+    assert!(
+        CLIPPY_DENY_SENTENCE.starts_with("Keep cargo build")
+            && CLIPPY_DENY_SENTENCE.ends_with("test green."),
+        "the clippy-bar needle must be the goal template's lint sentence \
+         verbatim (wrap + continuation indent included)"
+    );
+    assert_eq!(CLIPPY_DENY_FLAG, "-D warnings");
+    assert!(
+        !CLIPPY_DENY_SENTENCE.contains(BARE_CLIPPY_PHRASE),
+        "the bare-phrase detector must not match the pinned sentence itself \
+         (the backticked flag separates `clippy` from `+ test green`)"
+    );
+    assert!(
+        T166_INSTANCE.starts_with("cycle-77") && T166_INSTANCE.ends_with("T166"),
+        "the evidence tag must name the cycle and the item"
+    );
+
+    let spec = loop_spec();
+
+    // Presence, exactly-once, byte-identical.
+    assert_eq!(
+        spec.matches(CLIPPY_DENY_SENTENCE).count(),
+        1,
+        "the goal template must carry the `-D warnings` clippy bar \
+         byte-identical exactly once — zero means the sentence was \
+         reverted to the bare phrase (the T176 fix undone), more than one \
+         means it is stated twice"
+    );
+    // The OLD bare phrase, wrap-insensitive, gone everywhere.
+    assert_eq!(
+        spec.matches(BARE_CLIPPY_PHRASE).count(),
+        0,
+        "the bare `clippy + test green` phrase must not survive anywhere in \
+         LOOP-SPEC — the pre-T176 template reverted under a different \
+         wrapping, or a new goal-template surface reintroduced it"
+    );
+
+    // Scope: the sentence lives INSIDE step 2's window, ordered after the
+    // T47 export prefix it extends and before the `Commit your work here.`
+    // sentence it precedes (the template's sentence order preserved).
+    let start = spec
+        .find(STEP2_HEADING_LOOSE)
+        .expect("step-2 heading (`2. **`) present");
+    let end = start
+        + spec[start..]
+            .find(STEP3_HEADING)
+            .expect("step-3 heading present after step 2's");
+    let window = &spec[start..end];
+    let t47 = window
+        .find(T47_EXPORT_PREFIX)
+        .expect("step-2 window must carry the T47 export prefix (untouched)");
+    let sentence = window
+        .find(CLIPPY_DENY_SENTENCE)
+        .unwrap_or_else(|| {
+            panic!(
+                "step-2 window must carry the clippy-bar sentence (deleted, \
+                 or moved out of step 2?)"
+            )
+        });
+    let here = window
+        .find(COMMIT_HERE)
+        .expect("step-2 window must carry `Commit your work here.` (untouched)");
+    assert!(
+        t47 < sentence && sentence < here,
+        "the clippy-bar sentence must sit between the T47 export prefix \
+         ({t47}) and the `Commit your work here.` sentence ({here}) — the \
+         template's sentence order preserved (found at {sentence})"
+    );
+
+    // One template surface, one lint level: inside the goal string's window
+    // (the T47 prefix through the DO-NOT sentence that closes it),
+    // `-D warnings` occurs EXACTLY once.
+    let goal_start = start + t47;
+    let goal_end = start
+        + window
+            .find(DO_NOT_TOUCH_SENTENCE)
+            .expect(
+                "step-2 window must carry the DO-NOT closing sentence \
+                 (untouched)",
+            )
+        + DO_NOT_TOUCH_SENTENCE.len();
+    let goal_window = &spec[goal_start..goal_end];
+    assert_eq!(
+        goal_window.matches(CLIPPY_DENY_FLAG).count(),
+        1,
+        "the goal string must carry `-D warnings` exactly once — zero means \
+         the lint level was reverted, more than one means a second \
+         statement drifted into the template surface"
+    );
+
+    // The evidence clause is load-bearing too: the cycle-77 T166 instance
+    // tag, the warning lint it shipped, and the on-branch fix ref each
+    // occur EXACTLY once, inside step 2's window (the prose sentence the
+    // template change points at).
+    for (token, what) in [
+        (T166_INSTANCE, "the cycle-77 T166 instance tag"),
+        (
+            T166_WARNING,
+            "the needless_lifetimes warning the T166 impl shipped",
+        ),
+        (T166_FIX_REF, "the on-branch fix ref 7911b3c"),
+    ] {
+        assert_eq!(
+            spec.matches(token).count(),
+            1,
+            "LOOP-SPEC must state {what} exactly once — zero means the \
+             evidence clause was deleted, more than one means it is stated \
+             twice"
+        );
+        assert!(
+            window.contains(token),
+            "the evidence token {token:?} must sit inside step 2's window — \
+             the evidence clause drifted out of the launch-block doctrine"
+        );
+    }
+}
+
