@@ -51,24 +51,128 @@ pub(crate) const WEB_FETCH_MAX_CHARS_CEILING: usize = 100_000;
 /// redirects (spec req 2).
 pub(crate) const WEB_FETCH_MAX_REDIRECTS: usize = 5;
 /// Connect-phase timeout (spec req 2; mirrors `mcp_http`'s CONNECT_TIMEOUT).
-const WEB_FETCH_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+/// `pub(crate)`: the transport core is SHARED with `web_search` (T180), which
+/// builds its schema phrase from the same constants.
+pub(crate) const WEB_FETCH_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 /// Total budget of one `web_fetch` call, enforced caller-side with a channel
 /// `recv_timeout` (spec req 2: "total 30s"). The worker's reqwest client also
 /// carries this as its per-request timeout, but the caller-side deadline is
 /// what makes the total bound true for multi-redirect chains and trickling
-/// bodies.
-const WEB_FETCH_TOTAL_TIMEOUT: Duration = Duration::from_secs(30);
+/// bodies. `pub(crate)`: shared with `web_search` (T180) like the connect
+/// timeout — one deadline pair for every chug network tool.
+pub(crate) const WEB_FETCH_TOTAL_TIMEOUT: Duration = Duration::from_secs(30);
 /// Wire-side body cap: at most this many bytes (+1 overflow probe) are pulled
 /// off the network per fetch. Generous enough that any body that could yield
 /// [`WEB_FETCH_MAX_CHARS_CEILING`] chars of text arrives complete (HTML
 /// stripping only shrinks), tight enough that memory stays bounded.
-const WEB_FETCH_BODY_BYTE_CAP: usize = 2 * 1024 * 1024;
+/// `pub(crate)`: named in `web_search`'s truncated-body honesty note (T180).
+pub(crate) const WEB_FETCH_BODY_BYTE_CAP: usize = 2 * 1024 * 1024;
 /// Non-2xx body preview length (spec req 4: ≤500 chars).
 const NON_2XX_PREVIEW_CHARS: usize = 500;
 /// Bytes read to build that preview (500 chars of UTF-8 fit comfortably).
 const NON_2XX_PREVIEW_BYTE_CAP: usize = 2_048;
 /// Longest `&entity;` name scanned before giving up and emitting the `&`.
 const MAX_ENTITY_LEN: usize = 32;
+
+/// The caller's Content-Type policy: given the response's Content-Type
+/// header, decide the body's [`ContentKind`] or refuse it by name. A type
+/// alias — the bare `&dyn Fn(Option<&str>) -> anyhow::Result<ContentKind>`
+/// trips clippy::type_complexity at the one use site.
+type ContentTypeGate<'a> = &'a dyn Fn(Option<&str>) -> anyhow::Result<ContentKind>;
+
+/// One bounded GET — the shared transport core of the network tools (T37
+/// `web_fetch`, T180 `web_search`): client with the fixed UA, connect 10s /
+/// total 30s, ≤5 redirects; one send attempt with transport failures
+/// classified by class; non-2xx refused with a ≤500-char body preview; body
+/// read under the wire cap, cut on a char boundary. `content_type_gate` is
+/// the caller's Content-Type policy, run against the header BEFORE the body
+/// leaves the socket (`web_fetch` refuses binaries by name and gets back the
+/// kind it decided; `web_search` passes `None` — it parses whatever markup
+/// the search endpoint serves, so the kind is then plain
+/// [`ContentKind::Text`]). Returns the kind, the lossy-UTF-8 body, and
+/// whether the wire cap cut it short.
+fn bounded_get_body(
+    url: &str,
+    content_type_gate: Option<ContentTypeGate<'_>>,
+) -> anyhow::Result<(ContentKind, String, bool)> {
+    let client = reqwest::blocking::Client::builder()
+        .user_agent(user_agent())
+        .connect_timeout(WEB_FETCH_CONNECT_TIMEOUT)
+        .timeout(WEB_FETCH_TOTAL_TIMEOUT)
+        .redirect(redirect_policy())
+        .build()
+        .context("building http client")?;
+
+    let resp = client.get(url).send().map_err(|e| classify_transport(&e))?;
+
+    // Non-2xx → tool error naming the status, with a ≤500-char body preview
+    // (T37 spec req 4). One attempt: no retry loop.
+    let status = resp.status();
+    if !status.is_success() {
+        let mut limited = resp.take(NON_2XX_PREVIEW_BYTE_CAP as u64);
+        let mut bytes = Vec::new();
+        let _ = limited.read_to_end(&mut bytes);
+        let preview: String = String::from_utf8_lossy(&bytes)
+            .chars()
+            .take(NON_2XX_PREVIEW_CHARS)
+            .collect();
+        bail!("HTTP {status}: non-2xx response from GET {url}; body preview: {preview}");
+    }
+
+    let content_type = resp
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok());
+    let kind = match content_type_gate {
+        Some(gate) => gate(content_type)?,
+        None => ContentKind::Text,
+    };
+
+    let (raw, body_truncated) = read_body_capped(resp)?;
+    Ok((kind, raw, body_truncated))
+}
+
+/// T180: one bounded GET returning the RAW body — the shared legs
+/// (`bounded_get_body`) without the content-type gate or tag-stripping, for
+/// `web_search`'s parser, which needs the original markup (class attributes);
+/// stripping would destroy them. `label` names the calling tool in the
+/// scheme gate and the caller-side timeout error ("web_search timed out
+/// after 30s …"). Same worker-thread shape as `fetch_text`: the
+/// `recv_timeout` below is the hard total bound, so a peer that tricks its
+/// way past every client-side timeout costs the call its 30s budget, never
+/// the driver loop.
+pub(crate) fn fetch_raw(url: &str, label: &str) -> anyhow::Result<(String, bool)> {
+    let parsed = reqwest::Url::parse(url).map_err(|e| anyhow!("invalid URL {url:?}: {e}"))?;
+    let scheme = parsed.scheme().to_ascii_lowercase();
+    if scheme != "http" && scheme != "https" {
+        bail!("unsupported URL scheme {scheme:?} — {label} is GET over http:// or https:// only");
+    }
+
+    let (tx, rx) = mpsc::channel();
+    let url = parsed.to_string();
+    // Detached on purpose: the `recv_timeout` below is the bound, so joining
+    // here would double the worst case instead of capping it.
+    let _ = thread::Builder::new()
+        .name(label.to_string())
+        .spawn(move || {
+            let _ = tx.send(
+                bounded_get_body(&url, None).map(|(_, raw, truncated)| (raw, truncated)),
+            );
+        })
+        .with_context(|| format!("spawning {label} worker"))?;
+
+    match rx.recv_timeout(WEB_FETCH_TOTAL_TIMEOUT) {
+        Ok(result) => result,
+        Err(mpsc::RecvTimeoutError::Timeout) => bail!(
+            "{label} timed out after {}s ({})",
+            WEB_FETCH_TOTAL_TIMEOUT.as_secs(),
+            timeout_phrase()
+        ),
+        Err(mpsc::RecvTimeoutError::Disconnected) => {
+            bail!("{label} worker exited without a result (internal panic)")
+        }
+    }
+}
 
 /// The user-facing timeout phrase, shared by the schema description and both
 /// timeout error messages (caller-side `recv_timeout` expiry and the
@@ -175,37 +279,7 @@ pub(crate) fn fetch_text(url: &str, max_chars: usize) -> anyhow::Result<String> 
 
 /// The fetch itself: one GET attempt, classify the response, cap the text.
 fn fetch_worker(url: String, max_chars: usize) -> anyhow::Result<String> {
-    let client = reqwest::blocking::Client::builder()
-        .user_agent(user_agent())
-        .connect_timeout(WEB_FETCH_CONNECT_TIMEOUT)
-        .timeout(WEB_FETCH_TOTAL_TIMEOUT)
-        .redirect(redirect_policy())
-        .build()
-        .context("building web_fetch http client")?;
-
-    let resp = client.get(&url).send().map_err(|e| classify_transport(&e))?;
-
-    // Non-2xx → tool error naming the status, with a ≤500-char body preview
-    // (spec req 4). One attempt: no retry loop.
-    let status = resp.status();
-    if !status.is_success() {
-        let mut limited = resp.take(NON_2XX_PREVIEW_BYTE_CAP as u64);
-        let mut bytes = Vec::new();
-        let _ = limited.read_to_end(&mut bytes);
-        let preview: String = String::from_utf8_lossy(&bytes)
-            .chars()
-            .take(NON_2XX_PREVIEW_CHARS)
-            .collect();
-        bail!("HTTP {status}: non-2xx response from GET {url}; body preview: {preview}");
-    }
-
-    let content_type = resp
-        .headers()
-        .get(reqwest::header::CONTENT_TYPE)
-        .and_then(|v| v.to_str().ok());
-    let kind = classify_content_type(content_type)?;
-
-    let (raw, body_truncated) = read_body_capped(resp)?;
+    let (kind, raw, body_truncated) = bounded_get_body(&url, Some(&classify_content_type))?;
 
     let mut text = match kind {
         ContentKind::Html => html_to_text(&raw),
@@ -470,7 +544,9 @@ fn tag_name_at(b: &[u8], i: usize) -> (usize, Option<String>) {
 
 /// Skip a `<tag …>` opener, returning the index just past its `>`.
 /// Quote-aware: a `>` inside a quoted attribute value does not close the tag.
-fn skip_tag(b: &[u8], lt: usize) -> Option<usize> {
+/// `pub(crate)`: `web_search`'s parser (T180) reuses it for the same
+/// quote-aware scan over result anchors.
+pub(crate) fn skip_tag(b: &[u8], lt: usize) -> Option<usize> {
     let mut i = lt + 1;
     let mut quote: Option<u8> = None;
     while i < b.len() {
