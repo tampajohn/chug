@@ -677,6 +677,7 @@ fn run_mode_advertised_tool_list_is_exactly_the_pre_change_set() {
         "goal_complete",
         "delegate",
         "web_fetch",
+        "web_search", // T180 (F12 phase 1): provider seam + DuckDuckGo HTML provider
         "decision_log",
         "mcp_resource", // T169
     ];
