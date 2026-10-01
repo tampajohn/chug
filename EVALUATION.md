@@ -266,7 +266,7 @@ untouched this delta. No docs row filed.
 
 ## Outcomes (filled at cycle wrap — LOOP-SPEC Phase 3)
 
-### Cycle 85 (2026-10-01) — kimi mandatory fresh-eval cycle (queue drained at cycle-84 wrap fe02689; T81 routing correct 3-for-3) — 4 rows filed (T184–T187 + F14 reframe), 1 landed at this entry (T185), T184 mid-arc
+### Cycle 85 (2026-10-01) — kimi mandatory fresh-eval cycle (queue drained at cycle-84 wrap fe02689; T81 routing correct 3-for-3) — 4 rows filed (T184–T187 + F14 reframe), 2 landed (T185, T184), T186/T187 DEFERRED to cycle 86 (specs cold-start-ready; T186 gained the defunct-zombie liveness amendment from this cycle's inverse incident) — no tag (2 items < 3 since v0.11.0, F14 phase 1 of 2 not a check-off)
 
 - **T185** (pri 2, bug) — bash reader-grace keeps already-read output when a
   grandchild holds the pipe: landed `068e223` (impl `a0051b2`, glm 58/80
