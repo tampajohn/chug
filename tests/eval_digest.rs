@@ -269,7 +269,9 @@ fn digest_reports_todo_status_counts_and_evaluation_age() {
 
 /// The per-file block's field-line prefixes, in the order the script emits
 /// them today (T62 req c). Order + labels only; values are shape-checked.
-const GOLDEN_BLOCK_FIELDS: [&str; 10] = [
+/// T184 amended this pin (sanctioned): the tokens line gained the cumulative
+/// cache counters and a `- trim fires: N` line follows budget_low's.
+const GOLDEN_BLOCK_FIELDS: [&str; 11] = [
     "- runs: ",
     "- iterations: ",
     "- wall: ",
@@ -280,6 +282,7 @@ const GOLDEN_BLOCK_FIELDS: [&str; 10] = [
     "- goal: ",
     "- aborts: ",
     "- budget_low fires: ",
+    "- trim fires: ",
 ];
 
 /// The staleness block's field labels, in emission order (T62 req d).
@@ -348,8 +351,9 @@ fn assert_line_shape(text: &str, label: &str, pattern: &str, what: &str) {
 
 /// One events archive exercising EVERY field line the digest can emit for a
 /// file (verifying call, ok + failed tool results, accepted goal, budget
-/// abort, budget_low fire, output truncation), so the golden pin covers the
-/// full block skeleton. Serialization shapes mirror src/eventlog.rs.
+/// abort, budget_low fire, output truncation, trim fires + cache counters —
+/// T184), so the golden pin covers the full block skeleton. Serialization
+/// shapes mirror src/eventlog.rs.
 fn golden_fixture_events() -> String {
     let mut body = String::new();
     body.push_str(concat!(
@@ -360,12 +364,21 @@ fn golden_fixture_events() -> String {
     ));
     for n in 1..=4u32 {
         let tokens = 1_000 * u64::from(n);
+        let cache_read = 500 * u64::from(n);
         body.push_str(&format!(
-            "{{\"input_tokens\":{tokens},\"n\":{n},\"output_tokens\":{},\"ts\":\"2026-09-25T17:08:{:02}.000Z\",\"type\":\"iteration\"}}\n",
+            "{{\"input_tokens\":{tokens},\"n\":{n},\"output_tokens\":{},\"cache_read_input_tokens\":{cache_read},\"cache_creation_input_tokens\":7,\"ts\":\"2026-09-25T17:08:{:02}.000Z\",\"type\":\"iteration\"}}\n",
             10 * u64::from(n),
             31 + n
         ));
     }
+    body.push_str(concat!(
+        "{\"type\":\"trim\",\"ts\":\"2026-09-25T17:08:35.000Z\",\"before_tokens\":130000,",
+        "\"after_tokens\":88000,\"segments_collapsed\":2,\"marker_count\":2}\n"
+    ));
+    body.push_str(concat!(
+        "{\"type\":\"trim\",\"ts\":\"2026-09-25T17:08:36.500Z\",\"before_tokens\":135000,",
+        "\"after_tokens\":90000,\"segments_collapsed\":3,\"marker_count\":5}\n"
+    ));
     body.push_str(concat!(
         "{\"type\":\"tool_result\",\"ts\":\"2026-09-25T17:08:36.000Z\",\"name\":\"bash\",",
         "\"ok\":false,\"is_error\":true,\"duration_ms\":7,",
@@ -457,13 +470,14 @@ fn golden_section_pins_the_digest_output_skeleton() {
     assert_line_shape(block, "- runs: ", "- runs: # | model: * | spec: * | iters-ceil: #", "runs");
     assert_line_shape(block, "- iterations: ", "- iterations: # (last n=#) | verifying calls: #", "iterations");
     assert_line_shape(block, "- wall: ", "- wall: #s (* | * -> *", "wall");
-    assert_line_shape(block, "- tokens (cumulative at last iteration): ", "- tokens (cumulative at last iteration): #* in / #* out", "tokens");
+    assert_line_shape(block, "- tokens (cumulative at last iteration): ", "- tokens (cumulative at last iteration): #* in / #* out | cache-read #* / cache-creation #*", "tokens (T184: cache counters appended)");
     assert_line_shape(block, "- input context curve (cumulative, iter quartiles): ", "- input context curve (cumulative, iter quartiles): #*@#* -> *", "curve");
     assert_line_shape(block, "- tools: ", "- tools: *", "tools");
     assert_line_shape(block, "- failed tool results: ", "- failed tool results: # — classes (first line, digits->N):", "failed tool results");
     assert_line_shape(block, "- goal: ", "- goal: accepted #", "goal");
     assert_line_shape(block, "- aborts: ", "- aborts: #:", "aborts");
     assert_line_shape(block, "- budget_low fires: ", "- budget_low fires: # (first at remaining_iters=#) | output_truncated: #", "budget_low/output_truncated");
+    assert_line_shape(block, "- trim fires: ", "- trim fires: #", "trim fires (T184)");
 
     // (d) the staleness block's field labels, in order, shape-pinned.
     let staleness = &digest[digest.find("## Staleness").expect("staleness heading")..];
@@ -487,6 +501,81 @@ fn golden_section_pins_the_digest_output_skeleton() {
 // `grep -vx` — and render BOTH verdicts, so STALE means a file OTHER than the
 // reader's own stream postdates the digest (foreign/new corpus: a harvested
 // stream landing, another process writing archives).
+
+// --- T184: cache counters on the tokens line + the trim fires count ---------
+//
+// The digest must surface the context economy: cumulative cache-read /
+// cache-creation at the last iteration (on the tokens line, `0` when the
+// file has no cache keys — every pre-T184 archive), and a `trim fires: N`
+// count line (`0` when the file has no trim lines).
+
+/// T184 — a synthetic events file WITH cache keys and trim lines renders
+/// them in its block; a pre-change-shape file (no cache keys, no trim lines)
+/// renders `cache-read 0 / cache-creation 0` and `trim fires: 0` without
+/// disturbing any other line.
+#[test]
+fn digest_renders_cache_counters_and_trim_fires() {
+    let tmp = tempfile::tempdir().unwrap();
+    let chug = tmp.path().join(".chug");
+    std::fs::create_dir_all(&chug).unwrap();
+
+    // New shape: run_start + 3 iterations with cache keys + 2 trim lines.
+    let mut new_shape = String::new();
+    new_shape.push_str(concat!(
+        "{\"type\":\"run_start\",\"ts\":\"2026-09-25T17:08:31.100Z\",\"mode\":\"run\",",
+        "\"model\":\"m\",\"spec\":\"/repo/specs/t184.md\",\"cwd\":\"/tmp/w\",",
+        "\"version\":\"0.1.0\",\"commit\":\"4ea73e3\",\"max_iters\":50,\"max_minutes\":35,\"max_tokens\":null}\n"
+    ));
+    for n in 1..=3u32 {
+        let tokens = 1_000 * u64::from(n);
+        let cache_read = 12_000 * u64::from(n);
+        new_shape.push_str(&format!(
+            "{{\"input_tokens\":{tokens},\"n\":{n},\"output_tokens\":{},\"cache_read_input_tokens\":{cache_read},\"cache_creation_input_tokens\":1500,\"ts\":\"2026-09-25T17:08:{:02}.000Z\",\"type\":\"iteration\"}}\n",
+            10 * u64::from(n),
+            31 + n
+        ));
+    }
+    new_shape.push_str(concat!(
+        "{\"type\":\"trim\",\"ts\":\"2026-09-25T17:08:35.000Z\",\"before_tokens\":130000,",
+        "\"after_tokens\":88000,\"segments_collapsed\":2,\"marker_count\":2}\n"
+    ));
+    new_shape.push_str(concat!(
+        "{\"type\":\"trim\",\"ts\":\"2026-09-25T17:08:36.500Z\",\"before_tokens\":135000,",
+        "\"after_tokens\":90000,\"segments_collapsed\":3,\"marker_count\":5}\n"
+    ));
+    write_archive(&chug, "events-t184-new.jsonl", &new_shape);
+    // Pre-change shape: no cache keys, no trim lines (the T46 fixture).
+    write_archive(&chug, "events-t184-old.jsonl", &fixture_events(3, false));
+
+    let digest = run_digest(tmp.path(), "2026-09-26T00:00:00Z");
+
+    let new_block = section_of(&digest, "events-t184-new.jsonl");
+    // Cumulative cache counters at the LAST iteration (n=3), rendered through
+    // the same num() formatter as in/out; cache-creation is constant 1500.
+    assert!(
+        new_block.contains(
+            "- tokens (cumulative at last iteration): 3k in / 30 out | cache-read 36k / cache-creation 1.5k\n",
+        ),
+        "cache counters render on the tokens line:\n{new_block}"
+    );
+    assert!(
+        new_block.contains("- trim fires: 2\n"),
+        "trim lines are counted:\n{new_block}"
+    );
+
+    let old_block = section_of(&digest, "events-t184-old.jsonl");
+    // Old shape: `0` when absent — the `// 0` jq defaults, never a crash.
+    assert!(
+        old_block.contains(
+            "- tokens (cumulative at last iteration): 3k in / 30 out | cache-read 0 / cache-creation 0\n",
+        ),
+        "old-shape file renders zeros for both cache counters:\n{old_block}"
+    );
+    assert!(
+        old_block.contains("- trim fires: 0\n"),
+        "old-shape file renders trim fires: 0:\n{old_block}"
+    );
+}
 
 #[test]
 fn reader_staleness_check_excludes_the_own_live_stream() {

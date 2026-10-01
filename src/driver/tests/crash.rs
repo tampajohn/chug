@@ -287,6 +287,52 @@ fn resumed_request_carries_no_unanswered_tool_use() {
     );
 }
 
+/// T184: the resume-path trim seam — an oversized transcript trimmed by
+/// `resume_messages` records exactly one `{"type":"trim", …}` line in the
+/// events log (written directly via `eventlog::log_trim`: no sink exists on
+/// this path, so it rides the same best-effort append), with all four fields
+/// and before > after.
+#[test]
+fn resume_messages_over_threshold_records_one_trim_event() {
+    let tmp = tempfile::tempdir().unwrap();
+    let long = "x".repeat(25_000);
+    let mut messages = vec![Message::user(vec![ContentBlock::text_block("kick")])];
+    for i in 0..15 {
+        messages.push(Message::assistant(vec![ContentBlock::Known(KnownBlock::ToolUse {
+            id: format!("tu_{i}"),
+            name: "bash".into(),
+            input: json!({ "command": long.clone() }),
+        })]));
+        messages.push(Message::user(vec![ContentBlock::tool_result_block(
+            &format!("tu_{i}"),
+            long.clone(),
+            false,
+        )]));
+    }
+    transcript::rewrite(tmp.path(), &messages).unwrap();
+
+    resume_messages(tmp.path()).unwrap();
+
+    let lines: Vec<Value> = std::fs::read_to_string(tmp.path().join(".chug").join("events.jsonl"))
+        .unwrap()
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    let trims: Vec<&Value> = lines.iter().filter(|l| l["type"] == "trim").collect();
+    assert_eq!(trims.len(), 1, "exactly one trim event on resume: {lines:?}");
+    let t = trims[0];
+    assert!(
+        t["before_tokens"].as_u64().unwrap() > t["after_tokens"].as_u64().unwrap(),
+        "before > after: {t}"
+    );
+    assert!(t["segments_collapsed"].as_u64().unwrap() >= 1);
+    assert_eq!(
+        t["marker_count"].as_u64().unwrap(),
+        t["segments_collapsed"].as_u64().unwrap(),
+        "no frozen markers before: the delta IS the collapse count"
+    );
+}
+
 /// resume_messages (the run+chat --resume choke point) appends the
 /// interrupted tool_results in memory AND on disk, and is idempotent — a
 /// second resume must not stack a second repair message.
