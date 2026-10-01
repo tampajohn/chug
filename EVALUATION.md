@@ -278,7 +278,11 @@ untouched this delta. No docs row filed.
   predicate its sibling will codify): nextest 1324/1324 independently
   re-run in worktree AND main, clippy `-D warnings` clean. Child verified
   end-to-end on a throwaway site fixture: F6 landed, F12 landed, F14
-  in-flight via open T192. Region regenerates at this wrap's site sync —
+  in-flight via open T192. Acceptance VERIFIED at this wrap: a
+  CHUG_SITE_SYNC_NO_PUSH=1 dry run against the real site dir renders
+  Session fork (F6) landed, Web search (F12) landed, Context compaction
+  (F14) in-flight — site commit 2c5efb5 local, the post-cycle loopd sync
+  pushes it. Region regenerates at this wrap's site sync —
   acceptance confirmed in this entry's release section.
 - **T188** (pri 2, feature) — auto-spec: impl died 80/80 twice (fresh arc
   + ONE T63 resume, d1790876863-6) → orchestrator-finish amendment
