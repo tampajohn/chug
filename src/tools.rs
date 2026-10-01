@@ -179,6 +179,9 @@ pub fn tool_schemas() -> Vec<Value> {
         // T37: schema lives in webfetch.rs (single source of truth for the
         // description the model sees), registered here alongside the builtins.
         crate::webfetch::schema(),
+        // T180: same single-source pattern — the web_search schema lives in
+        // websearch.rs (provider seam + DuckDuckGo HTML provider).
+        crate::websearch::schema(),
         // T76: schema lives in tgrep.rs (same single-source pattern).
         crate::tgrep::schema(),
         // T169: the model-facing MCP resources tool (list/read over the
@@ -237,6 +240,7 @@ fn inner(ctx: &ToolCtx, name: &str, input: &Value) -> anyhow::Result<ToolResult>
         "list_dir" => list_dir(ctx, input),
         "delegate" => crate::delegate::delegate(ctx, input),
         "web_fetch" => crate::webfetch::web_fetch(input),
+        "web_search" => crate::websearch::web_search(input),
         "tgrep" => crate::tgrep::tgrep(ctx, input),
         "decision_log" => crate::decisions::decision_log(&ctx.cwd, input),
         "update_ledger" => update_ledger(ctx, input),
@@ -2648,19 +2652,21 @@ mod tests {
         }
     }
 
-    /// T41: the README Tools intro must name BOTH sandbox exceptions —
-    /// `delegate` (absolute child-worktree paths) and `web_fetch` (network,
-    /// not filesystem). It said `delegate` was "the one documented exception",
-    /// stale the moment T37 landed `web_fetch` — a cold reader saw the intro
-    /// contradict the `web_fetch` paragraph one screen below. T134 (codex
+    /// T41: the README Tools intro must name the sandbox exceptions —
+    /// `delegate` (absolute child-worktree paths), `web_fetch` (network, not
+    /// filesystem) and, since T180, `web_search` (network too). It said
+    /// `delegate` was "the one documented exception", stale the moment T37
+    /// landed `web_fetch`, and "two" was stale the moment T180 landed
+    /// `web_search` — a cold reader saw the intro contradict the
+    /// `web_fetch`/`web_search` paragraphs one screen below. T134 (codex
     /// review 20260928 drift §3): "All paths sandboxed" was FALSE — bash is
     /// not filesystem-confined and symlinks bypassed the old lexical-only
     /// check — so the intro must now name the symlink-confinement guarantee,
-    /// bash's honest limits, and both exceptions, and the old blanket claim
-    /// must be gone. Whitespace is normalized so the pin is independent of
-    /// markdown line wrapping.
+    /// bash's honest limits, and all three exceptions, and the old blanket
+    /// claim must be gone. Whitespace is normalized so the pin is
+    /// independent of markdown line wrapping.
     #[test]
-    fn readme_tools_intro_names_both_sandbox_exceptions() {
+    fn readme_tools_intro_names_the_three_sandbox_exceptions() {
         // T48: cargo runs test binaries with cwd = the package root; the compile-time env! path is wrong under the T47 shared cache (cycle-21) — resolve at runtime.
         let readme = fs::read_to_string(
             std::env::current_dir()
@@ -2670,7 +2676,7 @@ mod tests {
         .expect("README.md readable from the crate root");
         let flat: String = readme.split_whitespace().collect::<Vec<_>>().join(" ");
         // The corrected file-tool claim: sandboxing includes symlink
-        // resolution, and both exceptions stay named.
+        // resolution, and all exceptions stay named.
         assert!(
             flat.contains(
                 "All file-tool paths are sandboxed to `--cwd` — `..` traversal, absolute paths outside it, AND symlinks resolving outside it are refused (T134:"
@@ -2679,20 +2685,28 @@ mod tests {
         );
         assert!(
             flat.contains(
-                "`delegate` and `web_fetch` remain the two documented exceptions"
+                "`delegate`, `web_fetch`, and `web_search` remain the three documented exceptions"
             ),
-            "README Tools intro does not name both exceptions: {flat}"
+            "README Tools intro does not name the three exceptions: {flat}"
         );
         assert!(
             flat.contains(
-                "`web_fetch` is network, not filesystem). `bash` is NOT filesystem-confined: it starts in `--cwd`"
+                "`web_fetch` and `web_search` are network, not filesystem). `bash` is NOT filesystem-confined: it starts in `--cwd`"
             ),
-            "README Tools intro lost the web_fetch wording or the honest bash limits: {flat}"
+            "README Tools intro lost the web_fetch/web_search wording or the honest bash limits: {flat}"
         );
-        // The stale singular is gone.
+        // The stale singular and the stale pair are gone.
         assert!(
             !flat.contains("is the one documented exception"),
             "README still calls delegate the one documented exception: {flat}"
+        );
+        assert!(
+            !flat.contains("remain the two documented exceptions"),
+            "README still says two documented exceptions: {flat}"
+        );
+        assert!(
+            !flat.contains("sandbox exceptions stay exactly two"),
+            "README still says the sandbox exceptions stay exactly two: {flat}"
         );
         // The pre-T134 blanket claim is gone — it was false.
         assert!(

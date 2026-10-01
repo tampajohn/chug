@@ -31,6 +31,7 @@ mod sse;
 mod tgrep;
 mod todos;
 mod webfetch;
+mod websearch;
 
 /// T151: the ONE shared serialization domain for wall-clock/spawn-timing
 /// tests (see the module doc). Compiled only under `cargo test` — a
