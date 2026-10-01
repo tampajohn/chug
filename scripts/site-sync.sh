@@ -341,7 +341,7 @@ badge_ensure() { # cardfile status
 # ever dropped (flush_card prints every chunk — fix-up finding 1), so nothing
 # outside FEATURES.md is lost.
 features_generate() { # regionfile outfile
-  local region="$1" out="$2" rowstmp rows cardname cn fn short long line fid fstatus fname fwhat
+  local region="$1" out="$2" rowstmp rows openrows cardname cn fn short long line fid fstatus fname fwhat
   local matched="" sentinel match_id
   rowstmp="$(mktemp "${TMPDIR:-/tmp}/site-sync-frows.XXXXXX")"
   rows="$(mktemp "${TMPDIR:-/tmp}/site-sync-frows2.XXXXXX")"
@@ -351,11 +351,28 @@ features_generate() { # regionfile outfile
     warn "no F-rows parsed from FEATURES.md — feature grid not updated"
     cat "$region" > "$out"; rm -f "$rowstmp" "$rows"; return 0
   fi
-  # in-flight refinement: a TODO.md row referencing the F-id (F1 never matches F13)
+  # in-flight refinement: an OPEN TODO.md row referencing the F-id (F1 never
+  # matches F13). T193: OPEN rows only — status cell `todo` or `in-progress`,
+  # same -F'|' field conventions as todo_facts. Done rows keep their
+  # F-references forever (T105's done row names F6; T180's names F12), so the
+  # old whole-file grep rendered every feature a completed item ever touched
+  # in-flight permanently. Landed wins (req 3): a row already classified
+  # landed skips this refinement entirely — an open row referencing a LANDED
+  # feature cannot demote it.
+  openrows="$(mktemp "${TMPDIR:-/tmp}/site-sync-openrows.XXXXXX")"
+  if [ -f "$CHUG/TODO.md" ]; then
+    awk -F'|' '
+      /^[|]/ {
+        id = $2; gsub(/[ \t]/, "", id)
+        if (id !~ /^T[0-9]+$/) next
+        s = $6; gsub(/[ \t]/, "", s)
+        if (s == "todo" || s == "in-progress") print
+      }' "$CHUG/TODO.md" > "$openrows"
+  fi
   while IFS="$(printf '\t')" read -r fid fstatus fname fwhat; do
     [ -n "$fid" ] || continue
-    if [ "$fstatus" != "landed" ] && [ -f "$CHUG/TODO.md" ] \
-      && grep -qE "(^|[^A-Za-z0-9])F${fid#F}([^0-9]|$)" "$CHUG/TODO.md"; then
+    if [ "$fstatus" != "landed" ] && [ -s "$openrows" ] \
+      && grep -qE "(^|[^A-Za-z0-9])F${fid#F}([^0-9]|$)" "$openrows"; then
       fstatus="in-flight"
     fi
     printf '%s\t%s\t%s\t%s\n' "$fid" "$fstatus" "$fname" "$fwhat" >> "$rows"
@@ -406,7 +423,7 @@ features_generate() { # regionfile outfile
       printf '    </div>\n'
     done < "$rows"
   } > "$out" 2>/dev/null
-  rm -f "$rowstmp" "$rows"
+  rm -f "$rowstmp" "$rows" "$openrows"
 }
 
 # --- compute the facts --------------------------------------------------------
