@@ -150,6 +150,43 @@ fn plan_trim_segments(messages: &[Message], window_end: usize) -> Vec<TrimSegmen
     segments
 }
 
+/// T184: the telemetry one trim pass hands the driver's `Event::Trim` —
+/// estimated tokens before/after the pass, how many segments THIS pass
+/// collapsed, and the total `[trimmed: …]` marker count after.
+pub(crate) struct TrimStats {
+    pub before_tokens: usize,
+    pub after_tokens: usize,
+    /// Collapsed in THIS pass: every collapse splices in exactly one marker,
+    /// so this is the marker-count delta across the pass (frozen markers from
+    /// earlier passes sit in both counts and cancel).
+    pub segments_collapsed: usize,
+    pub marker_count: usize,
+}
+
+fn count_trim_markers(messages: &[Message]) -> usize {
+    messages.iter().filter(|m| is_trim_marker(m)).count()
+}
+
+/// T184 caller-side seam: one [`transcript_trim`] pass plus the telemetry the
+/// driver records as a Trim event. `None` = the pass was a no-op (nothing
+/// collapsed) — no event, exactly as `transcript_trim` returning false means
+/// no transcript rewrite.
+pub(crate) fn transcript_trim_stats(messages: &mut Vec<Message>) -> Option<TrimStats> {
+    let before_tokens = estimate_tokens(messages);
+    let markers_before = count_trim_markers(messages);
+    if !transcript_trim(messages) {
+        return None;
+    }
+    let after_tokens = estimate_tokens(messages);
+    let marker_count = count_trim_markers(messages);
+    Some(TrimStats {
+        before_tokens,
+        after_tokens,
+        segments_collapsed: marker_count - markers_before,
+        marker_count,
+    })
+}
+
 /// Transcript trimming (T77 — cache-stable, segment-frozen): above
 /// [`TRIM_ABOVE_TOKENS`] estimated tokens, collapse whole oldest-complete
 /// [`SEGMENT_TOKENS`] segments until under [`TRIM_TARGET_TOKENS`]. Each
@@ -302,6 +339,54 @@ mod tests {
         for msg in &messages[messages.len() - KEEP_LAST_MESSAGES..] {
             assert!(!is_trim_marker(msg), "tail never carries a marker");
         }
+    }
+
+    /// T184: the caller-side trim-event seam — `transcript_trim_stats`
+    /// reports exactly one stats set per collapsing pass (`None` on a no-op
+    /// pass: no event), with before > after, this pass's collapses as the
+    /// marker delta, and the total marker count after. The driver's Trim
+    /// event serializes straight from this.
+    #[test]
+    fn trim_stats_seam_reports_before_after_segments_and_markers() {
+        let long = "x".repeat(25_000);
+        let mut messages = vec![Message::user(vec![ContentBlock::text_block("first message")])];
+        for i in 0..15 {
+            messages.extend(use_result_pair(&format!("tu_{i}"), &long));
+        }
+        assert!(estimate_tokens(&messages) > TRIM_ABOVE_TOKENS);
+
+        let stats = transcript_trim_stats(&mut messages).expect("a collapsing pass reports stats");
+        assert!(
+            stats.before_tokens > stats.after_tokens,
+            "before {} > after {}",
+            stats.before_tokens,
+            stats.after_tokens
+        );
+        assert!(stats.segments_collapsed >= 1, "the pass collapsed something");
+        assert_eq!(
+            stats.marker_count, stats.segments_collapsed,
+            "no frozen markers before the pass: the delta IS the collapse count"
+        );
+        // Re-running on the same transcript cannot collapse anything new
+        // (frozen markers + the protected tail only) → a no-op → no event.
+        assert!(
+            transcript_trim_stats(&mut messages).is_none(),
+            "a no-op pass reports None: exactly one Trim event per collapsing pass"
+        );
+
+        // Grow past the next threshold: the second pass's delta counts only
+        // the NEW collapses; the first pass's frozen markers ride the total.
+        for i in 15..27 {
+            messages.extend(use_result_pair(&format!("tu_{i}"), &long));
+        }
+        let stats2 = transcript_trim_stats(&mut messages).expect("second collapsing pass");
+        assert!(stats2.before_tokens > stats2.after_tokens);
+        assert!(stats2.segments_collapsed >= 1);
+        assert_eq!(
+            stats2.marker_count,
+            stats.marker_count + stats2.segments_collapsed,
+            "total markers = frozen markers + this pass's collapses"
+        );
     }
 
     /// T77: a frozen segment is byte-identical after later trims — the

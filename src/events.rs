@@ -46,6 +46,32 @@ pub enum Event {
     Usage {
         input: u64,
         output: u64,
+        /// T184: cumulative cache-read input tokens (the API layer already
+        /// parses `cache_read_input_tokens`); 0 until a response reports one.
+        /// Rides the serialized iteration line; the console/TUI token lines
+        /// stay input/output only.
+        cache_read: u64,
+        /// T184: cumulative cache-creation input tokens (the API layer
+        /// already parses `cache_creation_input_tokens`); 0 until a response
+        /// reports one. Same ride-along as `cache_read`.
+        cache_creation: u64,
+    },
+    /// T184 telemetry: one transcript-trim pass (T77) collapsed frozen 16k
+    /// segments. The advisory lives in the transcript as `[trimmed: …]`
+    /// markers; this event exists only so `.chug/events.jsonl` records that
+    /// the pass fired — estimated tokens before/after, how many segments
+    /// THIS pass collapsed (frozen markers from earlier passes don't count),
+    /// and the total marker count after. Console/TUI stay silent
+    /// (BudgetLow/OutputTruncated precedent: telemetry-only).
+    Trim {
+        /// Estimated tokens in the transcript before the pass.
+        before_tokens: u64,
+        /// Estimated tokens after the pass (strictly less than before).
+        after_tokens: u64,
+        /// Segments collapsed in this pass (= the marker-count delta).
+        segments_collapsed: u32,
+        /// Total `[trimmed: …]` markers in the transcript after the pass.
+        marker_count: u32,
     },
     /// T17 telemetry: the one-shot budget-low warning was injected into the
     /// transcript. The notice itself already reached the user as a message;
@@ -335,11 +361,20 @@ impl EventSink for ConsoleSink {
                     self.cwd.display()
                 );
             }
-            Event::Usage { input, output } => {
+            Event::Usage {
+                input,
+                output,
+                ..
+            } => {
                 // Cumulative run totals: latest wins. Printed at the
-                // goal-complete/abort boundaries, not per event.
+                // goal-complete/abort boundaries, not per event. The cache
+                // counters ride the events log (T184); the console tokens
+                // line stays input/output only.
                 self.last_usage = Some((input, output));
             }
+            // T184: telemetry only — the collapse is already recorded in the
+            // transcript as `[trimmed: …]` markers; no console output.
+            Event::Trim { .. } => {}
             // T17: telemetry only — the notice already reached the user as a
             // transcript message; no console output.
             Event::BudgetLow { .. } => {}
@@ -617,6 +652,8 @@ mod tests {
         sink.emit(Event::Usage {
             input: 8_683_323,
             output: 1_243_749,
+            cache_read: 0,
+            cache_creation: 0,
         });
         sink.emit(Event::GoalAccepted {
             summary: "did it".into(),
@@ -639,10 +676,14 @@ mod tests {
         sink.emit(Event::Usage {
             input: 1_000,
             output: 100,
+            cache_read: 0,
+            cache_creation: 0,
         });
         sink.emit(Event::Usage {
             input: 8_683_323,
             output: 1_243_749,
+            cache_read: 0,
+            cache_creation: 0,
         });
         sink.emit(Event::Aborted {
             reason: "iteration budget exceeded".into(),
@@ -706,10 +747,28 @@ mod tests {
         sink.emit(Event::Usage {
             input: 10,
             output: 20,
+            cache_read: 0,
+            cache_creation: 0,
         });
         sink.emit(Event::SteeringQueued("note".into()));
         // T38: the truncation advisory is telemetry-only here too.
         sink.emit(Event::OutputTruncated);
+        assert_eq!(out_bytes(&err), "");
+        assert_eq!(out_bytes(&out), "");
+    }
+
+    /// T184: the Trim event is telemetry for `.chug/events.jsonl` only —
+    /// the console (and TUI, pinned in tui.rs) stays silent, BudgetLow
+    /// precedent.
+    #[test]
+    fn console_sink_trim_is_silent() {
+        let (mut sink, out, err) = sink("/w");
+        sink.emit(Event::Trim {
+            before_tokens: 130_000,
+            after_tokens: 88_000,
+            segments_collapsed: 2,
+            marker_count: 5,
+        });
         assert_eq!(out_bytes(&err), "");
         assert_eq!(out_bytes(&out), "");
     }
