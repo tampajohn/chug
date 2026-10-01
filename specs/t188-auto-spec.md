@@ -1,6 +1,6 @@
 # T188 — auto-spec: chug drafts its own spec from a bare goal
 
-check: cargo test
+check: export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-impl-a && cargo test
 
 estimate: ~400 lines (draft step + UI + tests)
 
