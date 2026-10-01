@@ -256,7 +256,9 @@ cycle.
 
 ## Outcomes (filled at cycle wrap — LOOP-SPEC Phase 3)
 
-### Cycle 81 (2026-10-01) — kimi routine freshness-skip cycle — doctrine bundle T175+T176+T178 (cycle-80's deferral) worked serially solo
+### Cycle 81 (2026-10-01) — kimi routine freshness-skip cycle — 2 landed (T175, T176); T178 deferred to the next cycle (4-minute wrap wall hit first — its spec is cold-start-ready)
+
+**Wrap note.** T178 (loopd CHUG_BASH_TIMEOUT=300) never dispatched: two serial doctrine arcs (each impl + kimi validation) consumed the budget; the row stays `todo` with its spec ready — a cold next cycle can dispatch immediately (solo, loopd + LOOP-SPEC step-3/5 alarm-600→280 re-key). Release check: 2 items since v0.10.0 (< 3) and no FEATURES check-off → no tag this wrap. T179 (pri 1, build.rs worktree rebuild tax) is the queue's top row for next cycle.
 
 **T176 done b46b730 (impl 9ed1246; recovery-routing d1790822838-6, validation-routing d1790823305-7, verdict d1790825494-8).** LOOP-SPEC step-2's impl goal template now runs clippy with `-D warnings` (the bare "clippy + test green" let an impl child honestly claim clippy-green while warnings stood — the cycle-77 T166 needless_lifetimes instance is named as evidence) plus a semantics sentence after the launch block (`cargo clippy --all-targets -- -D warnings`, zero warnings, not merely exit-0); sweep-the-family verified exactly ONE goal-template surface carried the bare phrase (step 4's FAIL arc reuses step 2's template with findings pasted in; lines 259/532 are gate descriptions); META-SPEC untouched. Pin leg (z): the sentence exactly-once in step-2's window with a wrap-insensitive revert detector (the OLD bare phrase must occur ZERO times file-wide). Impl glm died at the 50-MINUTE wall 67/80 with work complete+committed → orchestrator-finish (third minutes-wall death in ~8 impl children — the T173 measure clause is tripping). kimi validator PASS 8/8 mutants killed — every assert leg of the pin independently proven (count-0, count-2, bare-phrase, ordering, flag window, evidence window). Gates 1288/1288 + clippy -D in worktree and post-merge main.
 
