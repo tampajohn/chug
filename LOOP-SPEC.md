@@ -461,7 +461,19 @@ impl-a, in which case
 `CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-impl-b` — and its
 step-1 warm build goes to the SAME dir; the impl already flying keeps the
 slot it launched with (the T47/T52 default `target-shared` when it
-launched solo). Doctrine items NEVER overlap: a spec touching
+launched solo). At dispatch into the overlap the orchestrator ALSO
+re-keys the spec's `check:` line export to the SAME role-keyed slot
+before launch (sed + grep-verify per the sed-assertion rule, and commit
+the re-keyed spec on the branch): the goal's export and the check's
+export must always name one dir, because T144's scrub makes the check's
+own export the only target dir the goal gate sees, and the T52
+artifact-name class makes a foreign dir a correctness hazard, not only
+contention — spec authors keep writing check lines against the default
+`target-shared`, the re-key is a dispatch-time act, only when slotting
+a child into impl-a/impl-b (the cycle-77 bite: t165's gate ran its
+check against the default `target-shared` while T162's impl child
+built into it and was rejected on green work, fixed mid-flight by
+607e877). Doctrine items NEVER overlap: a spec touching
 LOOP-SPEC.md, META-SPEC.md, META-META-SPEC.md, SELF-SPEC.md, TODO.md's
 row format, or loopd.sh runs alone, with NO other child in flight (a
 mid-flight doctrine change would govern work that was launched under the

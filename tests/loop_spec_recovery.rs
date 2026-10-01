@@ -201,6 +201,32 @@
 //! quoting the old numbers moves with the doctrine in this same commit;
 //! the T156 block's historical 35-minute reference (T150-impl's death)
 //! stays as history.
+//!
+//! T175 doctrine: the Pipeline-overlap paragraph taught the GOAL's export
+//! swap (T161: an impl launched into the 2-impl overlap exports the
+//! role-keyed slot) but said nothing about the SPEC's `check:` line — and
+//! spec check lines hardcode a dir (specs/t162 names the default
+//! `target-shared`). Cycle 77 bit: t165's goal gate ran its check
+//! (naming the DEFAULT `target-shared`) while T162's impl child actively
+//! built into that dir — cargo lock contention plus the T52
+//! same-artifact-name class (a gate can execute a binary compiled from a
+//! foreign checkout's source) rejected the child's goal on GREEN work;
+//! fixed mid-flight by role-keying the check to `target-shared-impl-a`
+//! (607e877). T144's scrub (src/tools.rs) makes a bare `cargo`
+//! content-correct but cold, so the check's own export is the ONLY
+//! target dir the goal gate sees. The paragraph now carries ONE
+//! sentence: at dispatch into the overlap the orchestrator ALSO re-keys
+//! the spec's `check:` line export to the SAME role-keyed slot before
+//! launch, so the goal's export and the check's export always name one
+//! dir. Leg (y) pins the sentence's load-bearing tokens exactly-once
+//! inside the paragraph's window (the T64 pattern over the
+//! "**Pipeline overlap (T44, T161)" lead and the "## Phase 3 — Wrap"
+//! boundary): deleting the sentence, duplicating it, or moving it out of
+//! the paragraph (e.g. into step 2's launch block, which already pins
+//! the GOAL's export swap) all go red. The solo default is
+//! doctrine-unchanged — spec authors keep writing check lines against
+//! the default `target-shared`; the re-key is a dispatch-time
+//! orchestrator act, only when slotting a child into impl-a/impl-b.
 
 /// The leg's signature phrase: "resume" + the one-attempt cap language in
 /// one contiguous run. Must occur EXACTLY once in LOOP-SPEC.md.
@@ -1908,3 +1934,108 @@ fn step4_evidence_extension_sits_between_census_and_tripwire() {
          ({evidence}), 40-minute wall ({wall}), 60/50 tripwire ({threshold})"
     );
 }
+
+/// T175 — the Pipeline-overlap paragraph's window: from the paragraph's
+/// bold lead to the Phase 3 heading (the paragraph is Phase 2's last
+/// block, so the next heading bounds it — the T64 loose-heading window
+/// pattern).
+const OVERLAP_LEAD: &str = "**Pipeline overlap (T44, T161)";
+const PHASE3_HEADING: &str = "## Phase 3 — Wrap";
+
+/// T175 — the check-line re-key sentence's load-bearing tokens: (1) the
+/// ACT (re-key the check line — the spec's `check:` line export, not the
+/// goal's), (2) the DESTINATION (the SAME role-keyed slot the goal's
+/// export was swapped to), (3) the REASON (T144's scrub: the check's own
+/// export is the only target dir the goal gate sees), and (4) the
+/// EVIDENCE (the cycle-77 bite: t165's rejection, fixed mid-flight by
+/// 607e877). Each must occur EXACTLY once in LOOP-SPEC.md and INSIDE the
+/// overlap paragraph's window.
+const CHECK_REKEY_TOKENS: [&str; 5] = [
+    "re-keys the spec's `check:` line export",
+    "SAME role-keyed slot",
+    "the only target dir the goal gate sees",
+    "t165",
+    "607e877",
+];
+
+/// (y) T175 — the overlap dispatch check-line re-key: the Pipeline-overlap
+/// paragraph's ONE sentence (at dispatch into the overlap the
+/// orchestrator ALSO re-keys the spec's `check:` line export to the SAME
+/// role-keyed slot before launch) pins its load-bearing tokens
+/// exactly-once INSIDE the paragraph's window — non-vacuous: deleting
+/// the sentence goes red at count 0, duplicating it goes red at count 2,
+/// and moving it out of the paragraph goes red on window containment.
+/// The sentence must also sit AFTER the T161 slot sentence it extends
+/// (its `target-shared-impl-b` bytes) and BEFORE the Doctrine-items rule
+/// — it is an overlap-dispatch obligation, not an exemption. The solo
+/// default is unchanged: no leg pins a spec-author-side re-key, and the
+/// T161 sentences' bytes are untouched.
+#[test]
+fn overlap_check_rekey_tokens_exactly_once_inside_pipeline_overlap_paragraph() {
+    // Needle self-checks (T48 idiom): a mangled needle must not let this
+    // pin pass silently.
+    assert!(
+        CHECK_REKEY_TOKENS[0].starts_with("re-keys")
+            && CHECK_REKEY_TOKENS[0].contains("check:"),
+        "token 0 must be the re-key ACT naming the spec's check line"
+    );
+    assert!(
+        CHECK_REKEY_TOKENS
+            .iter()
+            .any(|t| t.contains("role-keyed slot"))
+            && CHECK_REKEY_TOKENS.iter().any(|t| t.contains("goal gate")),
+        "the token set must carry the same-slot destination and the \
+         goal-gate reason"
+    );
+    assert!(
+        CHECK_REKEY_TOKENS.contains(&"t165")
+            && CHECK_REKEY_TOKENS.contains(&"607e877"),
+        "the token set must carry the cycle-77 evidence (t165's rejection, \
+         the 607e877 mid-flight fix)"
+    );
+    let spec = loop_spec();
+    let start = spec
+        .find(OVERLAP_LEAD)
+        .expect("the Pipeline-overlap paragraph's bold lead present");
+    let end = start
+        + spec[start..]
+            .find(PHASE3_HEADING)
+            .expect("the Phase 3 heading present after the overlap paragraph");
+    let window = &spec[start..end];
+    for token in CHECK_REKEY_TOKENS {
+        assert_eq!(
+            spec.matches(token).count(),
+            1,
+            "LOOP-SPEC must state the check-line re-key token {token:?} \
+             exactly once — zero means the T175 sentence was deleted, more \
+             than one means it is stated twice (the T156 text-revert \
+             mutant class)"
+        );
+        assert!(
+            window.contains(token),
+            "the re-key token {token:?} must sit inside the Pipeline-overlap \
+             paragraph's window ({start}..{end}) — the sentence drifted out \
+             of the overlap doctrine (e.g. into step 2's launch block, \
+             which pins the GOAL's export swap, not the check line's)"
+        );
+    }
+    // Placement within the paragraph: the re-key sentence extends the
+    // T161 slot sentence (the goal's export swap it must match) and sits
+    // BEFORE the Doctrine-items-never-overlap rule.
+    let slot = window
+        .find("target-shared-impl-b")
+        .expect("the T161 slot sentence present in the window (untouched)");
+    let rekey = window
+        .find(CHECK_REKEY_TOKENS[0])
+        .expect("the re-key sentence present in the window (count leg above)");
+    let doctrine = window
+        .find("Doctrine items NEVER overlap")
+        .expect("the Doctrine-items rule present in the window (untouched)");
+    assert!(
+        slot < rekey && rekey < doctrine,
+        "the re-key sentence must sit after the T161 slot sentence it \
+         extends and before the Doctrine-items rule (slot {slot}, re-key \
+         {rekey}, doctrine rule {doctrine})"
+    );
+}
+
