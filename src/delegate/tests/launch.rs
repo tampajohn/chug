@@ -5,7 +5,7 @@
 // #[test] fn count — a dropped `mod launch;` line fails the pin's
 // reference to this const to compile. (T144 added the launch-scrub
 // env leg: 14 → 15.)
-pub(super) const TEST_COUNT: usize = 15;
+pub(super) const TEST_COUNT: usize = 19;
     use super::*; // the shared harness (delegate::tests) + delegate's own imports
 
     /// End-to-end with a stub binary: `CHUG_DELEGATE_BIN` points at a script
@@ -996,4 +996,302 @@ pub(super) const TEST_COUNT: usize = 15;
             dump, "ctd=UNSET\ncbtd=UNSET\n",
             "delegate child must not inherit either target-dir spelling"
         );
+    }
+
+    // ---- T183: the launch `env` map ----
+
+    /// T183: well-formed `env` reaches the CHILD process (the env-dump seam:
+    /// the stub records its exec'd environment) AND the launch payload names
+    /// the applied keys WITHOUT the values (values may carry paths the caller
+    /// should treat as opaque; keys-only also keeps status/log previews
+    /// small). NON-VACUOUSNESS: dropping the `cmd.env` application fails the
+    /// dump assert; leaking a value into the payload fails the keys-only
+    /// assert.
+    #[cfg(unix)]
+    #[test]
+    fn delegate_launch_env_applies_to_child_and_echoes_keys_only() {
+        let _timing = crate::testsupport::timing_guard();
+
+        use std::os::unix::fs::PermissionsExt;
+        let _guard = DELEGATE_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let child_dir = tempfile::tempdir().unwrap();
+        let ctx_cwd = tempfile::tempdir().unwrap();
+
+        let stub = ctx_cwd.path().join("chug-t183-env-stub.sh");
+        fs::write(
+            &stub,
+            concat!(
+                "#!/bin/sh\n",
+                "printf 'ctd=%s\\nprobe=%s\\n' \"${CARGO_TARGET_DIR:-UNSET}\" \"${CHUG_T183_PROBE:-UNSET}\" > env.txt\n",
+                "sleep 60\n",
+            ),
+        )
+        .unwrap();
+        fs::set_permissions(&stub, fs::Permissions::from_mode(0o755)).unwrap();
+        // SAFETY: serialized by DELEGATE_ENV_LOCK; no other test reads this var.
+        unsafe { std::env::set_var("CHUG_DELEGATE_BIN", &stub) };
+        ensure_spec_file("/tmp/chug-stub-spec.md");
+
+        let launch = dispatch(
+            &delegate_ctx(ctx_cwd.path()),
+            "delegate",
+            &json!({
+                "action": "launch",
+                "cwd": child_dir.path(),
+                "spec": "/tmp/chug-stub-spec.md",
+                "goal": "t183 env goal",
+                "model": "m",
+                "env": {"CARGO_TARGET_DIR": "/tmp/t183-explicit-target", "CHUG_T183_PROBE": "t183-secret-value"},
+            }),
+        );
+        assert!(!launch.is_error, "{}", launch.content);
+        // Keys-only echo (req 3): the keys appear (sorted), the values never.
+        assert!(
+            launch
+                .content
+                .contains("env_keys: CARGO_TARGET_DIR,CHUG_T183_PROBE"),
+            "launch payload must name the applied env keys: {}",
+            launch.content
+        );
+        assert!(
+            !launch.content.contains("t183-secret-value"),
+            "value bytes must never appear in the payload: {}",
+            launch.content
+        );
+        assert!(
+            !launch.content.contains("/tmp/t183-explicit-target"),
+            "value bytes must never appear in the payload: {}",
+            launch.content
+        );
+
+        let pid: u32 = launch
+            .content
+            .lines()
+            .find_map(|l| l.strip_prefix("launched: pid "))
+            .expect("pid in launch output")
+            .trim()
+            .parse()
+            .expect("pid parses");
+        let env_path = child_dir.path().join("env.txt");
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let dump = loop {
+            if let Ok(text) = fs::read_to_string(&env_path)
+                && text.contains("probe=")
+            {
+                break text;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "stub never wrote {} in 5s AND the launch outcome was: {}",
+                env_path.display(),
+                launch.content
+            );
+            thread::sleep(Duration::from_millis(25));
+        };
+        kill_pid_group(pid);
+        // SAFETY: serialized by DELEGATE_ENV_LOCK; no other test reads this var.
+        unsafe { std::env::remove_var("CHUG_DELEGATE_BIN") };
+        assert_eq!(
+            dump, "ctd=/tmp/t183-explicit-target\nprobe=t183-secret-value\n",
+            "the child's exec'd env must carry BOTH explicit entries verbatim"
+        );
+    }
+
+    /// T183: `env` absent → byte-identical spawn (the env seam): with a decoy
+    /// `CARGO_TARGET_DIR` seeded the way loopd.sh's prefix arrives, the child
+    /// still sees BOTH spellings scrubbed (the T144 behavior, unchanged) and
+    /// the launch payload carries no env echo at all.
+    #[cfg(unix)]
+    #[test]
+    fn delegate_launch_without_env_keeps_spawn_byte_identical() {
+        let _timing = crate::testsupport::timing_guard();
+
+        use std::os::unix::fs::PermissionsExt;
+        let _guard = DELEGATE_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let child_dir = tempfile::tempdir().unwrap();
+        let ctx_cwd = tempfile::tempdir().unwrap();
+
+        let stub = ctx_cwd.path().join("chug-t183-absent-stub.sh");
+        fs::write(
+            &stub,
+            concat!(
+                "#!/bin/sh\n",
+                "printf 'ctd=%s\\ncbtd=%s\\n' \"${CARGO_TARGET_DIR:-UNSET}\" \"${CARGO_BUILD_TARGET_DIR:-UNSET}\" > env.txt\n",
+                "sleep 60\n",
+            ),
+        )
+        .unwrap();
+        fs::set_permissions(&stub, fs::Permissions::from_mode(0o755)).unwrap();
+        // SAFETY: serialized by DELEGATE_ENV_LOCK; no other test reads this var.
+        unsafe { std::env::set_var("CHUG_DELEGATE_BIN", &stub) };
+        ensure_spec_file("/tmp/chug-stub-spec.md");
+        // SAFETY: serialized by DELEGATE_ENV_LOCK; both restored before return.
+        let saved_target = std::env::var_os("CARGO_TARGET_DIR");
+        unsafe { std::env::set_var("CARGO_TARGET_DIR", "/tmp/t183-decoy-shared") };
+
+        let launch = dispatch(
+            &delegate_ctx(ctx_cwd.path()),
+            "delegate",
+            &json!({
+                "action": "launch",
+                "cwd": child_dir.path(),
+                "spec": "/tmp/chug-stub-spec.md",
+                "goal": "t183 absent-env goal",
+                "model": "m",
+            }),
+        );
+        assert!(!launch.is_error, "{}", launch.content);
+        assert!(
+            !launch.content.contains("env_keys"),
+            "absent env must leave the payload byte-identical (no echo line): {}",
+            launch.content
+        );
+        let pid: u32 = launch
+            .content
+            .lines()
+            .find_map(|l| l.strip_prefix("launched: pid "))
+            .expect("pid in launch output")
+            .trim()
+            .parse()
+            .expect("pid parses");
+        let env_path = child_dir.path().join("env.txt");
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let dump = loop {
+            if let Ok(text) = fs::read_to_string(&env_path)
+                && text.contains("cbtd=")
+            {
+                break text;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "stub never wrote {} in 5s AND the launch outcome was: {}",
+                env_path.display(),
+                launch.content
+            );
+            thread::sleep(Duration::from_millis(25));
+        };
+        kill_pid_group(pid);
+        // SAFETY: serialized by DELEGATE_ENV_LOCK; restore the seam and the
+        // process value (a panic above must not leak the seed).
+        unsafe { std::env::remove_var("CHUG_DELEGATE_BIN") };
+        match saved_target {
+            Some(v) => unsafe { std::env::set_var("CARGO_TARGET_DIR", v) },
+            None => unsafe { std::env::remove_var("CARGO_TARGET_DIR") },
+        }
+        assert_eq!(
+            dump, "ctd=UNSET\ncbtd=UNSET\n",
+            "absent env: the pre-T183 scrub behavior is unchanged"
+        );
+    }
+
+    /// T183 ordering leg (req 2, the spec's no-real-child seam): the inherited
+    /// env carries a decoy `CARGO_TARGET_DIR`, the T144 scrub removes it, and
+    /// the explicit `env` entry re-adds its own value — the CONSTRUCTED
+    /// Command's env delta must name EXACTLY the explicit value (`get_envs`
+    /// keeps one final entry per key, so the later `env` overwrite is the
+    /// observable proof that explicit wins over the scrub), while the
+    /// spelling `env` does NOT name stays scrubbed. The env-absent control
+    /// keeps both spellings removed (pre-T183 byte-identical).
+    #[test]
+    fn delegate_launch_env_explicit_wins_over_the_t144_scrub() {
+        let _guard = DELEGATE_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // SAFETY: serialized by DELEGATE_ENV_LOCK; restored before return.
+        let saved = std::env::var_os("CARGO_TARGET_DIR");
+        unsafe { std::env::set_var("CARGO_TARGET_DIR", "/tmp/t183-decoy-shared") };
+        let explicit = "/tmp/t183-explicit-target";
+
+        // Explicit wins: scrub first, env after — the delta's final value is
+        // the explicit one, not the decoy and not a removal.
+        let mut cmd = Command::new("chug-t183-no-spawn-stub");
+        apply_delegate_env(
+            &mut cmd,
+            &[("CARGO_TARGET_DIR".to_string(), explicit.to_string())],
+        );
+        let got: Vec<(&std::ffi::OsStr, Option<&std::ffi::OsStr>)> = cmd.get_envs().collect();
+        assert!(
+            got.contains(&(
+                std::ffi::OsStr::new("CARGO_TARGET_DIR"),
+                Some(std::ffi::OsStr::new(explicit))
+            )),
+            "explicit env must win over the scrub, got {got:?}"
+        );
+        assert!(
+            got.contains(&(std::ffi::OsStr::new("CARGO_BUILD_TARGET_DIR"), None)),
+            "the spelling env does NOT name stays scrubbed, got {got:?}"
+        );
+
+        // Absent control: the scrub alone, exactly as pre-T183.
+        let mut cmd = Command::new("chug-t183-no-spawn-stub");
+        apply_delegate_env(&mut cmd, &[]);
+        let got: Vec<(&std::ffi::OsStr, Option<&std::ffi::OsStr>)> = cmd.get_envs().collect();
+        assert!(
+            got.contains(&(std::ffi::OsStr::new("CARGO_TARGET_DIR"), None))
+                && got.contains(&(std::ffi::OsStr::new("CARGO_BUILD_TARGET_DIR"), None)),
+            "absent env keeps the pure scrub delta, got {got:?}"
+        );
+
+        // SAFETY: serialized by DELEGATE_ENV_LOCK; restore (a panic above
+        // must not leak the seed).
+        match saved {
+            Some(v) => unsafe { std::env::set_var("CARGO_TARGET_DIR", v) },
+            None => unsafe { std::env::remove_var("CARGO_TARGET_DIR") },
+        }
+    }
+
+    /// T183: fail-closed validation rejects bad payloads at the call site and
+    /// NEVER spawns — the error names the offending key (or the cap), and the
+    /// stub's argv dump never appears in the child dir.
+    #[test]
+    fn delegate_launch_env_rejects_bad_payloads_without_spawning() {
+        let _timing = crate::testsupport::timing_guard();
+
+        let _guard = DELEGATE_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let child_dir = tempfile::tempdir().unwrap();
+        let ctx_cwd = tempfile::tempdir().unwrap();
+        // SAFETY: serialized by DELEGATE_ENV_LOCK; no other test reads this var.
+        unsafe { std::env::set_var("CHUG_DELEGATE_BIN", write_argv_stub(ctx_cwd.path())) };
+        ensure_spec_file("/tmp/chug-stub-spec.md");
+        let mut too_many = serde_json::Map::new();
+        for i in 0..17 {
+            too_many.insert(format!("CARGO_K{i}"), json!("v"));
+        }
+        let oversized = "x".repeat(4097);
+        for (label, env_value, needle) in [
+            ("PATH", json!({"PATH": "/evil"}), "PATH"),
+            (
+                "lowercase",
+                json!({"cargo_target_dir": "/tmp"}),
+                "cargo_target_dir",
+            ),
+            ("empty key", json!({"": "v"}), "not allowlisted"),
+            ("17 entries", Value::Object(too_many), "at most 16 entries"),
+            ("oversized", json!({"CARGO_X": oversized}), "4 KiB"),
+            ("NUL", json!({"CARGO_X": "a\u{0000}b"}), "NUL"),
+        ] {
+            let result = dispatch(
+                &delegate_ctx(ctx_cwd.path()),
+                "delegate",
+                &json!({
+                    "action": "launch",
+                    "cwd": child_dir.path(),
+                    "spec": "/tmp/chug-stub-spec.md",
+                    "goal": "g",
+                    "model": "m",
+                    "env": env_value,
+                }),
+            );
+            assert!(result.is_error, "{label} must be refused: {}", result.content);
+            assert!(
+                result.content.contains(needle),
+                "{label}: the error must name the offending key or cap ({needle}): {}",
+                result.content
+            );
+        }
+        // No spawn: the stub never ran, so its argv dump does not exist.
+        assert!(
+            !child_dir.path().join("argv.txt").exists(),
+            "a rejected env must never spawn the child"
+        );
+        // SAFETY: serialized by DELEGATE_ENV_LOCK; no other test reads this var.
+        unsafe { std::env::remove_var("CHUG_DELEGATE_BIN") };
     }

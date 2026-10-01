@@ -4,7 +4,7 @@
 // T109 req 4 count-pin anchor (see mod.rs's pin): this family's
 // #[test] fn count — a dropped `mod schema;` line fails the pin's
 // reference to this const to compile.
-pub(super) const TEST_COUNT: usize = 9;
+pub(super) const TEST_COUNT: usize = 10;
     use super::*; // the shared harness (delegate::tests) + delegate's own imports
 
     /// T29 test 5 (schema pins): the live delegate schema gains optional
@@ -362,11 +362,84 @@ pub(super) const TEST_COUNT: usize = 9;
         assert_eq!(
             props,
             vec![
-                "action", "base", "cwd", "goal", "max_iters", "max_minutes", "max_tokens",
+                "action", "base", "cwd", "env", "goal", "max_iters", "max_minutes", "max_tokens",
                 "model", "pid", "resume", "spec", "terminal", "wait_secs",
             ],
-            "delegate schema properties drifted — T115 was result-text-only; a new \
-             property needs its own spec and its own pin update"
+            "delegate schema properties drifted — T115 was result-text-only and T183 \
+             added `env` with its own pin; any further property needs its own spec \
+             and its own pin update"
+        );
+        let required: Vec<&str> = schema["input_schema"]["required"]
+            .as_array()
+            .expect("required list")
+            .iter()
+            .filter_map(Value::as_str)
+            .collect();
+        assert_eq!(
+            required,
+            vec!["action", "cwd"],
+            "required list must be unchanged"
+        );
+    }
+
+    /// T183 schema pin (T22/T39/T58 convention): the launch `env` property is
+    /// an OPTIONAL object of strings, its description carries the allowlist
+    /// regex, the caps, the explicit-wins-over-scrub ordering, and the
+    /// fallback sentence (the goal-carried `export` stays the fallback when
+    /// `env` is absent); the tool description names the env clause and the
+    /// keys-only payload echo. Doc honesty: a cold orchestrator reads the
+    /// schema, so it must state the ordering the spawn actually applies.
+    #[test]
+    fn delegate_schema_pins_optional_env_property() {
+        let schemas = tool_schemas();
+        let schema = schemas
+            .iter()
+            .find(|s| s.get("name").and_then(Value::as_str) == Some("delegate"))
+            .expect("exactly one delegate schema (pinned elsewhere)");
+        let prop = schema["input_schema"]["properties"]["env"]
+            .as_object()
+            .expect("env property missing from the delegate schema");
+        assert_eq!(prop.get("type").and_then(Value::as_str), Some("object"));
+        let desc = prop
+            .get("description")
+            .and_then(Value::as_str)
+            .expect("env property carries a description");
+        // The allowlist regex, verbatim.
+        assert!(
+            desc.contains("^(CARGO_|CHUG_|RUST)[A-Z0-9_]*$"),
+            "env description must carry the allowlist regex: {desc}"
+        );
+        // The caps.
+        assert!(
+            desc.contains("at most 16 entries"),
+            "env description must name the entry cap: {desc}"
+        );
+        assert!(
+            desc.contains("4 KiB") && desc.contains("no NUL"),
+            "env description must name the value caps: {desc}"
+        );
+        // The explicit-wins-over-scrub ordering.
+        assert!(
+            desc.contains("WINS over the scrub"),
+            "env description must state explicit-wins-over-scrub: {desc}"
+        );
+        // The fallback sentence.
+        assert!(
+            desc.contains("the goal-carried `export` remains the fallback"),
+            "env description must state the goal-carried-export fallback: {desc}"
+        );
+        // The tool description names the clause and the keys-only echo.
+        let tool_desc = schema
+            .get("description")
+            .and_then(Value::as_str)
+            .expect("delegate tool description");
+        assert!(
+            tool_desc.contains("env optional"),
+            "tool description lost the env clause: {tool_desc}"
+        );
+        assert!(
+            tool_desc.contains("applied env keys (keys only, never values)"),
+            "tool description must name the keys-only env echo: {tool_desc}"
         );
         let required: Vec<&str> = schema["input_schema"]["required"]
             .as_array()

@@ -48,6 +48,16 @@ const DELEGATE_WAIT_POLL: Duration = Duration::from_millis(2500);
 /// commits header — visibility-only change.
 pub(crate) const DELEGATE_COLLECT_COMMIT_CAP: usize = 20;
 
+/// T183: the launch `env` map's entry cap — a handful of role-keyed build
+/// knobs is the use case; a 17th entry is refused, never truncated (an
+/// silently-dropped entry would make the child's env differ from the one
+/// the caller asked for).
+pub(crate) const DELEGATE_ENV_MAX_ENTRIES: usize = 16;
+/// T183: the per-value byte cap (4 KiB) — env values are paths/flags, not
+/// payloads; the cap keeps a bloated map from silently inflating every
+/// child process's environment.
+pub(crate) const DELEGATE_ENV_VALUE_MAX_BYTES: usize = 4 * 1024;
+
 /// T115: the launch `goal_tail` preview window — the LAST ≤120 chars of the
 /// goal, T25's tail-anchoring rule. The observed composition-garble class
 /// (cycle 60: the T111 validator's launch goal arrived with a duplicated
@@ -74,9 +84,12 @@ pub(crate) fn tail_preview(text: &str, max_chars: usize) -> String {
 /// (`<binary> run --spec … --goal … --model … --max-iters … --max-minutes …`,
 /// plus `--max-tokens …` only when the caller passes one — T39/T15 parity,
 /// child cwd = the caller's `cwd`) and returns as soon as `spawn()` succeeds.
-/// The caller supplied the worktree, so worktree creation, building,
-/// harvest/merge, and killing the child stay with the caller's bash — this
-/// tool only replaces the `nohup … &` line and the ps/tail/jq polling.
+/// T183: an optional allowlisted `env` map rides the same spawn (T144 scrub
+/// first, explicit entries win over it; the payload names the applied keys,
+/// never the values). The caller supplied the worktree, so worktree creation,
+/// building, harvest/merge, and killing the child stay with the caller's
+/// bash — this tool only replaces the `nohup … &` line and the ps/tail/jq
+/// polling.
 /// `status` reports the child's liveness plus a summary of its
 /// `.chug/events.jsonl` and the tail of its console log.
 ///
@@ -277,6 +290,100 @@ fn delegate_resume(input: &Value) -> anyhow::Result<bool> {
     }
 }
 
+/// T183: parse the optional launch-only `env` map — a string→string map of
+/// environment variables passed to the CHILD process at spawn. Absent (or
+/// null) → an empty vec, byte-identical to the pre-T183 spawn; present →
+/// the entries as `(key, value)` pairs in the JSON object's own order
+/// (serde_json's map is sorted by key, so application is deterministic).
+///
+/// Fail-closed validation, a tool error naming the offending key:
+/// - the value must be a JSON object;
+/// - ≤ [`DELEGATE_ENV_MAX_ENTRIES`] entries;
+/// - keys must match `^(CARGO_|CHUG_|RUST)[A-Z0-9_]*$` — the allowlist
+///   exists so a model-influenced goal cannot rewrite PATH/HOME/DYLD_* on
+///   the child. Hand-rolled as the exact equivalent (three fixed prefixes,
+///   then an `[A-Z0-9_]*` remainder) because the crate carries no regex
+///   dependency for one pattern;
+/// - values are strings, ≤ [`DELEGATE_ENV_VALUE_MAX_BYTES`] bytes, with no
+///   NUL bytes (a NUL cannot survive exec(3) and would make the spawn fail
+///   confusingly instead of the call fail legibly).
+fn delegate_env_map(input: &Value) -> anyhow::Result<Vec<(String, String)>> {
+    let Some(value) = input.get("env") else {
+        return Ok(Vec::new());
+    };
+    if value.is_null() {
+        return Ok(Vec::new());
+    }
+    let Some(map) = value.as_object() else {
+        bail!("delegate: `env` must be an object mapping env-var names to string values, got {value}");
+    };
+    if map.len() > DELEGATE_ENV_MAX_ENTRIES {
+        bail!(
+            "delegate: `env` must carry at most {DELEGATE_ENV_MAX_ENTRIES} entries, got {}",
+            map.len()
+        );
+    }
+    let mut entries = Vec::with_capacity(map.len());
+    for (key, value) in map {
+        if !env_key_allowlisted(key) {
+            bail!(
+                "delegate: `env` key {key:?} is not allowlisted — keys must match \
+                 ^(CARGO_|CHUG_|RUST)[A-Z0-9_]*$ (so a goal cannot rewrite PATH/HOME/DYLD_* on the child)"
+            );
+        }
+        let Some(text) = value.as_str() else {
+            bail!("delegate: `env` value for {key:?} must be a string, got {value}");
+        };
+        if text.len() > DELEGATE_ENV_VALUE_MAX_BYTES {
+            bail!(
+                "delegate: `env` value for {key:?} is {} bytes — the cap is {DELEGATE_ENV_VALUE_MAX_BYTES} (4 KiB)",
+                text.len()
+            );
+        }
+        if text.contains('\0') {
+            bail!("delegate: `env` value for {key:?} contains a NUL byte");
+        }
+        entries.push((key.clone(), text.to_string()));
+    }
+    Ok(entries)
+}
+
+/// T183: the `env` key allowlist `^(CARGO_|CHUG_|RUST)[A-Z0-9_]*$`, spelled
+/// as the exact hand-rolled equivalent of that regex (no regex dependency
+/// for one fixed pattern): one of the three prefixes — `CARGO_`, `CHUG_`,
+/// or `RUST` — then any run of uppercase ASCII letters, digits, and
+/// underscores (possibly empty; `CARGO_` and bare `RUST` both match, as
+/// under the regex). Everything else — `PATH`, lowercase, empty — is
+/// refused.
+fn env_key_allowlisted(key: &str) -> bool {
+    let rest = key
+        .strip_prefix("CARGO_")
+        .or_else(|| key.strip_prefix("CHUG_"))
+        .or_else(|| key.strip_prefix("RUST"));
+    let Some(rest) = rest else {
+        return false;
+    };
+    rest.bytes()
+        .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_')
+}
+
+/// T183: apply the launch environment to the child `Command`, in the
+/// spec-pinned order: the inherited env arrives first, then the T144
+/// [`crate::tools::scrub_target_dir_vars`] scrub, then the explicit `env`
+/// entries. The scrub guards the ABSENT case — a child that forgets its
+/// goal-carried `export CARGO_TARGET_DIR=…` must never inherit the
+/// orchestrator's shared-cache dir and collide with other checkouts;
+/// `env` is the EXPLICIT case — a launch that names `CARGO_TARGET_DIR`
+/// here means it, so it is applied AFTER (and therefore over) the scrub
+/// (`Command::env` overwrites the removal recorded for the same key).
+/// With no `env` entries this is exactly the pre-T183 scrub call.
+pub(crate) fn apply_delegate_env(cmd: &mut Command, env: &[(String, String)]) {
+    crate::tools::scrub_target_dir_vars(cmd);
+    for (key, value) in env {
+        cmd.env(key, value);
+    }
+}
+
 /// Spawn a detached `chug run` child and return immediately. Never waits on
 /// the child — no sleeps, no retries, no waiting anywhere in this function.
 ///
@@ -301,6 +408,7 @@ pub(crate) fn delegate_launch(input: &Value) -> anyhow::Result<ToolResult> {
         .unwrap_or(DELEGATE_DEFAULT_MAX_MINUTES);
     let max_tokens = delegate_max_tokens(input)?;
     let resume = delegate_resume(input)?;
+    let env_map = delegate_env_map(input)?;
 
     // Binary resolution: the test seam wins, else the running chug itself —
     // children run the same binary, exactly like today's template line does.
@@ -331,12 +439,17 @@ pub(crate) fn delegate_launch(input: &Value) -> anyhow::Result<ToolResult> {
         .stderr(Stdio::from(open_append(&log_path)?));
     // T144: the child inherits THIS process's env, which is how loopd.sh's
     // per-invocation `CARGO_TARGET_DIR=<shared>` prefix reaches chug
-    // children at all. Scrub both spellings so a child that forgets its
-    // goal-carried `export CARGO_TARGET_DIR=<role-keyed>` builds into its
-    // own `<cwd>/target` instead of colliding with other checkouts
-    // (last-builder-wins); an in-command `export`/prefix inside the child's
-    // own goal text is unaffected — the child's shell sets it after spawn.
-    crate::tools::scrub_target_dir_vars(&mut cmd);
+    // children at all. T183 — application order at spawn: the existing
+    // inherited env → `scrub_target_dir_vars` (T144, unchanged) → the
+    // parsed `env` entries, so an EXPLICIT `CARGO_TARGET_DIR` in `env`
+    // WINS over the scrub. The scrub guards the ABSENT case (a child that
+    // forgets its goal-carried `export CARGO_TARGET_DIR=<role-keyed>`
+    // builds into its own `<cwd>/target` instead of colliding with other
+    // checkouts, last-builder-wins); `env` is the EXPLICIT case — a launch
+    // that names the dir there means it. An in-command
+    // `export`/prefix inside the child's own goal text is unaffected — the
+    // child's shell sets it after spawn.
+    apply_delegate_env(&mut cmd, &env_map);
     // Detached, `nohup … &` parity: the child gets its own process group and
     // ignores SIGHUP, so it survives both the orchestrator exiting and a
     // terminal hangup. Both are unix-only; non-unix falls back to a plain
@@ -379,14 +492,23 @@ pub(crate) fn delegate_launch(input: &Value) -> anyhow::Result<ToolResult> {
 
     // T39/T58: the configured token budget and the resume leg are echoed back
     // only when set — absent, the return text is byte-identical to pre-T39.
+    // T183: same conditional shape for the applied env keys — KEYS ONLY,
+    // never values (values may carry paths the caller should treat as
+    // opaque, and keeping them out keeps status/log previews small).
     let tokens_note = match max_tokens {
         Some(tokens) => format!(" max_tokens: {tokens}"),
         None => String::new(),
     };
     let resume_note = if resume { " resume: true" } else { "" };
+    let env_note = if env_map.is_empty() {
+        String::new()
+    } else {
+        let keys: Vec<&str> = env_map.iter().map(|(k, _)| k.as_str()).collect();
+        format!(" env_keys: {}", keys.join(","))
+    };
     Ok(ToolResult {
         content: format!(
-            "launched: pid {pid}\nlog: {}\nevents: {}\ngoal_bytes: {goal_bytes}\ngoal_sha256: {goal_sha}\ngoal_tail: {goal_tail}\nmodel: {model} max_iters: {max_iters} max_minutes: {max_minutes}{tokens_note}{resume_note}",
+            "launched: pid {pid}\nlog: {}\nevents: {}\ngoal_bytes: {goal_bytes}\ngoal_sha256: {goal_sha}\ngoal_tail: {goal_tail}\nmodel: {model} max_iters: {max_iters} max_minutes: {max_minutes}{tokens_note}{resume_note}{env_note}",
             log_path.display(),
             chug_dir.join("events.jsonl").display(),
         ),
