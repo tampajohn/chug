@@ -266,24 +266,43 @@ untouched this delta. No docs row filed.
 
 ## Outcomes (filled at cycle wrap — LOOP-SPEC Phase 3)
 
-### Cycle 86 (2026-10-01, in progress) — glm routine freshness-skip cycle (freshness held: 8 todo rows T186–T193 + EVALUATION.md same-UTC-day; skip record d1790875941-1) — T193 landed; T188 in flight
+### Cycle 86 (2026-10-01) — glm routine freshness-skip cycle (freshness held: 8 todo rows T186–T193 + EVALUATION.md same-UTC-day; skip record d1790875941-1) — 1 landed (T193), T188 IN-FLIGHT on a kept branch (round-2 validator FAIL, wall-budget stop), T186/T189/T190/T191/T192/T187 unworked (specs ready)
 
 - **T193** (pri 3, bug) — site-sync in-flight classifier counts done TODO
   rows: landed `a3acaac` (impl `a9f631b`, glm first-try 43/80 clean,
   +112/-7 across exactly the spec's 3 target files). Classifier now
   pre-filters OPEN rows only before the F-id grep; F6/F12 FEATURES
   annotations brought to the uppercase-LANDED convention; 5 new
-  site_sync pins (done-row-only stays queued, todo+in-progress yield
-  in-flight, uppercase-LANDED SPLIT row wins over an open referencing
-  row, unreferenced control, real-F6 shape). Gates-only routing
-  (d1790876650-3 — no core-list file, ~119 lines ≤ 150, no new surface,
-  no check: change; mirrors the T189 predicate its sibling will codify):
-  nextest 1324/1324 independently re-run in worktree AND main
-  (target-shared-gates / target-shared-main per the T52 overlap split),
-  clippy `-D warnings` clean. Child verified end-to-end on a throwaway
-  site fixture (CHUG_SITE_SYNC_NO_PUSH=1): F6 landed, F12 landed, F14
-  in-flight via open T192. Region regenerates at the next wrap sync —
-  acceptance confirmed there.
+  site_sync pins. Gates-only routing (d1790876650-3 — no core-list file,
+  ~119 lines ≤ 150, no new surface, no check: change; mirrors the T189
+  predicate its sibling will codify): nextest 1324/1324 independently
+  re-run in worktree AND main, clippy `-D warnings` clean. Child verified
+  end-to-end on a throwaway site fixture: F6 landed, F12 landed, F14
+  in-flight via open T192. Region regenerates at this wrap's site sync —
+  acceptance confirmed in this entry's release section.
+- **T188** (pri 2, feature) — auto-spec: impl died 80/80 twice (fresh arc
+  + ONE T63 resume, d1790876863-6) → orchestrator-finish amendment
+  (d1790878543-7): closed a real vacuous-class bug (bare `cd` = $HOME
+  always-0 = vacuous; `cd src` can fail = real — the child's impl
+  classified `cd src` vacuous), approve_gate fixture, 4 clippy legs,
+  README layout + req-4 docs (README Quickstart paragraph + SPEC.md CLI
+  rows), commits 4e0a66c + 7377425, 1330/1330. kimi round-1 verdict FAIL
+  (7 findings, d1790882387-9): m6 (draft_and_gate 1-attempt) and m7
+  (SpecDraft kick flip) mutants SURVIVED the full suite — headless
+  orchestration + wiring zero-coverage. Fixup child (pid 68910) died at
+  the 50-MINUTE wall 76/80 (first minutes-wall death in the census —
+  measure-clause data) with work complete-but-uncommitted → T55
+  orchestrator-finish commit fe584fb (F3–F6 closed, 1335/1335). kimi
+  round-2 verdict FAIL (3 of 7 open): F1 e2e mock-Llm test absent (m6
+  still survives), F2 SpecDraft wiring pins absent (m7 still survives),
+  F7 parse_slash/CLI pins absent; F3–F6 closed. Wall budget (three
+  children hit budget walls this cycle) forced the stop: branch
+  loop-t188 KEPT in /tmp/chug-loop-t188, recipe on the TODO row, all six
+  child segments + three child ledgers harvested. One process lesson:
+  the first fixup dispatch landed while the round-1 validator was still
+  verifying — the child correctly refused to start on the held
+  driver.lock (2-min loss, no damage); dispatch only after the previous
+  child in the same worktree is fully dead.
 
 ### Cycle 85 (2026-10-01) — kimi mandatory fresh-eval cycle (queue drained at cycle-84 wrap fe02689; T81 routing correct 3-for-3) — 4 rows filed (T184–T187 + F14 reframe), 2 landed (T185, T184), T186/T187 DEFERRED to cycle 86 (specs cold-start-ready; T186 gained the defunct-zombie liveness amendment from this cycle's inverse incident) — no tag (2 items < 3 since v0.11.0, F14 phase 1 of 2 not a check-off)
 
@@ -360,15 +379,7 @@ untouched this delta. No docs row filed.
 
 **T175 done b7a113a (impl d4663c7; recovery-routing d1790814515-2, validation-routing d1790816416-3, verdict d1790819131-4).** LOOP-SPEC's Pipeline-overlap paragraph gains ONE sentence: at dispatch into the 2-impl overlap the orchestrator ALSO re-keys the spec's `check:` line export to the SAME role-keyed slot before launch — the goal's export and the check's export must name one dir (T144's scrub makes the check's own export the only target dir the goal gate sees; T52 artifact-name class makes a foreign dir a correctness hazard); cycle-77 evidence (t165's green-work rejection, fixed mid-flight 607e877) named in the doctrine; solo default unchanged. Pin leg (y) in tests/loop_spec_recovery.rs: load-bearing tokens exactly-once inside the paragraph window, ordered after the T161 slot sentence and before the Doctrine-items rule, with T48 needle self-checks. Impl glm died 80/80 with work complete+committed → orchestrator-finish (no resume burned, T63/T150). kimi validator PASS 5/5 mutants RED (delete/duplicate/move/placement-flip/token-corrupt), gates independently re-run 1287/1287 + clippy -D. **Cycle-81 DISCOVERY: build.rs's `rerun-if-changed=.git/HEAD` makes EVERY cargo invocation in ANY git worktree a full crate rebuild** (`.git` is a file in a worktree → the watched path never exists → `StaleItem(MissingFile)` always-dirty, confirmed via CARGO_LOG) — the hidden tax behind slow worktree gates and child budget deaths; orchestrator carried a 2-line uncommitted gate-enablement patch in the worktree (hint emitted only when readable; reverted byte-identical pre-merge, disclosed to the validator in its goal); T179 filed for the real fix. Also: exporting CHUG_GIT_HASH in the gate env breaks the delegate-launch stub tests (empirical — unset it).
 
-### Cycle 80 (2026-09-30) — glm routine freshness-skip cycle — 4 landed (T177, T170, T174, T171 — F11 PHASE 1B CLOSED), doctrine bundle T175+T176+T178 deferred with reason
-
-**T177 done af4f4b4 (impl cbb5f84; routing d1790803248-3, validation-routing d1790803993-4).** shell_segments &&-run slice-panic fixed: the && arm now consumes the second & (the || arm's shape); odd runs (`&&&`, `&&&&`) tokenize deterministically with the lone leftover & as ordinary segment text (pinned); sweep-the-family confirmed the || and ; arms clean of the match-2-consume-1 shape; 3 new regression legs incl. a lint-survives-malformed-&&&-check-line test. RED-proofs stated in the commit message with real panic messages on the UNFIXED tokenizer ("byte range starts at 4 but ends at 3"). Impl died at the 50-MINUTE wall 56/80 with work complete+committed → orchestrator-finish (T150/T55 precedent) — minutes-binding census class confirmed again. Gates 1269/1269 nextest --release (two load-split calls after a 110s-alarm SIGKILL mid-suite; the known reaper family flaked once under co-load and passed solo 13.2s — T82 fallback-class evidence). Tests-only → kimi validation skipped per step 4, child's in-commit RED-proofs carry the adversarial load. NOTE: the bash-tool 120s cap vs the 600s alarm idiom fired FIVE times this cycle (T178's census row is live) — loopd's CHUG_BASH_TIMEOUT=300 is the fix in queue.
-
-**T170 done (impl e0a9de0; F11 phase 1b-ii).** MCP prompts/list + prompts/get consume legs on stdio: MAX_MCP_PROMPTS=200 warn-and-cap, McpPrompt/Argument/Message/Get types with module-scope shared mapping parse_prompts_list/parse_prompt_result (T171-reusable, no fork), McpBackend trait legs with phase-1b default bails (stdio overrides now, HTTP in T171), registry list_prompts/get_prompt with the single-sourced prompts_leg capability gate (non-capable servers never queried — stub-side witness; down/unknown servers named errors), NO model-facing tool (F9 phase, out of scope), README honest line. Impl arc: glm run1 died 75/80 'stuck: repeated error' (API-layer; +629 uncommitted) → ONE kimi resume (T63 + model-fallback d1790801997-2) accepted at 7 iterations — the uncommitted-work resume variant, fast because glm's work was sitting in the tree. kimi validator REQUIRED-class-exercised per the T162 precedent (routing d1790804456-5) — VERDICT: PASS (d1790806951-8): all 5 requirements verified, gates independently re-run (build, clippy -D, spec check 183/183, nextest 1275/1275), 6/6 mutation legs RED via T79 parallel worktrees (M1 uncapped, M2 gate-drop, M3 args-null-flip, M4 name-skip, M5 role-skip, M6 get-error-surfacing-drop), tree byte-clean at e0a9de0. Merge 88119dc; post-merge gates 1278/1278.
-
-**T174 done ab421d3 (impl first-try 43/80; kimi skipped d1790808866-12, T147 precedent).** T162's list-err-drop survivor pinned: fixture arm advertises resources + refuses list with a -32000 server-defined error; two legs assert the surfaced outcome names the server AND carries the server's message (transport surface + registry per-server outcome, one gate no fork); mutant RED-proven in-commit (message-loss text). Tests-only +94/-0 inside mod tests. Merged after T170's flip; gates 1280/1280.
-
-**T171 done 7b9b2bf (impl abd7242; F11 phase 1b CLOSED; recovery-routing d1790808588-11, validation-routing d1790810660-14).** All four McpBackend legs over the HTTP transport reusing the shared mappers (no fork), session discipline + shared timeouts unchanged, capability gate single-sourced in the registry, byte-identical named-error parity, T162 outcome types reused as-is (no gap found), 2 obsolete phase-1b honesty tests superseded+deleted, README honest. Impl run1 died at the 80/80 ITERATION wall after 29 min (fast glm pace — iterations binding again, minutes not) with +699 uncommitted → ONE resume committed abd7242 at 43/80. Merge hit a keep-both conflict vs T174's just-landed pin (adjacent hunks in mcp.rs's test module; orchestrator resolved, gates proved it). kimi validation skipped: the shared mapping was mutation-proven 6/6 RED by T170's validator one level down and the legs' own surface is stub-witnessed + RED-proved — the routing record names the inherited-proof basis. Post-merge gates 1286/1286. FEATURES.md F11 phase-1b closure note landed at the flip. 
+### Cycle 80 (2026-09-30) — glm routine freshness-skip cycle — 4 landed (T177 af4f4b4, T170 88119dc, T174 ab421d3, T171 7b9b2bf — F11 phase 1b CLOSED), doctrine bundle T175+T176+T178 deferred with reason — full narrative in git (row-flip commits + todo: flips).
 
 
 ### Cycle 79 (2026-09-30) — fresh eval (kimi; 8e832d2: 10 rows + 16 triage records) — 3 landed (T173 minutes-budgets 553928a, T172 load-lock deflake bae88d5, T169 F11-1b-i pull 3796983), 7 deferred with reason (minutes binding; iteration-ceiling deaths the new census class; T63 resume textbook; kill-rule confirmed x4) — one-line backfill at the cycle-84 wrap (entry absent since an earlier wrap's compaction; full text in git 8b4db7d and the todo: commits).
