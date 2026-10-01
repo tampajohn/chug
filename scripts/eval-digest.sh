@@ -3,8 +3,9 @@
 #
 # Scans <root>/.chug/events*.jsonl and writes <root>/.chug/eval-digest.md:
 # per events file — iterations, wall time, tool distribution, error classes
-# w/ counts, token totals + late-cycle input-token curve, aborts w/ reasons,
-# budget_low fires; plus TODO status counts and days since the last
+# w/ counts, token totals (+ cache-read/creation at the last iteration, T184)
+# + late-cycle input-token curve, aborts w/ reasons, budget_low fires, trim
+# fires (T184); plus TODO status counts and days since the last
 # EVALUATION.md write. Deterministic (LC_ALL=C, jq + awk only), no LLM calls,
 # sub-second. loopd.sh runs it before every cycle so the evaluator reads ONE
 # digest instead of doing ad-hoc jq ETL over raw archives.
@@ -28,13 +29,14 @@
 #   - runs: 1 | model: ... | spec: ... | iters-ceil: 50
 #   - iterations: 48 (last n=48) | verifying calls: 6
 #   - wall: 2123s (35m23s) | 2026-09-25T17:08:31Z -> 17:43:54Z
-#   - tokens (cumulative at last iteration): 169.2k in / 28.6k out
+#   - tokens (cumulative at last iteration): 169.2k in / 28.6k out | cache-read 141.3k / cache-creation 4.2k
 #   - input context curve (cumulative, iter quartiles): 2.7k@1 -> ... -> 169.2k@48
 #   - tools: bash 41, read_file 22, ...
 #   - failed tool results: 7 (+ normalized first-line error classes)
 #   - goal: accepted 1 / rejected 0
 #   - aborts: ... (reason x count, model, budget label)
 #   - budget_low fires: 1 | output_truncated: 0
+#   - trim fires: 5
 set -u
 export LC_ALL=C
 
@@ -164,6 +166,7 @@ def cls($s):
 | ($ev | map(select(.type == "run_start"))) as $rs
 | ($ev | map(select(.type == "verifying"))) as $vf
 | ($ev | map(select(.type == "output_truncated"))) as $ot
+| ($ev | map(select(.type == "trim"))) as $tm
 | ($ev | map(select(.type == "iteration" or .type == "usage"))) as $tok
 | ($tr | map(select(.is_error == true))) as $errs
 | ($ev | map(ep(.ts)) | map(select(. != null))) as $eps
@@ -207,7 +210,7 @@ def cls($s):
         else "- wall: \($wall)s (\(dur($wall))) | \($t0 | todateiso8601) -> \($t1 | todateiso8601)\n" end)
      + (if $lasttok == null
         then "- tokens: none recorded\n"
-        else "- tokens (cumulative at last iteration): \(num($lasttok.input_tokens // 0)) in / \(num($lasttok.output_tokens // 0)) out\n" end)
+        else "- tokens (cumulative at last iteration): \(num($lasttok.input_tokens // 0)) in / \(num($lasttok.output_tokens // 0)) out | cache-read \(num($lasttok.cache_read_input_tokens // 0)) / cache-creation \(num($lasttok.cache_creation_input_tokens // 0))\n" end)
      + "- input context curve (cumulative, iter quartiles): \($curve)\n"
      + (if $tools == "" then "- tools: (none)\n" else "- tools: \($tools)\n" end)
      + "- failed tool results: \($errs | length)"
@@ -219,6 +222,7 @@ def cls($s):
         then "- budget_low fires: 0"
         else "- budget_low fires: \($bl | length) (first at remaining_iters=\($bl[0].remaining_iters))" end)
      + " | output_truncated: \($ot | length)\n"
+     + "- trim fires: \($tm | length)\n"
    end)
 JQEOF
 )
