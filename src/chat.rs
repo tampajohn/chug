@@ -276,8 +276,17 @@ fn run_chat_with(
                         pending_autospec.as_deref(),
                         &mut knobs,
                     ) {
-                        // Approved: start the turn with the pending request.
-                        Ok(request) => break request,
+                        // Approved: start the turn with the pending request —
+                        // and CONSUME it (F4): the draft has been gated and
+                        // its file loaded as the spec, so the parked request
+                        // is spent. Clearing here is what keeps a stale
+                        // draft from being re-approved into a second turn
+                        // (a refusal does NOT clear — the operator edits the
+                        // draft and re-approves the same request).
+                        Ok(request) => {
+                            pending_autospec = None;
+                            break request;
+                        }
                         // The gate refused: stay idle (the notice landed).
                         Err(notice) => sink.emit(Event::AutoSpecNote(notice)),
                     }
@@ -408,6 +417,7 @@ mod tests {
     use crate::api::ScriptedLlm;
     use crate::events::TurnEndReason;
     use serde_json::{Value, json};
+    use std::fs;
     use std::sync::atomic::AtomicBool;
     use std::sync::{Arc, mpsc};
 
@@ -1082,6 +1092,201 @@ mod tests {
         assert_eq!(code, 0);
         assert!(events.is_empty());
         assert!(llm.calls.is_empty());
+    }
+
+    // ---------- T188 auto-spec: the session-level draft/approve loop ----------
+
+    /// The chat_draft fixture: structurally complete, non-vacuous, and
+    /// green-dry-run in a cwd containing `marker.txt`.
+    const AUTOSPEC_DRAFT: &str = "\
+# T-fix — the approved request
+
+check: test -f marker.txt
+
+estimate: ~5 changed lines
+
+## Concern
+
+The request needs a spec.
+
+## Requirements
+
+- The marker file stays present.
+
+## Tests
+
+- `test -f marker.txt` exits 0.
+
+## Acceptance
+
+- The check exits 0 on the current tree.
+";
+
+    /// Drive the session with access to ALL three senders (the harness's
+    /// run_session only forwards objective+update) so a script can park and
+    /// approve auto-spec requests.
+    fn run_autospec_session(
+        h: Harness,
+        script: impl FnOnce(
+            &mpsc::Sender<String>,
+            &mpsc::Sender<SlashUpdate>,
+            &mpsc::Sender<AutoSpecRequest>,
+        ) + Send
+        + 'static,
+    ) -> (i32, Vec<Event>, ScriptedLlm) {
+        let (autospec_tx, autospec_rx) = mpsc::channel();
+        let cfg = ChatConfig {
+            autospec_rx,
+            ..h.cfg
+        };
+        let cwd = cfg.cwd.clone();
+        let cwd_for_worker = cwd.clone();
+        let mut h = Harness { cfg, ..h };
+        let worker = std::thread::spawn(move || {
+            let mut mcp = crate::mcp::McpRegistry::new(&cwd_for_worker, true, None)
+                .expect("empty mcp registry");
+            let code = run_chat_with(
+                h.cfg,
+                &mut h.llm,
+                None,
+                &mut mcp,
+                &mut h.sink,
+                &crate::observ::Sink::Noop,
+            )
+            .expect("chat session failed");
+            (code, h.sink.0, h.llm)
+        });
+        script(&h.objective_tx, &h.update_tx, &autospec_tx);
+        drop(h.objective_tx);
+        drop(h.update_tx);
+        drop(autospec_tx);
+        let (code, events, llm) = worker.join().expect("worker panicked");
+        (code, events, llm)
+    }
+
+    fn autospec_notes(events: &[Event]) -> Vec<String> {
+        events
+            .iter()
+            .filter_map(|e| match e {
+                Event::AutoSpecNote(note) => Some(note.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// F4: an approved auto-spec request is CONSUMED — the session clears
+    /// `pending_autospec` when the gate passes, so a stale draft can never
+    /// be re-approved into a second turn. Pre-fix the second
+    /// /auto-spec-approve re-gated the still-on-disk draft and started a
+    /// second (stale) turn; the pinned refusal ("nothing pending") never
+    /// fired and the scripted LLM ran dry.
+    #[test]
+    fn auto_spec_approve_consumes_the_pending_request() {
+        let tmp = tempfile::tempdir().unwrap();
+        // The drafted check dry-runs green in the session cwd.
+        fs::write(tmp.path().join("marker.txt"), "x").unwrap();
+        let h = harness(
+            &tmp,
+            vec![
+                // The tool-less draft call returns the complete spec.
+                json!({
+                    "stop_reason": "end_turn",
+                    "usage": {"input_tokens": 10, "output_tokens": 5},
+                    "content": [{"type": "text", "text": AUTOSPEC_DRAFT}]
+                }),
+                // The approved turn completes in one reply.
+                text_response("did the approved work"),
+            ],
+        );
+        let (code, events, llm) = run_autospec_session(h, |objective_tx, _, autospec_tx| {
+            autospec_tx
+                .send(AutoSpecRequest::Draft("fix the login bug".into()))
+                .unwrap();
+            // Approve #1: gates the draft and starts the turn.
+            autospec_tx.send(AutoSpecRequest::Approve).unwrap();
+            // Approve #2 (the stale one): must refuse — nothing is pending
+            // anymore — and start NO second turn.
+            autospec_tx.send(AutoSpecRequest::Approve).unwrap();
+            let _ = objective_tx;
+        });
+        assert_eq!(code, 0);
+        // Exactly ONE turn started, carrying the approved request.
+        let starts: Vec<&String> = events
+            .iter()
+            .filter_map(|e| match e {
+                Event::TurnStart { objective } => Some(objective),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            starts,
+            vec!["fix the login bug"],
+            "exactly the approved turn may start: {starts:?}"
+        );
+        // The stale approve refused with the nothing-pending notice.
+        let notes = autospec_notes(&events);
+        assert!(
+            notes
+                .iter()
+                .any(|n| n.contains("nothing pending")),
+            "the stale re-approve must be refused as nothing pending: {notes:?}"
+        );
+        // Two LLM calls total: the draft + the single approved turn.
+        assert_eq!(llm.calls.len(), 2, "no second (stale) turn: {notes:?}");
+    }
+
+    /// The refusal side of the same class: a gate refusal NEVER consumes
+    /// the pending request — the operator edits the draft and re-approves
+    /// the same request. (Over-clearing would strand the parked request.)
+    #[test]
+    fn auto_spec_approve_refusal_keeps_the_request_pending() {
+        let tmp = tempfile::tempdir().unwrap();
+        // The draft's check is non-vacuous but FAILS the dry-run (no
+        // marker.txt) — chat_draft writes it, the approve gate refuses it.
+        let failing = AUTOSPEC_DRAFT.replace("test -f marker.txt", "test -f absent-marker.txt");
+        let h = harness(
+            &tmp,
+            vec![
+                json!({
+                    "stop_reason": "end_turn",
+                    "usage": {"input_tokens": 10, "output_tokens": 5},
+                    "content": [{"type": "text", "text": failing}]
+                }),
+            ],
+        );
+        let (code, events, llm) = run_autospec_session(h, |_, _, autospec_tx| {
+            autospec_tx
+                .send(AutoSpecRequest::Draft("fix the login bug".into()))
+                .unwrap();
+            // Two approvals of the SAME (still-failing) draft: both refuse
+            // on the dry-run — the request stays parked, never "nothing
+            // pending". The brief hold-open matters: a refusal does NOT
+            // break the idle poll (only an approval starts a turn), so the
+            // session would otherwise see the closed objective channel and
+            // exit before draining the second queued approve.
+            autospec_tx.send(AutoSpecRequest::Approve).unwrap();
+            autospec_tx.send(AutoSpecRequest::Approve).unwrap();
+            std::thread::sleep(Duration::from_millis(2000));
+        });
+        assert_eq!(code, 0);
+        let notes = autospec_notes(&events);
+        assert_eq!(
+            notes.iter().filter(|n| n.contains("dry-run")).count(),
+            2,
+            "both approvals gate the same parked draft: {notes:?}"
+        );
+        assert!(
+            !notes.iter().any(|n| n.contains("nothing pending")),
+            "a refusal must keep the request pending: {notes:?}"
+        );
+        // No turn ever started; only the draft call was made.
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, Event::TurnStart { .. })),
+            "a refused approve never starts a turn: {notes:?}"
+        );
+        assert_eq!(llm.calls.len(), 1, "only the draft call ran");
     }
 
     // ---------- session trace lifecycle (SPEC-8) ----------
