@@ -89,7 +89,7 @@ pub fn tool_schemas() -> Vec<Value> {
         }),
         json!({
             "name": "bash",
-            "description": "Run a shell command via `sh -c` in the working directory. Captures stdout+stderr and the exit code. 120s timeout; long output is truncated (head+tail kept). On macOS there is no `timeout` command; bound long commands with `perl -e 'alarm N; exec @ARGV' <cmd>` instead.",
+            "description": "Run a shell command via `sh -c` in the working directory. Captures stdout+stderr and the exit code. 120s timeout; long output is truncated (head+tail kept). macOS sed is BSD sed: GNU range forms like `,+N` do not exist — use `awk` or `sed -n 'N,Mp'` with absolute line numbers. On macOS there is no `timeout` command; bound long commands with `perl -e 'alarm N; exec @ARGV' <cmd>` instead.",
             "input_schema": {
                 "type": "object",
                 "properties": {
@@ -2272,10 +2272,11 @@ mod tests {
             desc.contains("perl -e 'alarm"),
             "bash description lost the `perl -e 'alarm` idiom: {desc}"
         );
-        // Appended as exactly ONE sentence (3 → 4), at the end.
+        // Appended as exactly ONE sentence (3 → 4); T181's BSD-sed sibling
+        // later made it 4 → 5, placed before this note so it stays final.
         assert_eq!(
             desc.split(". ").count(),
-            4,
+            5,
             "description did not gain exactly one sentence: {desc}"
         );
         assert!(desc.ends_with("instead."), "note is not the final sentence: {desc}");
@@ -2285,6 +2286,47 @@ mod tests {
             desc.contains("120s timeout; long output is truncated"),
             "driver 120s cap wording changed: {desc}"
         );
+    }
+
+    /// T181: the bash description must carry the BSD-sed range-form trap.
+    /// The cycle-83 eval caught the T22 pattern one level down: two
+    /// orchestrator streams (glm and kimi) reached for GNU sed's `,+N`
+    /// range form ("print N lines from the match") on macOS, where sed is
+    /// BSD and rejects it (`sed: N: ",+Np`). Both recovered in 1–2
+    /// iterations; T22's precedent says a recurring cross-platform trap
+    /// seen across BOTH model families gets one sentence in the tool
+    /// description — the only universal surface every child sees. The trap
+    /// (`,+N`), the platform fact (BSD), and the working alternatives
+    /// (`awk` / `sed -n 'N,Mp'` with absolute line numbers) are pinned
+    /// against the LIVE schema (`tool_schemas()`, not a copied literal), so
+    /// reverting the sentence fails here.
+    #[test]
+    fn bash_description_pins_bsd_sed_no_gnu_plus_n_range_form() {
+        let schemas = tool_schemas();
+        let entries: Vec<&Value> = schemas
+            .iter()
+            .filter(|s| s.get("name").and_then(Value::as_str) == Some("bash"))
+            .collect();
+        assert_eq!(entries.len(), 1, "exactly one bash schema");
+        let desc = entries[0]
+            .get("description")
+            .and_then(Value::as_str)
+            .expect("bash schema has a description");
+        // The GNU-only range form, the platform fact, and the working
+        // alternatives (with the "absolute line numbers" qualifier that
+        // makes the `sed -n 'N,Mp'` form actually portable).
+        for token in [
+            "`,+N`",
+            "BSD",
+            "`awk`",
+            "`sed -n 'N,Mp'`",
+            "absolute line numbers",
+        ] {
+            assert!(
+                desc.contains(token),
+                "bash description lost the BSD-sed token {token:?}: {desc}"
+            );
+        }
     }
 
     // ---- T26: read_file `offset`/`limit` pagination ----
