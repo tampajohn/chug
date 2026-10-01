@@ -1,277 +1,268 @@
-# EVALUATION — chug, assessed by chug-loop (2026-10-01, cycle 83)
+# EVALUATION — chug, assessed by chug-loop (2026-10-01, cycle 85)
 
-**MANDATORY fresh eval** — the queue is EMPTY (cycle 82 landed T179+T178
-and its wrap commit `7646250` declared the queue drained, with the
-handoff naming this cycle a mandatory kimi eval — the freshness
-predicate's queue half fails, so loopd routed kimi per T81, exactly as
-predicted). The delta corpus since the cycle-79 eval is cycles 79(phase
-2)–82: the orchestrator streams `events-20260930-202447` (kimi phase 2,
-T173/T172/T169 arcs), `-234322` (glm, cycle 80), `-20261001-035110`
-(glm, cycle 81), the cycle-82 glm segment(s), and 13 child streams
-(t169–t179 impl/validate/resume), read via `.chug/eval-digest.md` (419
-events files, 23,792 iterations, FRESH per its self-exclusion check)
-with targeted drills into the git record, `src/decisions.rs`,
-`src/driver.rs`, `src/delegate.rs`, and the digest failure classes. The
-headline: **11/11 queued rows landed across three routine cycles with
-zero items lost and zero reverts, F11 phase 1b CLOSED, two releases
-self-tagged — and the delta's two structural fixes (T178 fleet
-CHUG_BASH_TIMEOUT=300, T179 worktree always-stale rebuild-tax removal)
-landed at its END, attacking the dominant child-death class at the
-root.** The child-death rate stayed high (7 of 11 impl children died at
-a budget) but the recovery family absorbed 100% of it. The mandatory
-roadmap pull is **F12 → T180 (web_search phase 1)**. Four rows filed:
-T180–T183.
+**MANDATORY fresh eval** — the queue is EMPTY (cycle-84 wrap `fe02689`
+declared it drained — the first drain since cycle 82 — so the freshness
+predicate's queue half fails and loopd routed kimi per T81, the third
+consecutive correct routing prediction). The delta corpus since the
+cycle-83 eval (same UTC day) is cycles 83(phase 2)–84: orchestrator
+streams `events-20261001-102829` (kimi phase 2, 177/200 iters, 4h01m,
+1.06M non-cached input tokens), `-121517` (glm, 102/200), `-132550`
+(glm, 53/200) plus six child streams (t180 impl+validate, t182-impl,
+t183 impl-validate, t181 impl-validate), read via the fresh digest (428
+files, 24,438 iterations, FRESH per its self-exclusion check) with
+targeted drills into `src/tools.rs`'s exec path, `src/trim.rs`,
+`src/events.rs`, `src/eventlog.rs`, `.chug/decisions.jsonl`, and the
+git record. The headline: **4/4 queued rows landed (T180 — the F12
+web_search feature, T183 delegate env map, T182 decision_log
+always-reminder, T181 BSD-sed sentence), zero reverts, release v0.11.0
+self-tagged — and the delta's costs are two ORCHESTRATION-hygiene gaps
+(two lost child event streams, one zombie-raced gate) plus one real
+tool-output data-loss bug class that fired 13 times.**
 
 ## 1. What chug does well — be brief
 
-- **11/11 landed, 0 lost, 0 reverts across cycles 79p2–82** — T173,
-  T172, T169 (cycle 79 post-eval), T177, T170, T174, T171 (cycle 80),
-  T175, T176 (cycle 81), T179, T178 (cycle 82). The T63/T150 recovery
-  family absorbed a 64% impl-child death rate with 100% correct
-  routing: 3 resumes (t169 uncommitted 80/80, t170 stuck-abort → kimi
-  model-fallback accepted in 7 iters, t171 uncommitted 80/80), 4
-  orchestrator-finishes (t172, t175, t176, t177 — all complete+
-  committed).
-- **F11 PHASE 1B CLOSED** (T169 `mcp_resource` builtin + T170 prompts
-  stdio legs + T171 HTTP legs, 6/6-mutant kimi PASS on the shared
-  mappers) — the MCP consume story is complete through phase 1b, and
-  FEATURES.md carries the closure note.
-- **The loop finds its own root causes**: T179 (the worktree
-  `.git`-file always-stale rebuild tax — ~40–95s × EVERY cargo call in
-  EVERY worktree) was a live mid-arc discovery in cycle 81 (CARGO_LOG
-  fingerprint evidence), filed pri 1 mid-cycle (99e2a81), fixed next
-  cycle with the effect measured by both child and orchestrator
-  (48.43s → 3.23s; 1 → 0 Compiling lines). T178 removed the 120s bash
-  cap for the whole fleet (3–5 `timed out after Ns` deaths per stream
-  in the delta) and is live in THIS cycle's own env.
-- **Mechanical guards keep paying**: the T8 pipe-guard fired on a
-  notes-cell `|` at a cycle-80 row flip (caught pre-commit, reworded);
-  the cycle-61 kill rule held again (render garbles verified by
-  read-back, zero kills); T177's tokenizer fix has held (zero lint
-  panics since).
-- **First full T161 2-impl overlap cycle** (cycle 80: T177∥T170, then
-  T171∥T174) — strictly serial merges, one keep-both pin conflict
-  resolved clean, the T175 check-rekey doctrine codified from its
-  mid-flight precedent (9d5bc55).
-- **v0.10.0 and v0.10.1 self-tagged** with check-tag-version pairing
-  and generated notes; the release trigger doctrine ran unattended.
+- **4/4 landed incl. a 1050-line feature** (T180 web_search, F12 phase
+  1: provider seam + zero-config DuckDuckGo HTML provider, kimi PASS
+  8/8 mutants) — and the recovery machinery absorbed FOUR budget deaths
+  with 100% correct routing (t180-impl 50-min wall → ONE resume →
+  accepted; t180-validate 60/60 → ONE resume → PASS; t183-impl 80/80
+  uncommitted → ONE resume → committed+accepted; t183-validate 60/60
+  mid-mutant → ONE resume + verdict recovered from transcript +
+  orchestrator gap-closers 6/6).
+- **The small-row prediction verified 2/2**: post-T178/T179, both
+  small rows landed first-try clean (T182 29/80 in ~7 min child wall,
+  T181 20/80 in ~10 min) — small-row minutes-deaths → 0 as predicted.
+- **T182's success criterion measuring well**: the two `options … got
+  missing` fumbles in the cycle-83 stream are at 06:28Z, PRE-merge
+  (81ddb6c ~09:45Z); ZERO fumbles in all four post-merge streams.
+- **T183's defense-in-depth paid off immediately**: the new delegate
+  `env` param was silently dropped at both validator launches (the
+  orchestrator binary predated the merge) and the goal-carried export
+  carried the target dir anyway — exactly the layering the spec pins.
+- **Evidence-first under confusion**: glm seg-1's wrap goal was
+  REJECTED on a load flake; it root-caused a LIVE "zombie" validator
+  racing the gates, proved the unpatched tree green on a quiet machine
+  (1056/1056 debug, nextest 1310/1310 release, module bisections),
+  reverted an unneeded patch byte-identical, and made no code change
+  (triage d1790856539-8). Verify-then-kill held (read-back first).
+- **The decision corpus is complete**: ~39 records in the delta window
+  — every recovery routing, validation routing/verdict, outcome
+  backfill, and the cycle-84 phase-1 skip — zero gaps.
 
 ## 2. Incidents worth fixing
 
-1. **Impl-child budget deaths at 64% (7 of 11) — but the class SPLIT
-   is the story, and both halves now have their fix.** Census (digest,
-   abort reasons): 4 ITERATION-ceiling deaths (t169 +811 uncommitted →
-   resume; t171 +699 uncommitted → resume; t172 committed →
-   orchestrator-finish; t175 committed → orchestrator-finish) — all
-   four are big-actual rows (631–848 landed lines vs ~150–350 filing
-   estimates: the estimate-undershoot class, §3); 2 MINUTES-wall
-   deaths (t176 67/80, t177 56/80 — SMALL doctrine rows whose walls
-   were eaten by the two classes T178+T179 just fixed: t177-impl took
-   FIVE 120s-cap bash deaths ≈ 10+ min of 50, and every cargo call
-   paid the pre-T179 rebuild tax); 1 stuck-abort (t170, API-layer,
-   kimi resume accepted in 7 iters). **T173's measure clause
-   ADJUDICATED**: the literal predicate (>2 of the next 8 impl
-   children dying at the 50-minute budget with goal unaccepted) did
-   NOT trip — minutes-deaths are 2 of 11 (the cycle-81/82 wrap notes'
-   "3rd death — clause tripping" lumped iteration-deaths into "the
-   wall"; the record is corrected here). The SPIRIT holds: no further
-   budget raises; the remedy is filing-time spec-size discipline (§3's
-   calibration). Prediction to verify next delta: post-T178/T179,
-   small-row minutes-deaths → ~0; >500-actual rows keep dying at 80
-   iterations unless split at filing.
-2. **T168's success criterion FAILED: decision_log fumbles persist
-   (→ T182, pri 4).** The cycle-79 eval set `options … got missing`
-   corrective errors → 0 as the criterion; the delta has FIVE
-   (cycle-80 orchestrator ×2 — events-20260930-010417, t169-impl,
-   t173-impl, t179-impl). Code-read root cause: `validation_message`
-   (src/decisions.rs:285) appends `CONTRACT_REMINDER` (the full
-   six-field list) ONLY when the input has no required key or has an
-   unrecognized key — the exact recurring fumble shape (5 of 6
-   required fields, all recognized) takes the legs-only path, so the
-   error names the one missing field but never re-states the contract
-   (the ×2 in the cycle-80 stream: the retry can drop a DIFFERENT
-   field). T88 built the reminder, T168 the tool description; the gap
-   is the conditional. Fix is ~30 lines: always append.
-3. **BSD/GNU sed `,+N` fumbles across BOTH model families (→ T181,
-   pri 4).** `sed: N: ",+Np` appears in two orchestrator streams —
-   glm `events-20260930-050917` (cycle-78/79 boundary) and kimi
-   `events-20260930-202447` (cycle-79 phase 2): models reach for GNU
-   sed's `,+N` range form on macOS (BSD sed rejects it), then recover
-   in 1–2 iterations via awk. Exact T22-class (the `timeout` mirage):
-   a recurring cross-platform coreutils trap across both families;
-   the bash tool description is the only universal surface every
-   child sees. One sentence + a live-schema pin leg.
-4. **The role-keyed target-dir discipline rides a goal sentence
-   (→ T183, pri 4, doctrine — SOLO).** T47/T161's
-   `export CARGO_TARGET_DIR=<role-slot>` is prompt text every impl
-   child must honor on every cargo call; T144's scrub makes a dropped
-   export safe-but-cold, and post-T179 the cost is one cold build —
-   so this is a robustness CLEANUP, not an incident fix: `delegate`
-   launch gains an optional allowlisted `env` map (CARGO_/CHUG_/RUST
-   prefixes) applied AFTER the scrub (explicit wins), moving the
-   invariant from prompt text to process spawn; LOOP-SPEC's templates
-   adopt it in the same row (the goal sentences stay as
-   defense-in-depth — T144's goal-gate scrub still makes the check
-   line's own export the only dir the gate sees).
-5. **Cycle-81 Outcomes header mislabels its model.** The header says
-   "kimi routine freshness-skip cycle"; the events-stream + commit
-   window evidence says glm (stream `events-20261001-035110`, glm,
-   23:43→03:46 UTC, exactly covering cycle-81's commits). Routing was
-   CORRECT (routine → glm per T81); the wrap-note label is wrong.
-   Carried verbatim per the Outcomes carry-forward rule; noted here
-   for the record. No row.
-6. **Weighed and REJECTED** (each logged eval-triage): (a) **budget-low
-   warning gains a wrap directive** — the directive ALREADY exists
-   verbatim (src/driver.rs:1676: "Stop starting new work: commit what
-   is done, run the gates, and finish bookkeeping now"); the deaths
-   are wall/iteration exhaustion mid-verification, not
-   directive-ignorance; (b) **WARN_REMAINING_ITERS 8→12** — no
-   evidence the margin changes behavior; the 4 iteration-deaths had
-   630–850 lines of work to finish, not a 4-iteration shortfall;
-   (c) **T179 stale-hash follow-up** (worktree commits no longer
-   retrigger the build script) — T20's runtime `resolve_head` fields
-   (banner `head=`, run_start `head_branch`/`head_commit`) already
-   carry correct worktree identity; the baked `GIT_COMMIT` is the
-   BUILD commit, which is correct semantics — cosmetic; (d) **`/tmp`
-   commit-msg write_file fumbles** (t171/t174/t178 ×1 each) — the
-   error self-corrects in ~1 iteration and already names the fix
-   ("cross-tree paths go through bash"); (e) **`.chug/` gitignore
-   add-refusals** (×1 per orchestrator stream) — `.chug/` is
-   intentionally unversioned; the harvest is the `cp`, files landed;
-   cosmetic; (f) **"(output truncated: reader did not drain)"** ×1
-   (cycle-82 glm stream) — single instance, the bounded cap caught
-   it; watch-listed; (g) **META-SPEC's alarm-600 illustrative drift**
-   — disclosed non-blocking by T178's own validator; fold into the
-   next META-SPEC touch, not a standalone row.
+1. **Harvest gap ×2 — two impl event streams LOST (→ T186, pri 3,
+   doctrine SOLO).** The t183 impl's two glm segments (80/80 death +
+   resume) and t181's glm impl segment (20/80) were never harvested;
+   both worktrees were removed. Mechanism: a FRESH child launched into
+   a reused worktree ROTATES the predecessor's `.chug/events.jsonl`
+   (T10/T7), so copying only `.chug/events.jsonl` — the natural reading
+   of LOOP-SPEC §2 step 5's "harvest every child run's
+   `.chug/events.jsonl`" — silently drops the rotated segments, and
+   `git worktree remove` deletes them (untracked). Cycle-84's glm
+   orchestrator even named the t181 harvest
+   `events-t181-impl-validate-…` believing BOTH segments were inside;
+   the file holds `runs: 1`, kimi only (jq-verified). t183's loss
+   happened DESPITE the cycle-83 wrap note's explicit correct recipe
+   ("cp the worktree's .chug/events*.jsonl … both segments live in the
+   worktree .chug/") — a written recipe is not a mechanism; cycle-83's
+   kimi harvest of t180 (two separate files, impl runs:2 + validate)
+   shows the right shape. Cost: the eval corpus loses exactly the
+   impl-death-and-resume streams F13/F14 feed on; this eval could not
+   reconstruct t183-impl's per-iteration evidence (its abort kind
+   survives only via the wrap note's prose).
+2. **Zombie-collision: a live validator raced the wrap gates
+   (doctrine half → T186).** Cycle-84 seg-1 declared the t183 validator
+   (pid 6260) dead via a TRUNCATED `ps` read and removed its worktree
+   while it was alive; the zombie's cargo suites raced seg-1's
+   goal-gate `cargo test` → "check command failed" rejection. Diagnosed
+   (read-back first per the kill rule), zombie + orphaned check tree
+   killed, quiet-machine green proven; code change weighed and REJECTED
+   (d1790856539-8). Cost: ~30 min + one rejection cycle + a near-miss
+   on tree integrity (removing a worktree under a live child is the
+   T19 class in reverse). The two lessons — never remove a worktree
+   while any child pid launched in it lives; liveness via `delegate
+   status` or `kill -0`, never a truncated `ps … | head` — are
+   doctrine, filed in T186.
+3. **bash reader-grace DISCARDS already-read output when a grandchild
+   holds the pipe (→ T185, pri 2, bug).** 13
+   `(output truncated: reader did not drain)` fires in the delta
+   (cycle-83 kimi ×1, cycle-84 glm ×6, t181-validate ×3, t183-validate
+   ×3) — escalated from the cycle-83 watch-list's single instance
+   (d1790836694-10). Mechanism (src/tools.rs, read in full): reader
+   threads `read_to_end` then send ONCE at EOF (~line 1135); the
+   caller's `recv_capped` returns `(Vec::new(), false)` on the 5s
+   READER_GRACE timeout (~line 1253) — the side's ENTIRE accumulated
+   buffer is discarded; the doc comment's "whatever output was captured
+   is returned with a truncation note" is FALSE in the timeout leg.
+   Cause class: an orphaned grandchild (alarm-killed cargo's rustc, a
+   command's own backgrounded process) inherits the pipe write-end, so
+   EOF never comes. Cost per fire: 5s stall + total loss of that side's
+   output + usually a re-run iteration. The orphan-holds-pipe shape is
+   already a known test scenario (~line 1947), so the fix has a ready
+   harness.
+4. **T180: the filing-time discipline failure the doctrine already
+   names.** Filed at est ~420 WITH an explicit growth-stop clause;
+   landed 1050/-58 (2.5x); impl died at the 50-minute wall 74/80; FIVE
+   goal-gate rejections before acceptance — one REAL (the T95 README
+   module-list miss), four diagnosed and honestly attributed (T31
+   port-theft residual, a self-inflicted background-run load collision,
+   the T82 stub-spawn family ×2). The T173 measure clause TRIPPED at
+   the cycle-83 wrap (3/8 minutes-deaths: t176, t177, t180); the remedy
+   stays filing-time splits — practiced here: all four of this eval's
+   rows file at ≤ ~230 estimated lines. No new row (the doctrine
+   suffices; this text is the calibration record per META-META-SPEC).
+5. **Validator iteration-ceiling deaths ×2 — measure watch, NOT yet
+   tripped.** t180-validate 60/60 (verdict announced post-resume) and
+   t183-validate 60/60 with the verdict WRITTEN-but-unannounced (a
+   load-flake check rejection killed the driver post-verdict;
+   recovered from its transcript). The clause trips at >1 of the next
+   8 dying with the verdict unannounced → trim default mutation-leg
+   counts. This window: 1 of 3 (t181-validate 32/60 clean). Watch.
+6. **Weighed and REJECTED** (each logged eval-triage): (a) **F14 as
+   originally written** (a compaction/summarization pass) — the
+   driver-managed context window ALREADY EXISTS (T77's src/trim.rs: 5
+   markers in the cycle-83 kimi transcript, 4 in this eval's own live
+   transcript by iteration ~12); no measured context-ceiling death in
+   the delta; a summarization pass would break the trim design's
+   byte-stable prompt-cache prefix. REFRAMED to telemetry → T184 (§4);
+   summarization deferred on FEATURES.md. (b) **F12 phase 2
+   keyed-provider pull** (the cycle-84 wrap note's suggestion) —
+   FEATURES.md's deferral stands: zero consumers have needed a keyed
+   provider; the zero-config seam covers observed need; F14 outranks
+   it on measured cost. (c) **stub-deadline widening** for the
+   load-flake family — already rejected (d1790856539-8: the zombie was
+   the cause; quiet-machine green proven). (d) **driver post-abort
+   orphan reaping** — mechanism unproven (the zombie was a LIVE
+   validator, not an aborted one's orphan); T186's liveness discipline
+   covers the actionable surface. (e) **T179 stale-hash follow-up** —
+   cycle-83 §2.6(c) rejected (T20's runtime `resolve_head` fields carry
+   worktree identity; the baked hash is the BUILD commit, correct
+   semantics); not re-filed. (f) **estimate-threshold number edits** —
+   META-META-SPEC: re-calibrate in eval text, never edit the number in
+   passing. (g) **edit_file old-not-found fumbles** (kimi ×2 on t182's
+   spec path during eval-artifact writing; self-corrected in ~1 iter;
+   the error names counts) — watch, no row.
 
 ## 3. Friction hot spots — fix assessment
 
-- **120s bash-cap deaths (T178): FIXED, live this cycle** —
-  `CHUG_BASH_TIMEOUT=300` is in THIS orchestrator's own env (loopd
-  re-executed with the export); zero timeout deaths in this stream;
-  the alarm-280 doctrine is file-wide consistent.
-- **Worktree rebuild tax (T179): FIXED** — 0-Compiling warm builds
-  verified by both child and orchestrator; the known gap (baked hash
-  can go stale in a long-lived worktree) is assessed at §2.6(c) —
-  rejected as cosmetic.
-- **Load-flake families (T172): HOLDING with one residual fire** —
-  cycle 80 saw ONE reaper-family flake under co-load (T177's gates
-  load-split, solo-green 13.2s); cycles 81/82 ran full nextest green
-  (1286→1291) with NO red-only-under-nextest fallback named. Watch
-  next delta.
-- **decision_log fumbles (T168): FAILED** → T182 (§2.2).
-- **T175 (overlap check-rekey doctrine): dormant** — no 2-impl
-  overlap dispatched in cycles 81/82 (serial queues); T171's merge
-  rode the mid-flight re-key precedent (9d5bc55) clean in cycle 80.
-- **T176 (clippy `-D warnings` in the impl goal): measuring** — 3
-  impl children since (t177/t178/t179), zero clippy-warning findings
-  by validators; the criterion holds so far.
-- **T177 (`&&&` slice-panic): FIXED** — zero tokenizer panics since;
-  todo_consistency green at every wrap (19/19 today).
-- **Estimate calibration (required re-check)**: T169 ~350 → 848
-  (2.4x — EXCEEDED the ~500 hard ceiling; died 80/80 → resume), T170
-  ~300 → 631 (2.1x — stuck-death → resume), T171 ~320 → 784 (2.5x —
-  80/80 → resume), T172 ~150 → 821 (5.5x — 80/80 → orch-finish),
-  T173 ~120 → 503 (4.2x), T174 ~60 → 94 ✓, T175 ~150 → 145 ✓✓,
-  T176 ~120 → 187 ✓, T177 ~40 → 72 ✓, T178 ~60 → 97 ✓, T179 ~40 →
-  248 (6.2x). Re-calibration (eval text only, thresholds unedited):
-  (i) the sentence+pin-FILE mispricing persists — a NEW pin file
-  costs ~150–250 (T179 est ~40 → 248; T175 estimated its pin file in
-  and hit 145 — the cycle-79 re-calibration works WHEN APPLIED);
-  (ii) MCP-protocol feature rows price ~2–2.5x naive (protocol legs +
-  registry + fixtures): a naive ~300 MCP row lands 630–850 and MUST
-  file as two rows; (iii) THREE rows exceeded the hard ceiling at
-  landing (T169/T171/T172) and ALL THREE needed rescue — the
-  ceiling's failure measure is 3-for-3; filing-time discipline is
-  the only lever that works, and this eval's own T180 (est ~420) is
-  filed with an explicit growth-stop clause in consequence.
-- **Orchestrator iteration economy**: glm routine streams 162/178,
-  118, and cycle-82's short wrap segment; kimi phase-2 133/200 —
-  headroom adequate; the terminal long-poll keeps per-arc cost
-  ~15–25 iterations. Kimi token burn remains ~1.1M input/cycle
-  (see F14, §4).
+- **T182 (decision_log always-reminder): criterion HOLDING** — 0
+  post-merge fumbles across 4 streams (both pre-merge fumbles at
+  06:28Z, §1).
+- **T176 (clippy `-D warnings` in the impl goal): HOLDING** — zero
+  clippy findings in this delta's four validations.
+- **Small-row minutes-deaths → ~0: 2/2** (T182, T181 — §1).
+- **T173 clause: TRIPPED** (3/8 at the cycle-83 wrap) — the remedy
+  (filing-time spec-size discipline) is in force; this eval's rows all
+  file ≤ ~230 est (§2.4).
+- **reader-drain class: ESCALATED watch → row** (T185; 1 → 13 fires).
+- **Load-flake families (T172): one explained fire, no unexplained
+  ones** — the cycle-84 wrap-gate red was the zombie's duplicate load
+  (§2.2), not a latent flake; quiet-machine full green. The T31/T82
+  families fired INSIDE t180's goal-gate checks (wrap-note evidence) —
+  watch continues.
+- **Estimate calibration (required re-check)**: T180 ~420 → 1050
+  (2.5x — network-tool feature rows join the MCP-protocol class at
+  2–2.5x naive); T183 ~360 → +723/-39 (2.0x); T182 ~30 → +57/-16
+  (2.4x on a tiny base — small-base noise); T181 ~45 → +45/-3
+  (1.1x ✓). Re-calibration: feature rows with a network/protocol
+  surface price 2–2.5x naive and MUST file as two rows when naive
+  exceeds ~200; sentence+pin rows land ~1x when the pin file already
+  exists (T181) vs ~6x when it must be created (T179). The ceiling's
+  failure measure stands: rows landing >500 actual needed rescue 3-for-3.
+- **Orchestrator iteration economy**: kimi phase-2 177/200 in 4h01m
+  (serial validation arcs dominate); glm 102 + 53. The terminal
+  long-poll keeps per-arc cost ~15–25 iterations. Kimi's 1.06M input
+  figure is NON-CACHED ONLY — true per-call context size is invisible
+  (§4, T184).
 
-## 4. Capability gaps — ROADMAP PULL: F12 → T180 (web_search phase 1)
+## 4. Capability gaps — ROADMAP PULL: F14 → T184 (context-economy telemetry), REFRAMED
 
-The top wholly-unworked, non-deferred roadmap item is **F12 (web
-search)**. Ordering notes (written reasons per META-META-SPEC §4):
-F13 phases 2–3 stay blocked on the external layad pipeline (written
-deferral on record, corpus ~700+ records and growing); F9's
-`allowed-tools` semantics and F11's model-facing prompts surface are
-annotated "later phases" of LANDED items — the F11 row cross-references
-the prompts surface to F9, no new consumer has appeared since the
-phase-1b close-out, and T169's `mcp_resource` is the ready template
-when it is pulled; F10 phase 3b stays deferred (no consumer pulls
-MCP-spec-completeness surfaces). F12 stands unworked with NO deferral
-on record → **PULLED → T180**: phase 1 is the provider seam
-(`CHUG_WEB_SEARCH_PROVIDER`) + one zero-config provider (DuckDuckGo
-HTML, no key) with `uddg` redirector decoding, markup-drift honesty
-legs, and a local-stub end-to-end leg — phase 2 (keyed providers:
-Brave/Tavily) is named in the spec as the seam's plug-in point, not
-filed. The README tools-intro pin moves two→three network exceptions
-in-commit.
-**New capability find → appended to FEATURES.md as F14 (context
-compaction)**: kimi orchestrator streams burn 1.1–1.2M input tokens
-per cycle, glm up to 800k (digest input-context curves); nothing in
-src/ compacts aged tool results, and the transcript must stay the
-complete record — compaction would touch the PROMPT copy only.
-Appended to the roadmap (worked in order, NOT filed this eval).
+The cycle-83 eval appended F14 (context compaction) on the evidence of
+0.8–1.2M cumulative input tokens per orchestrator stream. This eval's
+code read REFRAMES it: **the driver-managed context window ALREADY
+EXISTS** — T77's trim machinery (src/trim.rs: 120k-est-token trigger,
+80k target, 16k frozen segments, `[trimmed:]` markers, byte-stable
+prefix for prompt caching) FIRES in real streams (5 markers in
+`.chug/transcript-20261001-102829.jsonl`; 4 in this eval's own live
+transcript by iteration ~12), and BOTH call sites persist the markers
+via `transcript::rewrite` (src/driver.rs ~689 resume path, ~1498 loop
+path) — so the F14 entry's "transcript stays complete" constraint is
+stale: T77 chose record-rewrite by design (re-segment-identical on
+resume). The "1M input tokens" evidence is also misread: the events
+stream records only NON-CACHED input — `cache_read_input_tokens` is
+parsed by the API layer (src/api.rs ~1227) but dropped before the
+events stream (`Event::Usage` carries `{ input, output }` only), so the
+loop cannot see its own per-call context size, and the digest's "input
+context curve" measures a partial quantity. **The real phase-1 gap is
+OBSERVABILITY**: trim fires silently (no event), cache reads invisible,
+context size invisible. → **T184**: cumulative cache fields on
+serialized iteration lines, a `Trim` event at both call sites
+(before/after estimates, segments collapsed), digest surfacing, README
+honesty. The summarization-quality half is DEFERRED with a written
+reason (no measured ceiling death; prefix-stability cost) — FEATURES.md
+F14 annotated accordingly. Ordering notes (written reasons per
+META-META-SPEC §4): F12 phase 2's deferral stands (§2.6(b)); F13 phases
+2–3 stay layad-blocked; F9 `allowed-tools` / F11 prompts-surface /
+F10 phase 3b keep their later-phase annotations — no new consumer has
+appeared.
 
 ## 5. Top 3 priorities
 
-1. **T180** (pri 2, feature) — the mandatory roadmap pull; gives the
-   loop discovery to complement web_fetch's fetch; touches tools.rs →
-   kimi REQUIRED.
-2. **T183** (pri 4, robustness cleanup, doctrine — SOLO) — removes
-   the last prompt-text operational invariant in the child-launch
-   path; kimi REQUIRED.
-3. **T182** (pri 4, DX) — the decision_log fumble class has survived
-   two mechanisms (T88, T168); the root cause is identified
-   (conditional reminder) and the fix is ~30 lines with a precise
-   pin leg. (T181 slots fourth — same pri, same size class.)
+1. **T185** (pri 2, bug) — tool-result data loss fired 13× in the
+   delta with a nailed mechanism and a ready test harness; touches
+   src/tools.rs → kimi REQUIRED.
+2. **T184** (pri 2, feature — the mandatory roadmap pull) — the loop
+   is blind to its own context economy; every future eval's cost
+   analysis rides on it; touches src/events.rs + src/driver.rs → kimi
+   REQUIRED.
+3. **T186** (pri 3, doctrine SOLO) — two lost streams + one zombie
+   race in ONE delta; the cheapest fix with the highest corpus value.
+   (T187 slots fourth — trivial doctrine drift, same SOLO rule.)
 
 ## 6. README audit (usability)
 
-Read top to bottom as a newcomer (943 lines). (a) **Reading order:
-sound** — the cycle-79 skeleton holds (what → install → quickstart →
-chat → slash packs → run → fork → plan → TUI → tools → policy
-surfaces → MCP client+server → observability → specs → loopd →
-development); no accretion. (b) **Redundancy: none drifting**
-spotted. (c) **Staleness: none found** — the MCP section is current
-through phase-1b closure (resources AND prompts bullets, both
-transports, the "model-facing prompts surface is a later F11/F9
-phase" honesty line); Continuous mode carries the T178 fleet bullet;
-Tools carries `mcp_resource`. (d) **Balance: watch** — 943 lines
-(+~13 since cycle 79); the MCP section remains the densest but earns
-its place. (e) **Quickstart truth: accurate** as written. No docs
-row filed this cycle.
+The cycle-83 full cold-read stands (structure sound); this eval
+delta-checks the four landings. 962 lines (+19). (a) **Reading order:
+sound** — no accretion: T180's web_search bullet integrated into the
+tools list (~line 484), the two→three network-exceptions sentence
+updated in place (~line 380), the Development-layout line carries the
+new module (the T95 guard caught the impl's miss — one of its four
+check rejections); T183's delegate env bullet folded into the existing
+delegate lines. (b) **Redundancy: none new.** (c) **Staleness: none
+found** — the stale "seventeen tools" comment was fixed in T180's flip
+commit; the tools list carries `mcp_resource` and `web_search`. (d)
+**Balance: watch continues** — 962 lines; the MCP section remains the
+densest but still earns its place. (e) **Quickstart truth: accurate** —
+untouched this delta. No docs row filed.
 
 ## Handoff
 
-- **Queue order**: T180 (pri 2, feature — tools.rs → kimi REQUIRED)
-  → T183 (pri 4, doctrine+code — SOLO, kimi REQUIRED) → T182 (pri 4,
-  decisions.rs — kimi OPTIONAL: not in the REQUIRED list; orchestrator
-  gates + personal RED-proof per the T147 precedent) → T181 (pri 4,
-  tools.rs description string — REQUIRED by the tools.rs letter; the
-  T22 precedent landed WITH kimi).
-- **Overlap notes**: T183 is doctrine → never overlaps. T180 and
-  T181 both touch src/tools.rs → never overlap each other. T182
-  (src/decisions.rs only) is file-disjoint from T180 (src/websearch.rs
-  + src/tools.rs + README) → T182's impl MAY overlap T180's VALIDATOR
-  under pattern (i) — declare the file lists at dispatch. Validators
-  cap at 1; merges strictly serial in queue order.
-- **Validation routing preview**: as above per row.
+- **Queue order**: T185 (pri 2, bug — src/tools.rs → kimi REQUIRED) →
+  T184 (pri 2, feature — src/events.rs + src/driver.rs → kimi
+  REQUIRED) → T186 (pri 3, doctrine — SOLO, kimi REQUIRED) → T187
+  (pri 4, doctrine trivial — SOLO, kimi REQUIRED).
+- **Overlap notes**: T185 (src/tools.rs only) and T184
+  (src/events.rs / eventlog.rs / driver.rs / trim.rs-call-sites +
+  scripts/eval-digest.sh + tests/eval_digest.rs + README) are
+  FILE-DISJOINT → eligible for the T161 2-impl overlap (re-key the
+  second spec's `check:` export per the T175 doctrine); validators
+  stay serial (cap 1); merges strictly serial in queue order. T186 and
+  T187 are doctrine → NEVER overlap anything; they run alone, serially.
+- **Validation routing preview**: all four REQUIRED (tools.rs /
+  events.rs+driver.rs / doctrine / doctrine).
 - **Human-decision items**: none new. Standing carries: the layad
   fine-tune pipeline (F13 2–3 precondition), the deferred chat/TUI
-  phase 2s, F14's roadmap position.
-- **Next-eval measures**: (1) post-T178/T179 small-row minutes-deaths
-  → ~0 (the §2.1 prediction); (2) T182's criterion: `options … got
-  missing` fumbles → 0; (3) T176's clippy criterion holds; (4) the
-  T173 clause's literal count stands at 2/11 — adjudicated NOT
-  tripped (§2.1); (5) estimate calibration per §3 — T180's growth-stop
-  clause is the live test of filing-time discipline; (6) cycle-81's
-  header mislabel (§2.5) is carried verbatim in Outcomes — future
-  wraps: the header model comes from the events stream, not memory.
+  phase 2s, F12 phase 2's no-consumer deferral.
+- **Next-eval measures**: (1) T182's criterion holds at 0 fumbles;
+  (2) reader-drain fires → 0 post-T185 with bytes surviving; (3)
+  harvest completeness: every worked item's impl AND validator streams
+  present in `.chug/` post-T186 (this delta: 2 of 3 multi-child items
+  incomplete); (4) T184 lands → the digest reports cache-read +
+  trim-fires and the next eval can finally see per-call context size;
+  (5) the validator 60/60-with-unannounced-verdict clause (trips at
+  >1 of 8; stands 1 of 3); (6) estimate calibration: this eval's rows
+  all est ≤ ~230 — the filing-discipline practice test.
 
 ## Outcomes (filled at cycle wrap — LOOP-SPEC Phase 3)
 
