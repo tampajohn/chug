@@ -647,11 +647,12 @@ fn plan_mode_budget_death_uses_the_existing_abort_path() {
 }
 
 /// Regression pin: the run-mode advertised tool list equals the exact
-/// pre-change set — seventeen tools today (T73 added plan mode's surface
+/// pre-change set — eighteen tools today (T73 added plan mode's surface
 /// without touching this list; T76 added tgrep and updated this pin in
 /// the same diff; T111 added the three todo tools beside update_ledger
 /// and updated this pin in the same diff; T169 added the builtin
-/// `mcp_resource` resources tool and updated this pin in the same diff).
+/// `mcp_resource` resources tool and updated this pin in the same diff;
+/// T180 added `web_search` and updated this pin in the same diff).
 /// If a rebase changes the set, update this pin in the same diff and say so.
 #[test]
 fn run_mode_advertised_tool_list_is_exactly_the_pre_change_set() {
