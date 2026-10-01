@@ -1567,6 +1567,9 @@ mod tests {
         objective_rx: mpsc::Receiver<String>,
         update_rx: mpsc::Receiver<SlashUpdate>,
         steer_rx: mpsc::Receiver<String>,
+        /// T188: kept (not dropped) so the auto-spec dispatch tests can
+        /// assert what the UI sent on its own channel.
+        autospec_rx: mpsc::Receiver<chat::AutoSpecRequest>,
         abort: Arc<AtomicBool>,
         _tmp: tempfile::TempDir,
     }
@@ -1576,7 +1579,7 @@ mod tests {
         let (steer_tx, steer_rx) = mpsc::channel::<String>();
         let (objective_tx, objective_rx) = mpsc::channel::<String>();
         let (update_tx, update_rx) = mpsc::channel::<SlashUpdate>();
-        let (autospec_tx, _autospec_rx) = mpsc::channel::<chat::AutoSpecRequest>();
+        let (autospec_tx, autospec_rx) = mpsc::channel::<chat::AutoSpecRequest>();
         let abort = Arc::new(AtomicBool::new(false));
         let app = App::new_chat(
             "test-model".into(),
@@ -1594,6 +1597,9 @@ mod tests {
             objective_rx,
             update_rx,
             steer_rx,
+            // T188: kept (not dropped) so the auto-spec dispatch tests can
+            // assert what the UI sent on its own channel.
+            autospec_rx,
             abort,
             _tmp: tmp,
         }
@@ -1987,6 +1993,84 @@ mod tests {
         // The new @path and Tab rows are part of the format.
         assert!(HELP_TEXT.lines().any(|l| l.trim_start().starts_with("@path")));
         assert!(HELP_TEXT.lines().any(|l| l.trim_start().starts_with("Tab")));
+    }
+
+    /// T188 (F7): the auto-spec arms dispatch on their OWN channel —
+    /// `/auto-spec <request>` sends `Draft(request)` with the request text
+    /// (plus the drafting notice), a bare `/auto-spec` sends NOTHING and
+    /// shows the usage line, `/auto-spec-approve` sends `Approve` (plus the
+    /// gating notice).
+    #[test]
+    fn chat_auto_spec_dispatch_sends_on_its_own_channel() {
+        let mut f = chat_app();
+        let abort = Arc::clone(&f.abort);
+        // The draft arm: the request rides the autospec channel verbatim.
+        type_text(&mut f.app, "/auto-spec fix the flaky test", &abort);
+        press(&mut f.app, KeyCode::Enter, &abort);
+        assert_eq!(
+            f.autospec_rx.try_recv().unwrap(),
+            chat::AutoSpecRequest::Draft("fix the flaky test".into()),
+            "the draft arm sends Draft(request) on the autospec channel"
+        );
+        assert!(f.objective_rx.try_recv().is_err(), "no objective on the draft arm");
+        let notices = notice_texts(&f.app);
+        assert_eq!(
+            notices.last().unwrap(),
+            "auto-spec: drafting spec for: fix the flaky test"
+        );
+        // The bare command: usage notice, nothing sent.
+        type_text(&mut f.app, "/auto-spec", &abort);
+        press(&mut f.app, KeyCode::Enter, &abort);
+        assert!(f.autospec_rx.try_recv().is_err(), "bare /auto-spec sends nothing");
+        let notices = notice_texts(&f.app);
+        assert!(
+            notices
+                .last()
+                .unwrap()
+                .starts_with("usage: /auto-spec <request>"),
+            "bare /auto-spec shows the usage line: {:?}",
+            notices.last().unwrap()
+        );
+        // The approve arm: the Approve request rides the same channel.
+        type_text(&mut f.app, "/auto-spec-approve", &abort);
+        press(&mut f.app, KeyCode::Enter, &abort);
+        assert_eq!(
+            f.autospec_rx.try_recv().unwrap(),
+            chat::AutoSpecRequest::Approve,
+            "the approve arm sends Approve on the autospec channel"
+        );
+        let notices = notice_texts(&f.app);
+        assert_eq!(
+            notices.last().unwrap(),
+            "auto-spec: gating the draft (structure + dry-run)…"
+        );
+    }
+
+    /// T188 (F7): the idle gate half of the dispatch arms — mid-turn
+    /// (Working) requests are refused with the finish-the-turn notice and
+    /// NOTHING is sent on either arm.
+    #[test]
+    fn chat_auto_spec_dispatch_is_gated_to_idle() {
+        let mut f = chat_app();
+        f.app.apply(Event::TurnStart {
+            objective: "work".into(),
+        });
+        assert_eq!(f.app.chat.as_ref().unwrap().state, ChatState::Working);
+        let abort = Arc::clone(&f.abort);
+        for line in ["/auto-spec draft me", "/auto-spec-approve"] {
+            type_text(&mut f.app, line, &abort);
+            press(&mut f.app, KeyCode::Enter, &abort);
+            assert!(
+                f.autospec_rx.try_recv().is_err(),
+                "{line} mid-turn must send nothing"
+            );
+        }
+        let notices = notice_texts(&f.app);
+        assert_eq!(
+            notices.last().unwrap(),
+            "auto-spec: finish the current turn first",
+            "the refusal notice names the gate"
+        );
     }
 
     // ---------- F9 phase 1: slash-command packs ----------

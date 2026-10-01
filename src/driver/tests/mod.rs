@@ -14,6 +14,7 @@ use serde_json::json;
 // One `mod` line per family file; each family's tests live in exactly one
 // file.
 mod approve;
+mod autospec;
 mod budget;
 mod crash;
 mod events;
