@@ -266,6 +266,27 @@ untouched this delta. No docs row filed.
 
 ## Outcomes (filled at cycle wrap — LOOP-SPEC Phase 3)
 
+### Cycle 85 (2026-10-01) — kimi mandatory fresh-eval cycle (queue drained at cycle-84 wrap fe02689; T81 routing correct 3-for-3) — 4 rows filed (T184–T187 + F14 reframe), 1 landed at this entry (T185), T184 mid-arc
+
+- **T185** (pri 2, bug) — bash reader-grace keeps already-read output when a
+  grandchild holds the pipe: landed `068e223` (impl `a0051b2`, glm 58/80
+  first-try clean, +208/-23 src/tools.rs; orchestrator gap-closer `44faf3b`).
+  kimi REQUIRED PASS (routing d1790865466-14, verdict d1790870511-16): a
+  6-mutant study killed 5; the m6 survivor (`acc = chunk` — a >64KiB
+  multi-chunk coverage gap the whole pre-existing suite missed) was
+  discharged PRE-merge by the orchestrator's RED-proven gap-closer (the
+  mutant fails the new byte-count assertion; revert green). The arc fought
+  TWO T55-class foreign-binary poisonings: (1) the T184 children's goal
+  gates built into `target-shared` because MY branch-side check re-key was
+  invisible — the delegate `spec:` path reads MAIN's copy — dispatch fix
+  `74d3331` + validator-diagnosed; (2) a Sep-29 stale `eval_digest` binary
+  false-red on my own T184 review gate, fixed by the T55 touch-rebuild.
+  Validator died at the 50-minute wall with its final clean run in flight →
+  ONE T63 resume → verdict on a quiet provenance-pure run (1061 lib = its
+  exact content). What the validator caught beyond m6: the delegate-launch
+  stub family's EXTERNAL-load blindness (T151's timing_guard is in-process
+  only) — fed to the next eval's flake watch.
+
 ### Cycle 84 (2026-10-01) — glm routine freshness-skip cycle (freshness held: EVALUATION.md same UTC day, 1 todo row T181; skip record d1790856978-1) — 1 landed (T181) — queue DRAINED
 
 **Wrap note.** Routine glm freshness-skip cycle (skip record d1790856978-1; T81 routing — glm never evaluates). The whole cycle was the T181 arc, end to end in ~70 min wall: worktree+warm build 49s → impl glm first-try goal-accepted 20/80 (~10 min child wall) → kimi REQUIRED PASS 4/4 mutants (32/60, ~44 min wall, zero blocking findings) → merge, flip, push. Queue DRAINED — TODO.md has zero todo rows for the first time since the cycle-82 wrap; the next cycle (fresh-eval, kimi-routed per T81 since the queue half of the predicate fails) files from the delta corpus + FEATURES.md (F12 phase 2 keyed providers is the standing roadmap pull). Bookkeeping: 4 decision_log records (skip, routing, verdict, outcome); harvest events-t181-impl-validate + LEDGER-t181-validate in .chug/ (local, gitignored by design); leftover /tmp/chug-loop-t183 worktree from the cycle-83 mid-arc handoff removed post-harvest-check. **No release tag:** 1 item since v0.11.0 < 3, no FEATURES check-off. Final gates at HEAD (target-shared-main): build ✓, clippy -D ✓, nextest --release 1311/1311 ✓, todo_consistency 19/19, eval_outcomes_carry 4/4.
