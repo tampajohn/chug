@@ -856,6 +856,12 @@ validates glm), auto-push per item. Two env knobs: `LOOP_ORCH_MODEL` (default
 kimi-k3) and `LOOP_ROUTINE_MODEL` (default glm-5-3-flash) — setting
 `LOOP_ROUTINE_MODEL=anthropic-system.ai.kimi-k3` restores single-model
 operation.
+loopd also exports `CHUG_BASH_TIMEOUT=300` for the whole loop fleet (T178):
+the orchestrator and every delegate child (children inherit the
+orchestrator's env) get a 300s bash-tool cap instead of the 120s default, so
+cold-cache gates and builds stop dying mid-run (`timed out after Ns`) and
+buying a retry; an explicit `--bash-timeout` flag overrides the env, and
+non-loop (interactive/chat) use keeps the 120s default.
 The supervisor builds the release binary (`cargo build --release`) before
 each cycle and the loop runs on it — and since the T137 build gate, a
 FAILED build aborts the cycle instead of relaunching the previous

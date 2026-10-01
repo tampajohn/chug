@@ -240,9 +240,10 @@ fn bounded_caps_wrap_the_nextest_form() {
     let loop_spec = read("LOOP-SPEC.md");
     count_eq(
         &loop_spec,
-        "perl -e 'alarm 600; exec @ARGV' cargo nextest run --release",
+        "perl -e 'alarm 280; exec @ARGV' cargo nextest run --release",
         1,
-        "LOOP-SPEC step-3 template caps the nextest form",
+        "LOOP-SPEC step-3 template caps the nextest form (T178 re-keyed the \
+         alarm below the CHUG_BASH_TIMEOUT=300 bash cap)",
     );
     let meta = read("META-SPEC.md");
     count_eq(

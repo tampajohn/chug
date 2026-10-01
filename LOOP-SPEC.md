@@ -220,12 +220,17 @@ never 3+, never 2 validators):
    refuse `/tmp/chug-loop-*` paths with `path escapes cwd`), and run
    bounded gates yourself (T82 gate runner, nextest-first — the
    predicate is `command -v cargo-nextest`: when it succeeds run
-   `CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared perl -e 'alarm 600; exec @ARGV' cargo nextest run --release`,
+   `CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared perl -e 'alarm 280; exec @ARGV' cargo nextest run --release`,
    else the same bounded cap around the fallback
-   `CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared perl -e 'alarm 600; exec @ARGV' cargo test --release -- --test-threads=4` —
+   `CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared perl -e 'alarm 280; exec @ARGV' cargo test --release -- --test-threads=4` —
    the T47 env prefix keeps the gate on the shared warm cache; bash tool
    calls don't share env, so the step-1 export doesn't persist between
-   calls). The runner rule (T82, operator-approved 2026-09-26): gates
+   calls). The `perl -e 'alarm N'` inner bound stays as the per-command
+   wedge guard (T178): with loopd exporting `CHUG_BASH_TIMEOUT=300` for the
+   whole fleet, the alarm value must sit BELOW the bash cap so the inner
+   bound fires first — the cargo-culted 600s alarm could never fire under
+   the old 120s default (EVALUATION.md §2.4), so the templates carry
+   `alarm 280`. The runner rule (T82, operator-approved 2026-09-26): gates
    prefer `cargo nextest run --release` — cargo-nextest is a HOST tool
    (installed via `cargo install cargo-nextest` or the get.nexte.st
    tarball), NOT a crate dependency — and the fallback to
@@ -360,8 +365,9 @@ never 3+, never 2 validators):
    `target-shared`/`target-shared-gates` split, scoped to worktree-review
    gates). The gate command is step 3's T82 runner — `cargo nextest run --release` when
    `cargo nextest` is on PATH, else
-   `cargo test --release -- --test-threads=4` under the bounded cap — same
-   tradeoff as step 3, and the dir is warm after its first release build.
+   `cargo test --release -- --test-threads=4` under the bounded cap (step
+   3's templates: `alarm 280` below the `CHUG_BASH_TIMEOUT=300` bash cap) —
+   same tradeoff as step 3, and the dir is warm after its first release build.
    Docs-only rounds (step 3's classification — every changed file ends
    `.md`) shrink the post-merge gate the same way: the guard floor
    replaces the full suite here too, and the main-dedicated-dir rule
