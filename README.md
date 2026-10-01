@@ -367,7 +367,7 @@ downgraded to a placeholder when the endpoint rejects image content),
 `write_file`,
 `edit_file` (+`replace_all`), `bash`, `grep`,
 `tgrep`, `glob`, `list_dir`, `update_ledger`, `todo_add`, `todo_update`,
-`todo_list`, `goal_complete`, `delegate`, `web_fetch`,
+`todo_list`, `goal_complete`, `delegate`, `web_fetch`, `web_search`,
 `decision_log`.
 All file-tool paths are sandboxed to `--cwd` — `..` traversal, absolute
 paths outside it, AND symlinks resolving outside it are refused (T134:
@@ -376,10 +376,10 @@ paths outside it, AND symlinks resolving outside it are refused (T134:
 confined too (T134 F1: the glob crate follows symlinked directories
 during expansion, so `glob`/`tgrep` drop every match whose real
 resolution lands outside `--cwd`, and a metacharacter path passed to a
-literal-path tool is refused, never expanded). `delegate` and
-`web_fetch` remain the two documented exceptions — `delegate`'s absolute
-`cwd`/`spec` target child worktrees by design; `web_fetch` is network,
-not filesystem). `bash` is NOT filesystem-confined: it starts in `--cwd`
+literal-path tool is refused, never expanded). `delegate`, `web_fetch`, and
+`web_search` remain the three documented exceptions — `delegate`'s absolute
+`cwd`/`spec` target child worktrees by design; `web_fetch` and `web_search`
+are network, not filesystem). `bash` is NOT filesystem-confined: it starts in `--cwd`
 but can touch absolute paths and inherits chug's environment (API
 credentials included) — treat model-issued bash as running with chug's
 own privileges. It runs in its own process group —
@@ -390,7 +390,7 @@ driver (120s default; `--bash-timeout` / `CHUG_BASH_TIMEOUT` overrides).
 `decision_log` is the loop's bookkeeping surface next to `update_ledger`:
 structured decision records to `.chug/decisions.jsonl` (append-only,
 best-effort) feeding the F13 distillation corpus; like the file tools it is
-cwd-sandboxed, so the two documented sandbox exceptions stay exactly two.
+cwd-sandboxed, so the three documented sandbox exceptions stay exactly three.
 
 `todo_add` / `todo_update` / `todo_list` are the other bookkeeping surface
 beside `update_ledger`: a structured todo list stored as a JSON array at
@@ -472,6 +472,17 @@ retry. Strictly less powerful than the `curl` already available through
 extraction, `events.jsonl` previews) that a raw shell fetch doesn't give the
 loop. Like `delegate`, it reaches outside the cwd sandbox by design — it is
 network, not filesystem.
+
+`web_search` — web search beside `web_fetch`, over the zero-config DuckDuckGo
+HTML provider (no API key; keyed providers — Brave/Tavily — are the seam's
+named phase 2). `query` required, `max_results` optional (default 5, clamped
+to 1..=10 — a larger request clamps, never errors); numbered results, each
+with a title, url, and one-line snippet; provider override via the
+`CHUG_WEB_SEARCH_PROVIDER` env var (valid values: `duckduckgo`). Live HTML
+scraping can break or be rate-limited at any time; those surface as tool
+errors — never a silent empty list (a page with no parsed result blocks says
+whether the page itself reported no results or the markup may have changed).
+Like `web_fetch`, it is network, not filesystem.
 
 `tgrep` — token-budgeted ranked context search: locate the 20 relevant lines
 without reading a whole file. `query` is one or more terms (ranked AND-ish;
@@ -938,6 +949,6 @@ activate without an operator restart — a pending `stop` still wins.
 cargo build && cargo clippy --all-targets -- -D warnings && cargo test
 ```
 
-All three must stay green. Layout: `src/{api,archive,driver,driver_lock,eventlog,events,fork,fsatomic,testsupport,tools,todos,tgrep,tui,webfetch,chat,
+All three must stay green. Layout: `src/{api,archive,driver,driver_lock,eventlog,events,fork,fsatomic,testsupport,tools,todos,tgrep,tui,webfetch,websearch,chat,
 attach,complete,commands,decisions,delegate,permissions,plan,riskgate,hooks,mcp,mcp_http,mcp_serve,sse,observ,auth,ledger,transcript,trim,build_info}.rs`
 (+ `main.rs`; `build.rs` only bakes the git commit into the startup banner).
