@@ -370,8 +370,20 @@ pub(super) const TEST_COUNT: usize = 18;
             "delegate",
             &json!({"action": "collect", "cwd": tmp.path()}),
         );
-        // Non-blocking by contract: well under any plausible poll interval.
-        assert!(started.elapsed() < Duration::from_secs(5), "{:?}", started.elapsed());
+        // Non-blocking by contract: collect has no wait path — it reads the
+        // events file and one best-effort git ref and returns. The cap is
+        // deliberately 30s, not 5s: a blocking collect (a wait_secs-style
+        // poll) would exceed it by far, while a loaded runner — full-suite
+        // parallelism plus shared-target-dir build contention — can stall a
+        // process spawn past 5s without any blocking (observed 5.63s in the
+        // T183 gate run; the assertion caught a scheduler stall, not a
+        // contract break). The contract is "returns without waiting on the
+        // child", not "returns in <5s on an idle machine".
+        assert!(
+            started.elapsed() < Duration::from_secs(30),
+            "{:?}",
+            started.elapsed()
+        );
         assert!(!result.is_error, "{}", result.content);
         assert!(result.content.contains("verdict: running"), "{}", result.content);
         assert!(!result.content.contains("summary:"), "{}", result.content);

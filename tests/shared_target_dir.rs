@@ -208,9 +208,9 @@ fn loop_spec_templates_export_the_shared_dir() {
     let spec = read("LOOP-SPEC.md");
     assert_contains(&spec, SHARED, "LOOP-SPEC.md");
     // Per-carrier pins — each of the three carriers is asserted by name and
-    // location, so dropping any ONE of them must fail this test (delegate
-    // has no env parameter and bash calls don't share env, so no carrier is
-    // redundant).
+    // location, so dropping any ONE of them must fail this test (bash calls
+    // don't share env, and T183's delegate `env` map duplicates only the
+    // launch-block carrier it rides with, so no carrier is redundant).
     // (1) step-1 worktree build line.
     count_eq(
         &spec,
@@ -261,13 +261,14 @@ fn loop_spec_validator_exports_the_validate_dir_always() {
     // (2) the spec-test's grep -c "target-shared-validate" ≥ 2, encoded as
     //     the exact count per the T47 pin pattern (a bare `>= 2` would
     //     survive dropping either carrier): the launch paragraph names the
-    //     dir AND the export sentence carries it.
+    //     dir AND the export sentence carries it. T183 adds the third
+    //     carrier — the delegate block's `env` value spells the dir too.
     count_eq(
         &spec,
         "target-shared-validate",
-        2,
+        3,
         "LOOP-SPEC target-shared-validate carriers: step-4 launch paragraph + \
-         goal-export sentence (T52)",
+         goal-export sentence + T183 env line (T52+T183)",
     );
     // (3) the rule is stated in its unconditional form.
     assert_contains(
@@ -282,6 +283,80 @@ fn loop_spec_validator_exports_the_validate_dir_always() {
         &format!("{SHARED} before"),
         1,
         "LOOP-SPEC step-2 impl goal export keeps target-shared (T52)",
+    );
+}
+
+/// T183 — the delegate launch templates carry the allowlisted `env` map: the
+/// step-2 impl block passes the T47 shared dir, the T161 overlap slots pass
+/// the role-keyed dir the same way, and step 4's validator passes the
+/// validate dir — the role-keyed target-dir discipline is a process-spawn
+/// fact now (T144's scrub still guards the ABSENT case; `env` is the
+/// EXPLICIT case and wins over it), with the goal-carried export lines kept
+/// as defense-in-depth. Exact per-carrier counts, the T47 pin pattern: a
+/// dropped (or duplicated) env carrier breaks the wiring this guards.
+#[test]
+fn t183_delegate_launch_templates_carry_the_env_map() {
+    let spec = read("LOOP-SPEC.md");
+    // The JSON env spellings (double-quoted key + path value) — distinct
+    // strings from the `CARGO_TARGET_DIR=<path>` export forms, so the
+    // pre-T183 carrier counts are unaffected.
+    const ENV_SHARED: &str =
+        "\"CARGO_TARGET_DIR\": \"/Users/jadams/workspace/chug/target-shared\"";
+    const ENV_IMPL_A: &str =
+        "\"CARGO_TARGET_DIR\": \"/Users/jadams/workspace/chug/target-shared-impl-a\"";
+    const ENV_IMPL_B: &str =
+        "\"CARGO_TARGET_DIR\": \"/Users/jadams/workspace/chug/target-shared-impl-b\"";
+    const ENV_VALIDATE: &str =
+        "\"CARGO_TARGET_DIR\": \"/Users/jadams/workspace/chug/target-shared-validate\"";
+    // Needle self-check (T48 idiom): the JSON form must differ from the
+    // export forms the older pins count.
+    assert!(!ENV_SHARED.contains(SHARED) && !ENV_IMPL_A.contains(IMPL_A));
+
+    // (1) step-2 impl-child delegate block: the env line, exactly once.
+    count_eq(
+        &spec,
+        ENV_SHARED,
+        1,
+        "LOOP-SPEC step-2 delegate block env carrier (T183)",
+    );
+    // (2) the T161 overlap slots pass the role-keyed dir via env the same
+    //     way — one carrier each in the step-2 overlap rule.
+    count_eq(
+        &spec,
+        ENV_IMPL_A,
+        1,
+        "LOOP-SPEC T161 impl-a env carrier (T183)",
+    );
+    count_eq(
+        &spec,
+        ENV_IMPL_B,
+        1,
+        "LOOP-SPEC T161 impl-b env carrier (T183)",
+    );
+    // (3) step-4 validator launch: target-shared-validate via env, once.
+    count_eq(
+        &spec,
+        ENV_VALIDATE,
+        1,
+        "LOOP-SPEC step-4 validator env carrier (T183)",
+    );
+    // (4) the goal-carried export lines STAY — defense-in-depth, stated:
+    //     the goal template's T47 export is byte-identical (pinned
+    //     elsewhere, `{SHARED} before` count 1) and the STAYS sentence is
+    //     present exactly once (wrap-insensitive, the T78 flat idiom).
+    count_eq(
+        &spec,
+        &format!("{SHARED} before"),
+        1,
+        "the step-2 GOAL export line STAYS (T183 defense-in-depth)",
+    );
+    count_eq(
+        &flat(&spec),
+        "line STAYS (defense-in-depth \u{2014} the goal gate's T144 scrub makes \
+         the check line's own export the only target dir the gate sees \
+         regardless)",
+        1,
+        "the T183 defense-in-depth sentence (step 2, flat)",
     );
 }
 

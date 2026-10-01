@@ -104,6 +104,7 @@ never 3+, never 2 validators):
      model:       "anthropic-system.ai.glm-5-3-flash"
      max_iters:   80
      max_minutes: 50
+     env:         {"CARGO_TARGET_DIR": "/Users/jadams/workspace/chug/target-shared"}
    ```
    The clippy bar in that goal is the `-D warnings` form — the child runs
    `cargo clippy --all-targets -- -D warnings` and must reach zero
@@ -134,18 +135,25 @@ never 3+, never 2 validators):
    children still die at the 50-minute budget with the goal unaccepted,
    the next eval considers spec-size discipline instead of further
    raises.
-   The goal carries the T47 export because delegate cannot pass env — a child
-   that skips it just builds cold into its own worktree's target dir
-   (harmless, slow). T161: an impl child launched INTO the 2-impl overlap
-   (the Pipeline overlap rule's pattern ii) swaps its goal's export for the
-   role-keyed slot — `export
+   T183: the delegate block passes the T47 shared dir to the child at
+   spawn (`env`, the template's last line) — the build-cache discipline is
+   a process-spawn fact now, not only goal text. The goal's `export
+   CARGO_TARGET_DIR=…` line STAYS (defense-in-depth — the goal gate's T144
+   scrub makes the check line's own export the only target dir the gate
+   sees regardless), so a child that skips both still just builds cold
+   into its own worktree's target dir (harmless, slow). T161: an impl
+   child launched INTO the 2-impl overlap (the Pipeline overlap rule's
+   pattern ii) swaps its goal's export for the role-keyed slot — `export
    CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-impl-a`
    before every cargo command, or
    `CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-impl-b`
-   when the impl already in flight holds impl-a — the same dir its step-1
-   warm build used, never the shared default while another impl flies (the
-   T52 lesson: never one shared slot for concurrent impls); the template
-   above is the solo default and stays.
+   when the impl already in flight holds impl-a — and passes the SAME
+   role-keyed dir via `env` (`env:
+   {"CARGO_TARGET_DIR": "/Users/jadams/workspace/chug/target-shared-impl-a"}` or
+   `env: {"CARGO_TARGET_DIR": "/Users/jadams/workspace/chug/target-shared-impl-b"}`),
+   the same dir its step-1 warm build used, never the shared default while
+   another impl flies (the T52 lesson: never one shared slot for
+   concurrent impls); the template above is the solo default and stays.
    Poll every ~60–110s with `delegate{action: "status", cwd:
    "/tmp/chug-loop-t<N>", pid: <pid launch returned>}` — each poll is a
    single non-blocking tool call reporting liveness, a summary of the
@@ -317,9 +325,12 @@ never 3+, never 2 validators):
    target dirs: the validator's mutate→test→revert→re-test cycle builds into
    its own persistent `target-shared-validate` cache, so its mutant binaries
    can never occupy an artifact slot another checkout's gates or impl builds
-   read — same artifact-name mechanism as step 3). The dir persists across
-   cycles — warm after first use; the first use is a cold build, the
-   accepted one-time cost per role. This
+   read — same artifact-name mechanism as step 3). T183: the launch ALSO
+   passes the dir via `env`
+   (`env: {"CARGO_TARGET_DIR": "/Users/jadams/workspace/chug/target-shared-validate"}`)
+   — the goal's export line STAYS, the step-2 defense-in-depth rule. The dir
+   persists across cycles — warm after first use; the first use is a cold
+   build, the accepted one-time cost per role. This
    paragraph is a LOOP-SPEC override of §6's launch
    mechanics only, and META-SPEC.md is not edited.
    Parallel mutants (T79, operator-approved 2026-09-26): after the gates
