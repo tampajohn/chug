@@ -411,7 +411,15 @@ a git worktree). Three actions:
   required; `--max-iters`/`--max-minutes` optional, defaults 40/35;
   `--max-tokens` optional — the child's cumulative input+output token
   ceiling, omitted = no token ceiling; `resume: true` optional to continue
-  the child's aborted run instead of starting fresh) against an absolute
+  the child's aborted run instead of starting fresh; `env` optional — an
+  allowlisted string→string map passed to the child's environment: keys must
+  match `^(CARGO_|CHUG_|RUST)[A-Z0-9_]*$`, ≤16 entries, values ≤4 KiB with
+  no NUL bytes, anything else a tool error naming the key; applied AFTER the
+  inherited-env target-dir scrub, so an explicit `CARGO_TARGET_DIR` in `env`
+  WINS over the scrub — the scrub guards the absent case, `env` is the
+  explicit case; when `env` is absent the goal-carried `export` remains the
+  fallback and the spawn is byte-identical, and the launch payload names the
+  applied keys, never the values) against an absolute
   `cwd` you prepared, appends its stdout+stderr to
   `<cwd>/.chug/delegate.log`, and returns immediately with the child `pid`,
   the log/events paths, and the goal-integrity echoes — `goal_bytes` (the
