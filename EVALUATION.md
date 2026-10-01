@@ -266,6 +266,25 @@ untouched this delta. No docs row filed.
 
 ## Outcomes (filled at cycle wrap — LOOP-SPEC Phase 3)
 
+### Cycle 86 (2026-10-01, in progress) — glm routine freshness-skip cycle (freshness held: 8 todo rows T186–T193 + EVALUATION.md same-UTC-day; skip record d1790875941-1) — T193 landed; T188 in flight
+
+- **T193** (pri 3, bug) — site-sync in-flight classifier counts done TODO
+  rows: landed `a3acaac` (impl `a9f631b`, glm first-try 43/80 clean,
+  +112/-7 across exactly the spec's 3 target files). Classifier now
+  pre-filters OPEN rows only before the F-id grep; F6/F12 FEATURES
+  annotations brought to the uppercase-LANDED convention; 5 new
+  site_sync pins (done-row-only stays queued, todo+in-progress yield
+  in-flight, uppercase-LANDED SPLIT row wins over an open referencing
+  row, unreferenced control, real-F6 shape). Gates-only routing
+  (d1790876650-3 — no core-list file, ~119 lines ≤ 150, no new surface,
+  no check: change; mirrors the T189 predicate its sibling will codify):
+  nextest 1324/1324 independently re-run in worktree AND main
+  (target-shared-gates / target-shared-main per the T52 overlap split),
+  clippy `-D warnings` clean. Child verified end-to-end on a throwaway
+  site fixture (CHUG_SITE_SYNC_NO_PUSH=1): F6 landed, F12 landed, F14
+  in-flight via open T192. Region regenerates at the next wrap sync —
+  acceptance confirmed there.
+
 ### Cycle 85 (2026-10-01) — kimi mandatory fresh-eval cycle (queue drained at cycle-84 wrap fe02689; T81 routing correct 3-for-3) — 4 rows filed (T184–T187 + F14 reframe), 2 landed (T185, T184), T186/T187 DEFERRED to cycle 86 (specs cold-start-ready; T186 gained the defunct-zombie liveness amendment from this cycle's inverse incident) — no tag (2 items < 3 since v0.11.0, F14 phase 1 of 2 not a check-off)
 
 - **T185** (pri 2, bug) — bash reader-grace keeps already-read output when a
