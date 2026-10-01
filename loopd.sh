@@ -330,6 +330,19 @@ while [ ! -f "$STOP" ]; do
   # the block. The supervisor then stamps its own rc-based verdict line into
   # the cycle log — the only thing downstream consumers (site-sync's cycle
   # count) may count, never raw child bytes.
+  # T178: lift the 120s bash-tool cap for the whole fleet — cycles-76–78
+  # showed 3-4 `timed out after Ns (process group killed)` bash deaths per
+  # stream (cold/warm nextest gates and cold cargo builds exceed 120s), and
+  # every death buys a retry whose wall time feeds the minutes-death census.
+  # ONE export here covers the orchestrator AND every delegate child
+  # (children inherit this process env — delegate has no env parameter, the
+  # T47 lesson — and T144's scrub removes only target-dir vars). Precedence:
+  # `--bash-timeout` flag > $CHUG_BASH_TIMEOUT env > the 120 default
+  # (src/main.rs:370), so an explicit flag still wins. Unlike the T47
+  # CARGO_TARGET_DIR prefix below, persisting this export across supervisor
+  # iterations is harmless: it only affects chug bash-tool calls, never the
+  # supervisor's own ./target build.
+  export CHUG_BASH_TIMEOUT=300
   chug_rc=0
   chug_out="$(CARGO_TARGET_DIR="$ROOT/target-shared" ./target/release/chug run --spec LOOP-SPEC.md \
     --goal "Run the full self-improvement cycle per LOOP-SPEC: evaluate or skip per the freshness rule, work the queue (features are first-class per the amended doctrine — close capability gaps, not only harden), adversarial validation for core-logic items, you own all bookkeeping, push after each item lands green + remainder at wrap. Your wrap IS the next cycle's input — leave TODO.md, EVALUATION.md and specs/ such that a cold next cycle needs zero human words." \
