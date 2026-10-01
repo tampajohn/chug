@@ -136,9 +136,12 @@ const REQUIRED_FIELDS: [&str; 6] = [
     "class", "subject", "inputs", "options", "choice", "confidence",
 ];
 
-/// The contract reminder appended to unknown-shape and non-object errors
-/// (T88 reqs 2-3): the batched-wrapper shape is the one failure data shows
-/// models actually hit, so the reminder names the fix, not just the fields.
+/// The contract reminder appended to EVERY validation-failure error (T88
+/// reqs 2-3 built it for the unknown-shape and non-object shapes; T182 made
+/// it unconditional): the reminder names the fix, not just the fields.
+/// Invariant: every failure message carries the full required-field list,
+/// because the 5-of-6-fields fumble shape previously bypassed it — the
+/// cycle-83 census counted 5 instances in 3 cycles.
 const CONTRACT_REMINDER: &str =
     "one record per call; required: class, subject, inputs, options, choice, confidence";
 
@@ -275,26 +278,27 @@ fn confidence_field(obj: &Map<String, Value>) -> Result<f64, String> {
 }
 
 /// The combined validation error (T88 reqs 1-2): every leg in schema order,
-/// then — only when the call's SHAPE is unknown, i.e. none of the six
-/// required keys are present (the cycle-47 batched wrapper) or an
-/// unrecognized key rides along (the events.jsonl-style `type` alias) — the
-/// received top-level keys (first 8, sorted) and the one-record-per-call
-/// contract reminder. Fires on failure legs only: extra keys on an
+/// then the one-record-per-call contract reminder — ALWAYS (T182), for
+/// every validation-failure shape: the 5-of-6-fields fumble (all keys
+/// recognized, one missing) previously took the legs-only path, the error
+/// named the ONE missing field but never re-stated the contract, and the
+/// retry dropped a DIFFERENT field (cycle-83 census: 5 instances in 3
+/// cycles). The `received keys: [...]` list stays conditional on the SHAPE
+/// being unknown — an unrecognized key rides along (the events.jsonl-style
+/// `type` alias): a merely-missing-field call needs the contract, not its
+/// own keys echoed. Fires on failure legs only: extra keys on an
 /// otherwise-valid record stay ignored, keeping the success path unchanged
 /// (T88 req 4).
 fn validation_message(obj: &Map<String, Value>, legs: &[String]) -> String {
     let mut msg = format!("invalid decision_log call: {}", legs.join("; "));
-    let has_required = obj.keys().any(|k| REQUIRED_FIELDS.contains(&k.as_str()));
     let has_unrecognized = obj.keys().any(|k| !REQUIRED_FIELDS.contains(&k.as_str()));
-    if !has_required || has_unrecognized {
+    if has_unrecognized {
         let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
         keys.sort_unstable();
         keys.truncate(8);
-        msg.push_str(&format!(
-            "; received keys: [{}]; {CONTRACT_REMINDER}",
-            keys.join(", ")
-        ));
+        msg.push_str(&format!("; received keys: [{}]", keys.join(", ")));
     }
+    msg.push_str(&format!("; {CONTRACT_REMINDER}"));
     msg
 }
 
@@ -803,16 +807,49 @@ mod tests {
         }
         let r = dispatch(&ctx, "decision_log", &input);
         assert!(r.is_error, "{}", r.content);
-        // Exact pin: every leg in REQUIRED_FIELDS order, one message.
+        // Exact pin: every leg in REQUIRED_FIELDS order, one message —
+        // ending with the always-on contract reminder (T182).
         assert_eq!(
             r.content,
             "tool error: invalid decision_log call: inputs must be a string, got missing; \
              options must be a string, got missing; choice must be a string, got missing; \
-             confidence must be a number in 0..=1, got missing"
+             confidence must be a number in 0..=1, got missing; one record per call; \
+             required: class, subject, inputs, options, choice, confidence"
         );
         assert_named_in_order(&r.content, &["inputs", "options", "choice", "confidence"]);
+        assert!(r.content.contains(REQUIRED_LIST), "{}", r.content);
         assert!(!r.content.contains("class must be"), "{}", r.content);
         assert!(!r.content.contains("subject must be"), "{}", r.content);
+        assert!(!log_path(tmp.path()).exists(), "validation failures must not write");
+    }
+
+    /// T182: the 5-of-6 fumble shape — exactly one required field missing,
+    /// ALL keys recognized — previously took the legs-only path and never
+    /// re-stated the contract, so the retry could drop a DIFFERENT field
+    /// (the cycle-83 census: 5 instances in 3 cycles). Every failure shape
+    /// now carries the full required-field list.
+    #[test]
+    fn decision_log_five_of_six_fields_still_carries_the_contract_reminder() {
+        let tmp = TempDir::new().unwrap();
+        let ctx = tool_ctx(tmp.path());
+        let mut input = sample_input();
+        input.as_object_mut().unwrap().remove("options");
+        let r = dispatch(&ctx, "decision_log", &input);
+        assert!(r.is_error, "{}", r.content);
+        // Exact pin: the leg names the ONE missing field, and the message
+        // ends with the full contract (T182) — no received-keys echo.
+        assert_eq!(
+            r.content,
+            "tool error: invalid decision_log call: options must be a string, got missing; \
+             one record per call; required: class, subject, inputs, options, choice, confidence"
+        );
+        assert_named_in_order(
+            &r.content,
+            &["options must be a string, got missing", REQUIRED_LIST],
+        );
+        // Merely-missing-field calls need the contract, not their own keys
+        // echoed: the received-keys list stays unknown-keys-only.
+        assert!(!r.content.contains("received keys"), "{}", r.content);
         assert!(!log_path(tmp.path()).exists(), "validation failures must not write");
     }
 
@@ -941,6 +978,8 @@ mod tests {
                 "{field}: {}",
                 r.content
             );
+            // T182: the always-on contract reminder rides this shape too.
+            assert!(r.content.contains(REQUIRED_LIST), "{field}: {}", r.content);
             for other in string_fields {
                 if other != field {
                     assert!(
@@ -965,6 +1004,8 @@ mod tests {
             "{}",
             r.content
         );
+        // T182: the always-on contract reminder rides this shape too.
+        assert!(r.content.contains(REQUIRED_LIST), "{}", r.content);
         for other in string_fields {
             assert!(
                 !r.content.contains(&format!("{other} must be")),
