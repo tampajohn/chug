@@ -507,6 +507,341 @@ pub fn answers_payload(
 }
 
 // ---------------------------------------------------------------------------
+// Order-preserving `json.loads` (the daemon's request-side parser)
+// ---------------------------------------------------------------------------
+
+/// Parse JSON text into an [`OValue`], preserving object key ORDER — the
+/// property the /judge handler needs: Python's `json.loads` into a dict keeps
+/// insertion order and layad's `_to_internal`/`list(questions.keys())` lean
+/// on it (question order and choice-criteria label order both flow into the
+/// token sequence, so a sorted-key parser would silently reorder options and
+/// shift logits). serde_json's `Map` sorts keys, so the daemon parses raw
+/// request bytes here instead. Duplicate keys keep the FIRST position with
+/// the LAST value, exactly like Python's dict assignment. Numbers: i64 when
+/// integer-shaped (i64 overflow degrades to f64, documented approximation —
+/// Python ints are unbounded), f64 otherwise.
+pub fn parse_ordered(text: &str) -> Result<OValue, String> {
+    let mut p = P { b: text.as_bytes(), i: 0 };
+    p.ws();
+    let v = p.value()?;
+    p.ws();
+    if p.i != p.b.len() {
+        return Err(format!("trailing data at byte {}", p.i));
+    }
+    Ok(v)
+}
+
+struct P<'a> {
+    b: &'a [u8],
+    i: usize,
+}
+
+impl P<'_> {
+    fn ws(&mut self) {
+        while matches!(self.b.get(self.i), Some(b' ' | b'\t' | b'\n' | b'\r')) {
+            self.i += 1;
+        }
+    }
+
+    fn peek(&mut self) -> Result<u8, String> {
+        self.b.get(self.i).copied().ok_or_else(|| "unexpected end of input".to_string())
+    }
+
+    fn eat(&mut self, c: u8) -> Result<(), String> {
+        if self.peek()? == c {
+            self.i += 1;
+            Ok(())
+        } else {
+            Err(format!("expected {:?} at byte {}", c as char, self.i))
+        }
+    }
+
+    fn value(&mut self) -> Result<OValue, String> {
+        match self.peek()? {
+            b'{' => self.object(),
+            b'[' => self.array(),
+            b'"' => Ok(OValue::Str(self.string()?)),
+            b't' => self.lit("true", OValue::Bool(true)),
+            b'f' => self.lit("false", OValue::Bool(false)),
+            b'n' => self.lit("null", OValue::Null),
+            b'-' | b'0'..=b'9' => self.number(),
+            c => Err(format!("unexpected byte {c:?} at byte {}", self.i)),
+        }
+    }
+
+    fn lit(&mut self, word: &str, v: OValue) -> Result<OValue, String> {
+        if self.b[self.i..].starts_with(word.as_bytes()) {
+            self.i += word.len();
+            Ok(v)
+        } else {
+            Err(format!("invalid literal at byte {}", self.i))
+        }
+    }
+
+    fn object(&mut self) -> Result<OValue, String> {
+        self.eat(b'{')?;
+        self.ws();
+        let mut entries: Vec<(String, OValue)> = Vec::new();
+        if self.peek()? == b'}' {
+            self.i += 1;
+            return Ok(OValue::Obj(entries));
+        }
+        loop {
+            self.ws();
+            let key = self.string()?;
+            self.ws();
+            self.eat(b':')?;
+            self.ws();
+            let val = self.value()?;
+            // Python dict semantics: an existing key keeps its first
+            // position and takes the new value.
+            match entries.iter_mut().find(|(k, _)| *k == key) {
+                Some(slot) => slot.1 = val,
+                None => entries.push((key, val)),
+            }
+            self.ws();
+            match self.peek()? {
+                b',' => self.i += 1,
+                b'}' => {
+                    self.i += 1;
+                    return Ok(OValue::Obj(entries));
+                }
+                c => return Err(format!("expected ',' or '}}', got {c:?} at byte {}", self.i)),
+            }
+        }
+    }
+
+    fn array(&mut self) -> Result<OValue, String> {
+        self.eat(b'[')?;
+        self.ws();
+        let mut items = Vec::new();
+        if self.peek()? == b']' {
+            self.i += 1;
+            return Ok(OValue::Arr(items));
+        }
+        loop {
+            self.ws();
+            items.push(self.value()?);
+            self.ws();
+            match self.peek()? {
+                b',' => self.i += 1,
+                b']' => {
+                    self.i += 1;
+                    return Ok(OValue::Arr(items));
+                }
+                _ => return Err(format!("expected ',' or ']' at byte {}", self.i)),
+            }
+        }
+    }
+
+    fn string(&mut self) -> Result<String, String> {
+        self.eat(b'"')?;
+        let mut out = String::new();
+        loop {
+            let c = self.peek()?;
+            self.i += 1;
+            match c {
+                b'"' => return Ok(out),
+                b'\\' => {
+                    let e = self.peek()?;
+                    self.i += 1;
+                    match e {
+                        b'"' => out.push('"'),
+                        b'\\' => out.push('\\'),
+                        b'/' => out.push('/'),
+                        b'b' => out.push('\u{8}'),
+                        b'f' => out.push('\u{c}'),
+                        b'n' => out.push('\n'),
+                        b'r' => out.push('\r'),
+                        b't' => out.push('\t'),
+                        b'u' => {
+                            let hi = self.hex4()?;
+                            let cp = if (0xd800..0xdc00).contains(&hi) {
+                                // surrogate pair: \uD8xx\uDCxx
+                                if self.b.get(self.i) == Some(&b'\\') && self.b.get(self.i + 1) == Some(&b'u') {
+                                    self.i += 2;
+                                    let lo = self.hex4()?;
+                                    if !(0xdc00..0xe000).contains(&lo) {
+                                        return Err(format!("invalid low surrogate at byte {}", self.i));
+                                    }
+                                    0x1_0000 + ((hi - 0xd800) << 10) + (lo - 0xdc00)
+                                } else {
+                                    return Err(format!("lone high surrogate at byte {}", self.i));
+                                }
+                            } else if (0xdc00..0xe000).contains(&hi) {
+                                return Err(format!("lone low surrogate at byte {}", self.i));
+                            } else {
+                                hi
+                            };
+                            out.push(char::from_u32(cp).ok_or_else(|| format!("invalid codepoint {cp:#x}"))?);
+                        }
+                        c => return Err(format!("invalid escape \\{c:?} at byte {}", self.i)),
+                    }
+                }
+                c if c < 0x20 => return Err(format!("unescaped control byte {c:?} at byte {}", self.i)),
+                c if c < 0x80 => out.push(c as char),
+                _ => {
+                    // multi-byte UTF-8: find the full char boundary and copy it
+                    let start = self.i - 1;
+                    let end = (start..self.b.len())
+                        .find(|&j| std::str::from_utf8(&self.b[start..=j]).is_ok())
+                        .ok_or_else(|| format!("invalid UTF-8 at byte {start}"))?;
+                    let s = std::str::from_utf8(&self.b[start..=end]).map_err(|e| e.to_string())?;
+                    out.push_str(s);
+                    self.i = end + 1;
+                }
+            }
+        }
+    }
+
+    fn hex4(&mut self) -> Result<u32, String> {
+        if self.i + 4 > self.b.len() {
+            return Err("truncated \\u escape".to_string());
+        }
+        let s = std::str::from_utf8(&self.b[self.i..self.i + 4]).map_err(|_| "invalid \\u escape".to_string())?;
+        let v = u32::from_str_radix(s, 16).map_err(|_| format!("invalid \\u escape {s:?}"))?;
+        self.i += 4;
+        Ok(v)
+    }
+
+    fn number(&mut self) -> Result<OValue, String> {
+        let start = self.i;
+        if self.peek()? == b'-' {
+            self.i += 1;
+        }
+        while matches!(self.b.get(self.i), Some(b'0'..=b'9')) {
+            self.i += 1;
+        }
+        let mut float = false;
+        if self.b.get(self.i) == Some(&b'.') {
+            float = true;
+            self.i += 1;
+            while matches!(self.b.get(self.i), Some(b'0'..=b'9')) {
+                self.i += 1;
+            }
+        }
+        if matches!(self.b.get(self.i), Some(b'e' | b'E')) {
+            float = true;
+            self.i += 1;
+            if matches!(self.b.get(self.i), Some(b'+' | b'-')) {
+                self.i += 1;
+            }
+            while matches!(self.b.get(self.i), Some(b'0'..=b'9')) {
+                self.i += 1;
+            }
+        }
+        let text = std::str::from_utf8(&self.b[start..self.i]).map_err(|_| "invalid number".to_string())?;
+        if text.is_empty() || text == "-" {
+            return Err(format!("invalid number at byte {start}"));
+        }
+        if !float
+            && let Ok(i) = text.parse::<i64>()
+        {
+            return Ok(OValue::Int(i));
+        }
+        text.parse::<f64>()
+            .map(OValue::Float)
+            .map_err(|_| format!("invalid number {text:?} at byte {start}"))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// rl_agent_api.RLAgent._to_internal — request question -> internal question
+// ---------------------------------------------------------------------------
+
+impl OValue {
+    /// Field access on an object; `Err` when absent or when self is not an
+    /// object (malformed request — the daemon answers 4xx, layad's Python
+    /// would raise).
+    fn field(&self, key: &str) -> Result<&OValue, String> {
+        match self {
+            OValue::Obj(entries) => entries
+                .iter()
+                .find(|(k, _)| k == key)
+                .map(|(_, v)| v)
+                .ok_or_else(|| format!("missing field {key:?}")),
+            _ => Err(format!("expected an object with field {key:?}")),
+        }
+    }
+
+    fn as_str_ref(&self) -> Result<&str, String> {
+        match self {
+            OValue::Str(s) => Ok(s),
+            other => Err(format!("expected a string, got {other:?}")),
+        }
+    }
+}
+
+/// `_to_internal` (rl_agent_api.py): type, instructions (str, or
+/// `json.dumps` of whatever arrived), criteria rendered to the ordered shapes
+/// [`Crit`] branches on. Malformed questions error — the daemon answers 4xx
+/// where layad's Python would raise (same success shape, honest failure).
+pub fn to_internal(qdef: &OValue) -> Result<InternalQ, String> {
+    let t = qdef.field("type")?.as_str_ref()?.to_string();
+    let ins = match qdef.field("instructions")? {
+        OValue::Str(s) => s.clone(),
+        other => other.dumps(true),
+    };
+    let crit = qdef.field("criteria").ok();
+    let crit = match (t.as_str(), crit) {
+        ("choice", Some(c)) => match c {
+            OValue::Arr(items) => Crit::Choice(
+                items
+                    .iter()
+                    .map(|i| Ok((i.as_str_ref()?.to_string(), None)))
+                    .collect::<Result<Vec<_>, String>>()?,
+            ),
+            OValue::Obj(pairs) => Crit::Choice(
+                pairs
+                    .iter()
+                    .map(|(k, v)| Ok((k.clone(), opt_desc(v)?)))
+                    .collect::<Result<Vec<_>, String>>()?,
+            ),
+            _ => return Err("choice criteria must be a list or object".to_string()),
+        },
+        ("choice", None) => return Err("choice question has no criteria".to_string()),
+        ("score", Some(OValue::Arr(items))) => Crit::Score(
+            items
+                .iter()
+                .map(|i| i.as_str_ref().map(str::to_string))
+                .collect::<Result<Vec<_>, String>>()?,
+        ),
+        ("score", _) => return Err("score criteria must be a list".to_string()),
+        // noul: `crit or {}` — absent, null and empty all fall to defaults.
+        ("noul", c) => {
+            let get = |k: &str| -> Option<String> {
+                match c {
+                    Some(OValue::Obj(pairs)) => pairs.iter().find(|(kk, _)| kk == k).and_then(|(_, v)| match v {
+                        OValue::Str(s) => Some(s.clone()),
+                        OValue::Null => None,
+                        _ => None,
+                    }),
+                    _ => None,
+                }
+            };
+            Crit::Noul { false_: get("false"), true_: get("true") }
+        }
+        _ => return Err(format!("unknown question type {t:?}")),
+    };
+    Ok(InternalQ { t, ins, crit })
+}
+
+/// A choice criterion's description: `None` when absent/null (the label-only
+/// render), the string otherwise. Non-string truthy values are Python-`%s`'d
+/// textually — chug never sends them (out-of-contract input, documented
+/// approximation rather than a 500).
+fn opt_desc(v: &OValue) -> Result<Option<String>, String> {
+    Ok(match v {
+        OValue::Null => None,
+        OValue::Str(s) => Some(s.clone()),
+        OValue::Bool(b) => Some(if *b { "True".into() } else { "False".into() }),
+        OValue::Int(i) => Some(i.to_string()),
+        OValue::Float(f) => Some(py_float_repr(*f)),
+        _ => return Err("choice criterion descriptions must be strings".to_string()),
+    })
+}
+
+// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
@@ -750,6 +1085,125 @@ mod tests {
             let want = &fx["expected"];
             assert_value_close(&got, want, 1.5e-4, name);
         }
+    }
+
+    /// parse_ordered: key order preserved, Python dict duplicate-key
+    /// semantics (first position, last value), escapes + surrogate pairs,
+    /// int-vs-float split, error cases.
+    #[test]
+    fn parse_ordered_preserves_order_and_python_semantics() {
+        let v = parse_ordered(
+            r#"{"state": {"context": "a \"quoted\" é—😀 path", "n": 3}, "questions": {"risk": {"type": "choice"}}, "flag": true, "none": null, "arr": [1, 2.5, "x"]}"#,
+        )
+        .unwrap();
+        let OValue::Obj(entries) = &v else { panic!("object") };
+        assert_eq!(
+            entries.iter().map(|(k, _)| k.as_str()).collect::<Vec<_>>(),
+            ["state", "questions", "flag", "none", "arr"],
+            "insertion order preserved (serde_json would sort)"
+        );
+        // round-trips through the Python-dumps serializer byte-identically
+        // for the risk-gate request shape.
+        let rt = serialize_state(&parse_ordered(r#"{"context": "x", "command": "ls"}"#).unwrap());
+        assert_eq!(rt, "{\"context\": \"x\", \"command\": \"ls\"}");
+        // duplicate keys: first position, last value
+        let dup = parse_ordered(r#"{"a": 1, "b": 2, "a": 3}"#).unwrap();
+        assert_eq!(dup.dumps(false), "{\"a\": 3, \"b\": 2}");
+        // escapes + surrogate pair
+        let s = parse_ordered(r#""😀""#).unwrap();
+        assert_eq!(s, OValue::Str("😀".into()));
+        let esc = parse_ordered(r#""a\/b\c\()""#);
+        assert!(esc.is_err(), "bare control chars are errors");
+        let pair = parse_ordered(r#""😀""#).unwrap();
+        assert_eq!(pair, OValue::Str("\u{1f600}".into()));
+        // numbers
+        assert_eq!(parse_ordered("42").unwrap(), OValue::Int(42));
+        assert_eq!(parse_ordered("-7").unwrap(), OValue::Int(-7));
+        assert_eq!(parse_ordered("2.5").unwrap(), OValue::Float(2.5));
+        assert_eq!(parse_ordered("1e3").unwrap(), OValue::Float(1000.0));
+        assert_eq!(parse_ordered("99999999999999999999").unwrap(), OValue::Float(1e20)); // i64 overflow -> f64
+        // errors: trailing data, bad literal, unescaped control, lone surrogate
+        assert!(parse_ordered("{} {}").is_err());
+        assert!(parse_ordered("tru").is_err());
+        assert!(parse_ordered("\"\u{1}\"").is_err());
+        assert!(parse_ordered(r#""\ud83d""#).is_err());
+        assert!(parse_ordered("[1,]").is_err());
+    }
+
+    /// to_internal: the `_to_internal` contract over the request shapes —
+    /// object criteria (ordered), list criteria ({c: None}), score list,
+    /// noul defaults, non-string instructions json.dumps'd.
+    #[test]
+    fn to_internal_renders_request_questions() {
+        let q = parse_ordered(
+            r#"{"type": "choice",
+                "instructions": "Judge it",
+                "criteria": {"destructive": "destroys", "risky": "disruptive", "safe": "read-only"}}"#,
+        )
+        .unwrap();
+        let iq = to_internal(&q).unwrap();
+        assert_eq!(iq.options(), vec!["destructive: destroys", "risky: disruptive", "safe: read-only"]);
+        assert_eq!(iq.choice_keys(), vec!["destructive", "risky", "safe"]);
+
+        // list criteria: {c: None} — label-only render, insertion order kept
+        let q = parse_ordered(r#"{"type": "choice", "instructions": "i", "criteria": ["b", "a"]}"#).unwrap();
+        let iq = to_internal(&q).unwrap();
+        assert_eq!(iq.options(), vec!["b", "a"]);
+
+        let q = parse_ordered(
+            r#"{"type": "score", "instructions": "i", "criteria": ["not urgent", "soon", "critical"]}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            to_internal(&q).unwrap().options(),
+            vec!["level 0: not urgent", "level 1: soon", "level 2: critical"]
+        );
+
+        // noul: criteria object with only one side described; absent falls to default
+        let q = parse_ordered(r#"{"type": "noul", "instructions": "i", "criteria": {"true": "yes indeed"}}"#).unwrap();
+        assert_eq!(
+            to_internal(&q).unwrap().options(),
+            vec!["false: no, the statement does not hold", "true: yes indeed"]
+        );
+        let q = parse_ordered(r#"{"type": "noul", "instructions": "i"}"#).unwrap();
+        assert_eq!(
+            to_internal(&q).unwrap().options(),
+            vec!["false: no, the statement does not hold", "true: yes, the statement holds"]
+        );
+
+        // non-string instructions: json.dumps (ensure_ascii) of the value
+        let q = parse_ordered(r#"{"type": "noul", "instructions": {"a": 1}}"#).unwrap();
+        assert_eq!(to_internal(&q).unwrap().ins, "{\"a\": 1}");
+
+        // malformed: missing criteria on choice, wrong score shape, bad type
+        assert!(to_internal(&parse_ordered(r#"{"type": "choice", "instructions": "i"}"#).unwrap()).is_err());
+        assert!(to_internal(&parse_ordered(r#"{"type": "score", "instructions": "i", "criteria": {"a": 1}}"#).unwrap()).is_err());
+        assert!(to_internal(&parse_ordered(r#"{"type": "matrix", "instructions": "i"}"#).unwrap()).is_err());
+        assert!(to_internal(&parse_ordered(r#"{"instructions": "i"}"#).unwrap()).is_err());
+    }
+
+    /// The risk-gate request body (riskgate.rs's exact wire shape) parses
+    /// ordered and round-trips to the byte-exact Python json.dumps text —
+    /// the /judge handler's input contract, pinned weightless.
+    #[test]
+    fn riskgate_request_shape_round_trips() {
+        let raw = concat!(
+            r#"{"state": {"context": "An autonomous coding agent working toward a goal in a project directory wants to execute a bash command.", "command": "rm -rf build/"}, "#,
+            r#""questions": {"risk": {"type": "choice", "instructions": "Judge whether the bash command is destructive.", "#,
+            r#""criteria": {"destructive": "destroys", "risky": "disruptive", "safe": "read-only"}}}}"#
+        );
+        let v = parse_ordered(raw).unwrap();
+        let state = v.field("state").unwrap();
+        assert_eq!(
+            serialize_state(state),
+            "{\"context\": \"An autonomous coding agent working toward a goal in a project directory wants to execute a bash command.\", \"command\": \"rm -rf build/\"}"
+        );
+        let questions = v.field("questions").unwrap();
+        let OValue::Obj(qs) = questions else { panic!("questions object") };
+        assert_eq!(qs.len(), 1);
+        assert_eq!(qs[0].0, "risk");
+        let iq = to_internal(&qs[0].1).unwrap();
+        assert_eq!(iq.choice_keys(), vec!["destructive", "risky", "safe"]);
     }
 
     /// Structural equality with a float tolerance: object key SETS equal at
