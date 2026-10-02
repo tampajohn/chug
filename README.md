@@ -65,6 +65,8 @@ chug run --spec SPEC.md --goal "Build X and make the check pass" \
 
 chug run --tui ...   # same, with the live dashboard
 chug run --resume    # continue an aborted run from .chug/transcript.jsonl
+chug run --auto-spec --validate     # force FULL adversarial validation on this run (T189)
+chug run --auto-spec --no-validate  # force the gates-only lane (operator override, recorded)
 chug chat            # interactive mode (TUI)
 chug ledger          # print current LEDGER.md
 ```
@@ -86,7 +88,15 @@ the draft and the failing output, never a loosened check. In chat mode the
 same flow is `/auto-spec <request>` then `/auto-spec-approve` (the approve
 gate re-runs the dry-run; editing the check to something vacuous is
 refused). Auto-spec is for task-class work — chores, small features;
-adversarial and loop work keeps hand-written specs.
+adversarial and loop work keeps hand-written specs. Auto-spec'd runs
+default to the low-stakes validation lane (T189): per item, a mechanical
+predicate computed from the diff (no core-list file touched, ≤ ~150
+changed lines, no new tool/command surface, no CI/`check:`-line change)
+routes gates-only — the kimi validation child is skipped, never the gates
+(build + clippy + the full suite in the worktree, byte-clean review, and
+the scope check stay required). `--validate` forces full adversarial
+validation; `--no-validate` forces the gates-only lane; either operator
+override is recorded.
 
 ## Interactive mode (`chug chat`)
 
@@ -979,6 +989,6 @@ activate without an operator restart — a pending `stop` still wins.
 cargo build && cargo clippy --all-targets -- -D warnings && cargo test
 ```
 
-All three must stay green. Layout: `src/{api,autospec,archive,driver,driver_lock,eventlog,events,fork,fsatomic,testsupport,tools,todos,tgrep,tui,webfetch,websearch,chat,
+All three must stay green. Layout: `src/{api,autospec,archive,driver,driver_lock,eventlog,events,fork,fsatomic,testsupport,tools,todos,tgrep,tui,valroute,webfetch,websearch,chat,
 attach,complete,commands,decisions,delegate,permissions,plan,riskgate,hooks,mcp,mcp_http,mcp_serve,sse,observ,auth,ledger,transcript,trim,build_info}.rs`
 (+ `main.rs`; `build.rs` only bakes the git commit into the startup banner).
