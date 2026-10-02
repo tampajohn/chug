@@ -189,7 +189,11 @@ pub(crate) fn log_trim(cwd: &Path, stats: &crate::trim::TrimStats) {
 
 /// Append one JSON object as a line, creating `.chug/` on demand. Failures
 /// warn once and are dropped: telemetry never aborts a run.
-fn append_line(cwd: &Path, line: Value) {
+/// Append one raw JSONL line to the events log (best-effort, one stderr warn
+/// on failure, never aborts). `pub(crate)` so the notify sink (T190) can
+/// record its one-per-run failure note from the flusher thread — the same
+/// hard rule as every other writer: the log never changes run behavior.
+pub(crate) fn append_line(cwd: &Path, line: Value) {
     if let Err(e) = append_line_inner(cwd, &line)
         && !WARNED.swap(true, Ordering::Relaxed)
     {
@@ -384,6 +388,15 @@ impl EventSink for EventLogSink<'_> {
                 "type": "verifying",
                 "ts": now_rfc3339(),
                 "cmd": cmd,
+            })),
+            // T190: the goal-completion validation verdict (the spec's
+            // `check:` command ran; a policy-blocked check is a FAIL — it
+            // never verified anything).
+            Event::ValidationVerdict { item, passed } => Some(json!({
+                "type": "validation",
+                "ts": now_rfc3339(),
+                "item": item,
+                "verdict": if *passed { "PASS" } else { "FAIL" },
             })),
             Event::GoalAccepted { summary } => Some(json!({
                 "type": "goal",

@@ -27,6 +27,7 @@ mod tui;
 mod mcp;
 mod mcp_http;
 mod mcp_serve;
+mod notify;
 mod permissions;
 mod sse;
 mod tgrep;

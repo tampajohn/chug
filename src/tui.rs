@@ -450,6 +450,10 @@ impl App {
                     color: Color::Cyan,
                 });
             }
+            // T190: the validation verdict is telemetry (events log + notify
+            // sink); the GoalAccepted/Rejected activity lines already carry
+            // the outcome to the operator.
+            Event::ValidationVerdict { .. } => {}
         }
     }
 
