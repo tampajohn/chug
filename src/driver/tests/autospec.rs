@@ -458,6 +458,7 @@ fn auto_spec_e2e_draft_gates_then_runs_to_goal_acceptance() {
         mcp_config: None,
         mcp_off: true,
         goal_pack: None,
+        ctx_warn_at_tokens: 0,
         approve: None,
     };
     let mut run_sink = RecordingSink::default();

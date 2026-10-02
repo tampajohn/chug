@@ -43,7 +43,9 @@ fn is_tool_result_user(msg: &Message) -> bool {
 /// single text block starts with `[trimmed:`. Assistant text can never match
 /// (role differs) and operator notes are prefixed `[operator]`, so detection
 /// needs no hidden state — a resumed transcript re-segments identically.
-fn is_trim_marker(msg: &Message) -> bool {
+/// `pub(crate)`: T192's live-context editor must treat these markers as
+/// pinned turns it can never delete or edit.
+pub(crate) fn is_trim_marker(msg: &Message) -> bool {
     if msg.role != "user" || msg.content.len() != 1 {
         return false;
     }

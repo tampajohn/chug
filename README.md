@@ -281,7 +281,23 @@ today).
   rotates a non-empty `.chug/transcript.jsonl` to
   `.chug/transcript-<timestamp>.jsonl` before its first append, so
   `--resume` never splices foreign sessions into context
-- **Events log** — the driver appends its structured event stream to
+- **Live-context editing** — each turn the driver mirrors the current
+  message list to `.chug/LIVE_CTX.md` as `[[CTX_TURN i role=...]]` blocks
+  (post-system-prompt messages only), and the model may edit that file with
+  its ordinary file tools. After each turn an accepted parse-back — whole
+  turn blocks only, pinned content untouched, strictly smaller in tokens —
+  replaces the affected transcript segment and records a `[ctx-edit:]`
+  marker (so `--resume` re-derives the identical context, same discipline
+  as `[trimmed:]`); a rejected edit leaves the transcript untouched and
+  surfaces a one-line reason. A turn whose only effect is an accepted edit
+  is FREE: it does not count against `--max-iters` (at most 3 consecutive
+  free edit turns, the 4th counts normally; `--max-tokens` always binds).
+  `--ctx-warn-at-tokens <N>` (default 0 = off) fires a one-shot steering
+  note when pre-call context crosses the threshold, naming LIVE_CTX
+  editing as the remedy. An accepted edit re-prefills the surviving suffix
+  from the edit point — one cache cost against a sustained smaller
+  context; `ctx_edit` event lines carry accepted + before/after tokens
+- - **Events log** — the driver appends its structured event stream to
   `.chug/events.jsonl`, one JSON object per line (`jq`-mineable): run start
   (the banner fields: version/commit/model/spec/cwd/mode — plus the
   checkout's `head_branch`/`head_commit` when the cwd's HEAD resolves at
@@ -996,6 +1012,6 @@ activate without an operator restart — a pending `stop` still wins.
 cargo build && cargo clippy --all-targets -- -D warnings && cargo test
 ```
 
-All three must stay green. Layout: `src/{api,autospec,archive,driver,driver_lock,eventlog,events,fork,fsatomic,testsupport,tools,todos,tgrep,tui,valroute,webfetch,websearch,chat,
+All three must stay green. Layout: `src/{api,autospec,archive,driver,driver_lock,eventlog,events,fork,fsatomic,live_ctx,testsupport,tools,todos,tgrep,tui,valroute,webfetch,websearch,chat,
 attach,complete,commands,decisions,delegate,notify,permissions,plan,riskgate,hooks,mcp,mcp_http,mcp_serve,sse,observ,auth,ledger,transcript,trim,build_info}.rs`
 (+ `main.rs`; `build.rs` only bakes the git commit into the startup banner).

@@ -16,6 +16,7 @@ use crate::eventlog;
 use crate::events::{BudgetExceeded, Event, EventSink, TurnEndReason};
 use crate::hooks;
 use crate::ledger;
+use crate::live_ctx;
 use crate::mcp::McpRegistry;
 use crate::notify::NotifySink;
 use crate::observ;
@@ -35,6 +36,13 @@ const CHAT_PREAMBLE: &str = "You are chug in an interactive session; work the us
 const KICK: &str = "Ledger and goal are above. You have not called goal_complete. Continue with the next ledger item, or update the ledger if the plan changed.";
 
 const STUCK_WINDOW: usize = 3;
+
+/// T192: at most 3 consecutive free LIVE_CTX edit turns — the 4th (and every
+/// later) edit turn in one consecutive run counts against `max_iters`
+/// normally. The run of consecutive edit turns only re-arms to free after a
+/// turn that does real work (any call outside the read-only/ctx-write
+/// classes); `--max-tokens` binds every turn regardless.
+const MAX_CONSECUTIVE_FREE_CTX_EDITS: u32 = 3;
 
 /// T25: the error-leg preview window. Failure bytes cluster at the END of
 /// command output (cargo's `failures:` list, rustc's `error[Exxxx]` blocks),
@@ -137,6 +145,12 @@ pub struct RunConfig {
     /// text is prepended to the first user message, and its path + byte hash
     /// ride the `run_start` line (`approve`/`plan_sha256`, always present).
     pub approve: Option<ApprovedPlan>,
+    /// T192: one-shot context-occupancy warning threshold, in estimated
+    /// tokens (serialized messages / 4). When the pre-call context reaches
+    /// it, the driver injects a one-shot advisory naming `.chug/LIVE_CTX.md`
+    /// editing as the remedy. `0` = off (the default; no warning leg —
+    /// pre-T192 behavior exactly). Run mode only: chat/plan never carry it.
+    pub ctx_warn_at_tokens: u64,
 }
 
 /// T146 (F2 phase 2a): an operator-approved plan file, loaded and validated
@@ -302,6 +316,10 @@ pub(crate) struct LoopCtx<'a> {
     /// plan vs the T188 spec draft) — picks the preamble/kick wording.
     /// `Plan` in run/chat modes.
     plan_kind: crate::plan::PlanKind,
+    /// T192: the one-shot context-occupancy warn threshold (`0` = off).
+    /// Run mode carries the CLI flag; plan/chat are always `0` (the LIVE_CTX
+    /// mirror and its occupancy nudge are run-surface features).
+    ctx_warn_at_tokens: u64,
 }
 
 enum VerifyOutcome {
@@ -461,6 +479,7 @@ fn run_loop(
         obs,
         plan_out: None,
         plan_kind: crate::plan::PlanKind::Plan,
+        ctx_warn_at_tokens: cfg.ctx_warn_at_tokens,
     };
     // T10: first line of the run's events log (model/spec/cwd/mode), plus
     // the configured budget ceilings (T17), the cwd's checkout HEAD (T20,
@@ -677,6 +696,7 @@ pub(crate) fn run_plan_loop(
         obs,
         plan_out: cfg.out_path.as_deref(),
         plan_kind: cfg.kind,
+        ctx_warn_at_tokens: 0,
     };
     match drive_loop(
         &ctx,
@@ -830,6 +850,7 @@ pub fn run_turn(
         obs,
         plan_out: None,
         plan_kind: crate::plan::PlanKind::Plan,
+        ctx_warn_at_tokens: 0,
     };
     match drive_loop(&ctx, knobs, client, gate, messages, None, sink, mcp)? {
         DriveOutcome::TurnEnded(reason) => Ok(reason),
@@ -955,6 +976,16 @@ pub(crate) fn drive_loop(
     // every image result is downgraded at WRAP time (never sent), and the
     // degrade retry itself happens at most once per invocation.
     let mut images_degraded = false;
+    // T192: the one-shot occupancy advisory has fired (never again this
+    // invocation), the pre-call mirror state (re-written every iteration),
+    // and the run of consecutive edit turns — free while < 3, counted after.
+    let mut ctx_warned = false;
+    let mut mirror = live_ctx::Mirror {
+        text: String::new(),
+        len: 0,
+        written: false,
+    };
+    let mut consecutive_free_edits: u32 = 0;
 
     loop {
         if iteration >= knobs.max_iters {
@@ -1093,6 +1124,46 @@ pub(crate) fn drive_loop(
         warned_time |= remaining_secs <= WARN_REMAINING_SECS;
         warned_tokens |= remaining_tokens.is_some_and(|r| r <= WARN_REMAINING_TOKENS);
 
+        // T192: the one-shot context-occupancy advisory, injected BEFORE the
+        // mirror write so the advisory is itself part of the mirrored
+        // (editable) context. Same shape as the budget-low notice above: a
+        // plain user message in the transcript, latched to at most one per
+        // invocation, no behavior change beyond the message. Fires only when
+        // a threshold is configured (`0` = off) and the pre-call context has
+        // reached it.
+        if ctx.ctx_warn_at_tokens > 0 && !ctx_warned {
+            let estimate = estimate_tokens(messages);
+            if estimate as u64 >= ctx.ctx_warn_at_tokens {
+                let msg = Message::user(vec![ContentBlock::text_block(
+                    live_ctx::occupancy_notice(estimate, ctx.ctx_warn_at_tokens),
+                )]);
+                transcript::append(ctx.cwd, &msg)?;
+                messages.push(msg);
+                ctx_warned = true;
+            }
+        }
+
+        // T192: mirror the outgoing message list to `.chug/LIVE_CTX.md`
+        // (pre-call, every iteration). Best-effort: a failed write flips
+        // `written` off, which disables this iteration's end-of-turn
+        // check; the loop warns once on stderr and the file is re-mirrored
+        // at the next boundary — the mirror is advisory input, never a run
+        // killer. Plan mode never mirrors — its six-tool read-only surface
+        // has no write_file/edit_file to do the editing with, so the
+        // feature is structurally inert there.
+        if ctx.mode != Mode::Plan {
+            mirror = live_ctx::Mirror::write(ctx.cwd, messages);
+            if !mirror.written {
+                static MIRROR_WARNED: AtomicBool = AtomicBool::new(false);
+                if !MIRROR_WARNED.swap(true, Ordering::Relaxed) {
+                    eprintln!(
+                        "chug: warning: .chug/LIVE_CTX.md mirror write failed; \
+                         live-context editing is disabled until a write succeeds"
+                    );
+                }
+            }
+        }
+
         // Re-read spec every iteration: the user may edit it mid-run. Keep the
         // last good copy if it becomes unreadable.
         if let Some(spec_path) = &knobs.spec_path
@@ -1228,11 +1299,26 @@ pub(crate) fn drive_loop(
         // T73: the plan text of an accepted submit_plan call (set only when
         // the dispatch succeeded, so an empty/invalid plan keeps the loop up).
         let mut plan_submitted: Option<String> = None;
+        // T192: vacuously true until the first call; any call outside the
+        // read-only/ctx-write classes (bash foremost) flips it off, and zero
+        // calls is not an edit turn. Feeds the free-edit-turn accounting at
+        // the bottom of the iteration.
+        let mut edit_only_so_far = true;
 
         for (id, name, input) in assistant.content.iter().filter_map(ContentBlock::tool_use) {
             sink.emit(Event::ToolStart {
                 name: name.to_string(),
             });
+            // T192: free-edit-turn classification — a turn whose only effect
+            // is an accepted LIVE_CTX edit is made exclusively of these call
+            // classes (checked BEFORE dispatch, but only the class matters:
+            // a denied/blocked call could not have had side effects either).
+            if matches!(
+                live_ctx::classify_call(ctx.cwd, name, input),
+                live_ctx::ToolEffect::Other
+            ) {
+                edit_only_so_far = false;
+            }
             let tool_start = std::time::SystemTime::now();
             let tool_t0 = Instant::now();
             // T73 plan mode: every call goes through the plan gate — the
@@ -1554,6 +1640,39 @@ pub(crate) fn drive_loop(
             );
         }
 
+        // T192: end-of-turn LIVE_CTX check — the model may have edited
+        // `.chug/LIVE_CTX.md` this turn. An accepted edit splices the list
+        // here and rewrites the transcript (T77's rewrite discipline: a
+        // resume re-derives the identical context); a rejected edit leaves
+        // the transcript untouched and surfaces a one-line reason the model
+        // routes around. The file is re-mirrored at the next boundary.
+        let mut turn_edit_accepted = false;
+        if let Some(check) = live_ctx::check_after_turn(ctx.cwd, messages, &mirror) {
+            sink.emit(Event::CtxEdit {
+                accepted: check.accepted,
+                before_tokens: check.before_tokens as u64,
+                after_tokens: check.after_tokens as u64,
+                reason: check.reason.clone(),
+            });
+            if check.accepted {
+                *messages = check
+                    .new_messages
+                    .expect("an accepted check always carries the spliced list");
+                transcript::rewrite(ctx.cwd, messages)?;
+                turn_edit_accepted = true;
+            } else {
+                let reason = check
+                    .reason
+                    .clone()
+                    .unwrap_or_else(|| "LIVE_CTX edit rejected".to_string());
+                let msg = Message::user(vec![ContentBlock::text_block(format!(
+                    "[ctx-edit rejected] {reason}"
+                ))]);
+                transcript::append(ctx.cwd, &msg)?;
+                messages.push(msg);
+            }
+        }
+
         // T184: the loop-path trim seam (chat turns share this loop, so the
         // Trim event fires under `chug run`, `--resume`, and chat alike).
         // One event per collapsing pass; the sink's eventlog arm serializes
@@ -1578,7 +1697,31 @@ pub(crate) fn drive_loop(
             inject_truncation_advisory(ctx.cwd, messages, client, sink)?;
         }
 
-        iteration += 1;
+        // T192: free compaction turns. A turn whose only effect is an
+        // accepted LIVE_CTX edit does not count against `max_iters`, at most
+        // [`MAX_CONSECUTIVE_FREE_CTX_EDITS`] consecutive free edit turns (the
+        // 4th and every later one in the same run counts normally). Only an
+        // accepted-edit turn sustains the run: any other turn — real work, a
+        // read-only turn with no edit, a rejected edit — breaks it and
+        // re-arms the privilege. Every turn — free or counted — already paid
+        // the token budget above (usage accumulates per response; the T15
+        // check at the top of the loop never saw a free turn), so
+        // `--max-tokens` always binds.
+        let is_free_edit_turn = tool_count > 0 && edit_only_so_far && turn_edit_accepted;
+        if is_free_edit_turn
+            && consecutive_free_edits < MAX_CONSECUTIVE_FREE_CTX_EDITS
+        {
+            consecutive_free_edits += 1;
+        } else {
+            iteration += 1;
+            if is_free_edit_turn {
+                // The 4th+ consecutive free edit turn: counts normally, and
+                // the run of consecutive edit turns continues.
+                consecutive_free_edits += 1;
+            } else {
+                consecutive_free_edits = 0;
+            }
+        }
     }
 }
 
