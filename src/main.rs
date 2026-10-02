@@ -35,6 +35,7 @@ mod tgrep;
 mod todos;
 mod valroute;
 mod webfetch;
+mod judge_pack;
 mod websearch;
 
 /// T151: the ONE shared serialization domain for wall-clock/spawn-timing

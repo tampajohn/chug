@@ -22,6 +22,40 @@ serde_json = "1"
 # `shasum -a 256` for out-of-band verification; a bespoke FNV/xx hash would
 # invent a one-off primitive to save one small pure-Rust dep.
 sha2 = "0.10"
+# T204 phase 1 (F15): the baked-in judge daemon's inference stack, ALL behind
+# the `daemon` feature — off by default, so the hot path (every `chug run`)
+# keeps its lean compile graph with zero candle in it (feature-off build is
+# pinned by tests/daemon_feature_off.rs's cargo-tree check). Weights are NOT
+# in the release tarball (~650MB); the daemon downloads via hf-hub on first
+# load into the standard HF cache and serves over a 0600 unix socket.
+candle-nn = { version = "0.11", optional = true }
+candle-transformers = { version = "0.11", optional = true }
+hf-hub = { version = "0.4", optional = true, default-features = false, features = [
+    "ureq",
+    "rustls-tls",
+] }
+tokenizers = { version = "0.22", optional = true, default-features = false, features = [
+    "onig",
+] }
+
+[features]
+default = []
+# metal on Apple Silicon (the primary release leg), plain cpu elsewhere —
+# candle-core is declared per-target below so `--features daemon` does the
+# right thing on every release target without a second feature knob.
+daemon = [
+    "dep:candle-core",
+    "dep:candle-nn",
+    "dep:candle-transformers",
+    "dep:hf-hub",
+    "dep:tokenizers",
+]
+
+[target.'cfg(all(target_os = "macos", target_arch = "aarch64"))'.dependencies]
+candle-core = { version = "0.11", optional = true, features = ["metal"] }
+
+[target.'cfg(not(all(target_os = "macos", target_arch = "aarch64")))'.dependencies]
+candle-core = { version = "0.11", optional = true }
 
 [dev-dependencies]
 tempfile = "3"
