@@ -5,7 +5,8 @@
 # per events file — iterations, wall time, tool distribution, error classes
 # w/ counts, token totals (+ cache-read/creation at the last iteration, T184)
 # + late-cycle input-token curve, aborts w/ reasons, budget_low fires, trim
-# fires (T184); plus TODO status counts and days since the last
+# fires (T184), ctx-edit fires (T202 — the F14 phase-2 adoption metric);
+# plus TODO status counts and days since the last
 # EVALUATION.md write. Deterministic (LC_ALL=C, jq + awk only), no LLM calls,
 # sub-second. loopd.sh runs it before every cycle so the evaluator reads ONE
 # digest instead of doing ad-hoc jq ETL over raw archives.
@@ -37,6 +38,7 @@
 #   - aborts: ... (reason x count, model, budget label)
 #   - budget_low fires: 1 | output_truncated: 0
 #   - trim fires: 5
+#   - ctx-edit fires: 2
 set -u
 export LC_ALL=C
 
@@ -167,6 +169,7 @@ def cls($s):
 | ($ev | map(select(.type == "verifying"))) as $vf
 | ($ev | map(select(.type == "output_truncated"))) as $ot
 | ($ev | map(select(.type == "trim"))) as $tm
+| ($ev | map(select(.type == "ctx_edit"))) as $ce
 | ($ev | map(select(.type == "iteration" or .type == "usage"))) as $tok
 | ($tr | map(select(.is_error == true))) as $errs
 | ($ev | map(ep(.ts)) | map(select(. != null))) as $eps
@@ -223,6 +226,7 @@ def cls($s):
         else "- budget_low fires: \($bl | length) (first at remaining_iters=\($bl[0].remaining_iters))" end)
      + " | output_truncated: \($ot | length)\n"
      + "- trim fires: \($tm | length)\n"
+     + "- ctx-edit fires: \($ce | length)\n"
    end)
 JQEOF
 )

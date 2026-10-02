@@ -1,6 +1,6 @@
 # T202 — T192 completion: genuinely-free-turn budget leg + digest ctx-edit surfacing
 
-check: touch src/*.rs tests/*.rs; export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared && cargo test --test live_ctx --test eval_digest
+check: touch src/*.rs tests/*.rs; export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-validate-a && cargo test --bin chug live_ctx && cargo test --test eval_digest
 
 ## Repo context
 
