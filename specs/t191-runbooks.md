@@ -1,6 +1,6 @@
 # T191 — runbooks/: per-use-case operator runbooks
 
-check: cargo test --test todo_consistency
+check: export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-impl-a && cargo test --test todo_consistency
 
 estimate: ~250 lines (runbooks dir + 5 docs + README section)
 
