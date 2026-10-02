@@ -98,6 +98,13 @@ the scope check stay required). `--validate` forces full adversarial
 validation; `--no-validate` forces the gates-only lane; either operator
 override is recorded.
 
+## Runbooks
+
+One-page recipes for the recurring uses — a quick task, a spec'd feature,
+an external-repo feasibility eval, loopd operations, adversarial review —
+each with copy-pasteable commands and a wall-clock arc. Start at
+[runbooks/README.md](runbooks/README.md).
+
 ## Interactive mode (`chug chat`)
 
 A conversational session in the TUI: type a request, chug works it with tools,
