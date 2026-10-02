@@ -113,7 +113,11 @@ simultaneously past gates — T194 amends T161's 2-child cap):
              CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared before
              every cargo command (T47 shared build cache — delegate has no env
              parameter, so the goal carries the export). Keep cargo build +
-             clippy `-D warnings` + test green. Commit your work here. Always
+             clippy `-D warnings` + test green. Never run tree-wide
+             formatters (`cargo fmt` across the repo, mass whitespace or
+             import-ordering passes) — format nothing you did not rewrite;
+             a diff touching files outside the spec's named targets is a
+             review red flag on its face. Commit your work here. Always
              commit ONLY from your worktree cwd (the /tmp/chug-loop-t<N>
              you were launched in): if you cd to the main repo for
              read-only checks, cd back before committing —
