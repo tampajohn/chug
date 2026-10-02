@@ -6,7 +6,7 @@
 
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
-use std::sync::mpsc::{Receiver, RecvTimeoutError};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, TryRecvError};
 use std::time::Duration;
 
 use crate::api::{Client, ContentBlock, Llm, Message};
@@ -195,6 +195,95 @@ pub fn run_chat(cfg: ChatConfig, sink: &mut dyn EventSink) -> anyhow::Result<i32
     run_chat_with(cfg, &mut client, gate, &mut mcp, sink, observ::global())
 }
 
+/// The idle poll's tick: how often the idle session wakes to check for an
+/// auto-spec request sent while idle (T188).
+const IDLE_POLL_TICK: Duration = Duration::from_millis(100);
+
+/// One decision of the idle poll ([`poll_step`]). The session loop in
+/// [`run_chat_with`] executes the serving arms on [`PollStep::Serve`] —
+/// byte-identical to the inline arms this seam replaced; the seam owns
+/// only the POLL decisions.
+#[derive(Debug, PartialEq)]
+enum PollStep {
+    /// A queued auto-spec request — serve it (T188: actionable exactly
+    /// while idle), then poll again.
+    Serve(AutoSpecRequest),
+    /// An objective arrived — start the turn with it.
+    Objective(String),
+    /// The queue is empty and the UI has quit — the drain is complete;
+    /// end the session gracefully.
+    Drained,
+    /// Nothing actionable this tick — poll again.
+    Idle,
+}
+
+/// The idle poll's two inputs, abstracted so [`poll_step`]'s drain
+/// decision is unit-testable (T188 round-4 pin): production wires the
+/// session's channels ([`ChannelSources`]); the seam tests wire a
+/// scripted source that controls WHEN a queued request becomes visible
+/// relative to the observed disconnect — the en-route race that the
+/// session-level tests hit only by wall-clock luck.
+trait IdlePollSources {
+    /// Non-blocking poll of the auto-spec request queue.
+    fn try_recv_autospec(&mut self) -> Result<AutoSpecRequest, TryRecvError>;
+    /// Bounded wait for the next objective.
+    fn recv_objective(&mut self, tick: Duration) -> Result<String, RecvTimeoutError>;
+}
+
+/// The production wiring of [`IdlePollSources`]: the session's own
+/// channels. Shared borrows — `Receiver::try_recv`/`recv_timeout` take
+/// `&self` — so the poll never needs the config mutably.
+struct ChannelSources<'a> {
+    autospec_rx: &'a Receiver<AutoSpecRequest>,
+    objective_rx: &'a Receiver<String>,
+}
+
+impl IdlePollSources for ChannelSources<'_> {
+    fn try_recv_autospec(&mut self) -> Result<AutoSpecRequest, TryRecvError> {
+        self.autospec_rx.try_recv()
+    }
+
+    fn recv_objective(&mut self, tick: Duration) -> Result<String, RecvTimeoutError> {
+        self.objective_rx.recv_timeout(tick)
+    }
+}
+
+/// The idle-poll decision, extracted as a seam (T188 round-4 pin): the
+/// serve-arm ordering (auto-spec requests first), the disconnect latch,
+/// the one-more-drain-pass, and exit-on-empty. `run_chat_with` executes
+/// the serving arms on [`PollStep::Serve`] exactly as before; THIS
+/// function owns the poll decisions, so the drain fix — a request queued
+/// around the UI quit is still served before the exit — is pinned by unit
+/// tests against a scripted source instead of the racy session-level
+/// timing the suite relied on before (under the pre-fix behavior — return
+/// immediately on disconnect — the en-route request is dropped, and the
+/// deterministic drain test below fails where the session-level tests
+/// raced and passed either way).
+fn poll_step<S: IdlePollSources>(src: &mut S, ui_gone: &mut bool, tick: Duration) -> PollStep {
+    // Serve auto-spec requests first (T188 — they are actionable exactly
+    // while idle), then wait for the next objective.
+    match src.try_recv_autospec() {
+        Ok(request) => return PollStep::Serve(request),
+        // Empty queue. If the UI already quit, the drain is complete:
+        // nothing actionable remains — exit the session gracefully.
+        Err(_) if *ui_gone => return PollStep::Drained,
+        Err(_) => {}
+    }
+    match src.recv_objective(tick) {
+        Ok(objective) => PollStep::Objective(objective),
+        Err(RecvTimeoutError::Timeout) => PollStep::Idle,
+        // The UI has quit. Latch (never spin) and take one more drain pass
+        // through the serving arm above: a request queued before the quit
+        // is still actionable (T188 — served exactly while idle) and must
+        // never be dropped by the exit. The pass re-enters the try_recv
+        // match; the `Err(_) if ui_gone` arm exits once the queue is empty.
+        Err(RecvTimeoutError::Disconnected) => {
+            *ui_gone = true;
+            PollStep::Idle
+        }
+    }
+}
+
 /// The chat session loop. Idle: block for the next objective. Working: run
 /// one turn via the shared driver loop. The UI quitting (dropping its
 /// senders) ends the session gracefully. Split from [`run_chat`] so tests
@@ -264,15 +353,25 @@ fn run_chat_with(
         // Idle: serve auto-spec requests first (T188 — they are actionable
         // exactly while idle), then wait for the next objective. The poll
         // wakes every 100 ms so a request sent while idle is served without
-        // waiting for an objective.
+        // waiting for an objective. The poll DECISION is [`poll_step`] —
+        // extracted as a seam so the drain-after-disconnect fix is pinned
+        // deterministically (T188 round-4); the serving arms below are the
+        // byte-identical arms the inline poll ran before it.
         let objective = loop {
-            match cfg.autospec_rx.try_recv() {
-                Ok(AutoSpecRequest::Draft(request)) => {
+            let step = poll_step(
+                &mut ChannelSources {
+                    autospec_rx: &cfg.autospec_rx,
+                    objective_rx: &cfg.objective_rx,
+                },
+                &mut ui_gone,
+                IDLE_POLL_TICK,
+            );
+            match step {
+                PollStep::Serve(AutoSpecRequest::Draft(request)) => {
                     pending_autospec =
                         handle_auto_spec_draft(&cfg, client, trace.as_deref(), sink, request);
-                    continue;
                 }
-                Ok(AutoSpecRequest::Approve) => {
+                PollStep::Serve(AutoSpecRequest::Approve) => {
                     match handle_auto_spec_approve(
                         &cfg,
                         sink,
@@ -294,30 +393,19 @@ fn run_chat_with(
                         Err(notice) => sink.emit(Event::AutoSpecNote(notice)),
                     }
                 }
+                // An objective arrived — start the turn with it.
+                PollStep::Objective(objective) => break objective,
                 // Empty queue. If the UI already quit, the drain is
                 // complete: nothing actionable remains — exit the session
                 // gracefully.
-                Err(_) if ui_gone => {
+                PollStep::Drained => {
                     if let Some(trace) = &trace {
                         obs.trace_finished(trace, observ::outcome::COMPLETED, turns);
                     }
                     return Ok(0);
                 }
-                Err(_) => {}
-            }
-            match cfg.objective_rx.recv_timeout(Duration::from_millis(100)) {
-                Ok(objective) => break objective,
-                Err(RecvTimeoutError::Timeout) => continue,
-                // The UI has quit. Latch (never spin) and take one more
-                // drain pass through the serving arms above: a request
-                // queued before the quit is still actionable (T188 — served
-                // exactly while idle) and must never be dropped by the
-                // exit. The pass re-enters the try_recv match; the
-                // `Err(_) if ui_gone` arm exits once the queue is empty.
-                Err(RecvTimeoutError::Disconnected) => {
-                    ui_gone = true;
-                    continue;
-                }
+                // Nothing actionable this tick — poll again.
+                PollStep::Idle => {}
             }
         };
         // Clear any abort flag left over from keys pressed between turns so
@@ -431,6 +519,7 @@ mod tests {
     use crate::api::ScriptedLlm;
     use crate::events::TurnEndReason;
     use serde_json::{Value, json};
+    use std::collections::VecDeque;
     use std::fs;
     use std::sync::atomic::AtomicBool;
     use std::sync::{Arc, mpsc};
@@ -1334,6 +1423,187 @@ The request needs a spec.
             "a refused approve never starts a turn: {notes:?}"
         );
         assert_eq!(llm.calls.len(), 1, "only the draft call ran");
+    }
+
+    // ---------- T188 round-4: the idle-poll drain seam (deterministic) ----------
+
+    /// A scripted [`IdlePollSources`] for the poll seam tests: each side's
+    /// results are queued in order; a queued `Ok` is CONSUMED like a real
+    /// channel pops it, while an `Err` (empty queue / disconnect) is the
+    /// channel STATE and persists for the next poll; an exhausted script
+    /// settles on empty/disconnected. Deterministic by construction — no
+    /// threads, no wall-clock.
+    struct ScriptedSources {
+        autospec: VecDeque<Result<AutoSpecRequest, TryRecvError>>,
+        objectives: VecDeque<Result<String, RecvTimeoutError>>,
+        /// Poll counts, for asserting what the exit does after the latch.
+        autospec_polls: u32,
+        objective_waits: u32,
+    }
+
+    impl IdlePollSources for ScriptedSources {
+        fn try_recv_autospec(&mut self) -> Result<AutoSpecRequest, TryRecvError> {
+            self.autospec_polls += 1;
+            match self.autospec.pop_front() {
+                Some(Err(why)) => {
+                    // Only the LAST entry persists (the channel state an
+                    // empty/disconnected queue keeps returning); a scripted
+                    // sequence still advances.
+                    if self.autospec.is_empty() {
+                        self.autospec.push_front(Err(why));
+                    }
+                    Err(why)
+                }
+                other => other.unwrap_or(Err(TryRecvError::Empty)),
+            }
+        }
+
+        fn recv_objective(&mut self, _tick: Duration) -> Result<String, RecvTimeoutError> {
+            self.objective_waits += 1;
+            match self.objectives.pop_front() {
+                Some(Err(why)) => {
+                    if self.objectives.is_empty() {
+                        self.objectives.push_front(Err(why));
+                    }
+                    Err(why)
+                }
+                other => other.unwrap_or(Err(RecvTimeoutError::Disconnected)),
+            }
+        }
+    }
+
+    /// Drive [`poll_step`] exactly like the session's idle loop: record
+    /// every served request, stop at the first Objective/Drained.
+    fn run_poll_steps(src: &mut ScriptedSources) -> (Vec<AutoSpecRequest>, PollStep) {
+        let mut ui_gone = false;
+        let mut served = Vec::new();
+        for _ in 0..100 {
+            match poll_step(src, &mut ui_gone, IDLE_POLL_TICK) {
+                PollStep::Serve(request) => served.push(request),
+                PollStep::Objective(objective) => return (served, PollStep::Objective(objective)),
+                PollStep::Drained => return (served, PollStep::Drained),
+                PollStep::Idle => {}
+            }
+        }
+        panic!("the idle poll never resolved (script never yields Objective/Drained)");
+    }
+
+    /// T188 round-4, THE m8 killer: the en-route drain. The UI quits (the
+    /// objective channel disconnects) and the /auto-spec request lands in
+    /// the queue only on a poll AFTER that disconnect was observed — the
+    /// race the session-level tests above hit only by wall-clock luck
+    /// (they drop the senders with the queue already populated, which the
+    /// pre-fix code drained anyway). The fix latches the disconnect and
+    /// takes one more drain pass; under m8 (return immediately on
+    /// disconnect) the request is dropped and this test fails
+    /// deterministically, not racily.
+    #[test]
+    fn idle_poll_drains_an_en_route_request_after_the_disconnect() {
+        let mut src = ScriptedSources {
+            // Poll 1: the queue is momentarily empty (the request is in
+            // flight); poll 2 — after the disconnect was observed — it
+            // lands.
+            autospec: VecDeque::from(vec![
+                Err(TryRecvError::Empty),
+                Ok(AutoSpecRequest::Draft("en-route request".into())),
+            ]),
+            // The objective channel reports the quit on the first wait.
+            objectives: VecDeque::from(vec![Err(RecvTimeoutError::Disconnected)]),
+            autospec_polls: 0,
+            objective_waits: 0,
+        };
+        let (served, end) = run_poll_steps(&mut src);
+        assert_eq!(
+            served,
+            vec![AutoSpecRequest::Draft("en-route request".into())],
+            "a request queued around the UI quit must be served by the drain pass"
+        );
+        assert_eq!(
+            end,
+            PollStep::Drained,
+            "the session still exits gracefully once the queue is empty"
+        );
+        // Three polls: empty (the disconnect was observed), the drain pass
+        // serving the request, then the latched exit on the empty queue.
+        assert_eq!(src.autospec_polls, 3);
+        // The exit is the LATCHED one: after the disconnect the empty queue
+        // ends the session without another blocking wait on the dead
+        // channel.
+        assert_eq!(src.objective_waits, 1);
+    }
+
+    /// The serve-first ordering: a queued auto-spec request is served
+    /// BEFORE the session takes the next objective (T188 — actionable
+    /// exactly while idle; the objective's turn starts only after the
+    /// queue is drained).
+    #[test]
+    fn idle_poll_serves_a_queued_request_before_the_next_objective() {
+        let mut src = ScriptedSources {
+            autospec: VecDeque::from(vec![Ok(AutoSpecRequest::Approve)]),
+            objectives: VecDeque::from(vec![Ok("the objective".into())]),
+            autospec_polls: 0,
+            objective_waits: 0,
+        };
+        let (served, end) = run_poll_steps(&mut src);
+        assert_eq!(
+            served,
+            vec![AutoSpecRequest::Approve],
+            "the queued request is served before any objective"
+        );
+        assert_eq!(
+            end,
+            PollStep::Objective("the objective".into()),
+            "the objective still starts the turn once the queue is drained"
+        );
+        assert_eq!(src.autospec_polls, 2);
+        assert_eq!(src.objective_waits, 1);
+    }
+
+    /// Exit-on-empty: nothing ever queued and the UI already quit — the
+    /// poll latches the disconnect and ends the session on the next poll
+    /// without serving anything and without re-waiting on the dead
+    /// channel.
+    #[test]
+    fn idle_poll_exits_when_the_drain_completes_with_nothing_queued() {
+        let mut src = ScriptedSources {
+            autospec: VecDeque::new(),
+            objectives: VecDeque::from(vec![Err(RecvTimeoutError::Disconnected)]),
+            autospec_polls: 0,
+            objective_waits: 0,
+        };
+        let (served, end) = run_poll_steps(&mut src);
+        assert!(served.is_empty());
+        assert_eq!(end, PollStep::Drained);
+        assert_eq!(src.autospec_polls, 2);
+        assert_eq!(
+            src.objective_waits, 1,
+            "a latched disconnect exits without re-waiting"
+        );
+    }
+
+    /// The tick timeout is NOT a disconnect: an idle session with a live
+    /// UI keeps polling (Timeout → Idle) until the objective (or a queued
+    /// request) arrives; latching on Timeout would strand both.
+    #[test]
+    fn idle_poll_keeps_polling_through_the_tick_timeout() {
+        let mut src = ScriptedSources {
+            autospec: VecDeque::new(),
+            objectives: VecDeque::from(vec![
+                Err(RecvTimeoutError::Timeout),
+                Ok("late objective".into()),
+            ]),
+            autospec_polls: 0,
+            objective_waits: 0,
+        };
+        let (served, end) = run_poll_steps(&mut src);
+        assert!(served.is_empty());
+        assert_eq!(
+            end,
+            PollStep::Objective("late objective".into()),
+            "a tick timeout never latches the disconnect"
+        );
+        assert_eq!(src.autospec_polls, 2);
+        assert_eq!(src.objective_waits, 2);
     }
 
     // ---------- session trace lifecycle (SPEC-8) ----------
