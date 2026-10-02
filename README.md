@@ -297,7 +297,7 @@ today).
   editing as the remedy. An accepted edit re-prefills the surviving suffix
   from the edit point — one cache cost against a sustained smaller
   context; `ctx_edit` event lines carry accepted + before/after tokens
-- - **Events log** — the driver appends its structured event stream to
+- **Events log** — the driver appends its structured event stream to
   `.chug/events.jsonl`, one JSON object per line (`jq`-mineable): run start
   (the banner fields: version/commit/model/spec/cwd/mode — plus the
   checkout's `head_branch`/`head_commit` when the cwd's HEAD resolves at
@@ -970,7 +970,7 @@ the `.chug/events*.jsonl` corpus (per-file iterations, wall time, tool
 distribution, error classes, token curve, aborts, budget-low fires, TODO
 status counts, staleness flag) so the evaluation phase reads one file instead
 of re-mining raw archives.
-The supervisor creates four gitignored build caches, one per cargo-consumer
+The supervisor creates five gitignored build caches, one per cargo-consumer
 role, warm after first use: `target-shared/` (implementation children and
 worktree-review gates), `target-shared-validate-a/` and
 `target-shared-validate-b/` (validators — one dir per validator slot, T194:
