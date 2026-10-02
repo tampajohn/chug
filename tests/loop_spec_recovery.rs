@@ -2539,3 +2539,99 @@ fn wrap_bullet_names_the_harvest_all_doctrine_inside_phase_3() {
     );
 }
 
+// ---- T196 — the impl goal template bans tree-wide formatters ----
+//
+// The T188 fmt-noise class: cycle 87's t188 round-3 glm impl child ran a
+// mass `cargo fmt` across the whole repo — 83 files, +12.6k/−9.2k
+// uncommitted fmt noise on top of the real change — and the T63 resume had
+// to spend its first act stripping the noise to the 775 real insertions
+// before the fix-up could proceed (the diff was unreviewable until
+// stripped). The template said nothing about formatting, so a child that
+// decided to "tidy up" had license. The template now carries ONE ban
+// sentence, woven into the goal text: never run tree-wide formatters —
+// format nothing you did not rewrite. Step 4's FAIL-arc fix-up child has
+// no goal text of its own (its goal is step 2's with the findings pasted
+// in — the same one-template-covers-fix-ups fact the T176 pin records), so
+// this one edit covers both.
+//
+// The pin (T48/T64/T176 pattern): the ban's two load-bearing tokens occur
+// EXACTLY once in LOOP-SPEC.md, both inside step 2's window, the ban
+// sitting between the clippy-bar sentence it extends and the `Commit your
+// work here.` sentence it precedes.
+
+/// The ban's subject — TREE-WIDE formatting is the banned act (a per-file
+/// format of a file you rewrote is not). Must occur EXACTLY once in
+/// LOOP-SPEC.md.
+const FMT_BAN_TREE_WIDE: &str = "tree-wide";
+
+/// The ban's named tool. Must occur EXACTLY once in LOOP-SPEC.md.
+const FMT_BAN_TOOL: &str = "cargo fmt";
+
+/// (ad) T196 — the impl goal template bans tree-wide formatters: the
+/// ban's two load-bearing tokens occur EXACTLY once in LOOP-SPEC.md, both
+/// inside step 2's window (the T64 loose-heading scope), and the ban
+/// sentence sits BETWEEN the clippy-bar sentence it extends and the
+/// `Commit your work here.` sentence it precedes (the template's sentence
+/// order preserved). Revert the ban sentence and BOTH tokens drop to 0 —
+/// this leg goes red (the deletion proof is in the commit message);
+/// state the ban twice and the count-2 leg fires; move it out of step 2
+/// or reorder it past the commitment sentence and the window/ordering
+/// legs fire.
+#[test]
+fn impl_goal_template_bans_tree_wide_formatters() {
+    // Needle self-checks (T48 idiom): a mangled needle must not let this
+    // pin pass silently.
+    assert!(
+        FMT_BAN_TREE_WIDE.starts_with("tree-") && FMT_BAN_TREE_WIDE.ends_with("wide"),
+        "the subject needle must be the hyphenated `tree-wide` form"
+    );
+    assert_eq!(FMT_BAN_TOOL, "cargo fmt");
+
+    let spec = loop_spec();
+    let tokens: [(&str, &str); 2] = [
+        (FMT_BAN_TREE_WIDE, "the tree-wide formatter ban"),
+        (FMT_BAN_TOOL, "the `cargo fmt` ban"),
+    ];
+    for (needle, what) in tokens {
+        assert_eq!(
+            spec.matches(needle).count(),
+            1,
+            "LOOP-SPEC must state {what} exactly once — zero means the \
+             T196 ban sentence was deleted, more than one means it is \
+             stated twice (the T156 text-revert mutant class)"
+        );
+    }
+
+    // Scope + order: inside step 2's window, after the clippy-bar sentence
+    // the ban extends and before the commitment sentence it precedes.
+    let start = spec
+        .find(STEP2_HEADING_LOOSE)
+        .expect("step-2 heading (`2. **`) present");
+    let end = start
+        + spec[start..]
+            .find(STEP3_HEADING)
+            .expect("step-3 heading present after step 2's");
+    let window = &spec[start..end];
+    for (needle, what) in tokens {
+        assert!(
+            window.contains(needle),
+            "step 2's window must carry {what} ({needle:?}) — the ban \
+             drifted out of the impl goal template"
+        );
+    }
+    let clippy = window
+        .find(CLIPPY_DENY_SENTENCE)
+        .expect("step-2 window must carry the clippy-bar sentence (T176, untouched)");
+    let ban = window
+        .find(FMT_BAN_TREE_WIDE)
+        .expect("step-2 window must carry the fmt ban (count leg above)");
+    let here = window
+        .find(COMMIT_HERE)
+        .expect("step-2 window must carry `Commit your work here.` (untouched)");
+    assert!(
+        clippy < ban && ban < here,
+        "the fmt ban must sit between the clippy-bar sentence ({clippy}) \
+         and the `Commit your work here.` sentence ({here}) — the \
+         template's sentence order preserved (found at {ban})"
+    );
+}
