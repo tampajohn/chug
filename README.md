@@ -439,8 +439,11 @@ driver (120s default; `--bash-timeout` / `CHUG_BASH_TIMEOUT` overrides).
 
 `decision_log` is the loop's bookkeeping surface next to `update_ledger`:
 structured decision records to `.chug/decisions.jsonl` (append-only,
-best-effort) feeding the F13 distillation corpus; like the file tools it is
-cwd-sandboxed, so the three documented sandbox exceptions stay exactly three.
+best-effort) feeding the F13 distillation corpus — outcome records'
+`choice` is a closed set (`landed-clean`/`fixed-up`/`reverted`) enforced
+at write time, and `scripts/decisions-audit.sh` prints the corpus-health
+summary; like the file tools it is cwd-sandboxed, so the three documented
+sandbox exceptions stay exactly three.
 
 `todo_add` / `todo_update` / `todo_list` are the other bookkeeping surface
 beside `update_ledger`: a structured todo list stored as a JSON array at
