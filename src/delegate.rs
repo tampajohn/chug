@@ -384,6 +384,106 @@ pub(crate) fn apply_delegate_env(cmd: &mut Command, env: &[(String, String)]) {
     }
 }
 
+/// T197: the dir after the first `CARGO_TARGET_DIR=` in `text` — terminated
+/// at the first character that cannot appear in a bare assignment tail
+/// (whitespace or a shell metacharacter: `;`, `&`, `|`, quotes, backtick,
+/// parens, redirects) or at end of text. No marker, or an empty dir
+/// (`CARGO_TARGET_DIR=` at end of line), → None.
+fn first_target_dir(text: &str) -> Option<String> {
+    const MARKER: &str = "CARGO_TARGET_DIR=";
+    let idx = text.find(MARKER)?;
+    let tail = &text[idx + MARKER.len()..];
+    let end = tail
+        .char_indices()
+        .find(|(_, c)| {
+            c.is_whitespace()
+                || matches!(
+                    c,
+                    ';' | '&' | '|' | '\'' | '"' | '`' | '(' | ')' | '<' | '>'
+                )
+        })
+        .map(|(i, _)| i)
+        .unwrap_or(tail.len());
+    let dir = &tail[..end];
+    if dir.is_empty() {
+        None
+    } else {
+        Some(dir.to_string())
+    }
+}
+
+/// T197: the spec text's check-line dir — the first line carrying BOTH a
+/// `check:` marker and a `CARGO_TARGET_DIR=<dir>` assignment, first
+/// occurrence on that line winning (multiple assignments in one check line
+/// are possible in principle; the first is the documented one). No such
+/// line → None: a spec with no check export is legitimate and never warns.
+fn spec_check_target_dir(spec_text: &str) -> Option<String> {
+    let line = spec_text
+        .lines()
+        .find(|line| line.contains("check:") && line.contains("CARGO_TARGET_DIR="))?;
+    first_target_dir(line)
+}
+
+/// T197: the goal text's `export CARGO_TARGET_DIR=<dir>` — the first
+/// occurrence, the LOOP-SPEC template's exact spelling (the goal's export
+/// line STAYS as defense-in-depth even when `env` carries the dir).
+/// Absent → None.
+fn goal_export_target_dir(goal: &str) -> Option<String> {
+    let idx = goal.find("export CARGO_TARGET_DIR=")?;
+    first_target_dir(&goal[idx..])
+}
+
+/// T197: the launch-time target-dir drift advisory — the pure seam behind
+/// the launch return text's `WARN target-dir drift:` block. Three surfaces
+/// carry the child's build-cache dir and nothing checked their agreement
+/// mechanically (the dispatch re-key fumble class, cycles 85/87: the
+/// orchestrator re-keys the check-line `CARGO_TARGET_DIR` export into the
+/// BRANCH-side spec copy while `delegate launch`'s goal/env surfaces still
+/// point at the old slot — three fumbles, each self-caught mid-flight):
+///
+/// - the spec's `check:`-line export ([`spec_check_target_dir`]) — MAIN's
+///   copy is what the goal gate runs;
+/// - the goal's `export CARGO_TARGET_DIR=<dir>` ([`goal_export_target_dir`]);
+/// - the launch `env` map's `CARGO_TARGET_DIR` value (`env_dir`).
+///
+/// Returns the rendered warning when ≥2 of the three are present AND any
+/// present pair disagrees, naming every PRESENT surface and its dir; absent
+/// surfaces never warn (a spec with no check export is legitimate), full
+/// agreement and single-surface launches are None. Pure — unit-tested
+/// without spawning anything. Advisory only, never a refusal: the launch
+/// never rewrites the spec or goal (the orchestrator owns the re-key), and
+/// a hard gate could deadlock legitimate mid-flight re-keys.
+fn target_dir_drift(spec_text: &str, goal: &str, env_dir: Option<&str>) -> Option<String> {
+    let spec_dir = spec_check_target_dir(spec_text);
+    let goal_dir = goal_export_target_dir(goal);
+    let mut present: Vec<(&str, &str)> = Vec::with_capacity(3);
+    if let Some(dir) = spec_dir.as_deref() {
+        present.push(("spec check", dir));
+    }
+    if let Some(dir) = goal_dir.as_deref() {
+        present.push(("goal export", dir));
+    }
+    if let Some(dir) = env_dir {
+        present.push(("env map", dir));
+    }
+    if present.len() < 2 {
+        return None;
+    }
+    let first = present[0].1;
+    if present.iter().all(|(_, dir)| *dir == first) {
+        return None;
+    }
+    let mut warning = String::from(
+        "WARN target-dir drift: CARGO_TARGET_DIR carriers disagree — the launch proceeds \
+         (advisory only), but the goal gate's check and the child's build may target \
+         different dirs; align all three before relying on the shared cache",
+    );
+    for (name, dir) in &present {
+        warning.push_str(&format!("\n  {name}: {dir}"));
+    }
+    Some(warning)
+}
+
 /// Spawn a detached `chug run` child and return immediately. Never waits on
 /// the child — no sleeps, no retries, no waiting anywhere in this function.
 ///
@@ -450,6 +550,24 @@ pub(crate) fn delegate_launch(input: &Value) -> anyhow::Result<ToolResult> {
     // `export`/prefix inside the child's own goal text is unaffected — the
     // child's shell sets it after spawn.
     apply_delegate_env(&mut cmd, &env_map);
+    // T197: the target-dir drift advisory — computed over the three surfaces
+    // this spawn just assembled, AFTER the argv/env assembly and BEFORE the
+    // spawn returns. The spec text is read best-effort (unreadable → no
+    // advisory, launch proceeds — the spec's existence/readability probe
+    // already ran, so this only guards a TOCTOU vanish); the goal text and
+    // the `env` map are in hand. Advisory only, never a refusal; with no
+    // drift the return text stays byte-identical (`drift_note` is empty).
+    let drift_note = fs::read_to_string(&spec)
+        .ok()
+        .and_then(|spec_text| {
+            let env_dir = env_map
+                .iter()
+                .find(|(key, _)| key == "CARGO_TARGET_DIR")
+                .map(|(_, value)| value.as_str());
+            target_dir_drift(&spec_text, goal, env_dir)
+        })
+        .map(|warning| format!("\n{warning}"))
+        .unwrap_or_default();
     // Detached, `nohup … &` parity: the child gets its own process group and
     // ignores SIGHUP, so it survives both the orchestrator exiting and a
     // terminal hangup. Both are unix-only; non-unix falls back to a plain
@@ -508,7 +626,7 @@ pub(crate) fn delegate_launch(input: &Value) -> anyhow::Result<ToolResult> {
     };
     Ok(ToolResult {
         content: format!(
-            "launched: pid {pid}\nlog: {}\nevents: {}\ngoal_bytes: {goal_bytes}\ngoal_sha256: {goal_sha}\ngoal_tail: {goal_tail}\nmodel: {model} max_iters: {max_iters} max_minutes: {max_minutes}{tokens_note}{resume_note}{env_note}",
+            "launched: pid {pid}\nlog: {}\nevents: {}\ngoal_bytes: {goal_bytes}\ngoal_sha256: {goal_sha}\ngoal_tail: {goal_tail}\nmodel: {model} max_iters: {max_iters} max_minutes: {max_minutes}{tokens_note}{resume_note}{env_note}{drift_note}",
             log_path.display(),
             chug_dir.join("events.jsonl").display(),
         ),

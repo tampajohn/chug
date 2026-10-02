@@ -220,7 +220,7 @@
             total += actual;
         }
         assert_eq!(
-            total, 95,
+            total, 104,
             "delegate test count drifted — recount and update the count pin"
         );
     }
