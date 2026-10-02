@@ -469,7 +469,13 @@ a git worktree). Three actions:
   WINS over the scrub — the scrub guards the absent case, `env` is the
   explicit case; when `env` is absent the goal-carried `export` remains the
   fallback and the spawn is byte-identical, and the launch payload names the
-  applied keys, never the values) against an absolute
+  applied keys, never the values; the payload also gains a
+  `WARN target-dir drift:` block when ≥2 of the three CARGO_TARGET_DIR
+  carriers — the spec's `check:`-line export, the goal's
+  `export CARGO_TARGET_DIR=…`, and the `env` map's `CARGO_TARGET_DIR` — are
+  present and any pair disagrees, naming every present surface and its dir
+  (advisory only — the launch proceeds and nothing is rewritten; absent
+  surfaces never warn, a spec with no check export is legitimate) against an absolute
   `cwd` you prepared, appends its stdout+stderr to
   `<cwd>/.chug/delegate.log`, and returns immediately with the child `pid`,
   the log/events paths, and the goal-integrity echoes — `goal_bytes` (the
