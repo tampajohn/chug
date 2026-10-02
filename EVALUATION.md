@@ -284,7 +284,7 @@ SELF-SPEC-shaped rows; no human-decision items.
 
 ## Outcomes (filled at cycle wrap — LOOP-SPEC Phase 3)
 
-### Cycle 91 (2026-10-02, ~09:00 UTC–) — kimi MANDATORY fresh-eval cycle (queue drained at cycle-90 wrap; T81 routing correct 4-for-4) — 8 rows filed (T195–T202) + the F13 phase-2a roadmap pull; cycle in progress
+### Cycle 91 (2026-10-02, ~09:00–12:45 UTC) — kimi MANDATORY fresh-eval cycle (queue drained at cycle-90 wrap; T81 routing correct 4-for-4) — 8 rows filed (T195–T202) + the F13 phase-2a roadmap pull; 4 landed (T195, T196, T198, T201 — all doctrine), T202 impl-complete-but-unmerged (recipe on the row), T197/T199/T200 deferred (wall)
 
 - **T195 landed** (merge c634a6c, impl df2c285 — glm 67/80 first-try,
   ~32 min, zero budget deaths). The gate source-touch guard: every
@@ -329,6 +329,46 @@ SELF-SPEC-shaped rows; no human-decision items.
   intent) — noted for the next eval. The validator DOGFOODED T201:
   its verdict.md was written at decision time and harvested
   (verdict-t196-bundle-20261002.md). Post-merge main gates 1436/1436.
+
+- **T202 deferred at the wrap wall** (recipe on the row). Full impl
+  landed in `loop-t202` as two commits (1d98253 legs 1–2, 169fad3 leg
+  3) via an 80/80 death + ONE T63 resume; the resume's first
+  goal_complete was REJECTED — the child's 300s bash cap kills the
+  T195 touch-forced all-targets rebuild mid-check (the goal GATE's
+  1200s would pass; a new friction interaction for the next eval:
+  children observing a touch-guarded check end-to-end need the split
+  build-then-test run). At the wrap wall with the resume still in
+  flight, the arc hands off per T28/T19 (routing d1790944041-27).
+  SPEC-ACCURACY MISS (mine): the filed acceptance claimed "ctx-edit
+  fires: 2" on the cycle-89 stream — re-measured at wrap: ZERO
+  `ctx_edit` events in every delta stream (the emission site
+  driver.rs:1651 is live; no accepted live-ctx edit occurred in the
+  sample). My eval misread a combined grep output; the acceptance
+  evidence becomes 0-on-delta-streams + fixture-pinned rendering,
+  adjudicated at next cycle's review.
+- **T197, T199, T200 deferred — unworked** (wall-clock; T197's
+  ~70–90-min arc vs ~75 min left after the bundle was a coin flip
+  that risked a mid-validation orchestrator death, and dispatching it
+  would ALSO have trapped T202's serial merge behind it — the
+  cycle-88 T187-deferral precedent; T199/T200 sequence behind T197 —
+  all three specs are dispatch-ready: worktree + warm build + glm
+  80/50 + gates + the lane call from the diff).
+- **Cycle-level notes.** 4 rows landed (T195 + the T196/T198/T201
+  bundle), all doctrine, 2 kimi rounds both PASS-first-round
+  (12/12 mutants killed, 0 survivors, 2 justified deviations).
+  Validator census: 2/2 announced verdicts — and T201 was dogfooded
+  in-cycle (the bundle validator wrote verdict.md at decision time).
+  Impl budget deaths: 2 of 3 impl arcs (bundle 80/80, t202 80/80) —
+  both recovered via ONE T63 resume each (the T63 machinery held).
+  The T195 review gate + both validators ran the touch prefix
+  in-cycle (adoption immediate). The disclosed fmt-execution incident
+  (bundle impl's mangled heredoc EXECUTED the prose's backticked
+  `cargo fmt`, 89 files, stripped pre-commit) is the T188 class via
+  the heredoc-execution vector — the ban covers intent, not shell
+  mangling; flagged for the next eval (commit-message quoting
+  discipline). Release trigger check at wrap: 4 items since v0.13.0
+  (T195, T196, T198, T201) ≥3 → patch bump (no feature check-off:
+  all doctrine) → v0.13.1 pending final gates.
 
 ### Cycle 90 (2026-10-02, 08:06–09:00 UTC) — glm routine freshness-skip cycle (freshness held: EVALUATION.md 03:41Z same UTC day + 1 todo row T187) — 1 landed (T187), QUEUE DRAINED
 
