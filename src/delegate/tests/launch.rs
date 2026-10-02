@@ -4,8 +4,10 @@
 // T109 req 4 count-pin anchor (see mod.rs's pin): this family's
 // #[test] fn count — a dropped `mod launch;` line fails the pin's
 // reference to this const to compile. (T144 added the launch-scrub
-// env leg: 14 → 15.)
-pub(super) const TEST_COUNT: usize = 19;
+// env leg: 14 → 15. T183 added the env-map legs: 15 → 19. T197
+// added the target-dir drift legs — 8 pure-seam unit legs + 1
+// dispatch-level launch leg: 19 → 28.)
+pub(super) const TEST_COUNT: usize = 28;
     use super::*; // the shared harness (delegate::tests) + delegate's own imports
 
     /// End-to-end with a stub binary: `CHUG_DELEGATE_BIN` points at a script
@@ -1292,6 +1294,229 @@ pub(super) const TEST_COUNT: usize = 19;
             !child_dir.path().join("argv.txt").exists(),
             "a rejected env must never spawn the child"
         );
+        // SAFETY: serialized by DELEGATE_ENV_LOCK; no other test reads this var.
+        unsafe { std::env::remove_var("CHUG_DELEGATE_BIN") };
+    }
+
+    // ---- T197: the launch-time target-dir drift advisory ----
+
+    /// T197 unit leg (pure seam): all three surfaces present and agreeing →
+    /// None — full agreement never warns.
+    #[test]
+    fn target_dir_drift_three_way_agreement_is_none() {
+        let spec = "check: touch src/*.rs; export CARGO_TARGET_DIR=/tmp/t197-agree && cargo test\n";
+        let goal = "do the thing; export CARGO_TARGET_DIR=/tmp/t197-agree before every cargo command";
+        assert_eq!(target_dir_drift(spec, goal, Some("/tmp/t197-agree")), None);
+    }
+
+    /// T197 unit leg: spec-vs-goal drift (the cycle-85/87 fumble shape — the
+    /// check line re-keyed in the spec copy while the goal still names the
+    /// old slot) → Some, naming both present surfaces and their dirs, and
+    /// never naming an absent surface (the env map is absent here).
+    #[test]
+    fn target_dir_drift_spec_vs_goal_names_both_surfaces() {
+        let spec = "check: touch src/*.rs; export CARGO_TARGET_DIR=/tmp/t197-spec-dir && cargo test\n";
+        let goal = "do the thing; export CARGO_TARGET_DIR=/tmp/t197-goal-dir before every cargo command";
+        let warning = target_dir_drift(spec, goal, None).expect("drift must be detected");
+        assert!(
+            warning.starts_with("WARN target-dir drift:"),
+            "warning must carry the WARN marker: {warning}"
+        );
+        assert!(
+            warning.contains("spec check: /tmp/t197-spec-dir"),
+            "the spec surface must be named with its dir: {warning}"
+        );
+        assert!(
+            warning.contains("goal export: /tmp/t197-goal-dir"),
+            "the goal surface must be named with its dir: {warning}"
+        );
+        assert!(
+            !warning.contains("env map"),
+            "absent surfaces never warn: {warning}"
+        );
+    }
+
+    /// T197 unit leg: spec-vs-env drift (goal carries no export) → Some,
+    /// naming the spec and env surfaces only.
+    #[test]
+    fn target_dir_drift_spec_vs_env_names_both_surfaces() {
+        let spec = "check: touch src/*.rs; export CARGO_TARGET_DIR=/tmp/t197-spec-dir && cargo test\n";
+        let goal = "no export line in this goal";
+        let warning =
+            target_dir_drift(spec, goal, Some("/tmp/t197-env-dir")).expect("drift must be detected");
+        assert!(
+            warning.contains("spec check: /tmp/t197-spec-dir"),
+            "{warning}"
+        );
+        assert!(warning.contains("env map: /tmp/t197-env-dir"), "{warning}");
+        assert!(
+            !warning.contains("goal export"),
+            "the absent goal surface never warns: {warning}"
+        );
+    }
+
+    /// T197 unit leg: goal-vs-env drift (spec has no check export — a
+    /// legitimate spec shape) → Some, naming the goal and env surfaces only.
+    #[test]
+    fn target_dir_drift_goal_vs_env_names_both_surfaces() {
+        let spec = "# a spec with no check export is legitimate and never warns\n";
+        let goal = "do the thing; export CARGO_TARGET_DIR=/tmp/t197-goal-dir before every cargo command";
+        let warning =
+            target_dir_drift(spec, goal, Some("/tmp/t197-env-dir")).expect("drift must be detected");
+        assert!(
+            warning.contains("goal export: /tmp/t197-goal-dir"),
+            "{warning}"
+        );
+        assert!(warning.contains("env map: /tmp/t197-env-dir"), "{warning}");
+        assert!(
+            !warning.contains("spec check"),
+            "the absent spec surface never warns: {warning}"
+        );
+    }
+
+    /// T197 unit leg: exactly one surface present → None — a single carrier
+    /// cannot disagree with itself (each of the three alone).
+    #[test]
+    fn target_dir_drift_single_surface_present_is_none() {
+        let spec = "check: touch src/*.rs; export CARGO_TARGET_DIR=/tmp/t197-solo && cargo test\n";
+        let goal = "do the thing; export CARGO_TARGET_DIR=/tmp/t197-solo before every cargo command";
+        // Spec check export alone.
+        assert_eq!(target_dir_drift(spec, "no export", None), None);
+        // Goal export alone.
+        assert_eq!(target_dir_drift("# no check export\n", goal, None), None);
+        // Env map alone.
+        assert_eq!(
+            target_dir_drift("# no check export\n", "no export", Some("/tmp/t197-solo")),
+            None
+        );
+    }
+
+    /// T197 unit leg: no surface present at all → None (nothing to compare).
+    #[test]
+    fn target_dir_drift_no_surfaces_present_is_none() {
+        assert_eq!(target_dir_drift("# a plain spec\n", "a plain goal", None), None);
+    }
+
+    /// T197 unit leg (multiple CARGO_TARGET_DIR in the check text → first
+    /// wins): the spec dir is the FIRST occurrence on the check line, so a
+    /// goal naming the first dir AGREES (None), while a goal naming the
+    /// second still drifts — and the warning names the FIRST dir as the spec
+    /// surface.
+    #[test]
+    fn target_dir_drift_first_check_occurrence_wins_with_multiple_target_dirs_in_the_check_text() {
+        let spec = "check: touch src/*.rs; export CARGO_TARGET_DIR=/tmp/t197-first && cargo test || export CARGO_TARGET_DIR=/tmp/t197-second\n";
+        // First occurrence wins → the spec surface is /tmp/t197-first, and a
+        // goal carrying the same dir agrees.
+        assert_eq!(
+            target_dir_drift(
+                spec,
+                "export CARGO_TARGET_DIR=/tmp/t197-first",
+                None
+            ),
+            None
+        );
+        // A goal naming the second occurrence drifts against the FIRST dir.
+        let warning = target_dir_drift(spec, "export CARGO_TARGET_DIR=/tmp/t197-second", None)
+            .expect("drift must be detected");
+        assert!(
+            warning.contains("spec check: /tmp/t197-first"),
+            "first occurrence must win: {warning}"
+        );
+    }
+
+    /// T197 unit leg: an agreeing pair with the third surface absent → None
+    /// — ≥2 present with every pair agreeing never warns (the absent surface
+    /// is not a disagreement).
+    #[test]
+    fn target_dir_drift_agreeing_pair_with_the_third_surface_absent_is_none() {
+        let spec = "check: touch src/*.rs; export CARGO_TARGET_DIR=/tmp/t197-pair && cargo test\n";
+        let goal = "do the thing; export CARGO_TARGET_DIR=/tmp/t197-pair before every cargo command";
+        // Spec + goal agree, env absent.
+        assert_eq!(target_dir_drift(spec, goal, None), None);
+        // Goal + env agree, spec carries no check export.
+        assert_eq!(
+            target_dir_drift("# no check export\n", goal, Some("/tmp/t197-pair")),
+            None
+        );
+    }
+
+    /// T197 dispatch-level leg (the CHUG_DELEGATE_BIN argv-stub harness): a
+    /// launch with a drifting fixture spec spawns NORMALLY (advisory, never
+    /// a refusal — the child argv carries spec + goal verbatim) AND its
+    /// return text carries the WARN block naming both present surfaces.
+    /// NON-VACUOUSNESS: the always-None mutant fails this leg's WARN asserts
+    /// and the spec-vs-goal unit leg above (≥2 RED, stated in the commit).
+    #[cfg(unix)]
+    #[test]
+    fn delegate_launch_drifting_fixture_spec_spawns_normally_and_warns() {
+        // T151: hold the shared timing domain FIRST (before the env lock —
+        // see crate::testsupport's lock-order rule) across the spawn → poll →
+        // cleanup body: this leg's outcome rides a child-spawn deadline.
+        let _timing = crate::testsupport::timing_guard();
+
+        let _guard = DELEGATE_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let child_dir = tempfile::tempdir().unwrap();
+        let ctx_cwd = tempfile::tempdir().unwrap();
+        // SAFETY: serialized by DELEGATE_ENV_LOCK; no other test reads this var.
+        unsafe { std::env::set_var("CHUG_DELEGATE_BIN", write_argv_stub(ctx_cwd.path())) };
+        // The drift rehearsal: the fixture spec's check line is keyed to one
+        // dir while the goal's export still names another — the fumble shape
+        // `delegate launch` must surface at the launch moment.
+        let spec = ctx_cwd.path().join("t197-drift-spec.md");
+        fs::write(
+            &spec,
+            "# T197 drift rehearsal\ncheck: touch src/*.rs; export CARGO_TARGET_DIR=/tmp/t197-spec-dir && cargo test\n",
+        )
+        .unwrap();
+        let goal =
+            "implement the item; export CARGO_TARGET_DIR=/tmp/t197-goal-dir before every cargo command";
+        let launch = dispatch(
+            &delegate_ctx(ctx_cwd.path()),
+            "delegate",
+            &json!({
+                "action": "launch",
+                "cwd": child_dir.path(),
+                "spec": spec.display().to_string(),
+                "goal": goal,
+                "model": "m",
+            }),
+        );
+        assert!(!launch.is_error, "{}", launch.content);
+        // The advisory rides the normal launch payload — launch proceeds.
+        assert!(
+            launch.content.contains("WARN target-dir drift:"),
+            "the drifting launch must carry the WARN block: {}",
+            launch.content
+        );
+        assert!(
+            launch
+                .content
+                .contains("spec check: /tmp/t197-spec-dir"),
+            "the spec surface must be named: {}",
+            launch.content
+        );
+        assert!(
+            launch
+                .content
+                .contains("goal export: /tmp/t197-goal-dir"),
+            "the goal surface must be named: {}",
+            launch.content
+        );
+        // The spawn itself is unchanged: spec + goal reach the child verbatim.
+        let argv = wait_for_argv_dump(child_dir.path(), &launch);
+        assert!(
+            argv.windows(2)
+                .any(|w| w[0] == "--spec" && w[1] == spec.to_str().unwrap()),
+            "spec must reach the child verbatim: {:?}",
+            argv
+        );
+        assert!(
+            argv.windows(2).any(|w| w[0] == "--goal" && w[1] == goal),
+            "goal must reach the child verbatim: {:?}",
+            argv
+        );
+        let pid = spawn_pid_of(&launch);
+        kill_pid_group(pid);
         // SAFETY: serialized by DELEGATE_ENV_LOCK; no other test reads this var.
         unsafe { std::env::remove_var("CHUG_DELEGATE_BIN") };
     }
