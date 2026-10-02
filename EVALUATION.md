@@ -284,6 +284,27 @@ SELF-SPEC-shaped rows; no human-decision items.
 
 ## Outcomes (filled at cycle wrap — LOOP-SPEC Phase 3)
 
+### Cycle 91 (2026-10-02, ~09:00 UTC–) — kimi MANDATORY fresh-eval cycle (queue drained at cycle-90 wrap; T81 routing correct 4-for-4) — 8 rows filed (T195–T202) + the F13 phase-2a roadmap pull; cycle in progress
+
+- **T195 landed** (merge c634a6c, impl df2c285 — glm 67/80 first-try,
+  ~32 min, zero budget deaths). The gate source-touch guard: every
+  bounded-gate template running in a non-main checkout against a shared
+  role-keyed dir now carries the immediate `touch src/*.rs tests/*.rs;`
+  prefix (LOOP-SPEC steps 1/3/4, META-SPEC §5/§7, the guard-floor clause,
+  META-META-SPEC's check-line convention sentence); main-dedicated gates
+  exempt by T57 construction, impl inner loop exempt — both exemptions
+  stated once at the first carrier. Measured grounding (this eval):
+  touch forces an 18s release bin rebuild / 29.7s all-targets — the
+  guard's per-gate cost against the ~30-min false-red diagnoses it kills
+  (cycle-84 precedent) and the silent false-green leg. Pins amended
+  T187-style + ONE new structural pin (adjacency-exact, RED-proven).
+  kimi REQUIRED PASS (routing d1790935661-17, verdict d1790936624-18):
+  gates re-run 1434/1434 + clippy, 7 serial mutants ALL RED-as-expected
+  (incl. the spec-mandated M1 + both structural-pin legs), 0 survivors,
+  4 minor non-blocking observations. Post-merge main gates 1434/1434
+  under target-shared-main. The arc dogfooded its own doctrine: the
+  review gate and the validator both ran the touch prefix.
+
 ### Cycle 90 (2026-10-02, 08:06–09:00 UTC) — glm routine freshness-skip cycle (freshness held: EVALUATION.md 03:41Z same UTC day + 1 todo row T187) — 1 landed (T187), QUEUE DRAINED
 
 - **T187 landed** (merge ae9ea36, impl d3d4da5). The 3x-deferred doctrine row landed first-try clean: META-SPEC.md's bounded-gates (T6) hard rule re-keys the illustrative caps from the dead form (`alarm 600` / `timeout 600` — under any bash cap below 600s the cap's process-group SIGKILL lands before the inner alarm can fire) to `alarm 280` / `timeout 280`, matching T178's LOOP-SPEC templates verbatim, and gains the rule in one sentence: the inner bound must sit BELOW the driver's bash cap (280 under the fleet's CHUG_BASH_TIMEOUT=300, ≤ ~110 under the 120s default). Both pins that ASSERTED the 600 form were amended in-commit with the justification named (nextest_gate_runner::bounded_caps_wrap_the_nextest_form, shared_target_dir::meta_spec_release_carriers_are_pinned_per_carrier — the pin follows the re-keyed carrier, T178's LOOP-SPEC half already pinned 280). kimi REQUIRED PASS (23/60 iters, ~10 min): gates independently re-run (spec check line green incl. both greps, clippy -D warnings, nextest --release 1433/1433 under the doctrine's own alarm-280 wrap), 4 mutants serial in-tree (overlap declared — all touch the same META-SPEC paragraph): M1 alarm-600 restore KILLED (both pins + both greps), M2 timeout-600 restore KILLED (both pins; grep legs alone blind — the check line's timeout leg is covered by the cargo-test leg, observation), M3 rule-sentence drop SURVIVED (observation — the sentence is unpinned; the pins protect the cap VALUES, not the rule statement), M4 alarm-300 corrupt-value KILLED. Tree byte-clean post-mutants. Child economy: impl 21/80 in ~20 min, validator 23/60 in ~10 min — zero budget deaths, zero resumes; three deferrals (cycle-82 handoff, cycle-83 eval, cycle-89 wrap) were pure queue position, not difficulty. Post-merge gates 1433/1433 in target-shared-main + clippy clean.
