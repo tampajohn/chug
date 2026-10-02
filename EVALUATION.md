@@ -305,6 +305,31 @@ SELF-SPEC-shaped rows; no human-decision items.
   under target-shared-main. The arc dogfooded its own doctrine: the
   review gate and the validator both ran the touch prefix.
 
+- **T196 + T198 + T201 landed (T45 doctrine bundle)** (merge 1136ade;
+  per-row commits d4229bf / 96ccd9f / ca82fd9 in queue order). T196: the
+  step-2 impl goal template bans tree-wide formatters (one woven
+  sentence + exactly-once pin, RED-proven). T198: loopd cycle budget
+  `--max-minutes 240→360` with the walls arithmetic in-comment (360 =
+  p95 × 1.5; iters stay 200) + the argv pin amended in-commit. T201:
+  validator verdict-first — VERDICT + findings land in
+  `.chug/verdict.md` at decision time (META-SPEC §6) and step 4 reads
+  it before spending a T63 resume (LOOP-SPEC) — the deviation
+  ("heredoc" → "one bash command") verified justified by the T126
+  exactly-once pin. ONE kimi round covered the bundle (routing
+  d1790939775-22, verdict d1790940890-23): PASS first round, 5/5
+  mutants killed across two T79 waves (per-row deletions + needle
+  corruption), 1 non-blocking observation (loopd.sh:314's stale
+  171/240 comment — comment-hygiene candidate). Arc: impl died 80/80
+  with t201 written-uncommitted → ONE T63 resume (routing
+  d1790939069-21) finished in 10 iters / ~9.5 min. DISCLOSED INCIDENT:
+  the impl's first t196 commit heredoc mangled and the shell EXECUTED
+  the prose's backticked `cargo fmt` — a tree-wide reformat (89 files)
+  the child stripped T63-style before recommitting; the row's own
+  incident class via a different vector (heredoc-execution, not
+  intent) — noted for the next eval. The validator DOGFOODED T201:
+  its verdict.md was written at decision time and harvested
+  (verdict-t196-bundle-20261002.md). Post-merge main gates 1436/1436.
+
 ### Cycle 90 (2026-10-02, 08:06–09:00 UTC) — glm routine freshness-skip cycle (freshness held: EVALUATION.md 03:41Z same UTC day + 1 todo row T187) — 1 landed (T187), QUEUE DRAINED
 
 - **T187 landed** (merge ae9ea36, impl d3d4da5). The 3x-deferred doctrine row landed first-try clean: META-SPEC.md's bounded-gates (T6) hard rule re-keys the illustrative caps from the dead form (`alarm 600` / `timeout 600` — under any bash cap below 600s the cap's process-group SIGKILL lands before the inner alarm can fire) to `alarm 280` / `timeout 280`, matching T178's LOOP-SPEC templates verbatim, and gains the rule in one sentence: the inner bound must sit BELOW the driver's bash cap (280 under the fleet's CHUG_BASH_TIMEOUT=300, ≤ ~110 under the 120s default). Both pins that ASSERTED the 600 form were amended in-commit with the justification named (nextest_gate_runner::bounded_caps_wrap_the_nextest_form, shared_target_dir::meta_spec_release_carriers_are_pinned_per_carrier — the pin follows the re-keyed carrier, T178's LOOP-SPEC half already pinned 280). kimi REQUIRED PASS (23/60 iters, ~10 min): gates independently re-run (spec check line green incl. both greps, clippy -D warnings, nextest --release 1433/1433 under the doctrine's own alarm-280 wrap), 4 mutants serial in-tree (overlap declared — all touch the same META-SPEC paragraph): M1 alarm-600 restore KILLED (both pins + both greps), M2 timeout-600 restore KILLED (both pins; grep legs alone blind — the check line's timeout leg is covered by the cargo-test leg, observation), M3 rule-sentence drop SURVIVED (observation — the sentence is unpinned; the pins protect the cap VALUES, not the rule statement), M4 alarm-300 corrupt-value KILLED. Tree byte-clean post-mutants. Child economy: impl 21/80 in ~20 min, validator 23/60 in ~10 min — zero budget deaths, zero resumes; three deferrals (cycle-82 handoff, cycle-83 eval, cycle-89 wrap) were pure queue position, not difficulty. Post-merge gates 1433/1433 in target-shared-main + clippy clean.
