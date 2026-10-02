@@ -43,6 +43,19 @@
 //! the one-record-per-call contract when the shape itself is unknown (a
 //! batched wrapper, an aliased key); and the received JSON type for a
 //! non-object input. The success path is byte-identical (req 4).
+//!
+//! T199 — corpus integrity at the write edge (F13 phase 2a-i): outcome
+//! records are the F13 classifier's label rows, so they get two guards the
+//! other classes don't. (1) `choice` is a CLOSED set {landed-clean,
+//! fixed-up, reverted}, enforced at write time — a prose choice ("landed-clean
+//! — merge 7b9b2bf (keep-both conflict resolution) + flip") poisons the label
+//! set the classifier trains against; 7 corpus records predate the gate and
+//! stay grandfathered (append-only history is immutable;
+//! `scripts/decisions-audit.sh` counts them). (2) An advisory subject lint:
+//! an outcome backfill whose `subject` names no id the corpus contains gets a
+//! `note:` line on the return text — never an error (append-only best-effort
+//! stays the T70 invariant). Every other class keeps its free-string
+//! `choice`: the seed classes' options are per-decision.
 
 use std::fs;
 use std::io::Write;
@@ -73,6 +86,11 @@ pub const SEED_CLASSES: [&str; 6] = [
     "eval-triage",
     "outcome",
 ];
+
+/// The closed `choice` set for `class == "outcome"` records (T199 req 1) —
+/// exactly the label set the F13 classifier trains against, named verbatim in
+/// the schema description. Other classes' `choice` stays free-string.
+const OUTCOME_CHOICES: [&str; 3] = ["landed-clean", "fixed-up", "reverted"];
 
 /// One decision record. Field order here IS the line's key order (serde
 /// serializes struct fields in declaration order), matching the documented
@@ -194,6 +212,22 @@ pub fn decision_log(cwd: &Path, input: &Value) -> anyhow::Result<ToolResult> {
     let choice = choice.unwrap_or_default();
     let confidence = confidence.unwrap_or_default();
 
+    // T199 req 1: the outcome choice enum, enforced at write time — never a
+    // silent clamp. This leg sits AFTER the six type legs, so it only fires
+    // when class and choice are both well-typed strings (a missing or
+    // garbled choice is already named by its own leg above; no
+    // double-reporting). The message names the closed set and says where
+    // provenance text belongs, and rides the same invalid-call shape
+    // (contract reminder included) as every other validation failure.
+    if class == "outcome" && !OUTCOME_CHOICES.contains(&choice) {
+        let leg = format!(
+            "outcome choice must be one of {}, got \"{choice}\" — provenance text belongs in \
+             inputs",
+            OUTCOME_CHOICES.join(" | ")
+        );
+        return Err(anyhow!("{}", validation_message(obj, &[leg])));
+    }
+
     let ts = unix_ts();
     let n = ID_COUNTER.fetch_add(1, Ordering::Relaxed) + 1;
     let record = DecisionRecord {
@@ -208,11 +242,71 @@ pub fn decision_log(cwd: &Path, input: &Value) -> anyhow::Result<ToolResult> {
     };
 
     append_record(cwd, &record)?;
+
+    // T199 req 2: the advisory subject lint, outcome records only — an
+    // outcome backfill's subject should BE an id the corpus contains (the
+    // T152-class bug was a misattributed subject id, and a TODO number or a
+    // composite prose subject does not join cleanly at distillation time).
+    // Best-effort, never an error: an unreadable corpus skips the check
+    // silently and the record stays landed; a miss only appends a note line
+    // to the return text. The scan runs after the append (the write path is
+    // untouched; the note describes the corpus as the record lands in it).
+    let mut content = format!("recorded {}", record.id);
+    if class == "outcome"
+        && let Some(note) = subject_note(cwd, subject)
+    {
+        content.push('\n');
+        content.push_str(&note);
+    }
     Ok(ToolResult {
-        content: format!("recorded {}", record.id),
+        content,
         is_error: false,
         images: Vec::new(),
     })
+}
+
+/// The advisory note for an outcome record whose `subject` resolves to no
+/// record id in the corpus (T199 req 2), or `None` when there is nothing to
+/// note: the subject IS an existing id, or the corpus file is unreadable or
+/// absent (the silent-skip case — best-effort must never turn a landed
+/// record into a failure).
+fn subject_note(cwd: &Path, subject: &str) -> Option<String> {
+    let path = cwd.join(".chug").join("decisions.jsonl");
+    let text = fs::read_to_string(&path).ok()?;
+    let resolved = text
+        .lines()
+        // First-match: the scan stops at the first line whose id equals the
+        // subject. Exact equality — the same "resolves to an id" definition
+        // scripts/decisions-audit.sh applies, so the lint and the audit
+        // agree on what a resolved subject is.
+        .any(|line| line_id(line) == Some(subject));
+    if resolved {
+        None
+    } else {
+        Some(format!(
+            "note: subject {subject} not found in {}",
+            path.display()
+        ))
+    }
+}
+
+/// The record id carried by one corpus line, read WITHOUT parsing JSON — the
+/// T199 subject-lint scan is a bounded, line-oriented pass (a first-match
+/// string check per line is fine at corpus scale, per the spec). The record
+/// shape pins `id` as the FIRST key (T70; `assert_key_order` test-pins it),
+/// so the first raw `"id"` occurrence in a well-formed line is the key:
+/// slice from the value's opening quote to its closing one. Ids are
+/// `d<digits>-<digits>`, so no embedded quotes; an escaped `\"id\"` inside a
+/// value never produces the bare `"id"` needle. A line without a parsable
+/// leading id yields `None` and simply never matches — the lint stays
+/// advisory even over malformed corpus lines.
+fn line_id(line: &str) -> Option<&str> {
+    let key = "\"id\"";
+    let after_key = line.find(key)? + key.len();
+    let after_colon = after_key + line[after_key..].find(':')? + 1;
+    let after_open = after_colon + line[after_colon..].find('"')? + 1;
+    let end = after_open + line[after_open..].find('"')?;
+    Some(&line[after_open..end])
 }
 
 /// Human-readable name for a `serde_json` value's type, used by the
@@ -675,6 +769,203 @@ mod tests {
         assert_eq!(records[2]["subject"], "t69 \"collect\" candidate");
         assert_eq!(records[2]["inputs"], "line1\nline2\\slash");
         assert_eq!(records[2]["confidence"], 0.0, "0.0 boundary round-trips");
+    }
+
+    // ---------- T199 outcome choice enum ----------
+
+    /// Req 1: an outcome record's `choice` is a CLOSED set enforced at write
+    /// time — a prose choice (the corpus's 7 grandfathered shapes) is a tool
+    /// error naming the set and the `inputs` provenance home, lands nothing;
+    /// each of the three valid choices passes byte-verbatim; a non-outcome
+    /// class keeps its free-string choice.
+    #[test]
+    fn decision_log_outcome_choice_enum_is_enforced_at_write_time() {
+        let tmp = TempDir::new().unwrap();
+        let ctx = tool_ctx(tmp.path());
+        let prior = dispatch(&ctx, "decision_log", &sample_input());
+        assert!(!prior.is_error);
+
+        // A prose choice — the exact grandfathered corpus shape — is refused.
+        let mut bad = sample_input();
+        bad["class"] = json!("outcome");
+        bad["subject"] = json!("d1790000000-1");
+        bad["options"] = json!("landed-clean | fixed-up | reverted");
+        bad["choice"] = json!(
+            "landed-clean — merge 7b9b2bf (keep-both conflict resolution) + flip, \
+             post-merge gates 1286/1286"
+        );
+        let r = dispatch(&ctx, "decision_log", &bad);
+        assert!(r.is_error, "{}", r.content);
+        // Exact pin: names the closed set, echoes the refusal, says where
+        // provenance text belongs, and carries the contract reminder (T182
+        // invariant: every failure message lists the required fields).
+        assert_eq!(
+            r.content,
+            "tool error: invalid decision_log call: outcome choice must be one of \
+             landed-clean | fixed-up | reverted, got \"landed-clean — merge 7b9b2bf \
+             (keep-both conflict resolution) + flip, post-merge gates 1286/1286\" — \
+             provenance text belongs in inputs; one record per call; required: class, \
+             subject, inputs, options, choice, confidence"
+        );
+        for token in ["landed-clean", "fixed-up", "reverted", "provenance text belongs in inputs"]
+        {
+            assert!(r.content.contains(token), "{token:?} missing: {}", r.content);
+        }
+        // An enum failure never writes.
+        let before = fs::read_to_string(log_path(tmp.path())).unwrap().lines().count();
+        assert_eq!(before, 1, "only the prior record is on disk");
+
+        // Each of the three valid choices passes and lands verbatim.
+        for (i, choice) in ["landed-clean", "fixed-up", "reverted"].iter().enumerate() {
+            let mut input = bad.clone();
+            input["choice"] = json!(choice);
+            let r = dispatch(&ctx, "decision_log", &input);
+            assert!(!r.is_error, "choice={choice}: {}", r.content);
+            let records = read_records(tmp.path());
+            assert_eq!(records.last().unwrap()["choice"], *choice);
+            assert_eq!(records.len(), 2 + i, "one line per accepted call");
+        }
+
+        // Non-outcome classes keep the free-string choice — prose rides.
+        let mut free = sample_input();
+        free["choice"] = json!("kimi-required — resume with a fresh goal");
+        let r = dispatch(&ctx, "decision_log", &free);
+        assert!(!r.is_error, "{}", r.content);
+        let records = read_records(tmp.path());
+        assert_eq!(
+            records.last().unwrap()["choice"],
+            "kimi-required — resume with a fresh goal"
+        );
+    }
+
+    /// Req 1, layering leg: the enum check sits AFTER the type legs — a
+    /// missing or non-string `choice` on an outcome record is named by its
+    /// own type leg (the T88 shape), never by the enum, so the correction
+    /// message stays single-purpose.
+    #[test]
+    fn decision_log_outcome_choice_type_legs_fire_before_the_enum() {
+        let tmp = TempDir::new().unwrap();
+        let ctx = tool_ctx(tmp.path());
+        let mut input = sample_input();
+        input["class"] = json!("outcome");
+        input.as_object_mut().unwrap().remove("choice");
+        let r = dispatch(&ctx, "decision_log", &input);
+        assert!(r.is_error, "{}", r.content);
+        assert!(
+            r.content.contains("choice must be a string, got missing"),
+            "{}",
+            r.content
+        );
+        assert!(!r.content.contains("outcome choice must be one of"), "{}", r.content);
+
+        input["choice"] = json!(7);
+        let r = dispatch(&ctx, "decision_log", &input);
+        assert!(r.is_error, "{}", r.content);
+        assert!(r.content.contains("choice must be a string, got number"), "{}", r.content);
+        assert!(!r.content.contains("outcome choice must be one of"), "{}", r.content);
+        assert!(!log_path(tmp.path()).exists(), "validation failures must not write");
+    }
+
+    // ---------- T199 outcome subject lint ----------
+
+    /// Req 2: the advisory subject lint. A subject that IS an existing id
+    /// resolves silently; an unknown id, a TODO number, and a composite
+    /// subject embedding a real id each get a `note:` line on the return
+    /// text — the return stays non-error and the record stays landed.
+    /// Non-outcome classes are never linted (their subjects are prose).
+    #[test]
+    fn decision_log_outcome_subject_lint_notes_only_unresolved_ids() {
+        let tmp = TempDir::new().unwrap();
+        let ctx = tool_ctx(tmp.path());
+        let prior = dispatch(&ctx, "decision_log", &sample_input());
+        assert!(!prior.is_error);
+        let known_id = prior
+            .content
+            .strip_prefix("recorded ")
+            .expect("result echoes the id")
+            .to_string();
+
+        // Known id: no note, return text unchanged.
+        let outcome = |subject: Value| {
+            let mut o = sample_input();
+            o["class"] = json!("outcome");
+            o["subject"] = subject;
+            o["options"] = json!("landed-clean | fixed-up | reverted");
+            o["choice"] = json!("fixed-up");
+            o
+        };
+        let r = dispatch(&ctx, "decision_log", &outcome(json!(known_id)));
+        assert!(!r.is_error, "{}", r.content);
+        let landed_id = read_records(tmp.path())[1]["id"].as_str().unwrap().to_string();
+        assert_eq!(r.content, format!("recorded {landed_id}"));
+
+        // Unknown id: the note line, naming the subject and the corpus path.
+        let r = dispatch(&ctx, "decision_log", &outcome(json!("d9999999999-99")));
+        assert!(!r.is_error, "the lint is advisory, never an error: {}", r.content);
+        let landed_id =
+            read_records(tmp.path())[2]["id"].as_str().unwrap().to_string();
+        assert_eq!(
+            r.content,
+            format!(
+                "recorded {landed_id}\nnote: subject d9999999999-99 not found in {}",
+                log_path(tmp.path()).display()
+            )
+        );
+        assert!(r.content.ends_with("/.chug/decisions.jsonl"), "{}", r.content);
+        assert_eq!(read_records(tmp.path()).len(), 3, "the record still landed");
+
+        // A composite subject embedding a REAL id still does not resolve:
+        // the subject must BE the id (exact equality — the same definition
+        // scripts/decisions-audit.sh applies), so the note fires.
+        let composite = format!("{known_id} plus recovery routing context");
+        let r = dispatch(&ctx, "decision_log", &outcome(json!(composite.clone())));
+        assert!(!r.is_error, "{}", r.content);
+        assert!(
+            r.content.contains(&format!("\nnote: subject {composite} not found in ")),
+            "{}",
+            r.content
+        );
+
+        // Non-outcome classes are never linted: a prose subject on a
+        // validation-routing record gets no note.
+        let mut prose = sample_input();
+        prose["subject"] = json!("T199 arc (routing d9999999999-99)");
+        let r = dispatch(&ctx, "decision_log", &prose);
+        assert!(!r.is_error, "{}", r.content);
+        assert!(!r.content.contains("note:"), "{}", r.content);
+    }
+
+    /// Req 2, silent-skip leg: a corpus file that exists but cannot be READ
+    /// (write-only, mode 0o222) must not turn the landed record into a
+    /// failure — the append proceeds, the lint skips silently, no note.
+    #[test]
+    fn decision_log_outcome_subject_lint_skips_silently_when_corpus_is_unreadable() {
+        let tmp = TempDir::new().unwrap();
+        let chug = tmp.path().join(".chug");
+        fs::create_dir_all(&chug).unwrap();
+        let corpus = chug.join("decisions.jsonl");
+        fs::write(&corpus, b"").unwrap();
+        let mut perms = fs::metadata(&corpus).unwrap().permissions();
+        use std::os::unix::fs::PermissionsExt;
+        perms.set_mode(0o222);
+        fs::set_permissions(&corpus, perms).unwrap();
+
+        let ctx = tool_ctx(tmp.path());
+        let mut outcome = sample_input();
+        outcome["class"] = json!("outcome");
+        outcome["subject"] = json!("d9999999999-99");
+        outcome["choice"] = json!("reverted");
+        let r = dispatch(&ctx, "decision_log", &outcome);
+        assert!(!r.is_error, "write proceeds, lint skips: {}", r.content);
+        assert!(
+            !r.content.contains("note:"),
+            "no note from an unreadable corpus: {}",
+            r.content
+        );
+        assert!(r.content.starts_with("recorded d"), "{}", r.content);
+        // The record really did land (append needs only write permission).
+        let meta = fs::metadata(&corpus).unwrap();
+        assert!(meta.len() > 0, "the outcome record was appended");
     }
 
     // ---------- validation legs ----------
