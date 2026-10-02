@@ -227,6 +227,41 @@
 //! doctrine-unchanged — spec authors keep writing check lines against
 //! the default `target-shared`; the re-key is a dispatch-time
 //! orchestrator act, only when slotting a child into impl-a/impl-b.
+//!
+//! T186 doctrine: two cycle-84 incidents share one root — §2 step 5's
+//! harvest + removal mechanics were underspecified. (1) HARVEST GAP ×2:
+//! a FRESH child launched into a reused worktree ROTATES its
+//! predecessor's `.chug/events.jsonl` to `.chug/events-<ts>.jsonl`
+//! (T10/T7), so the old "harvest every child run's
+//! `.chug/events.jsonl`" reading silently dropped every rotated segment,
+//! and `git worktree remove` then deleted them untracked — the t183 impl
+//! child's two glm segments (an 80/80 death + its T63 resume) and the
+//! t181 impl child's glm segment (20/80 first-try) were never harvested,
+//! t181's even filed under one combined name while the harvested file
+//! held `runs: 1`, kimi only. Cycle-83's kimi harvest of t180 did it
+//! right (`events-t180-impl-…` runs: 2 AND `events-t180-validate-…` as
+//! separate files) — a written recipe is not a mechanism, so step 5 now
+//! carries the glob (`.chug/events*.jsonl`), the rotation mechanism, and
+//! one-file-per-segment naming inspected from each file's `run_start`.
+//! (2) ZOMBIE COLLISION: cycle-84 seg-1 declared the t183 validator
+//! (pid 6260) dead via a TRUNCATED ps read, removed its worktree while
+//! the child lived, and the zombie's cargo suites raced the wrap
+//! goal-gate into a ~30-minute "check command failed" rejection (the
+//! code change was weighed and rejected, eval-triage d1790856539-8) —
+//! step 5 now makes liveness a removal precondition (`delegate status`
+//! or `kill -0 <pid>`, never a truncated `ps … | head` read) with the
+//! defunct-zombie caveat (a bare ps -p / kill -0 hit must also exclude
+//! `ps -p <pid> -o stat=` showing `Z`, which satisfies kill -0 while
+//! holding no files — the cycle-85 inverse: two defunct validator pids
+//! read ALIVE on a bare ps -p moments before a safe removal). Legs
+//! (aa)–(ac) pin both rules + the Phase-3 wrap bullet's amendment in the
+//! T48/T64 pattern: every needle exactly-once file-wide and inside its
+//! window (step 5 = `5. **` through `6. **`, reusing the T120 anchors;
+//! Phase 3 = `## Phase 3 — Wrap` through `## Hard rules`), with the
+//! removal precondition ordered after the harvest glob and before the
+//! merge sentence it guards. Reverting either doctrine sentence drops
+//! its needles to 0 and the named leg goes red; duplicating one fires
+//! the count-2 leg.
 
 /// The leg's signature phrase: "resume" + the one-attempt cap language in
 /// one contiguous run. Must occur EXACTLY once in LOOP-SPEC.md.
@@ -2216,5 +2251,291 @@ fn goal_template_clippy_bar_denies_warnings() {
              the evidence clause drifted out of the launch-block doctrine"
         );
     }
+}
+
+// ---- T186 — step 5: harvest ALL events segments + the live-child removal precondition ----
+//
+// Two cycle-84 incidents, one root (see the module docs for the full
+// narrative): the harvest gap (rotated segments dropped, then deleted
+// with the removed worktree) and the zombie collision (a worktree
+// removed under a live child after a truncated ps read). Step 5 now
+// carries BOTH rules; legs (aa)–(ac) pin them in the T48/T64 pattern —
+// every needle exactly-once in LOOP-SPEC.md and inside its window, so a
+// revert drops the count to 0, a duplicate fires count-2, and a move out
+// of the window dies on the find.
+
+/// The harvest-all glob — the live stream AND every rotated segment,
+/// copied one harvested file per source file. Must occur EXACTLY once in
+/// LOOP-SPEC.md.
+const HARVEST_ALL_GLOB: &str = ".chug/events*.jsonl";
+
+/// The harvest shape — one harvested file per source file (never one
+/// combined file per worktree). Must occur EXACTLY once.
+const ONE_FILE_PER_SEGMENT: &str = "ONE harvested file per source file";
+
+/// The rotation mechanism's row tag (T7: a fresh run rotates the
+/// transcript; T10: the events stream's rotation mirrors it) — the
+/// reason a reused worktree holds MORE than one segment. Must occur
+/// EXACTLY once.
+const ROTATION_TAG: &str = "T10/T7";
+
+/// The per-segment naming rule's inspect token — each harvested file is
+/// named per the run segment(s) it ACTUALLY contains, read off its
+/// `run_start`. Must occur EXACTLY once (step 4's T69 run_start-latch
+/// sentence does not collide with this longer needle).
+const RUN_START_INSPECT: &str = "`run_start` model/spec";
+
+/// The combined-name ban — never `impl-validate` for a single-segment
+/// file (the t181 harvest's exact mistake). Must occur EXACTLY once (the
+/// t181 evidence sentence says "one combined name" WITHOUT the token).
+const COMBINED_NAME_BAN: &str = "combined `impl-validate` name";
+
+/// Harvest evidence (1/2): the t183 impl child's two lost glm segments.
+/// Must occur EXACTLY once.
+const T183_HARVEST_LOSS: &str = "the t183 impl child's two glm segments";
+
+/// Harvest evidence (2/2): the t181 impl child's lost glm segment. Must
+/// occur EXACTLY once.
+const T181_HARVEST_LOSS: &str = "t181 impl child's glm segment";
+
+/// The removal precondition's subject — NO child pid launched in that
+/// worktree still alive. Must occur EXACTLY once.
+const LIVE_PID_PRECONDITION: &str = "NO child pid launched in that worktree";
+
+/// The sanctioned liveness sources, paired. Must occur EXACTLY once
+/// (step 2's polling paragraph names `delegate status` separately; this
+/// longer needle is the step-5 pairing with `kill -0`).
+const LIVENESS_SOURCE: &str = "liveness comes from `delegate status` or";
+
+/// The kill-based liveness test. Must occur EXACTLY once (the
+/// defunct-zombie caveat repeats bare `kill -0`, not the `<pid>` form).
+const KILL_ZERO_PID: &str = "kill -0 <pid>";
+
+/// The truncated-ps ban — the cycle-84 seg-1 failure mode. Must occur
+/// EXACTLY once (`\u{2026}` = the ellipsis, spelled as an escape so an
+/// editor normalization cannot silently unpin it, the DENSITY_NEEDLE
+/// idiom).
+const TRUNCATED_PS_BAN: &str = "truncated `ps \u{2026} | head` read";
+
+/// The zombie-collision evidence: the t183 validator's pid, named. Must
+/// occur EXACTLY once.
+const PID_6260: &str = "pid 6260";
+
+/// The defunct-zombie caveat's exact check — a bare ps hit must also
+/// read the state column. Must occur EXACTLY once.
+const ZOMBIE_STAT_CHECK: &str = "-o stat=";
+
+/// The defunct-zombie state the check must exclude. Must occur EXACTLY
+/// once.
+const SHOWING_Z: &str = "showing `Z`";
+
+/// The defunct-zombie state's name. Must occur EXACTLY once (the
+/// cycle-85 inverse sentence repeats the bare "defunct" stem — this
+/// needle is the hyphenated state name).
+const DEFUNCT_ZOMBIE: &str = "defunct-zombie";
+
+/// The cycle-85 inverse incident tag — two defunct validator pids read
+/// ALIVE on a bare ps -p moments before a safe removal. Must occur
+/// EXACTLY once.
+const CYCLE85_INVERSE: &str = "cycle-85 inverse";
+
+/// The merge sentence the removal precondition must precede — the whole
+/// point is that no remove (and no merge) happens while a child lives.
+/// Kept line-safe ("Only then merge to" — the spec wraps after `to`).
+/// Must occur EXACTLY once.
+const ONLY_THEN_MERGE: &str = "Only then merge to";
+
+/// The Phase-3 wrap bullet's pointer at the harvest-all doctrine. Must
+/// occur EXACTLY once in LOOP-SPEC.md (step 5 itself spells the doctrine
+/// out without the hyphenated token).
+const WRAP_HARVEST_ALL: &str = "step 5's harvest-all";
+
+/// The heading that closes the wrap-bullet window (the window OPENS at
+/// the pre-existing T175 `PHASE3_HEADING` const above — reused, not
+/// redefined).
+const HARD_RULES_HEADING: &str = "## Hard rules";
+
+/// (aa) T186 — the harvest-all doctrine: ALL of the worktree's
+/// `.chug/events*.jsonl` files (the live stream AND every rotated
+/// segment), ONE harvested file per source file, each named per the run
+/// segment(s) it ACTUALLY contains (never a combined `impl-validate`
+/// name for a single-segment file), with the T10/T7 rotation mechanism
+/// and the t183/t181 losses named. Every load-bearing token occurs
+/// EXACTLY once in LOOP-SPEC.md, inside step 5's window (the T64
+/// loose-heading scope pattern, reusing the T120 step-5 anchors).
+/// Revert the harvest-all sentence (e.g. back to "harvest every child
+/// run's `.chug/events.jsonl`") and the glob + shape needles drop to 0 —
+/// this leg goes red; duplicate a token and the count-2 leg fires; move
+/// the doctrine out of step 5 and the window leg fires.
+#[test]
+fn harvest_all_needles_occur_exactly_once_inside_step_5() {
+    // Needle self-check (T48 idiom): a mangled needle must not let this
+    // pin pass silently.
+    assert!(
+        HARVEST_ALL_GLOB.starts_with(".chug/events") && HARVEST_ALL_GLOB.ends_with("*.jsonl"),
+        "the harvest-all glob must name the worktree's `.chug/` events \
+         streams with the wildcard"
+    );
+    assert!(
+        ROTATION_TAG == "T10/T7" && COMBINED_NAME_BAN.contains("impl-validate"),
+        "the rotation tag and the combined-name ban must carry their \
+         load-bearing tokens verbatim"
+    );
+    let spec = loop_spec();
+    let tokens: [(&str, &str); 7] = [
+        (HARVEST_ALL_GLOB, "the harvest-all glob"),
+        (ONE_FILE_PER_SEGMENT, "the one-file-per-source-file shape"),
+        (ROTATION_TAG, "the T10/T7 rotation tag"),
+        (RUN_START_INSPECT, "the run_start inspect token"),
+        (COMBINED_NAME_BAN, "the combined-name ban"),
+        (T183_HARVEST_LOSS, "the t183 harvest-loss evidence"),
+        (T181_HARVEST_LOSS, "the t181 harvest-loss evidence"),
+    ];
+    for (needle, what) in tokens {
+        assert_eq!(
+            spec.matches(needle).count(),
+            1,
+            "LOOP-SPEC must state {what} exactly once — zero means the \
+             harvest-all doctrine was reverted (or the needle was \
+             rewrapped across a line break, which also breaks the spec's \
+             own line-wise grep), more than one means it is stated twice"
+        );
+    }
+    let start = spec
+        .find(STEP5_HEADING_LOOSE)
+        .expect("step-5 heading (`5. **`) present");
+    let end = start
+        + spec[start..]
+            .find(STEP6_HEADING_LOOSE)
+            .expect("step-6 heading present after step 5's");
+    let window = &spec[start..end];
+    for (needle, what) in tokens {
+        assert!(
+            window.contains(needle),
+            "step 5's window must carry {what} ({needle:?}) — the \
+             harvest-all doctrine was deleted or moved out of step 5"
+        );
+    }
+}
+
+/// (ab) T186 — the live-child removal precondition: before ANY
+/// `git worktree remove`, verify NO child pid launched in that worktree
+/// is still alive — liveness comes from `delegate status` or
+/// `kill -0 <pid>`, NEVER a truncated `ps … | head` read — and a bare
+/// `ps -p <pid>` / `kill -0` hit must ALSO exclude the defunct-zombie
+/// state (`ps -p <pid> -o stat=` showing `Z`, which satisfies kill -0
+/// while holding no files). Every load-bearing token occurs EXACTLY once
+/// in LOOP-SPEC.md, inside step 5's window, and the precondition sits
+/// AFTER the harvest glob it extends and BEFORE the `Only then merge to
+/// main` sentence it guards (the ordering IS the doctrine: harvest what
+/// exists, prove no live child, only then remove + merge). Revert the
+/// precondition sentence and every count drops to 0 — this leg goes red;
+/// move it after the merge sentence and the ordering leg fires; the
+/// pid 6260 + cycle-85 evidence tokens keep both incidents (the
+/// safe-direction miss and the exactness miss) named.
+#[test]
+fn removal_precondition_exactly_once_inside_step_5_before_merge() {
+    // Needle self-check (T48 idiom).
+    assert!(
+        TRUNCATED_PS_BAN.starts_with("truncated `ps")
+            && TRUNCATED_PS_BAN.ends_with("read")
+            && KILL_ZERO_PID.starts_with("kill -0"),
+        "the truncated-ps ban and the kill -0 needle must carry their \
+         liveness language verbatim"
+    );
+    let spec = loop_spec();
+    let tokens: [(&str, &str); 10] = [
+        (LIVE_PID_PRECONDITION, "the live-child removal precondition"),
+        (LIVENESS_SOURCE, "the sanctioned liveness sources"),
+        (KILL_ZERO_PID, "the kill -0 <pid> liveness test"),
+        (TRUNCATED_PS_BAN, "the truncated `ps … | head` ban"),
+        (PID_6260, "the pid 6260 zombie evidence"),
+        (ZOMBIE_STAT_CHECK, "the -o stat= state-column check"),
+        (SHOWING_Z, "the `Z` defunct state"),
+        (DEFUNCT_ZOMBIE, "the defunct-zombie state name"),
+        (CYCLE85_INVERSE, "the cycle-85 inverse evidence"),
+        (ONLY_THEN_MERGE, "the Only-then-merge sentence"),
+    ];
+    for (needle, what) in tokens {
+        assert_eq!(
+            spec.matches(needle).count(),
+            1,
+            "LOOP-SPEC must state {what} exactly once — zero means the \
+             removal precondition was reverted (or the needle was \
+             rewrapped across a line break), more than one means it is \
+             stated twice"
+        );
+    }
+    let start = spec
+        .find(STEP5_HEADING_LOOSE)
+        .expect("step-5 heading (`5. **`) present");
+    let end = start
+        + spec[start..]
+            .find(STEP6_HEADING_LOOSE)
+            .expect("step-6 heading present after step 5's");
+    let window = &spec[start..end];
+    for (needle, what) in tokens {
+        assert!(
+            window.contains(needle),
+            "step 5's window must carry {what} ({needle:?}) — the \
+             removal precondition was deleted or moved out of step 5"
+        );
+    }
+    // The ordering IS the doctrine: harvest-all first, then the live-child
+    // check, and only then the merge sentence the precondition guards.
+    let harvest = window
+        .find(HARVEST_ALL_GLOB)
+        .expect("step-5 window must carry the harvest-all glob (leg (aa))");
+    let precondition = window
+        .find(LIVE_PID_PRECONDITION)
+        .expect("step-5 window must carry the removal precondition");
+    let merge = window
+        .find(ONLY_THEN_MERGE)
+        .expect("step-5 window must carry the merge sentence");
+    assert!(
+        harvest < precondition && precondition < merge,
+        "the removal precondition must sit AFTER the harvest-all glob \
+         ({harvest}) and BEFORE the merge sentence ({merge}) — found at \
+         {precondition}: harvesting precedes proving no live child, and \
+         proving precedes merging"
+    );
+}
+
+/// (ac) T186 — the Phase-3 wrap bullet matches the doctrine (harvest =
+/// ALL segments): the bullet now points at §2 step 5's harvest-all
+/// instead of implying one file per item. The pointer occurs EXACTLY
+/// once in LOOP-SPEC.md, inside the Phase-3 window (the `## Phase 3 —
+/// Wrap` heading through `## Hard rules`). Revert the bullet to the
+/// one-file reading and the needle drops to 0 — this leg goes red;
+/// duplicate it and the count-2 leg fires.
+#[test]
+fn wrap_bullet_names_the_harvest_all_doctrine_inside_phase_3() {
+    // Needle self-check (T48 idiom).
+    assert!(
+        WRAP_HARVEST_ALL.starts_with("step 5's") && WRAP_HARVEST_ALL.ends_with("harvest-all"),
+        "the wrap-bullet pointer must name §2 step 5's harvest-all \
+         doctrine verbatim"
+    );
+    let spec = loop_spec();
+    assert_eq!(
+        spec.matches(WRAP_HARVEST_ALL).count(),
+        1,
+        "LOOP-SPEC must state the wrap bullet's harvest-all pointer \
+         exactly once — zero means the Phase-3 bullet was reverted to \
+         the one-file reading, more than one means it is stated twice"
+    );
+    let start = spec
+        .find(PHASE3_HEADING)
+        .expect("Phase-3 heading present");
+    let end = start
+        + spec[start..]
+            .find(HARD_RULES_HEADING)
+            .expect("Hard-rules heading present after Phase 3's");
+    let window = &spec[start..end];
+    assert!(
+        window.contains(WRAP_HARVEST_ALL),
+        "the Phase-3 window must carry {WRAP_HARVEST_ALL:?} — the \
+         harvest bullet drifted out of the wrap section"
+    );
 }
 

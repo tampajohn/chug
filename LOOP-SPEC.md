@@ -406,14 +406,42 @@ simultaneously past gates — T194 amends T161's 2-child cap):
    / `validation-verdict`).
 5. **Harvest, then merge + close — you own the books.** Before any
    `git worktree remove` (which deletes the worktree's untracked `.chug/`
-   silently — the cycle-5 T18 loss), harvest every child run's
-   `.chug/events.jsonl` from the worktree into the main repo's `.chug/` as
-   `events-t<N>-<role>-<yyyymmdd>-<hhmmss>.jsonl` (impl and validator
-   alike; precedents `events-t17-impl-20260925-170831.jsonl` and
-   `events-t17-validate3-20260925.jsonl`), plus the
-   child's `LEDGER.md` as `LEDGER-t<N>-<role>-<ts>.md` when it carried a
-   verdict or non-trivial findings; transcript harvest is the operator's
-   choice (size). Only then merge to main, re-run gates in main —
+   silently — the cycle-5 T18 loss), harvest ALL of the worktree's
+   `.chug/events*.jsonl` files — the live stream AND every rotated
+   `events-<ts>.jsonl` segment, ONE harvested file per source file: a
+   FRESH child launched into a reused worktree ROTATES its predecessor's
+   `.chug/events.jsonl` to `.chug/events-<ts>.jsonl` (T10/T7), so
+   copying only the live stream silently drops the rotated segment(s) —
+   the cycle-84 evidence: the t183 impl child's two glm segments and the
+   t181 impl child's glm segment were never harvested and died with
+   their removed worktrees, t181's even filed under one combined name
+   while the harvested file held a single kimi segment (`runs: 1`). Name
+   each harvested file per the run segment(s) it ACTUALLY contains
+   (inspect its `run_start` model/spec: `events-t<N>-impl-<ts>.jsonl`
+   for the impl segment, `events-t<N>-validate-<ts>.jsonl` for the
+   validator; NEVER a combined `impl-validate` name for a
+   single-segment file; impl and validator alike; precedents
+   `events-t17-impl-20260925-170831.jsonl` and
+   `events-t17-validate3-20260925.jsonl` — cycle-83's kimi harvest of
+   t180 did it right, `events-t180-impl-…` (`runs: 2`) AND
+   `events-t180-validate-…` as separate files), plus the child's
+   `LEDGER.md` as `LEDGER-t<N>-<role>-<ts>.md` when it carried a verdict
+   or non-trivial findings; transcript harvest is the operator's choice
+   (size). The remove carries a SECOND precondition, exact in BOTH
+   directions: verify NO child pid launched in that worktree is still
+   alive — liveness comes from `delegate status` or `kill -0 <pid>`,
+   NEVER a truncated `ps … | head` read (cycle-84 seg-1 declared the
+   t183 validator dead on a bare ps pipeline read, removed its worktree
+   while pid 6260 lived, and the zombie's cargo suites raced the wrap
+   goal-gate into a ~30-minute "check command failed" diagnosis) — and a
+   bare `ps -p <pid>` / `kill -0` hit must ALSO exclude the
+   defunct-zombie state (`ps -p <pid> -o stat=` showing `Z`, which
+   satisfies kill -0 while holding no files — the cycle-85 inverse: two
+   defunct validator pids read ALIVE on a bare ps -p moments before a
+   safe removal; the safe direction, but the check must be exact both
+   ways). A live child blocks the removal: harvest what exists, leave
+   the worktree, note the row for the next cycle. Only then merge to
+   main, re-run gates in main —
    `CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-main`,
    ALWAYS, never conditionally on the T44 overlap (this is NOT step 3's
    role-keyed rule; step 3's worktree-review gates keep their T52
@@ -587,8 +615,11 @@ alike) has been harvested.
 
 - TODO.md truthful (every `done` row has a commit ref).
 - Child harvests landed in the main repo's `.chug/`: each worked item's
-  `events-t<N>-<role>-*.jsonl` (plus `LEDGER-t<N>-<role>-*.md` where
-  non-trivial) — nothing died with a removed worktree.
+  `events-t<N>-<role>-*.jsonl` — ALL of the segments the worktree held
+  (the live stream AND each rotated segment — §2 step 5's harvest-all),
+  never the live `.chug/events.jsonl` alone (plus
+  `LEDGER-t<N>-<role>-*.md` where non-trivial) — nothing died with a
+  removed worktree.
 - `.chug/decisions.jsonl` carries the cycle's records — `eval-triage` at
   eval time (filed rows AND rejected candidates), `recovery-routing` /
   `model-fallback` at dispatch, `validation-routing` +
