@@ -113,7 +113,11 @@ simultaneously past gates — T194 amends T161's 2-child cap):
              CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared before
              every cargo command (T47 shared build cache — delegate has no env
              parameter, so the goal carries the export). Keep cargo build +
-             clippy `-D warnings` + test green. Commit your work here. Always
+             clippy `-D warnings` + test green. Never run tree-wide
+             formatters (`cargo fmt` across the repo, mass whitespace or
+             import-ordering passes) — format nothing you did not rewrite;
+             a diff touching files outside the spec's named targets is a
+             review red flag on its face. Commit your work here. Always
              commit ONLY from your worktree cwd (the /tmp/chug-loop-t<N>
              you were launched in): if you cd to the main repo for
              read-only checks, cd back before committing —
@@ -419,7 +423,11 @@ simultaneously past gates — T194 amends T161's 2-child cap):
    throwaway worktrees removed after results are collected; findings
    reference mutant names, not leg dirs. META-SPEC §6's goal template
    carries the same T79 mandate (that edit, not this paragraph's launch
-   override, is what touches META-SPEC.md). FAIL → fix-up child
+   override, is what touches META-SPEC.md). On a validator budget death
+   or wedge, read `.chug/verdict.md` in the worktree BEFORE spending a
+   T63 resume — a written verdict IS the verdict (provenance note in the
+   ledger; the resume is then only for missing mutation legs, named in
+   the routing record). FAIL → fix-up child
    with the findings pasted into its goal — and when a finding names one
    instance of a class (a vacuous pin, a missing reset, an unchecked error
    leg), the goal ALSO names the class and requires

@@ -316,6 +316,15 @@ while [ ! -f "$STOP" ]; do
   # queue; minutes 171/240 — never binding). The cap is also the stuck-cycle
   # detector, so 200 costs ≤40 extra stuck iterations per stuck cycle before
   # the HALT guard (3 consecutive failed cycles) trips.
+  # T198: minutes raised 240→360 — the fleet outgrew the wall: cycle-85–90
+  # walls measured 3h23m–4h01m, cap hit once (cycle 88 DIED at the
+  # 240-minute wall mid-arc, absorbed by a wrap + cold restart + the
+  # cycle-89 reconciliation; three of the six ran within 5 minutes of the
+  # cap). 360 = p95 ≈ 4h × 1.5 headroom; iterations stay 200 (cycle 89
+  # used 195/200 — a watch item for the next eval, not this row; separate
+  # lever with a separate measure history). Bounded blast-radius reasoning
+  # is unchanged from T27: loopd relaunches a dead cycle, and the
+  # 3-consecutive-failures HALT still caps a wedged fleet.
   # T47: the shared cache reaches the cycle as a per-invocation env prefix on
   # the chug call — NEVER as a bare `export`. An export inside this while loop
   # would persist in the supervisor's environment across iterations, so from
@@ -360,7 +369,7 @@ while [ ! -f "$STOP" ]; do
   chug_rc=0
   chug_out="$(CARGO_TARGET_DIR="$ROOT/target-shared" ./target/release/chug run --spec LOOP-SPEC.md \
     --goal "Run the full self-improvement cycle per LOOP-SPEC: evaluate or skip per the freshness rule, work the queue (features are first-class per the amended doctrine — close capability gaps, not only harden), adversarial validation for core-logic items, you own all bookkeeping, push after each item lands green + remainder at wrap. Your wrap IS the next cycle's input — leave TODO.md, EVALUATION.md and specs/ such that a cold next cycle needs zero human words." \
-    --model "$orch_model" --max-iters 200 --max-minutes 240 \
+    --model "$orch_model" --max-iters 200 --max-minutes 360 \
     2>> "$cycle_log")" || chug_rc=$?
   printf '%s\n' "$chug_out" >> "$cycle_log"
   if [ "$chug_rc" -eq 0 ]; then

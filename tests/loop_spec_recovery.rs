@@ -2539,3 +2539,205 @@ fn wrap_bullet_names_the_harvest_all_doctrine_inside_phase_3() {
     );
 }
 
+// ---- T196 — the impl goal template bans tree-wide formatters ----
+//
+// The T188 fmt-noise class: cycle 87's t188 round-3 glm impl child ran a
+// mass `cargo fmt` across the whole repo — 83 files, +12.6k/−9.2k
+// uncommitted fmt noise on top of the real change — and the T63 resume had
+// to spend its first act stripping the noise to the 775 real insertions
+// before the fix-up could proceed (the diff was unreviewable until
+// stripped). The template said nothing about formatting, so a child that
+// decided to "tidy up" had license. The template now carries ONE ban
+// sentence, woven into the goal text: never run tree-wide formatters —
+// format nothing you did not rewrite. Step 4's FAIL-arc fix-up child has
+// no goal text of its own (its goal is step 2's with the findings pasted
+// in — the same one-template-covers-fix-ups fact the T176 pin records), so
+// this one edit covers both.
+//
+// The pin (T48/T64/T176 pattern): the ban's two load-bearing tokens occur
+// EXACTLY once in LOOP-SPEC.md, both inside step 2's window, the ban
+// sitting between the clippy-bar sentence it extends and the `Commit your
+// work here.` sentence it precedes.
+
+/// The ban's subject — TREE-WIDE formatting is the banned act (a per-file
+/// format of a file you rewrote is not). Must occur EXACTLY once in
+/// LOOP-SPEC.md.
+const FMT_BAN_TREE_WIDE: &str = "tree-wide";
+
+/// The ban's named tool. Must occur EXACTLY once in LOOP-SPEC.md.
+const FMT_BAN_TOOL: &str = "cargo fmt";
+
+/// (ad) T196 — the impl goal template bans tree-wide formatters: the
+/// ban's two load-bearing tokens occur EXACTLY once in LOOP-SPEC.md, both
+/// inside step 2's window (the T64 loose-heading scope), and the ban
+/// sentence sits BETWEEN the clippy-bar sentence it extends and the
+/// `Commit your work here.` sentence it precedes (the template's sentence
+/// order preserved). Revert the ban sentence and BOTH tokens drop to 0 —
+/// this leg goes red (the deletion proof is in the commit message);
+/// state the ban twice and the count-2 leg fires; move it out of step 2
+/// or reorder it past the commitment sentence and the window/ordering
+/// legs fire.
+#[test]
+fn impl_goal_template_bans_tree_wide_formatters() {
+    // Needle self-checks (T48 idiom): a mangled needle must not let this
+    // pin pass silently.
+    assert!(
+        FMT_BAN_TREE_WIDE.starts_with("tree-") && FMT_BAN_TREE_WIDE.ends_with("wide"),
+        "the subject needle must be the hyphenated `tree-wide` form"
+    );
+    assert_eq!(FMT_BAN_TOOL, "cargo fmt");
+
+    let spec = loop_spec();
+    let tokens: [(&str, &str); 2] = [
+        (FMT_BAN_TREE_WIDE, "the tree-wide formatter ban"),
+        (FMT_BAN_TOOL, "the `cargo fmt` ban"),
+    ];
+    for (needle, what) in tokens {
+        assert_eq!(
+            spec.matches(needle).count(),
+            1,
+            "LOOP-SPEC must state {what} exactly once — zero means the \
+             T196 ban sentence was deleted, more than one means it is \
+             stated twice (the T156 text-revert mutant class)"
+        );
+    }
+
+    // Scope + order: inside step 2's window, after the clippy-bar sentence
+    // the ban extends and before the commitment sentence it precedes.
+    let start = spec
+        .find(STEP2_HEADING_LOOSE)
+        .expect("step-2 heading (`2. **`) present");
+    let end = start
+        + spec[start..]
+            .find(STEP3_HEADING)
+            .expect("step-3 heading present after step 2's");
+    let window = &spec[start..end];
+    for (needle, what) in tokens {
+        assert!(
+            window.contains(needle),
+            "step 2's window must carry {what} ({needle:?}) — the ban \
+             drifted out of the impl goal template"
+        );
+    }
+    let clippy = window
+        .find(CLIPPY_DENY_SENTENCE)
+        .expect("step-2 window must carry the clippy-bar sentence (T176, untouched)");
+    let ban = window
+        .find(FMT_BAN_TREE_WIDE)
+        .expect("step-2 window must carry the fmt ban (count leg above)");
+    let here = window
+        .find(COMMIT_HERE)
+        .expect("step-2 window must carry `Commit your work here.` (untouched)");
+    assert!(
+        clippy < ban && ban < here,
+        "the fmt ban must sit between the clippy-bar sentence ({clippy}) \
+         and the `Commit your work here.` sentence ({here}) — the \
+         template's sentence order preserved (found at {ban})"
+    );
+}
+
+// ---- T201 — the validator verdict-first doctrine ----
+//
+// The unannounced-verdict class: a validator that reaches its verdict but
+// dies before announcing it burns a recovery cycle — t185-validate (50-min
+// wall, verdict recovered via T63 resume), t188-round4 (60/60, verdict
+// recovered from transcript), t192-validate (60/60, verdict recovered from
+// the log — the 4th of the class), plus the t186 post-goal_complete wedge
+// (14 min silent, verdict fully rendered in its log). Every instance cost
+// a transcript-archaeology pass or a resume (~10–20 min) because the
+// verdict existed ONLY inside the dying child's context. One sentence
+// kills the class for every death mode: the moment the verdict is DECIDED
+// it lands in `.chug/verdict.md` — a budget death, a wedge, a SIGKILL: the
+// verdict is already on disk. META-SPEC §6's template gains the
+// write-first half; LOOP-SPEC step 4 gains the recovery half (read
+// verdict.md BEFORE spending a T63 resume — a written verdict IS the
+// verdict).
+//
+// One pin covers both carriers: `verdict.md` occurs EXACTLY once in EACH
+// file, inside the §6 Validate window (STEP6_VALIDATE_HEADING ..
+// STEP7_HEADING, the T126 anchors) and inside step 4's window
+// respectively, and in META-SPEC the write sentence precedes the
+// `End with a verdict line` sentence it front-runs.
+
+/// The verdict artifact's path token — the file a dying validator's
+/// verdict must already sit in. Must occur EXACTLY once in META-SPEC.md
+/// (the §6 write-first sentence) AND exactly once in LOOP-SPEC.md (step
+/// 4's recovery sentence) — one carrier each, no forks.
+const VERDICT_FILE: &str = "verdict.md";
+
+/// (ae) T201 — verdict-first: `verdict.md` occurs EXACTLY once in
+/// META-SPEC.md (the §6 template's write-first sentence) AND exactly once
+/// in LOOP-SPEC.md (step 4's recovery sentence), each inside its carrier
+/// window, and the §6 write sentence sits BEFORE the `End with a verdict
+/// line` sentence it front-runs. Delete EITHER sentence and its file's
+/// count drops to 0 — this leg goes red (the deletion proof is in the
+/// commit message); state either sentence twice and the count-2 leg
+/// fires; move a sentence out of its window and the window leg fires.
+#[test]
+fn validator_verdict_first_file_named_once_in_each_spec() {
+    // Needle self-check (T48 idiom): a mangled needle must not let this
+    // pin pass silently.
+    assert_eq!(
+        VERDICT_FILE, "verdict.md",
+        "the needle must be the bare verdict.md token verbatim"
+    );
+
+    let meta = meta_spec();
+    let spec = loop_spec();
+    let meta_count = meta.matches(VERDICT_FILE).count();
+    let spec_count = spec.matches(VERDICT_FILE).count();
+    assert_eq!(
+        meta_count, 1,
+        "META-SPEC must name .chug/verdict.md exactly once — zero means \
+         the §6 verdict-first sentence was deleted, more than one means \
+         the write rule is stated twice"
+    );
+    assert_eq!(
+        spec_count, 1,
+        "LOOP-SPEC must name .chug/verdict.md exactly once — zero means \
+         the step-4 recovery sentence was deleted, more than one means it \
+         is stated twice"
+    );
+
+    // Scope: the write sentence lives inside §6's Validate window; the
+    // recovery sentence inside step 4's window.
+    let mstart = meta
+        .find(STEP6_VALIDATE_HEADING)
+        .expect("META-SPEC §6 Validate heading present");
+    let mend = mstart
+        + meta[mstart..]
+            .find(STEP7_HEADING)
+            .expect("META-SPEC step-7 heading present after §6's");
+    assert!(
+        meta[mstart..mend].contains(VERDICT_FILE),
+        "META-SPEC §6's Validate window must carry {VERDICT_FILE:?} — the \
+         write-first sentence drifted out of the validator goal template"
+    );
+    let sstart = spec
+        .find(STEP4_HEADING_LOOSE)
+        .expect("step-4 heading (`4. **`) present");
+    let send = sstart
+        + spec[sstart..]
+            .find(STEP5_HEADING_LOOSE)
+            .expect("step-5 heading present after step 4's");
+    assert!(
+        spec[sstart..send].contains(VERDICT_FILE),
+        "step 4's window must carry {VERDICT_FILE:?} — the recovery \
+         sentence drifted out of the FAIL-arc doctrine"
+    );
+
+    // Order: the write-first sentence precedes the verdict-line sentence
+    // it front-runs (write FIRST, then the wrap-up summary line).
+    let write = meta[mstart..mend]
+        .find(VERDICT_FILE)
+        .expect("§6 window carries the write sentence (leg above)");
+    let end_line = meta[mstart..mend]
+        .find("End with a verdict line")
+        .expect("§6 window carries the `End with a verdict line` sentence");
+    assert!(
+        write < end_line,
+        "the verdict-first sentence must precede `End with a verdict \
+         line` — the write happens FIRST, the summary line after ({write} \
+         vs {end_line})"
+    );
+}
