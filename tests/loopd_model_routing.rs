@@ -69,9 +69,12 @@ const EVAL_ARM: &str = "eval $LOOP_ORCH_MODEL";
 const ROUTE_CALL: &str = "routing=\"$(route TODO.md EVALUATION.md)\"";
 /// The launch line now carries the routed model — the hardcoded kimi of
 /// today's script is gone. The iters cap is pinned too: T121 raised it
-/// 160→200 (cycle-61 died 160/160 post-wrap, pre-goal_complete).
+/// 160→200 (cycle-61 died 160/160 post-wrap, pre-goal_complete). T198
+/// raised minutes 240→360 (the fleet outgrew the wall: cycle-85–90 walls
+/// 3h23m–4h01m, cap hit once at cycle 88; 360 = p95 × 1.5; iterations
+/// stay 200).
 const INVOCATION_MODEL: &str =
-    "--model \"$orch_model\" --max-iters 200 --max-minutes 240";
+    "--model \"$orch_model\" --max-iters 200 --max-minutes 360";
 /// The loopd.log routing line: every model change is explained in the log
 /// (the T50 re-exec-log rule).
 const ROUTING_LOG: &str = "routing: todo_rows=";
