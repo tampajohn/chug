@@ -2315,7 +2315,7 @@ const KILL_ZERO_PID: &str = "kill -0 <pid>";
 /// EXACTLY once (`\u{2026}` = the ellipsis, spelled as an escape so an
 /// editor normalization cannot silently unpin it, the DENSITY_NEEDLE
 /// idiom).
-const TRUNCATED_PS_BAN: &str = concat!("truncated `ps \u{2026} | head` read");
+const TRUNCATED_PS_BAN: &str = "truncated `ps \u{2026} | head` read";
 
 /// The zombie-collision evidence: the t183 validator's pid, named. Must
 /// occur EXACTLY once.
