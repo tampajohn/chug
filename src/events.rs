@@ -144,6 +144,16 @@ pub enum Event {
     PermissionError {
         detail: String,
     },
+    /// T190: one goal-completion validation verdict — the spec's `check:`
+    /// command (chat: `/check`) ran and produced a binary verdict. `item`
+    /// names what was validated (the check command), `passed` is the
+    /// verdict (a policy-BLOCKED check is a FAIL: it never verified
+    /// anything). Telemetry only: console/TUI stay silent; the events log
+    /// records the verdict line and the notify sink (T190) may fire on it.
+    ValidationVerdict {
+        item: String,
+        passed: bool,
+    },
     /// Chat mode: the user submitted a new objective and a turn is starting.
     TurnStart {
         objective: String,
@@ -418,6 +428,9 @@ impl EventSink for ConsoleSink {
             Event::AutoSpecNote(note) => {
                 let _ = writeln!(self.err, "[chug] auto-spec: {note}");
             }
+            // T190: the validation verdict rides the events log + the notify
+            // sink; the console goal/reject lines already carry the outcome.
+            Event::ValidationVerdict { .. } => {}
         }
     }
 }

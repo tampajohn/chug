@@ -17,6 +17,7 @@ use crate::events::{BudgetExceeded, Event, EventSink, TurnEndReason};
 use crate::hooks;
 use crate::ledger;
 use crate::mcp::McpRegistry;
+use crate::notify::NotifySink;
 use crate::observ;
 use crate::permissions;
 use crate::riskgate::{GateDecision, LayaJudge, RiskGate};
@@ -487,6 +488,14 @@ fn run_loop(
         cfg.approve.as_ref().map(|a| a.path.as_str()),
         cfg.approve.as_ref().map(|a| a.sha256.as_str()),
     );
+    // T190: completion notifications fire from this child process itself
+    // (per-run config; loopd forwards nothing). The wrapper sits between
+    // the events log (drive_loop records the jsonl lines) and the caller's
+    // sink; absent/disabled config makes it a pure pass-through. The final
+    // GoalAccepted/Aborted is enqueued while the loop still runs and is
+    // drained by the wrapper's Drop as this scope ends — a hung sink cannot
+    // stall exit past the drain cap.
+    let mut notify = NotifySink::new(&cfg.cwd, sink);
     match drive_loop(
         &ctx,
         &mut knobs,
@@ -494,7 +503,7 @@ fn run_loop(
         &mut gate,
         &mut messages,
         Some(initial_spec),
-        sink,
+        &mut notify,
         &mut mcp,
     )? {
         DriveOutcome::RunFinished(code) => Ok(code),
@@ -1824,6 +1833,7 @@ fn verify(
     if !permissions.is_empty()
         && let Some(deny_message) = permissions.check("bash", &input, sink)
     {
+        emit_validation_blocked(sink, command);
         return Ok(VerifyOutcome::Blocked(goal_check_blocked_message(&deny_message)));
     }
     // T83 PreToolUse veto: hook-side gating applies to the check too — a
@@ -1832,6 +1842,7 @@ fn verify(
         && ctx.mode != Mode::Plan
         && let Err(veto_message) = hooks.pre_tool_use(ctx.cwd, "bash", &input, sink)
     {
+        emit_validation_blocked(sink, command);
         return Ok(VerifyOutcome::Blocked(goal_check_blocked_message(&veto_message)));
     }
     // Risk gate: the check command is judged exactly like a bash command
@@ -1850,6 +1861,7 @@ fn verify(
                         json!({ "verdict": "blocked", "command": command_preview }),
                     );
                 }
+                emit_validation_blocked(sink, command);
                 return Ok(VerifyOutcome::Blocked(goal_check_blocked_message(&msg)));
             }
             GateDecision::Allowed => {
@@ -1865,6 +1877,12 @@ fn verify(
     }
     let outcome = tools::run_shell(ctx.cwd, command, Duration::from_secs(tools::CHECK_TIMEOUT_SECS))?;
     if !outcome.timed_out && outcome.exit_code == Some(0) {
+        // T190: the validation verdict rides the sink (events log line +
+        // notify leg); PASS names the item that verified.
+        sink.emit(Event::ValidationVerdict {
+            item: command.to_string(),
+            passed: true,
+        });
         return Ok(VerifyOutcome::Accepted);
     }
     let output = tools::truncate_middle(&outcome.output, 5_000, 5_000);
@@ -1872,9 +1890,24 @@ fn verify(
         Some(code) => code.to_string(),
         None => "timeout".to_string(),
     };
+    // T190: FAIL also names the item — the check the operator's spec chose.
+    sink.emit(Event::ValidationVerdict {
+        item: command.to_string(),
+        passed: false,
+    });
     Ok(VerifyOutcome::Failed(format!(
         "$ {command}\nexit code: {exit_label}\n{output}"
     )))
+}
+
+/// T190: a policy-BLOCKED check never verified anything — its verdict is a
+/// FAIL naming the blocked item (the same verdict shape the executed-check
+/// legs emit; the run learns the gate refused, not that the check passed).
+fn emit_validation_blocked(sink: &mut dyn EventSink, command: &str) {
+    sink.emit(Event::ValidationVerdict {
+        item: command.to_string(),
+        passed: false,
+    });
 }
 
 /// First `check: <shell command>` line in the spec text, if any.
