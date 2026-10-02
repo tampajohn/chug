@@ -52,11 +52,17 @@ routing judgments) has no co-located inference to build on.
 1. `chug daemon` subcommand (same binary, CHUG_DELEGATE_BIN self-exe
    pattern): hosts candle inference (candle-core/-nn/-transformers +
    hf-hub + tokenizers behind a `daemon` cargo feature — metal on
-   macos-14, cpu on linux release builds) and serves HTTP on
-   127.0.0.1:8421 (distinct from layad's 8420 so both can run during
-   migration): `GET /healthz`, `POST /judge` — request/response shape
-   IDENTICAL to layad's (drop-in: LayaJudge pointed at 8421 works
-   unmodified).
+   macos-14, cpu on linux release builds) and serves HTTP-semantics over
+   a UNIX DOMAIN SOCKET (operator 2026-10-02: "do we even need the
+   port") at $CHUG_HOME/daemon.sock (default ~/.chug/daemon.sock —
+   host-scoped, NOT per-repo .chug; CHUG_DAEMON_SOCK overrides), mode
+   0600: `GET /healthz`, `POST /judge` — JSON request/response shape
+   IDENTICAL to layad's (drop-in semantics; only the transport framing
+   differs). No TCP listener in phase 1: UDS needs no port doctrine,
+   filesystem perms gate a policy surface to the user's own processes,
+   no network listener for EDR to flag (F94 S1 history), and stale-daemon
+   recovery is connect -> ECONNREFUSED -> unlink -> respawn. Tooling:
+   `curl --unix-socket` covers debugging + the layad A/B parity script.
 2. RLAgent-layout checkpoint loader: convaiinnovations/laya AND RLAgent
    fine-tunes (stop-judge layout), from HF hub or local dir;
    CHUG_LAYA_CHECKPOINT overrides; daemon preloads configured
@@ -67,17 +73,23 @@ routing judgments) has no co-located inference to build on.
 3. Packing parity: state_pack.py featurization ported to Rust with
    GOLDEN VECTORS committed (input state -> expected probabilities,
    generated once from the Python SDK, incl. the billing 0.9607 case)
-   asserted within 1e-3; plus a live A/B script hitting layad:8420 and
-   chug-daemon:8421 on the same fixtures (dev-time, not CI).
-4. Lifecycle: single-daemon lock; auto-spawn on first judge call when
-   CHUG_JUDGE=daemon (detached self-exe spawn, healthz wait with
-   bounded budget, clear stderr line); `chug daemon --stop|--status`;
-   loopd ensures the daemon at cycle start (like build warmth).
-   Fail-open preserved: daemon absent/unreachable -> clients degrade
-   logged exactly as the HTTP path does today.
-5. Client selection: CHUG_JUDGE=daemon|http|off — daemon defaults the
-   judge URL to 127.0.0.1:8421 (LAYA_URL still overrides); http keeps
-   today's behavior byte-for-byte. Judgment latency budget ~50ms warm.
+   asserted within 1e-3; plus a live A/B script hitting layad:8420 (TCP) and
+   chug-daemon (curl --unix-socket) on the same fixtures (dev-time,
+   not CI).
+4. Lifecycle: single-daemon lock (flock on $CHUG_HOME/daemon.lock,
+   the driver-lock pattern); auto-spawn on first judge call when
+   CHUG_JUDGE=daemon (detached self-exe spawn, wait-for-socket +
+   healthz over UDS with bounded budget, clear stderr line); stale
+   socket recovery: connect ECONNREFUSED -> unlink -> respawn, never a
+   hard error; `chug daemon --stop|--status`; loopd ensures the daemon
+   at cycle start (like build warmth). Fail-open preserved: daemon
+   absent/unreachable -> clients degrade logged exactly as the HTTP
+   path does today.
+5. Client selection: CHUG_JUDGE=daemon|http|off. daemon = minimal
+   hand-rolled HTTP/1.1-over-UnixStream transport (~60 lines, NO new
+   deps — reqwest 0.12 has no UDS support; one JSON POST, bounded read);
+   http = today's reqwest TCP path byte-for-byte (LAYA_URL remote
+   layad stays the escape hatch). Judgment latency budget ~50ms warm.
 6. FEATURES.md gains F15 (baked-in judge daemon) with this row as
    phase 1; README risk-gate/notify sections updated (one paragraph
    each, no append-sprawl); DEPENDENCIES.md (T203) lists the daemon as
@@ -89,7 +101,9 @@ routing judgments) has no co-located inference to build on.
 - Protocol drop-in: fixture /judge request -> response shape matches
   layad's (fields, types, error shape) — pinned by contract test.
 - Lifecycle: second `chug daemon` exits on the lock; auto-spawn brings
-  up a healthy daemon; --stop leaves no orphan.
+  up a healthy daemon; --stop leaves no orphan; stale socket file
+  (SIGKILL'd daemon) -> connect fails, unlink, respawn succeeds;
+  socket file mode is 0600.
 - Feature-off build compiles with zero candle deps (cargo tree pin);
   release-matrix builds compile (metal mac, cpu linux).
 
@@ -97,4 +111,5 @@ routing judgments) has no co-located inference to build on.
 
 - /hook/* layad parity (Claude Code hooks migration off Python layad —
   phase 2); F13 routing endpoint + hot checkpoint reload (phase 2+);
+  a TCP listener (opt-in debug knob if ever needed — YAGNI phase 1);
   CUDA; sub-F16 quantization; removing the HTTP fallback path.
