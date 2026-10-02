@@ -35,6 +35,19 @@ encode internal structure/doctrine: VA-private from day one).
   processes WITHOUT committing secrets (loopd env file outside the
   repo / operator Vault — never .chug/*.json in git).
 
+## Interim posture (operator 2026-10-02, supersedes nothing below)
+
+The Artifactory/Databricks/HF-org decision is being discussed by the
+operator on Monday 2026-10-05 — NO org-side work (repo creation,
+membership, Vault tokens) happens before that call. Interim hosting
+for fine-tunes: LOCAL DIRECTORY (CHUG_LAYA_CHECKPOINT=<path> — T204
+req 2 already covers local-dir loading) or PRIVATE tampajohn/* HF
+repos (HF_TOKEN-gated, operator's personal org). New fine-tune repos
+are created PRIVATE at inception per the publish contract below. The
+loop-side work in this spec (endpoint-agnostic fetch, revision
+pinning, token passthrough, hygiene gate) is required for the interim
+too — only the org steps wait.
+
 ## Hosting options (ranked, operator 2026-10-02 Databricks question)
 
 1. **JFrog Artifactory HF repository** (PREFERRED if available): VA
@@ -76,12 +89,12 @@ encode internal structure/doctrine: VA-private from day one).
    documented, its CONTENTS never logged/committed (T190 notify
    fail-open pattern applies: daemon absent/unauthed -> degrade
    logged, loop continues).
-4. Operator steps (listed in the spec's handoff section, not loop
-   work): FIRST verify the Artifactory HF-repo option (version +
-   repo type; if present it displaces the HF org); else verify the
-   videoamp HF org exists (else create with IT); create the private
-   judge repo(s); set org membership / Artifactory perms; mint a
-   read-scoped token into Vault; decide the stop-judge migration
+4. Operator steps (PENDING the Monday 2026-10-05 hosting decision —
+   do NOT execute early): FIRST verify the Artifactory HF-repo option
+   (version + repo type; if present it displaces the HF org); else
+   verify the videoamp HF org exists (else create with IT); create the
+   private judge repo(s); set org membership / Artifactory perms; mint
+   a read-scoped token into Vault; decide the stop-judge migration
    (personal-transcript-derived IP -> VA asset call).
 5. DEPENDENCIES.md (T203) gains the HF row: huggingface.co /
    hf-hub downloads / optional (public default) or HF_TOKEN (private) /
