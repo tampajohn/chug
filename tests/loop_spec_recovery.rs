@@ -2635,3 +2635,109 @@ fn impl_goal_template_bans_tree_wide_formatters() {
          template's sentence order preserved (found at {ban})"
     );
 }
+
+// ---- T201 — the validator verdict-first doctrine ----
+//
+// The unannounced-verdict class: a validator that reaches its verdict but
+// dies before announcing it burns a recovery cycle — t185-validate (50-min
+// wall, verdict recovered via T63 resume), t188-round4 (60/60, verdict
+// recovered from transcript), t192-validate (60/60, verdict recovered from
+// the log — the 4th of the class), plus the t186 post-goal_complete wedge
+// (14 min silent, verdict fully rendered in its log). Every instance cost
+// a transcript-archaeology pass or a resume (~10–20 min) because the
+// verdict existed ONLY inside the dying child's context. One sentence
+// kills the class for every death mode: the moment the verdict is DECIDED
+// it lands in `.chug/verdict.md` — a budget death, a wedge, a SIGKILL: the
+// verdict is already on disk. META-SPEC §6's template gains the
+// write-first half; LOOP-SPEC step 4 gains the recovery half (read
+// verdict.md BEFORE spending a T63 resume — a written verdict IS the
+// verdict).
+//
+// One pin covers both carriers: `verdict.md` occurs EXACTLY once in EACH
+// file, inside the §6 Validate window (STEP6_VALIDATE_HEADING ..
+// STEP7_HEADING, the T126 anchors) and inside step 4's window
+// respectively, and in META-SPEC the write sentence precedes the
+// `End with a verdict line` sentence it front-runs.
+
+/// The verdict artifact's path token — the file a dying validator's
+/// verdict must already sit in. Must occur EXACTLY once in META-SPEC.md
+/// (the §6 write-first sentence) AND exactly once in LOOP-SPEC.md (step
+/// 4's recovery sentence) — one carrier each, no forks.
+const VERDICT_FILE: &str = "verdict.md";
+
+/// (ae) T201 — verdict-first: `verdict.md` occurs EXACTLY once in
+/// META-SPEC.md (the §6 template's write-first sentence) AND exactly once
+/// in LOOP-SPEC.md (step 4's recovery sentence), each inside its carrier
+/// window, and the §6 write sentence sits BEFORE the `End with a verdict
+/// line` sentence it front-runs. Delete EITHER sentence and its file's
+/// count drops to 0 — this leg goes red (the deletion proof is in the
+/// commit message); state either sentence twice and the count-2 leg
+/// fires; move a sentence out of its window and the window leg fires.
+#[test]
+fn validator_verdict_first_file_named_once_in_each_spec() {
+    // Needle self-check (T48 idiom): a mangled needle must not let this
+    // pin pass silently.
+    assert_eq!(
+        VERDICT_FILE, "verdict.md",
+        "the needle must be the bare verdict.md token verbatim"
+    );
+
+    let meta = meta_spec();
+    let spec = loop_spec();
+    let meta_count = meta.matches(VERDICT_FILE).count();
+    let spec_count = spec.matches(VERDICT_FILE).count();
+    assert_eq!(
+        meta_count, 1,
+        "META-SPEC must name .chug/verdict.md exactly once — zero means \
+         the §6 verdict-first sentence was deleted, more than one means \
+         the write rule is stated twice"
+    );
+    assert_eq!(
+        spec_count, 1,
+        "LOOP-SPEC must name .chug/verdict.md exactly once — zero means \
+         the step-4 recovery sentence was deleted, more than one means it \
+         is stated twice"
+    );
+
+    // Scope: the write sentence lives inside §6's Validate window; the
+    // recovery sentence inside step 4's window.
+    let mstart = meta
+        .find(STEP6_VALIDATE_HEADING)
+        .expect("META-SPEC §6 Validate heading present");
+    let mend = mstart
+        + meta[mstart..]
+            .find(STEP7_HEADING)
+            .expect("META-SPEC step-7 heading present after §6's");
+    assert!(
+        meta[mstart..mend].contains(VERDICT_FILE),
+        "META-SPEC §6's Validate window must carry {VERDICT_FILE:?} — the \
+         write-first sentence drifted out of the validator goal template"
+    );
+    let sstart = spec
+        .find(STEP4_HEADING_LOOSE)
+        .expect("step-4 heading (`4. **`) present");
+    let send = sstart
+        + spec[sstart..]
+            .find(STEP5_HEADING_LOOSE)
+            .expect("step-5 heading present after step 4's");
+    assert!(
+        spec[sstart..send].contains(VERDICT_FILE),
+        "step 4's window must carry {VERDICT_FILE:?} — the recovery \
+         sentence drifted out of the FAIL-arc doctrine"
+    );
+
+    // Order: the write-first sentence precedes the verdict-line sentence
+    // it front-runs (write FIRST, then the wrap-up summary line).
+    let write = meta[mstart..mend]
+        .find(VERDICT_FILE)
+        .expect("§6 window carries the write sentence (leg above)");
+    let end_line = meta[mstart..mend]
+        .find("End with a verdict line")
+        .expect("§6 window carries the `End with a verdict line` sentence");
+    assert!(
+        write < end_line,
+        "the verdict-first sentence must precede `End with a verdict \
+         line` — the write happens FIRST, the summary line after ({write} \
+         vs {end_line})"
+    );
+}

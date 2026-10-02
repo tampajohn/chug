@@ -134,7 +134,12 @@ check: cd /Users/jadams/workspace/chug && cargo test
              overlapping files — declare that overlap judgment in your
              verdict notes. The tree-restored rule is unchanged: the main
              worktree must be byte-clean before the verdict; findings
-             reference mutant names, not leg dirs. End with a verdict line
+             reference mutant names, not leg dirs. When you reach your
+             verdict, FIRST write it — `VERDICT: PASS|FAIL` plus the
+             numbered findings list — to `.chug/verdict.md` in your
+             worktree cwd (one bash command), THEN do any wrap-up gates
+             or summary; a budget death after the write loses nothing.
+             End with a verdict line
              VERDICT: PASS or VERDICT: FAIL plus a numbered findings list." \
      --model anthropic-system.ai.kimi-k3 --max-iters 60 --max-minutes 40 \
      > /tmp/chug-round-N-validate.log 2>&1 & echo "validator pid: $!"
