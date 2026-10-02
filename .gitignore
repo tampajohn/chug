@@ -6,5 +6,8 @@ target-shared-main/
 target-shared-mut-*/
 target-shared-impl-a/
 target-shared-impl-b/
+target-shared-impl-c/
+target-shared-validate-a/
+target-shared-validate-b/
 .chug/
 LEDGER.md
