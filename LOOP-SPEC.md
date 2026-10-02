@@ -65,8 +65,25 @@ simultaneously past gates — T194 amends T161's 2-child cap):
 1. **Worktree.** `git -C /Users/jadams/workspace/chug worktree add
    /tmp/chug-loop-t<N> -b loop-t<N>`; build warm (T47): `export
    CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared` then
-   `cargo build --release` there — every worktree shares one incremental
-   cache instead of a cold 43s–6 min build per round. T78: the warm build is
+   `touch src/*.rs tests/*.rs; cargo build --release` there — the touch is
+   the T195 gate-source-touch guard (cwd-relative; `;` not `&&` so a touch
+   hiccup never blocks the run): cargo's freshness check is mtime-only and
+   its artifact filename excludes the checkout path, so a REUSED worktree —
+   a T63 resume or next-cycle recovery — carries OLD source mtimes while
+   the shared dir holds a different checkout's newer-built artifacts, the
+   highest-risk case, and cargo would read those foreign artifacts as
+   fresh; every worktree shares one incremental
+   cache instead of a cold 43s–6 min build per round. Two exemptions keep
+   the guard cheap (stated once here, at the guard's first carrier):
+   post-merge main gates and Phase-3 final gates
+   (`target-shared-main`) are EXEMPT — every builder in that dir is a main
+   checkout and git refreshes mtimes on merge/checkout, so artifact identity
+   holds by T57's construction (a touch there is dead cost, not safety) —
+   and the guard binds at GATE time, not in an impl child's iterative cargo
+   loop: a child that already built its own checkout's artifacts into its
+   slot rebuilds nothing foreign, and re-touching every inner-loop
+   `cargo test` would burn ~30s × dozens of runs for zero correctness.
+   T78: the warm build is
    the release profile, because the review/validation gates below run the
    release-profile gate runner (T82: nextest when on PATH, else
    `cargo test --release` — step 3's runner rule); release artifacts live
@@ -236,12 +253,15 @@ simultaneously past gates — T194 amends T161's 2-child cap):
    refuse `/tmp/chug-loop-*` paths with `path escapes cwd`), and run
    bounded gates yourself (T82 gate runner, nextest-first — the
    predicate is `command -v cargo-nextest`: when it succeeds run
-   `CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared perl -e 'alarm 280; exec @ARGV' cargo nextest run --release`,
-   else the same bounded cap around the fallback
-   `CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared perl -e 'alarm 280; exec @ARGV' cargo test --release -- --test-threads=4` —
+   `touch src/*.rs tests/*.rs; CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared perl -e 'alarm 280; exec @ARGV' cargo nextest run --release`,
+   else the same touch guard + bounded cap around the fallback
+   `touch src/*.rs tests/*.rs; CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared perl -e 'alarm 280; exec @ARGV' cargo test --release -- --test-threads=4` —
    the T47 env prefix keeps the gate on the shared warm cache; bash tool
    calls don't share env, so the step-1 export doesn't persist between
-   calls). The `perl -e 'alarm N'` inner bound stays as the per-command
+   calls; the T195 `touch` prefix rebinds the shared dir's artifacts to
+   THIS checkout before the gate runs them — a foreign checkout's artifacts
+   in the dir are mtime-fresh against this checkout's older sources).
+   The `perl -e 'alarm N'` inner bound stays as the per-command
    wedge guard (T178): with loopd exporting `CHUG_BASH_TIMEOUT=300` for the
    whole fleet, the alarm value must sit BELOW the bash cap so the inner
    bound fires first — the cargo-culted 600s alarm could never fire under
@@ -276,7 +296,8 @@ simultaneously past gates — T194 amends T161's 2-child cap):
    **Docs-only rounds skip the cargo gates (T80).** When the round diff
    touches ONLY `*.md` — file-extension-exact, not "mostly docs" — gates
    shrink to the guard floor `cargo test --test todo_consistency` (still
-   under the bounded-cap rule, same env prefix as the full gate), and the
+   under the bounded-cap rule, same T195 touch guard + env prefix as the
+   full gate), and the
    full build/clippy/test is skipped at review AND post-merge (step 5
    applies the same
    classification). The classification is mechanical and stated as a
@@ -370,7 +391,13 @@ simultaneously past gates — T194 amends T161's 2-child cap):
    for the slot-b validator)
    — the goal's export line STAYS, the step-2 defense-in-depth rule. The
    slot dirs persist across cycles — warm after first use; the first use
-   is a cold build, the accepted one-time cost per role. Wrap gates keep
+   is a cold build, the accepted one-time cost per role. The validator's
+   own gate runs carry the T195 touch guard the same way —
+   `touch src/*.rs tests/*.rs;` immediately prefixes its cargo gate
+   commands (§6's "run the T82 gate runner yourself" legs) — because its
+   slot dir persists across cycles and can hold a previous validator
+   checkout's artifacts mtime-fresh (the same T55 mechanism step 3's guard
+   closes). Wrap gates keep
    `target-shared-gates` (step 3's overlap-window rule, unchanged) and
    post-merge gates keep `target-shared-main` (step 5) — the slot split
    is validator-only. This
