@@ -941,17 +941,20 @@ fn meta_spec_release_carriers_are_pinned_per_carrier() {
     // single-line fallback needle (count 5 above) cannot see — the T82 cap
     // examples show the nextest form; the fallback leg is stated in prose
     // right after them ("the same caps wrap the fallback ... instead").
+    // T187 re-keyed the examples from the dead alarm-600 form to 280, below
+    // the bash cap, so the pins follow the carrier.
     count_eq(
         &meta,
-        "perl -e 'alarm 600; exec @ARGV' cargo nextest run --release",
+        "perl -e 'alarm 280; exec @ARGV' cargo nextest run --release",
         1,
-        "META-SPEC T6 macOS example wraps the T82 nextest form (T82)",
+        "META-SPEC T6 macOS example wraps the T82 nextest form (T82; T187 \
+         re-keyed the alarm below the bash cap)",
     );
     count_eq(
         &meta,
-        "timeout 600 cargo nextest run --release",
+        "timeout 280 cargo nextest run --release",
         1,
-        "META-SPEC T6 Linux example wraps the T82 nextest form (T82)",
+        "META-SPEC T6 Linux example wraps the T82 nextest form (T82; T187)",
     );
 }
 

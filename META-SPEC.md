@@ -171,11 +171,15 @@ Derive 2-4 narrow slices from YOUR feature spec — one concern per round, each 
   `cargo nextest run --release` when `cargo nextest` is on PATH (the
   mechanical predicate: `command -v cargo-nextest`), else the fallback
   `cargo test --release -- --test-threads=4` — under an explicit cap
-  (e.g. `perl -e 'alarm 600; exec @ARGV' cargo nextest run --release` on
-  macOS, `timeout 600 cargo nextest run --release` on Linux; when
+  (e.g. `perl -e 'alarm 280; exec @ARGV' cargo nextest run --release` on
+  macOS, `timeout 280 cargo nextest run --release` on Linux; when
   cargo-nextest is absent the same caps wrap the fallback
   `cargo test --release -- --test-threads=4` instead) or the driver's own
-  bash timeout. The T82 runner rule: the fallback is UNCONDITIONAL —
+  bash timeout. The cap value is not free: the inner alarm/timeout bound
+  must sit BELOW the driver's bash cap so the inner bound fires first —
+  280 under the loop fleet's `CHUG_BASH_TIMEOUT=300` (T178), ≤ ~110 under
+  the 120s default — a 600s alarm under either cap is dead weight that
+  lets the cap's SIGKILL land first. The T82 runner rule: the fallback is UNCONDITIONAL —
   nextest is never a hard dependency, every template degrades gracefully
   when it is absent; the first cycle after the switch runs BOTH runners
   once in main and records both wall times in Outcomes; a family red only
