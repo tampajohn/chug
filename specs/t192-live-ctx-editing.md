@@ -1,6 +1,6 @@
 # T192 — Live-context editing: model-edited .chug/LIVE_CTX.md with shrink gate + free compaction turns (F14 phase 2)
 
-check: cargo test
+check: export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared && cargo test
 
 estimate: ~450 lines (mirror + parse-back + gate + transcript marker + free-turn accounting + nudge + events, ~15 test legs)
 
