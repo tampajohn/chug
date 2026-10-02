@@ -84,11 +84,14 @@ check: cd /Users/jadams/workspace/chug && cargo test
    files directly). Read the child's `LEDGER.md` and the tail of its
    `.chug/transcript.jsonl` if the outcome is ambiguous. Run the T82 gate
    runner yourself — when `command -v cargo-nextest` succeeds:
-   `cd /tmp/chug-round-N && CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared cargo nextest run --release`,
+   `cd /tmp/chug-round-N && touch src/*.rs tests/*.rs; CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared cargo nextest run --release`,
    else the fallback
-   `cd /tmp/chug-round-N && CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared cargo test --release -- --test-threads=4`
+   `cd /tmp/chug-round-N && touch src/*.rs tests/*.rs; CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared cargo test --release -- --test-threads=4`
    (bounded, release profile per the gates rule below — see it for the T78
-   build-time tradeoff and the T82 nextest-first runner rule) — never trust
+   build-time tradeoff and the T82 nextest-first runner rule; the T195
+   touch prefix rebinds the shared dir's artifacts to THIS worktree's
+   sources — a foreign checkout's artifacts in the dir are mtime-fresh
+   against its older ones) — never trust
    a claim of green without seeing it.
 6. **Validate (kimi-k3, REQUIRED).** Before merging any round, launch a
    validation child on kimi-k3 (no env prefix, backgrounded + polled like
@@ -144,9 +147,11 @@ check: cd /Users/jadams/workspace/chug && cargo test
    not: replicate the diff into the main tree (checkout the changed files:
    `git -C /Users/jadams/workspace/chug checkout round-N -- <files>` when the
    child committed; otherwise copy the files) and the T82 gate runner —
-   `cargo nextest run --release` when `cargo nextest` is on PATH, else
-   `cargo test --release -- --test-threads=4` — in the main tree before
-   calling it landed. Red or off-spec → either fix
+   `touch src/*.rs tests/*.rs; cargo nextest run --release` when `cargo nextest` is on PATH, else
+   `touch src/*.rs tests/*.rs; cargo test --release -- --test-threads=4` — in the main tree before
+   calling it landed (the T195 touch guard rides every gate template — this
+   gate may run against a shared slot still holding §5's worktree-built
+   artifacts). Red or off-spec → either fix
    trivially yourself or run round N+1 with the failure as feedback in the goal.
 8. **Ledger.** Record round outcome in YOUR LEDGER.md: scope, verdict, what
    remains.
