@@ -106,10 +106,14 @@ impl Llm for CtxEditorLlm {
         self.calls.push((system.to_string(), messages.to_vec()));
         if let Some(edit) = self.drops.pop_front() {
             if matches!(edit, Edit::None) {
-                // Read-only turn: no edit, just look at a big file.
-                return Ok(Response {
-                    body: tool_use_response("read_file", json!({"path": "notes.txt"})),
-                });
+                // Read-only turn: no edit, just look at a big file. The
+                // usage is the CONFIGURED one (default 10/5, exactly what
+                // `tool_use_response` hardcodes), so a leg can make the
+                // counted read pay real tokens.
+                let mut body = tool_use_response("read_file", json!({"path": "notes.txt"}));
+                let (input, output) = self.usage;
+                body["usage"] = json!({"input_tokens": input, "output_tokens": output});
+                return Ok(Response { body });
             }
             // The driver mirrored the pre-call list to the file moments ago.
             let mirror = std::fs::read_to_string(live_ctx::live_ctx_path(&self.cwd))
@@ -332,28 +336,45 @@ fn fourth_consecutive_free_edit_counts_normally() {
     assert!(aborted, "the 4th free edit's iteration exhausted the budget");
 }
 
-/// The token budget always binds — even on a free edit turn. The T15 check
-/// sits at the top of the loop over CUMULATIVE usage, which a free turn's
-/// response already added to.
+/// The token budget always binds — even on a genuinely FREE edit turn
+/// (T192's carried finding 1, reworked: the old leg scripted only REJECTED
+/// edits, so every turn counted and the free-turn usage path was never
+/// exercised; this one drives an ACCEPTED edit through the real gate).
+///
+/// The T15 check sits at the top of the loop over CUMULATIVE usage, which a
+/// free turn's response already added to. The run is pinned by TWO budgets
+/// at once: `max_iters = 2` convicts a COUNTED edit turn (the iteration
+/// check precedes the token check at the boundary, so the abort reason
+/// would read "iteration budget exceeded"), while a genuinely free edit
+/// turn leaves the counter at 1 and the token check sees 80k+80k from the
+/// counted read plus 80k+80k from the free edit = 320k >= 300k. Dying on
+/// TOKENS is therefore the observable that the edit turn was free; crossing
+/// 300k at all is the observable that its usage accumulated (always-binds).
 #[test]
 fn token_budget_binds_on_free_edit_turns() {
     let tmp = tempfile::tempdir().unwrap();
     let (_utx, urx) = mpsc::channel::<SlashUpdate>();
     let controls = Controls::detached();
     let ctx = ctx_for(&tmp, Mode::Autonomous, &controls, &urx, None, &observ::Sink::Noop);
-    // No iteration budget at all: only the token budget can stop the run.
-    // Each response reports 50k in + 50k out; the 150k budget must die on
-    // the THIRD boundary — right after the FREE edit turn paid its tokens.
-    let mut knobs = knobs_with(u32::MAX);
-    knobs.max_tokens = 150_000;
+    // Two budgets, one death: max_iters=2 would abort a counted second turn
+    // at the third boundary; max_tokens=300k must be the thing that dies.
+    // 80k/call keeps the T17 token-kind budget-low notice silent at the
+    // second boundary (remaining 140k > the 50k warn threshold), so the read
+    // pair the scripted drop targets stays at turns [2,3] behind the
+    // boundary-1 iteration-kind notice.
+    let mut knobs = knobs_with(2);
+    knobs.max_tokens = 300_000;
     let messages = vec![Message::user(vec![ContentBlock::text_block("Goal: tokens")])];
 
-    // A strip of free edit turns (drop the write pair each time): the token
-    // budget must end the run long before the iteration budget could matter.
-    let drops: Vec<Edit> = (0..12).map(|_| Edit::DropLast(2)).collect();
-    let mut llm = CtxEditorLlm::new(tmp.path(), drops)
-        .with_usage(50_000, 50_000)
+    // Call 1 is a read-only turn (counted: iteration -> 1; the T17 budget-low
+    // notice co-fires at the first boundary, landing at index 1). Call 2
+    // drops the read pair behind it — an ACCEPTED edit, hence a genuinely
+    // free turn (the counter stays at 1) whose usage still accumulates.
+    let mut llm = CtxEditorLlm::new(tmp.path(), vec![Edit::None, Edit::DropLast(2)])
+        .with_usage(80_000, 80_000)
         .then_goal_complete();
+    // notes.txt exists (the read-only turn really reads it).
+    std::fs::write(tmp.path().join("notes.txt"), "x".repeat(4_000)).unwrap();
 
     let mut gate = None;
     let mut messages = messages;
@@ -372,13 +393,27 @@ fn token_budget_binds_on_free_edit_turns() {
     assert!(matches!(outcome, DriveOutcome::RunFinished(1)), "{outcome:?}");
     let aborted = sink.0.iter().any(|e| matches!(
         e,
-        Event::Aborted { reason, budget: Some(BudgetExceeded::Tokens { max: 150_000 }), .. } if reason == "token budget exceeded"
+        Event::Aborted { reason, budget: Some(BudgetExceeded::Tokens { max: 300_000 }), .. } if reason == "token budget exceeded"
     ));
-    assert!(aborted, "the token budget, not the iteration budget, stopped the run");
-    // Call 1 (read, counted) + call 2 (free edit): 200k cumulative >= 150k
-    // at the third boundary. The free turn's usage counted — without it the
-    // run would have had 150k-100k left.
+    assert!(
+        aborted,
+        "the token budget, not the iteration budget, stopped the run\noutcome: {outcome:?}\nctx events: {:?}\ncalls: {}",
+        ctx_events(&sink),
+        llm.calls.len()
+    );
+    // Call 1 (read, counted) + call 2 (the free edit): 320k cumulative >=
+    // 300k at the third boundary. A third call would mean the free turn's
+    // usage (or its freedom) was skipped — the leg's RED mutants both
+    // surface here as a reached `goal_complete`.
     assert_eq!(llm.calls.len(), 2);
+    // And the edit turn was a genuinely accepted ctx edit (T192 finding 1:
+    // the old leg's scripted edits were ALL rejected — no free turn existed
+    // to exercise any of the above).
+    let events = ctx_events(&sink);
+    assert_eq!(events.len(), 1, "{events:?}");
+    assert!(events[0].0, "the scripted edit was accepted: {events:?}");
+    assert!(events[0].3.is_none(), "no rejection reason: {events:?}");
+    assert!(events[0].2 < events[0].1, "strictly smaller: {events:?}");
 }
 
 // ---------- rejected edits (requirement 2) ----------

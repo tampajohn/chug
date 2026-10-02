@@ -270,8 +270,9 @@ fn digest_reports_todo_status_counts_and_evaluation_age() {
 /// The per-file block's field-line prefixes, in the order the script emits
 /// them today (T62 req c). Order + labels only; values are shape-checked.
 /// T184 amended this pin (sanctioned): the tokens line gained the cumulative
-/// cache counters and a `- trim fires: N` line follows budget_low's.
-const GOLDEN_BLOCK_FIELDS: [&str; 11] = [
+/// cache counters and a `- trim fires: N` line follows budget_low's. T202
+/// amended it again: `- ctx-edit fires: N` follows trim fires'.
+const GOLDEN_BLOCK_FIELDS: [&str; 12] = [
     "- runs: ",
     "- iterations: ",
     "- wall: ",
@@ -283,6 +284,7 @@ const GOLDEN_BLOCK_FIELDS: [&str; 11] = [
     "- aborts: ",
     "- budget_low fires: ",
     "- trim fires: ",
+    "- ctx-edit fires: ",
 ];
 
 /// The staleness block's field labels, in emission order (T62 req d).
@@ -378,6 +380,17 @@ fn golden_fixture_events() -> String {
     body.push_str(concat!(
         "{\"type\":\"trim\",\"ts\":\"2026-09-25T17:08:36.500Z\",\"before_tokens\":135000,",
         "\"after_tokens\":90000,\"segments_collapsed\":3,\"marker_count\":5}\n"
+    ));
+    // T202: the F14 phase-2 adoption metric — one accepted edit (reason
+    // null, the T17-honesty shape) and one rejected one, both counted.
+    body.push_str(concat!(
+        "{\"type\":\"ctx_edit\",\"ts\":\"2026-09-25T17:08:37.500Z\",\"accepted\":true,",
+        "\"before_tokens\":91000,\"after_tokens\":44000,\"reason\":null}\n"
+    ));
+    body.push_str(concat!(
+        "{\"type\":\"ctx_edit\",\"ts\":\"2026-09-25T17:08:38.500Z\",\"accepted\":false,",
+        "\"before_tokens\":44000,\"after_tokens\":44000,",
+        "\"reason\":\"pinned content of turn 0 was modified\"}\n"
     ));
     body.push_str(concat!(
         "{\"type\":\"tool_result\",\"ts\":\"2026-09-25T17:08:36.000Z\",\"name\":\"bash\",",
@@ -478,6 +491,7 @@ fn golden_section_pins_the_digest_output_skeleton() {
     assert_line_shape(block, "- aborts: ", "- aborts: #:", "aborts");
     assert_line_shape(block, "- budget_low fires: ", "- budget_low fires: # (first at remaining_iters=#) | output_truncated: #", "budget_low/output_truncated");
     assert_line_shape(block, "- trim fires: ", "- trim fires: #", "trim fires (T184)");
+    assert_line_shape(block, "- ctx-edit fires: ", "- ctx-edit fires: #", "ctx-edit fires (T202: the golden fixture carries 2 ctx_edit lines)");
 
     // (d) the staleness block's field labels, in order, shape-pinned.
     let staleness = &digest[digest.find("## Staleness").expect("staleness heading")..];
@@ -574,6 +588,80 @@ fn digest_renders_cache_counters_and_trim_fires() {
     assert!(
         old_block.contains("- trim fires: 0\n"),
         "old-shape file renders trim fires: 0:\n{old_block}"
+    );
+}
+
+// --- T202: the ctx-edit fires count -----------------------------------------
+//
+// The T192 event lines (`ctx_edit`, one per end-of-turn LIVE_CTX parse-back)
+// are the F14 phase-2 adoption metric; the digest must surface their count
+// beside the T184 trim count so the loop's own telemetry can see the feature
+// (T202 req 2). Zero renders as `0` — shape-stable on every pre-T192
+// archive, which is every real archive today (measured: no harvested events
+// file contains a ctx_edit line yet).
+
+/// T202 — a synthetic events file WITH 2 `ctx_edit` lines (one accepted, one
+/// rejected, the real T192 serialization shapes) renders `ctx-edit fires: 2`;
+/// a pre-T192 file (no ctx_edit lines) renders `ctx-edit fires: 0` without
+/// disturbing any other line.
+#[test]
+fn digest_renders_ctx_edit_fires() {
+    let tmp = tempfile::tempdir().unwrap();
+    let chug = tmp.path().join(".chug");
+    std::fs::create_dir_all(&chug).unwrap();
+
+    // New shape: run_start + 3 iterations + 2 ctx_edit lines.
+    let mut new_shape = String::new();
+    new_shape.push_str(concat!(
+        "{\"type\":\"run_start\",\"ts\":\"2026-09-25T17:08:31.100Z\",\"mode\":\"run\",",
+        "\"model\":\"m\",\"spec\":\"/repo/specs/t202.md\",\"cwd\":\"/tmp/w\",",
+        "\"version\":\"0.1.0\",\"commit\":\"4ea73e3\",\"max_iters\":50,\"max_minutes\":35,\"max_tokens\":null}\n"
+    ));
+    for n in 1..=3u32 {
+        let tokens = 1_000 * u64::from(n);
+        new_shape.push_str(&format!(
+            "{{\"input_tokens\":{tokens},\"n\":{n},\"output_tokens\":{},\"ts\":\"2026-09-25T17:08:{:02}.000Z\",\"type\":\"iteration\"}}\n",
+            10 * u64::from(n),
+            31 + n
+        ));
+    }
+    new_shape.push_str(concat!(
+        "{\"type\":\"ctx_edit\",\"ts\":\"2026-09-25T17:08:35.000Z\",\"accepted\":true,",
+        "\"before_tokens\":91000,\"after_tokens\":44000,\"reason\":null}\n"
+    ));
+    new_shape.push_str(concat!(
+        "{\"type\":\"ctx_edit\",\"ts\":\"2026-09-25T17:08:36.000Z\",\"accepted\":false,",
+        "\"before_tokens\":44000,\"after_tokens\":44000,",
+        "\"reason\":\"shrink gate: the edited context is not strictly smaller ",
+        "(44 -> 48 tokens)\"}\n"
+    ));
+    write_archive(&chug, "events-t202-new.jsonl", &new_shape);
+    // Pre-T192 shape: no ctx_edit lines at all (the T46 fixture).
+    write_archive(&chug, "events-t202-old.jsonl", &fixture_events(3, false));
+
+    let digest = run_digest(tmp.path(), "2026-09-26T00:00:00Z");
+
+    let new_block = section_of(&digest, "events-t202-new.jsonl");
+    assert!(
+        new_block.contains("- ctx-edit fires: 2\n"),
+        "both ctx_edit lines are counted, accepted and rejected alike:\n{new_block}"
+    );
+    // Beside the trim count: the ctx-edit line is trim's immediate successor.
+    let lines: Vec<&str> = new_block.lines().collect();
+    let trim_at = lines
+        .iter()
+        .position(|l| l.starts_with("- trim fires: "))
+        .unwrap_or_else(|| panic!("trim fires line present:\n{new_block}"));
+    assert_eq!(
+        lines.get(trim_at + 1),
+        Some(&"- ctx-edit fires: 2"),
+        "ctx-edit fires is the line right after trim fires:\n{new_block}"
+    );
+
+    let old_block = section_of(&digest, "events-t202-old.jsonl");
+    assert!(
+        old_block.contains("- ctx-edit fires: 0\n"),
+        "pre-T192 file renders ctx-edit fires: 0 (shape-stable):\n{old_block}"
     );
 }
 
