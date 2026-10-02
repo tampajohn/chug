@@ -306,7 +306,28 @@ simultaneously past gates — T194 amends T161's 2-child cap):
    src/driver.rs, src/api.rs, src/tools.rs, src/events.rs, or the loop/spec
    doctrine itself; optional for docs/tests-only items): META-SPEC §6
    verbatim — VERDICT: PASS/FAIL + numbered findings, mutation-testing where
-   feasible. A validator on a docs-only round keeps its judgment: it may
+   feasible. The low-stakes lane (T189) is decided per item BEFORE dispatch
+   and is MECHANICAL — gates-only when ALL hold: (a) the diff touches NO
+   core-list file (the list this step opens with — src/driver.rs,
+   src/api.rs, src/tools.rs, src/events.rs, or the loop/spec doctrine
+   itself; any LOOP-SPEC/META-SPEC/META-META-SPEC/SELF-SPEC edit stays FULL
+   validation); (b) ≤ ~150 changed lines (added+deleted, `git diff
+   --numstat`); (c) no new tool/command surface (a schema enum, a CLI
+   flag, an MCP tool, a hook event); (d) no CI/workflow or spec `check:`
+   line change (a `.github/` path, or any diff line whose payload starts
+   `check:`). Any single one flipped → full adversarial validation. The
+   four inputs are computed from the diff (`git diff --numstat` + `git
+   diff`), never the model's say-so, and the routing record (class
+   `validation-routing`) names all four inputs plus the verdict. The lane
+   changes review depth, never the gates or the quality floor: a
+   gates-only item still runs build + clippy + the full suite in its
+   worktree, byte-clean review, and the scope check — the lane skips the
+   kimi child, never the gates — and a lane-eligible diff the gates catch
+   red still gets a fix-up child (the FAIL arc below). Auto-spec'd runs
+   (T188) default to the lane predicate; `--validate` forces full
+   adversarial and `--no-validate` forces gates-only — either operator
+   override is recorded. A validator on a docs-only round keeps its
+   judgment: it may
    shrink its own gate run to step 3's guard floor, and it retains the
    right to run the full suite anyway when the doc diff quotes commands or
    check lines (the T67 class — a spec `check:` line IS executable text).
