@@ -110,8 +110,11 @@ each with a row below.
    (explicitly carried): `token_budget_binds_on_free_edit_turns`
    scripts only REJECTED edits — no genuinely-free turn ever
    exercises the usage-skip it claims to pin (vacuous for its name);
-   (b) `ctx_edit` events land (2 fires in the cycle-89 orchestrator
-   stream) but `scripts/eval-digest.sh` never surfaces them — the
+   (b) `ctx_edit` events land (0 fires measured across ALL 545
+   harvested streams — the "2 fires in the cycle-89 orchestrator
+   stream" claim was an eval misread of a combined grep, corrected at
+   the cycle-92 merge per validator finding 1) but
+   `scripts/eval-digest.sh` never surfaces them — the
    F14 adoption metric is invisible in the loop's own telemetry
    (T192's spec named the lines "for the T184-class digest").
 7. **Weighed and REJECTED** (each logged eval-triage):
@@ -283,6 +286,10 @@ the validator-wedge class (one sighting), post-360 cycle walls. No
 SELF-SPEC-shaped rows; no human-decision items.
 
 ## Outcomes (filled at cycle wrap — LOOP-SPEC Phase 3)
+
+### Cycle 92 (2026-10-02, 12:38–14:30 UTC) — glm routine freshness-skip cycle (predicate held: eval fresh same UTC day + 4 todo rows) — 1 landed (T202, the cycle-91 handoff), T197 in flight at wrap, T199/T200 deferred (wall)
+
+- **T202** (T192 completion) landed `3127b9e` (merge of loop-t202: 1d98253 legs 1-2 + 169fad3 leg 3 + 5dc1fcf dispatch re-key) — the cycle-91 deferred handoff, closed by orchestrator-finish: the resumed child (pid 63649) was found ALIVE 4.5h past its 50-min budget (it had detected a SIGTERM'd inner run and self-relaunched detached) chasing its known-unsatisfiable goal gate (300s bash cap vs the touch-rebuild the check line triggers — 3 failed attempts logged, then a detached-shim workaround whose test HANGS); killed after transcript read-back (routing d1790945038-1), the uncommitted in-flight move (tests/live_ctx.rs integration file + spec tweak) adjudicated DROP (bin-only crate: integration tests cannot see the pub(crate) internals — validator independently reproduced the filed check's "no test target named live_ctx" failure, legitimizing the on-branch check-line amendment to `--bin chug live_ctx`). Legs: (1) genuinely-free-turn budget leg reworked — the carried weak test scripted only REJECTED edits; the rework drives an ACCEPTED edit through the real gate with a two-budget abort-reason discriminator (max_iters=2 convicts a counted turn via iteration-death; token-death at 320k≥300k proves the edit turn was free AND its usage accumulated) — M1/M2/M6 RED-proven; (2) digest gains `- ctx-edit fires: N` immediately after trim fires (adjacency-pinned, M3/M4/M5 RED-proven); (3) eval_digest golden pins (GOLDEN_BLOCK_FIELDS 11→12, real T192 serialization shapes, exact-count + zero-shape-stable legs). kimi REQUIRED PASS (verdict d1790945675-3): 6/6 mutants, nextest 1437/1437, 0 blocking findings — finding 1 adjudicated the spec's false "2 fires" premise with an independent 545-stream census (0 everywhere) and recommended the EVALUATION.md §2.3 correction, applied in the flip commit. Lane call: FULL validation, two mechanical legs flipped from the actual diff (179 lines > ~150; on-branch `check:` line change — the wrap's ~120-line estimate was wrong; the mechanical rule reads the diff). Post-merge: 1437/1437 (one mcp_serve stub-spawn flake re-run green; family untouched by the merge, zero src/ production deltas). Post-merge hygiene: the dispatch-time validate-a re-key reverted to canonical target-shared in the flip commit.
 
 ### Cycle 91 (2026-10-02, ~09:00–12:45 UTC) — kimi MANDATORY fresh-eval cycle (queue drained at cycle-90 wrap; T81 routing correct 4-for-4) — 8 rows filed (T195–T202) + the F13 phase-2a roadmap pull; 4 landed (T195, T196, T198, T201 — all doctrine), T202 impl-complete-but-unmerged (recipe on the row), T197/T199/T200 deferred (wall)
 
