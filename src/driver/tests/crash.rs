@@ -86,6 +86,7 @@ fn resumed_run_config(tmp: &tempfile::TempDir, spec: &Path) -> RunConfig {
         mcp_config: None,
         mcp_off: true,
         goal_pack: None,
+        ctx_warn_at_tokens: 0,
         approve: None,
     }
 }

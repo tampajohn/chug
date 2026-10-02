@@ -30,6 +30,7 @@ fn aborted_run_config(tmp: &tempfile::TempDir, spec: &Path, resume: bool) -> Run
         mcp_off: true,
         // T117: a literal test goal — no pack expansion.
         goal_pack: None,
+        ctx_warn_at_tokens: 0,
         approve: None,
     }
 }
