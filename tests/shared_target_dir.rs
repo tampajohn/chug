@@ -49,8 +49,14 @@
 use std::path::PathBuf;
 
 const SHARED: &str = "CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared";
-/// T52: the validator's role-keyed dir — ALWAYS, not conditionally.
-const VALIDATE: &str = "CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-validate";
+/// T52, slot-keyed per T194: validator slot a's dir — the SOLO default (the
+/// first validator in flight always takes it).
+const VALIDATE: &str =
+    "CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-validate-a";
+/// T194: validator slot b — the pattern-(iv) second validator's dir, which
+/// flies only when two items are simultaneously past gates.
+const VALIDATE_B: &str =
+    "CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-validate-b";
 /// T52: the orchestrator's gate dir for the T44 overlap window (incl.
 /// N+1's impl during N's post-merge gates).
 const GATES: &str = "CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-gates";
@@ -246,29 +252,41 @@ fn loop_spec_templates_export_the_shared_dir() {
 #[test]
 fn loop_spec_validator_exports_the_validate_dir_always() {
     let spec = read("LOOP-SPEC.md");
-    // T52: the validator's goal export names the role-keyed dir — ALWAYS,
-    // never conditionally (a conditional rule is a future
-    // mis-application; T44's cap — one validator in flight — makes one
-    // validator dir sufficient because validators are serial). Per-carrier
-    // pins, T47 pattern:
-    // (1) step 4's §6-goal export sentence carries the full export line.
+    // T52, slot-keyed per T194: the validator's goal export names its SLOT
+    // dir — ALWAYS, never conditionally (a conditional rule is a future
+    // mis-application). Slot a is the solo default; slot b exists only for
+    // the pattern-(iv) second validator. Per-carrier pins, T47 pattern:
+    // (1) step 4's §6-goal export sentences carry BOTH full export lines,
+    //     exactly once each.
     count_eq(
         &spec,
         &format!("export {VALIDATE}"),
         1,
-        "LOOP-SPEC step-4 validator goal export (T52)",
+        "LOOP-SPEC step-4 validator slot-a goal export (T52+T194)",
     );
-    // (2) the spec-test's grep -c "target-shared-validate" ≥ 2, encoded as
-    //     the exact count per the T47 pin pattern (a bare `>= 2` would
-    //     survive dropping either carrier): the launch paragraph names the
-    //     dir AND the export sentence carries it. T183 adds the third
-    //     carrier — the delegate block's `env` value spells the dir too.
     count_eq(
         &spec,
-        "target-shared-validate",
-        3,
-        "LOOP-SPEC target-shared-validate carriers: step-4 launch paragraph + \
-         goal-export sentence + T183 env line (T52+T183)",
+        &format!("export {VALIDATE_B}"),
+        1,
+        "LOOP-SPEC step-4 validator slot-b goal export (T194)",
+    );
+    // (2) the bare old single-dir spelling is GONE — the un-suffixed
+    //     `target-shared-validate` cache was retired by the slot split, so
+    //     EVERY occurrence of the dir family must be slot-suffixed (-a or
+    //     -b); a straggler reference would fork the rule.
+    let bare: Vec<usize> = spec
+        .match_indices("target-shared-validate")
+        .filter(|(i, _)| {
+            let rest = &spec[i + "target-shared-validate".len()..];
+            !(rest.starts_with("-a") || rest.starts_with("-b"))
+        })
+        .map(|(i, _)| i)
+        .collect();
+    assert!(
+        bare.is_empty(),
+        "every `target-shared-validate` occurrence in LOOP-SPEC.md must be \
+         slot-suffixed (-a/-b) — the un-suffixed dir was retired by T194's \
+         validator slot split (bare offsets {bare:?})"
     );
     // (3) the rule is stated in its unconditional form.
     assert_contains(
@@ -306,8 +324,13 @@ fn t183_delegate_launch_templates_carry_the_env_map() {
         "\"CARGO_TARGET_DIR\": \"/Users/jadams/workspace/chug/target-shared-impl-a\"";
     const ENV_IMPL_B: &str =
         "\"CARGO_TARGET_DIR\": \"/Users/jadams/workspace/chug/target-shared-impl-b\"";
-    const ENV_VALIDATE: &str =
-        "\"CARGO_TARGET_DIR\": \"/Users/jadams/workspace/chug/target-shared-validate\"";
+    // T194: the 3-impl fleet's third slot and the two validator slots.
+    const ENV_IMPL_C: &str =
+        "\"CARGO_TARGET_DIR\": \"/Users/jadams/workspace/chug/target-shared-impl-c\"";
+    const ENV_VALIDATE_A: &str =
+        "\"CARGO_TARGET_DIR\": \"/Users/jadams/workspace/chug/target-shared-validate-a\"";
+    const ENV_VALIDATE_B: &str =
+        "\"CARGO_TARGET_DIR\": \"/Users/jadams/workspace/chug/target-shared-validate-b\"";
     // Needle self-check (T48 idiom): the JSON form must differ from the
     // export forms the older pins count.
     assert!(!ENV_SHARED.contains(SHARED) && !ENV_IMPL_A.contains(IMPL_A));
@@ -333,12 +356,27 @@ fn t183_delegate_launch_templates_carry_the_env_map() {
         1,
         "LOOP-SPEC T161 impl-b env carrier (T183)",
     );
-    // (3) step-4 validator launch: target-shared-validate via env, once.
+    // (3) step-4 validator launch: the slot dirs via env, once each (T194
+    //     split the single validate dir into slot a — the solo default —
+    //     and slot b — the pattern-(iv) second validator).
     count_eq(
         &spec,
-        ENV_VALIDATE,
+        ENV_VALIDATE_A,
         1,
-        "LOOP-SPEC step-4 validator env carrier (T183)",
+        "LOOP-SPEC step-4 validator slot-a env carrier (T183+T194)",
+    );
+    count_eq(
+        &spec,
+        ENV_VALIDATE_B,
+        1,
+        "LOOP-SPEC step-4 validator slot-b env carrier (T194)",
+    );
+    // (3b) step-2's impl-c case passes the third slot the same way (T194).
+    count_eq(
+        &spec,
+        ENV_IMPL_C,
+        1,
+        "LOOP-SPEC T194 impl-c env carrier (T183+T194)",
     );
     // (4) the goal-carried export lines STAY — defense-in-depth, stated:
     //     the goal template's T47 export is byte-identical (pinned
@@ -686,10 +724,11 @@ fn readme_target_cache_clause_names_the_main_dedicated_dir() {
     );
     // Integrated into the existing continuous-mode paragraph (req 3), not a
     // new bullet: the dir appears in the SAME paragraph as the T52 sibling
-    // caches, with its role spelled out.
+    // caches, with its role spelled out. (T194 slot-keyed the validators —
+    // the paragraph's validator carrier is now the slot-a dir.)
     let at = readme
-        .find("target-shared-validate/")
-        .expect("README keeps the T52 sibling-cache clause");
+        .find("target-shared-validate-a/")
+        .expect("README keeps the validator slot-cache clause (T52+T194)");
     let start = readme[..at].rfind("\n\n").map(|i| i + 2).unwrap_or(0);
     let end = at + readme[at..].find("\n\n").unwrap_or(readme.len() - at);
     let para = &readme[start..end];
@@ -1145,13 +1184,16 @@ fn gitignore_ignores_the_t79_mut_leg_cache_family() {
 // validator pauses N+1's MERGE, never its impl. The old "never 2 impls"
 // clause is gone.
 
-/// T161: the hard-rules invariant — kept line-contiguous so a line-wise
-/// grep can find it; must occur EXACTLY once spec-wide (a second statement
-/// would fork the rule).
-const T161_INVARIANT: &str = "at most 2 children, ≤1 validator, disjoint-gated";
+/// T161 invariant, as amended by T194: the hard-rules invariant — kept
+/// line-contiguous so a line-wise grep can find it; must occur EXACTLY once
+/// spec-wide (a second statement would fork the rule).
+const T161_INVARIANT: &str = "at most 3 children, ≤2 validators, disjoint-gated";
 /// T161: the two impl-child role-keyed slots — full env-prefix carriers.
 const IMPL_A: &str = "CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-impl-a";
 const IMPL_B: &str = "CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-impl-b";
+/// T194: the third impl slot for the 3-impl fleet — same full-path carrier
+/// pattern (step-2 dispatch rule + Pipeline-overlap paragraph).
+const IMPL_C: &str = "CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-impl-c";
 
 /// Prose needles wrap freely at doctrine edits, so count them
 /// wrap-insensitively (the T78 flat idiom: whitespace runs collapse).
@@ -1166,8 +1208,8 @@ fn t161_hard_rules_invariant_is_stated_exactly_once() {
         &spec,
         T161_INVARIANT,
         1,
-        "the T161 hard-rules invariant (at most 2 children, ≤1 validator, \
-         disjoint-gated)",
+        "the T161 invariant as amended by T194 (at most 3 children, ≤2 \
+         validators, disjoint-gated)",
     );
     // The invariant lives in the Hard rules section, not just the §2 prose.
     let hard = spec
@@ -1237,32 +1279,58 @@ fn t161_disjointness_gate_wording_is_pinned() {
     );
 }
 
+/// T194 amended the T161 cap (≤2 children, ≤1 validator, "never 3+, never
+/// 2 validators") to ≤3 children, ≤2 validators. This pin now guards the
+/// NEW cap at the same carriers the T161 pin guarded the old one (the §2
+/// intro, the Trivial-row bundling cross-ref, the Pipeline hard cap, and
+/// the Hard rules bullet), and holds the deletion guard: the old cap text
+/// must be GONE everywhere in LOOP-SPEC.md. (The fan-out-specific pins —
+/// pairwise gate, 2nd-validator rule, slot dirs, resource governor — live
+/// in tests/loop_spec_fanout.rs.)
 #[test]
-fn t161_cap_is_never_3_plus_never_2_validators() {
+fn t194_cap_amends_t161_three_children_two_validator_slots() {
     let spec = read("LOOP-SPEC.md");
-    // Three carriers each — §2 intro, the Pipeline-overlap paragraph, and
-    // the Hard rules bullet — dropping any ONE goes red.
-    count_eq(
-        &spec,
-        "never 3+",
-        3,
-        "the 3+-children ban: §2 intro + pipeline + hard rules (T161)",
-    );
-    count_eq(
-        &spec,
-        "never 2 validators",
-        3,
-        "the 2-validator ban: §2 intro + pipeline + hard rules (T161)",
-    );
-    // The ≤1-validator cap, wrap-insensitively (the intro and pipeline
-    // wordings wrap between `1` and `validator`): §2 intro, the Trivial-row
-    // bundling cap, the pipeline hard-cap sentence, and the Hard rules.
+    // The new caps, at the same carriers the old ones occupied — dropping
+    // any ONE goes red (3 × "in flight" form: §2 intro + pipeline hard cap
+    // + hard rules; 4 × flat validator form: §2 intro + bundling cross-ref
+    // + pipeline + hard rules, the same carrier set the old
+    // "of which at most 1 validator" pin counted).
     count_eq(
         &flat(&spec),
-        "of which at most 1 validator",
+        "at most 3 children in flight",
+        3,
+        "the 3-children cap: §2 intro + pipeline hard cap + hard rules \
+         (flat) (T194)",
+    );
+    count_eq(
+        &flat(&spec),
+        "of which at most 2 validators",
         4,
-        "the ≤1-validator cap: §2 intro + bundling cap + pipeline + hard \
-         rules (flat) (T161)",
+        "the ≤2-validators cap: §2 intro + bundling cross-ref + pipeline + \
+         hard rules (flat) (T194)",
+    );
+    // Deletion guard: the OLD cap text is gone everywhere in LOOP-SPEC.md —
+    // all three of its former carriers (§2 intro, Pipeline hard cap, Hard
+    // rules) plus any straggler.
+    assert!(
+        !spec.contains("never 3+"),
+        "the old `never 3+` ban must be GONE from LOOP-SPEC.md — T194 allows \
+         three children in flight (≤2 validators)"
+    );
+    assert!(
+        !spec.contains("never 2 validators"),
+        "the old `never 2 validators` ban must be GONE from LOOP-SPEC.md — \
+         T194 allows two validators when two items are past gates"
+    );
+    assert!(
+        !spec.contains("of which at most 1 validator"),
+        "the old ≤1-validator cap must be GONE from LOOP-SPEC.md — T194 \
+         amends it to at most 2"
+    );
+    assert!(
+        !spec.contains("at most 2 children"),
+        "the old 2-children cap must be GONE from LOOP-SPEC.md — T194 \
+         amends it to at most 3"
     );
 }
 
@@ -1287,12 +1355,28 @@ fn t161_impl_slots_are_role_keyed_and_carried_at_both_dispatch_points() {
         "target-shared-impl-b full-path carriers: step-2 dispatch rule + \
          pipeline overlap paragraph (T161)",
     );
-    // The Hard rules restatement names the slots bare (no env prefix).
+    // T194's third slot follows the same pattern: step-2 dispatch rule +
+    // pipeline overlap paragraph, exactly once each.
+    count_eq(
+        &spec,
+        IMPL_C,
+        2,
+        "target-shared-impl-c full-path carriers: step-2 dispatch rule + \
+         pipeline overlap paragraph (T194)",
+    );
+    // The Hard rules restatement names the slots bare (no env prefix) —
+    // now three of them (T194 added impl-c).
     count_eq(
         &spec,
         "build slot (target-shared-impl-a /",
         1,
         "the hard-rules slot restatement (T161)",
+    );
+    count_eq(
+        &spec,
+        "target-shared-impl-b / target-shared-impl-c, the T52 lesson",
+        1,
+        "the hard-rules slot list names all three impl slots (T194)",
     );
     // The T52 lesson is named at both carriers: never one shared slot for
     // concurrent impls; the step-1 warm build lands in the SAME dir.
@@ -1498,7 +1582,7 @@ fn readme_documents_the_t161_impl_slots() {
     let end = at + readme[at..].find("\n\n").unwrap_or(readme.len() - at);
     let para = &readme[start..end];
     assert!(
-        para.contains("target-shared-validate/"),
+        para.contains("target-shared-validate-a/"),
         "the README T161 clause must sit in the same paragraph as the T52 \
          sibling caches (T161); got:\n{para}"
     );

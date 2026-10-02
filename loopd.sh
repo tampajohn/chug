@@ -154,6 +154,20 @@ trap 'rm -f "$PIDFILE"' EXIT
 # touch the operator's daily builds. Clean policy: none automatic — reclaiming
 # is the operator's call (`du -sh target-shared`; recovery from a poisoned
 # cache is `rm -rf target-shared`, cheap, rebuilt once and warm for all).
+# T194: validator children are SLOT-keyed — target-shared-validate-a /
+# target-shared-validate-b, one dir per validator slot (a = the solo
+# default, b = the pattern-(iv) second validator, which flies only when two
+# items are simultaneously past gates, never two validators on one item) —
+# so two concurrent validators never share a target dir (the T47 invariant:
+# no two cargo processes share a target dir; sharing one would serialize on
+# cargo's build lock and erase the parallelism). The supervisor never sets
+# a slot dir itself: children receive theirs through their delegate goal
+# export + env map (LOOP-SPEC step 4) — this script's own build stays pinned
+# to ./target below, the cycle's orchestrator keeps the target-shared prefix
+# on the chug invocation, and the wrap gates keep their own role-keyed dirs
+# per LOOP-SPEC steps 3 and 5. Loop-SPEC doctrine says orchestrators key
+# validator slots at dispatch; this comment records the convention where the
+# T47 shared-cache discipline lives.
 mkdir -p target-shared
 
 echo "$(ts) loopd start (pid $$)" >> "$LOG"

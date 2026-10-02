@@ -939,7 +939,9 @@ status counts, staleness flag) so the evaluation phase reads one file instead
 of re-mining raw archives.
 The supervisor creates four gitignored build caches, one per cargo-consumer
 role, warm after first use: `target-shared/` (implementation children and
-worktree-review gates), `target-shared-validate/` (validators),
+worktree-review gates), `target-shared-validate-a/` and
+`target-shared-validate-b/` (validators — one dir per validator slot, T194:
+two validators sharing one dir would serialize on cargo's build lock),
 `target-shared-gates/` (overlap-window gates), and `target-shared-main/`
 (post-merge and final main gates). Validation rounds that mutation-test in
 parallel (T79) add per-leg caches `target-shared-mut-<k>/` — one per mutant
@@ -948,7 +950,10 @@ never shared across legs (the same role-keying, one level down).
 Two-impl overlap (T161) adds two impl-child slots, `target-shared-impl-a/`
 and `target-shared-impl-b/` — the impl launched into an overlap takes the
 slot no flying impl holds, so two concurrent implementation children never
-share one artifact dir (the T52 role-keying, widened).
+share one artifact dir (the T52 role-keying, widened); T194's 3-child
+fleet adds a third impl slot, `target-shared-impl-c/`, and the second
+validator slot `target-shared-validate-b/` (a second validator flies only
+when two items are simultaneously past gates — never two on one item).
 The supervisor hands `CARGO_TARGET_DIR`
 to each cycle as a per-invocation env prefix; loopd.sh carries the
 rationale. Why role-keyed: cargo's artifact filename excludes the checkout
