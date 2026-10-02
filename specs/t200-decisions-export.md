@@ -1,6 +1,6 @@
 # T200 — Distillation export: decisions.jsonl → joined training JSONL (F13 phase 2a-ii)
 
-check: touch src/*.rs tests/*.rs; export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared && cargo test --test decisions_export
+check: touch src/*.rs tests/*.rs; export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-validate-a && cargo test --test decisions_export
 
 ## Repo context
 
