@@ -1,6 +1,6 @@
 # T199 — Decision-corpus integrity: outcome-choice enum at write time + corpus audit script (F13 phase 2a-i)
 
-check: touch src/*.rs tests/*.rs; export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared && cargo test
+check: touch src/*.rs tests/*.rs; export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-validate-a && cargo test
 
 ## Repo context
 
