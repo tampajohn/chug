@@ -423,7 +423,11 @@ simultaneously past gates — T194 amends T161's 2-child cap):
    throwaway worktrees removed after results are collected; findings
    reference mutant names, not leg dirs. META-SPEC §6's goal template
    carries the same T79 mandate (that edit, not this paragraph's launch
-   override, is what touches META-SPEC.md). FAIL → fix-up child
+   override, is what touches META-SPEC.md). On a validator budget death
+   or wedge, read `.chug/verdict.md` in the worktree BEFORE spending a
+   T63 resume — a written verdict IS the verdict (provenance note in the
+   ledger; the resume is then only for missing mutation legs, named in
+   the routing record). FAIL → fix-up child
    with the findings pasted into its goal — and when a finding names one
    instance of a class (a vacuous pin, a missing reset, an unchecked error
    leg), the goal ALSO names the class and requires
