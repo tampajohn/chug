@@ -35,6 +35,25 @@ encode internal structure/doctrine: org-private from day one).
   processes WITHOUT committing secrets (loopd env file outside the
   repo / operator Vault — never .chug/*.json in git).
 
+## Hosting options (ranked, operator 2026-10-02 Databricks question)
+
+1. **JFrog Artifactory HF repository** (PREFERRED if available): VA
+   already runs JFrog (wheels ship there); JFrog's Hugging Face repo
+   type (local + remote/proxy, 7.9x+) hosts first-party models behind
+   EXISTING SSO/IAM — no new membership silo. HF clients pull via
+   HF_ENDPOINT pointed at the Artifactory repo URL + Artifactory token.
+   VERIFY (operator): our Artifactory version + HF repo type enabled.
+2. **org HF org private repo** (the original plan): works today,
+   but adds a second membership/token silo to manage.
+3. **Databricks Model Registry** (REJECTED 2026-10-02, verified against
+   Databricks lifecycle docs): the registry speaks ONLY the MLflow API
+   (models:/ URIs, mlflow.<flavor>.load_model, artifact downloads via
+   MLflow client) — NO HF Hub-compatible endpoint exists. Consuming
+   from it would mean a bespoke MLflow fetch backend (REST + signed-URL
+   downloads, Databricks-specific auth) instead of hf-hub's native
+   path. Model Serving is the inference layer — wrong abstraction for
+   shipping weights to a daemon.
+
 ## Requirements
 
 1. Daemon (T204 surface): CHUG_LAYA_CHECKPOINT accepts `org/model@REV`
@@ -42,6 +61,10 @@ encode internal structure/doctrine: org-private from day one).
    artifact); HF_TOKEN env passthrough honored; a private-repo
    auth failure produces ONE clear stderr line naming the fix
    (HF_TOKEN missing/insufficient) — never a silent retry storm.
+   Endpoint-agnostic fetch: CHUG_HF_ENDPOINT (or HF_ENDPOINT if the
+   hf-hub crate honors it — verify at impl; else ApiBuilder override)
+   points downloads at Artifactory or any HF-compatible host; default
+   stays public huggingface.co.
 2. Publish contract (documented in the repo — DEPENDENCIES.md section
    + runbooks/ entry): any laya fine-tune destined for the videoamp HF
    org is (a) PRIVATE at creation, (b) secret-scanned over its training
@@ -54,8 +77,10 @@ encode internal structure/doctrine: org-private from day one).
    fail-open pattern applies: daemon absent/unauthed -> degrade
    logged, loop continues).
 4. Operator steps (listed in the spec's handoff section, not loop
-   work): verify the org HF org exists (else create with IT);
-   create the private judge repo(s); set org membership; mint a
+   work): FIRST verify the Artifactory HF-repo option (version +
+   repo type; if present it displaces the HF org); else verify the
+   org HF org exists (else create with IT); create the private
+   judge repo(s); set org membership / Artifactory perms; mint a
    read-scoped token into Vault; decide the stop-judge migration
    (personal-transcript-derived IP -> VA asset call).
 5. DEPENDENCIES.md (T203) gains the HF row: huggingface.co /
