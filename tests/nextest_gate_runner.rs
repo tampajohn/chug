@@ -248,15 +248,16 @@ fn bounded_caps_wrap_the_nextest_form() {
     let meta = read("META-SPEC.md");
     count_eq(
         &meta,
-        "perl -e 'alarm 600; exec @ARGV' cargo nextest run --release",
+        "perl -e 'alarm 280; exec @ARGV' cargo nextest run --release",
         1,
-        "META-SPEC T6 macOS example caps the nextest form",
+        "META-SPEC T6 macOS example caps the nextest form (T187 re-keyed the \
+         alarm below the bash cap, matching T178's LOOP-SPEC templates)",
     );
     count_eq(
         &meta,
-        "timeout 600 cargo nextest run --release",
+        "timeout 280 cargo nextest run --release",
         1,
-        "META-SPEC T6 Linux example caps the nextest form",
+        "META-SPEC T6 Linux example caps the nextest form (T187)",
     );
 }
 
