@@ -1,6 +1,6 @@
 # T198 — loopd cycle budget --max-minutes 240→360 (the fleet outgrew the wall)
 
-check: export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared && cargo test --test loopd_model_routing --test loopd_reexec && grep -qF -- "--max-minutes 360" loopd.sh && ! grep -qF -- "--max-minutes 240" loopd.sh
+check: touch src/*.rs tests/*.rs; export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared && cargo test --test loopd_model_routing --test loopd_reexec && grep -qF -- "--max-minutes 360" loopd.sh && ! grep -qF -- "--max-minutes 240" loopd.sh
 
 ## Repo context
 

@@ -1,6 +1,6 @@
 # T196 — Impl-goal template bans tree-wide formatters (the T188 fmt-noise class)
 
-check: export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared && cargo test --test loop_spec_recovery --test todo_consistency && grep -qF "tree-wide" LOOP-SPEC.md && grep -qF "cargo fmt" LOOP-SPEC.md
+check: touch src/*.rs tests/*.rs; export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared && cargo test --test loop_spec_recovery --test todo_consistency && grep -qF "tree-wide" LOOP-SPEC.md && grep -qF "cargo fmt" LOOP-SPEC.md
 
 ## Repo context
 
