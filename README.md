@@ -1025,6 +1025,9 @@ activate without an operator restart — a pending `stop` still wins.
 cargo build && cargo clippy --all-targets -- -D warnings && cargo test
 ```
 
-All three must stay green. Layout: `src/{api,autospec,archive,driver,driver_lock,eventlog,events,fork,fsatomic,live_ctx,testsupport,tools,todos,tgrep,tui,valroute,webfetch,websearch,chat,
+All three must stay green. External dependencies — crates, runtime services,
+spawned processes, the env surface — are inventoried with their failure modes
+in [DEPENDENCIES.md](DEPENDENCIES.md); check it before adding one.
+Layout: `src/{api,autospec,archive,driver,driver_lock,eventlog,events,fork,fsatomic,live_ctx,testsupport,tools,todos,tgrep,tui,valroute,webfetch,websearch,chat,
 attach,complete,commands,decisions,delegate,notify,permissions,plan,riskgate,hooks,mcp,mcp_http,mcp_serve,sse,observ,auth,ledger,transcript,trim,build_info}.rs`
 (+ `main.rs`; `build.rs` only bakes the git commit into the startup banner).
