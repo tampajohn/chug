@@ -626,3 +626,133 @@ fn spec_check_hook_veto_wins_over_risk_gate() {
         "the risk judge must never be consulted when the hook veto fires first"
     );
 }
+
+// T190: the check's verdict rides the events log as a `validation` line —
+// item (the check command) + verdict (PASS/FAIL; a policy-blocked check is
+// a FAIL: it never verified anything). These legs pin the emit points the
+// notify sink (T190) hangs off.
+
+/// A check that runs and exits 0 records PASS with the item named, then the
+/// goal acceptance follows.
+#[test]
+fn validation_verdict_pass_is_recorded_with_the_item() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (_utx, urx) = mpsc::channel::<SlashUpdate>();
+    let controls = Controls::detached();
+    let ctx = ctx_for(&tmp, Mode::Chat, &controls, &urx, None, &observ::Sink::Noop);
+    let mut knobs = knobs_with(3);
+    knobs.check_cmd = Some("true".to_string());
+    let mut llm = ScriptedLlm::new(vec![tool_use_response(
+        "goal_complete",
+        json!({"summary": "claim done"}),
+    )]);
+    let mut messages = Vec::new();
+    let outcome = drive_loop(
+        &ctx,
+        &mut knobs,
+        &mut llm,
+        &mut None,
+        &mut messages,
+        None,
+        &mut RecordingSink::default(),
+        &mut McpRegistry::new(tmp.path(), true, None).unwrap(),
+    )
+    .unwrap();
+    assert!(matches!(outcome, DriveOutcome::TurnEnded(TurnEndReason::GoalAccepted)));
+    let lines = events_jsonl(&tmp);
+    let verdicts: Vec<&Value> = lines
+        .iter()
+        .filter(|l| l["type"] == "validation")
+        .collect();
+    assert_eq!(verdicts.len(), 1, "one verdict line: {lines:?}");
+    assert_eq!(verdicts[0]["verdict"], "PASS");
+    assert_eq!(verdicts[0]["item"], "true");
+    // The goal acceptance still rides the same log, after the verdict.
+    let verdict_pos = lines.iter().position(|l| l["type"] == "validation").unwrap();
+    let goal_pos = lines
+        .iter()
+        .position(|l| l["type"] == "goal" && l["outcome"] == "accepted")
+        .unwrap();
+    assert!(verdict_pos < goal_pos);
+}
+
+/// A check that fails records FAIL with the item named, and the goal is
+/// rejected (the loop continues).
+#[test]
+fn validation_verdict_fail_is_recorded_with_the_item() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (_utx, urx) = mpsc::channel::<SlashUpdate>();
+    let controls = Controls::detached();
+    let ctx = ctx_for(&tmp, Mode::Chat, &controls, &urx, None, &observ::Sink::Noop);
+    let mut knobs = knobs_with(3);
+    knobs.check_cmd = Some("false".to_string());
+    let mut llm = ScriptedLlm::new(vec![
+        tool_use_response("goal_complete", json!({"summary": "claim done"})),
+        text_only_response("routed around"),
+    ]);
+    let mut messages = Vec::new();
+    let outcome = drive_loop(
+        &ctx,
+        &mut knobs,
+        &mut llm,
+        &mut None,
+        &mut messages,
+        None,
+        &mut RecordingSink::default(),
+        &mut McpRegistry::new(tmp.path(), true, None).unwrap(),
+    )
+    .unwrap();
+    assert!(matches!(outcome, DriveOutcome::TurnEnded(TurnEndReason::Completed)));
+    assert!(no_accepted_goal(&events_jsonl(&tmp)));
+    let lines = events_jsonl(&tmp);
+    let verdicts: Vec<&Value> = lines
+        .iter()
+        .filter(|l| l["type"] == "validation")
+        .collect();
+    assert_eq!(verdicts.len(), 1, "one verdict line: {lines:?}");
+    assert_eq!(verdicts[0]["verdict"], "FAIL");
+    assert_eq!(verdicts[0]["item"], "false");
+}
+
+/// A policy-blocked check is a FAIL verdict: the command never ran, so it
+/// verified nothing (fail-closed, same shape as a failed execution).
+#[test]
+fn validation_verdict_for_a_blocked_check_is_fail() {
+    let tmp = tempfile::tempdir().unwrap();
+    write_permissions_json(tmp.path(), json!([{"tool": "bash"}]));
+    let (_utx, urx) = mpsc::channel::<SlashUpdate>();
+    let controls = Controls::detached();
+    let ctx = ctx_for(&tmp, Mode::Chat, &controls, &urx, None, &observ::Sink::Noop);
+    let mut knobs = knobs_with(3);
+    knobs.check_cmd = Some("echo ran > check-blocked.txt".to_string());
+    let mut llm = ScriptedLlm::new(vec![
+        tool_use_response("goal_complete", json!({"summary": "claim done"})),
+        text_only_response("routed around"),
+    ]);
+    let mut messages = Vec::new();
+    let outcome = drive_loop(
+        &ctx,
+        &mut knobs,
+        &mut llm,
+        &mut None,
+        &mut messages,
+        None,
+        &mut RecordingSink::default(),
+        &mut McpRegistry::new(tmp.path(), true, None).unwrap(),
+    )
+    .unwrap();
+    assert!(matches!(outcome, DriveOutcome::TurnEnded(TurnEndReason::Completed)));
+    assert!(
+        !tmp.path().join("check-blocked.txt").exists(),
+        "a blocked check never executes"
+    );
+    assert!(no_accepted_goal(&events_jsonl(&tmp)));
+    let lines = events_jsonl(&tmp);
+    let verdicts: Vec<&Value> = lines
+        .iter()
+        .filter(|l| l["type"] == "validation")
+        .collect();
+    assert_eq!(verdicts.len(), 1, "one verdict line: {lines:?}");
+    assert_eq!(verdicts[0]["verdict"], "FAIL");
+    assert_eq!(verdicts[0]["item"], "echo ran > check-blocked.txt");
+}
