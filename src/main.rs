@@ -31,6 +31,7 @@ mod permissions;
 mod sse;
 mod tgrep;
 mod todos;
+mod valroute;
 mod webfetch;
 mod websearch;
 
@@ -71,6 +72,20 @@ enum CliCommand {
         /// `--resume` the existing draft is reused, never redrafted.
         #[arg(long, default_value_t = false)]
         auto_spec: bool,
+        /// T189: force FULL adversarial validation (the kimi child) for
+        /// every item on this auto-spec'd run — the low-stakes lane
+        /// predicate is off. Operator override, recorded via decision_log.
+        /// Belongs to the --auto-spec group.
+        #[arg(long, requires = "auto_spec", conflicts_with = "no_validate")]
+        validate: bool,
+        /// T189: force the gates-only lane for every item on this
+        /// auto-spec'd run, regardless of the diff — the kimi validation
+        /// child is skipped, never the gates (build + clippy + the full
+        /// suite in the worktree, byte-clean review, and the scope check
+        /// stay REQUIRED). Operator override, recorded via decision_log.
+        /// Belongs to the --auto-spec group.
+        #[arg(long, requires = "auto_spec", conflicts_with = "validate")]
+        no_validate: bool,
         /// Goal text.
         #[arg(long)]
         goal: String,
@@ -168,6 +183,16 @@ enum CliCommand {
         /// Goal text: the task, in one sentence or ten.
         #[arg(long)]
         goal: String,
+        /// T189: force FULL adversarial validation for every item on this
+        /// run (the low-stakes lane predicate is off). Operator override,
+        /// recorded via decision_log. A quick run IS an auto-spec run.
+        #[arg(long, conflicts_with = "no_validate")]
+        validate: bool,
+        /// T189: force the gates-only lane for every item on this run,
+        /// regardless of the diff — the kimi validation child is skipped,
+        /// never the gates. Operator override, recorded via decision_log.
+        #[arg(long, conflicts_with = "validate")]
+        no_validate: bool,
         /// Working directory; all file/bash tools are sandboxed here. Defaults to `.`.
         #[arg(long)]
         cwd: Option<PathBuf>,
@@ -371,6 +396,8 @@ fn main() -> ExitCode {
         CliCommand::Run {
             spec,
             auto_spec,
+            validate,
+            no_validate,
             goal,
             cwd,
             model,
@@ -388,6 +415,15 @@ fn main() -> ExitCode {
         } => cmd_run(
             spec,
             auto_spec,
+            // T189: clap enforces the pair's exclusivity and the auto-spec
+            // group; here the bools fold into the lane override.
+            if validate {
+                Some(valroute::LaneOverride::Full)
+            } else if no_validate {
+                Some(valroute::LaneOverride::GatesOnly)
+            } else {
+                None
+            },
             goal,
             cwd,
             model,
@@ -405,6 +441,8 @@ fn main() -> ExitCode {
         ),
         CliCommand::Quick {
             goal,
+            validate,
+            no_validate,
             cwd,
             model,
             max_iters,
@@ -418,6 +456,13 @@ fn main() -> ExitCode {
         } => cmd_run(
             None,      // no --spec: the draft phase writes it
             true,      // auto_spec
+            if validate {
+                Some(valroute::LaneOverride::Full)
+            } else if no_validate {
+                Some(valroute::LaneOverride::GatesOnly)
+            } else {
+                None
+            },
             goal,
             cwd,
             model,
@@ -524,6 +569,9 @@ fn auto_spec_path(cwd: &Path) -> PathBuf {
 fn cmd_run(
     spec: Option<PathBuf>,
     auto_spec: bool,
+    // T189: the auto-spec lane override — Some(Full) = --validate, Some(
+    // GatesOnly) = --no-validate, None = the lane predicate governs.
+    validation_override: Option<valroute::LaneOverride>,
     goal: String,
     cwd: Option<PathBuf>,
     model: Option<String>,
@@ -592,6 +640,28 @@ fn cmd_run(
         spec.expect("--spec is required without --auto-spec (clap enforces)")
             .canonicalize()
             .with_context(|| "spec file not found")?
+    };
+    // T189: the auto-spec validation lane. The lane predicate is the
+    // default (LOOP-SPEC §2 step 4); --validate/--no-validate are operator
+    // overrides. An override is RECORDED via decision_log
+    // (validation-routing) and carried to the orchestrator on the goal
+    // (re-read every iteration); the default carries the self-contained
+    // predicate directive the same way. Hand-written specs are untouched —
+    // the operator's spec is the contract there.
+    let goal = if auto_spec {
+        match validation_override {
+            Some(lane) => {
+                if let Err(e) = valroute::record_override(&cwd, lane) {
+                    // The decision_log contract is best-effort: a record
+                    // failure warns and never aborts the run.
+                    eprintln!("chug: warning: lane override record failed: {e:#}");
+                }
+                format!("{goal}{}", lane.directive())
+            }
+            None => format!("{goal}{}", valroute::predicate_directive()),
+        }
+    } else {
+        goal
     };
     // T11: one stderr line naming the build so a stale binary is obvious.
     // T20: resolve the cwd's checkout identity at runtime so the same line
@@ -1295,6 +1365,7 @@ mod tests {
             let err = cmd_run(
                 Some(spec.clone()),
                 false,
+                None, // T189: no lane override (hand-written spec)
                 "g".into(),
                 Some(tmp.path().to_path_buf()),
                 Some("test-model".into()),
@@ -1396,6 +1467,101 @@ mod tests {
         );
     }
 
+    // ---------- T189: the validation-lane CLI flags ----------
+
+    /// `--validate` / `--no-validate` parse on both auto-spec entry points
+    /// (`run --auto-spec` and `quick`), default false, are mutually
+    /// exclusive, and belong to the --auto-spec group: on a hand-written
+    /// `--spec` run either flag is a clap error (the lane override is an
+    /// auto-spec-path knob — a hand-written spec is the operator's
+    /// contract, and per-item routing stays the orchestrator's per
+    /// LOOP-SPEC §2 step 4). A dropped flag or flipped requires/conflicts
+    /// wiring is RED here.
+    #[test]
+    fn validation_lane_cli_parse_pins() {
+        // Defaults: both flags absent → false/false.
+        let cli = Cli::try_parse_from(["chug", "run", "--spec", "s.md", "--goal", "g"])
+            .expect("run --spec parses");
+        let CliCommand::Run {
+            validate, no_validate, ..
+        } = cli.command
+        else {
+            panic!("expected the run subcommand");
+        };
+        assert!(!validate, "--validate defaults false");
+        assert!(!no_validate, "--no-validate defaults false");
+
+        // Each override parses under --auto-spec.
+        let cli = Cli::try_parse_from(["chug", "run", "--auto-spec", "--validate", "--goal", "g"])
+            .expect("--validate parses with --auto-spec");
+        let CliCommand::Run {
+            validate, no_validate, ..
+        } = cli.command
+        else {
+            panic!("expected the run subcommand");
+        };
+        assert!(validate && !no_validate);
+
+        let cli = Cli::try_parse_from([
+            "chug", "run", "--auto-spec", "--no-validate", "--goal", "g",
+        ])
+        .expect("--no-validate parses with --auto-spec");
+        let CliCommand::Run {
+            validate, no_validate, ..
+        } = cli.command
+        else {
+            panic!("expected the run subcommand");
+        };
+        assert!(!validate && no_validate);
+
+        // The pair is mutually exclusive.
+        assert!(
+            Cli::try_parse_from([
+                "chug", "run", "--auto-spec", "--validate", "--no-validate", "--goal", "g",
+            ])
+            .is_err(),
+            "--validate and --no-validate together are a clap error"
+        );
+
+        // The overrides belong to the --auto-spec group: a hand-written
+        // --spec run refuses either flag.
+        assert!(
+            Cli::try_parse_from(["chug", "run", "--spec", "s.md", "--validate", "--goal", "g"])
+                .is_err(),
+            "--validate without --auto-spec is a clap error"
+        );
+        assert!(
+            Cli::try_parse_from(["chug", "run", "--spec", "s.md", "--no-validate", "--goal", "g"])
+                .is_err(),
+            "--no-validate without --auto-spec is a clap error"
+        );
+
+        // The quick alias (an auto-spec run) carries the same pair.
+        let cli = Cli::try_parse_from(["chug", "quick", "--goal", "g", "--no-validate"])
+            .expect("quick --no-validate parses");
+        let CliCommand::Quick {
+            validate, no_validate, ..
+        } = cli.command
+        else {
+            panic!("expected the quick subcommand");
+        };
+        assert!(!validate && no_validate);
+        let cli = Cli::try_parse_from(["chug", "quick", "--goal", "g", "--validate"])
+            .expect("quick --validate parses");
+        let CliCommand::Quick {
+            validate, no_validate, ..
+        } = cli.command
+        else {
+            panic!("expected the quick subcommand");
+        };
+        assert!(validate && !no_validate);
+        assert!(
+            Cli::try_parse_from(["chug", "quick", "--goal", "g", "--validate", "--no-validate"])
+                .is_err(),
+            "quick --validate --no-validate together are a clap error"
+        );
+    }
+
     /// The cmd_run refusals the CLI boundary enforces BEFORE any draft or
     /// LLM call: a hand-written `--spec` is mutually exclusive with
     /// `--auto-spec` (the operator's word is never overwritten), and
@@ -1413,6 +1579,7 @@ mod tests {
         let err = cmd_run(
             Some(spec.clone()),
             true,
+            None, // T189: no lane override (the refusal fires before the lane)
             "g".into(),
             Some(tmp.path().to_path_buf()),
             Some("test-model".into()),
@@ -1439,6 +1606,7 @@ mod tests {
         let err = cmd_run(
             None,
             true,
+            None, // T189: no lane override (the refusal fires before the lane)
             "g".into(),
             Some(tmp.path().to_path_buf()),
             Some("test-model".into()),
