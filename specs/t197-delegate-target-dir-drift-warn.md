@@ -1,6 +1,6 @@
 # T197 — delegate launch warns on CARGO_TARGET_DIR drift (the 74d3331 dispatch-rekey class)
 
-check: export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared && cargo test
+check: touch src/*.rs tests/*.rs; export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared && cargo test
 
 ## Repo context
 

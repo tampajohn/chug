@@ -1,6 +1,6 @@
 # T201 — Validator verdict-first: VERDICT lands in .chug/verdict.md at decision time
 
-check: export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared && cargo test --test loop_spec_recovery --test todo_consistency && grep -qF "verdict.md" META-SPEC.md && grep -qF "verdict.md" LOOP-SPEC.md
+check: touch src/*.rs tests/*.rs; export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared && cargo test --test loop_spec_recovery --test todo_consistency && grep -qF "verdict.md" META-SPEC.md && grep -qF "verdict.md" LOOP-SPEC.md
 
 ## Repo context
 
