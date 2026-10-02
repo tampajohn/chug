@@ -990,5 +990,5 @@ cargo build && cargo clippy --all-targets -- -D warnings && cargo test
 ```
 
 All three must stay green. Layout: `src/{api,autospec,archive,driver,driver_lock,eventlog,events,fork,fsatomic,testsupport,tools,todos,tgrep,tui,valroute,webfetch,websearch,chat,
-attach,complete,commands,decisions,delegate,permissions,plan,riskgate,hooks,mcp,mcp_http,mcp_serve,sse,observ,auth,ledger,transcript,trim,build_info}.rs`
+attach,complete,commands,decisions,delegate,notify,permissions,plan,riskgate,hooks,mcp,mcp_http,mcp_serve,sse,observ,auth,ledger,transcript,trim,build_info}.rs`
 (+ `main.rs`; `build.rs` only bakes the git commit into the startup banner).
