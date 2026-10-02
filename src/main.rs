@@ -18,6 +18,7 @@ mod fsatomic;
 mod hooks;
 mod riskgate;
 mod ledger;
+mod live_ctx;
 mod observ;
 mod plan;
 mod tools;
@@ -112,6 +113,12 @@ enum CliCommand {
         /// --max-tokens-per-request, $CHUG_MAX_TOKENS, 32768.
         #[arg(long)]
         max_tokens_per_request: Option<u32>,
+        /// T192: one-shot context-occupancy warning, in estimated tokens.
+        /// When the pre-call context reaches it, the driver injects a
+        /// one-shot advisory naming .chug/LIVE_CTX.md editing as the remedy
+        /// (an accepted edit-only turn is free, cap 3 consecutive). 0 = off.
+        #[arg(long, default_value_t = 0)]
+        ctx_warn_at_tokens: u64,
         /// Resume from <cwd>/.chug/transcript.jsonl.
         #[arg(long)]
         resume: bool,
@@ -213,6 +220,10 @@ enum CliCommand {
         /// Per-request output-token cap sent as `max_tokens` on every API call.
         #[arg(long)]
         max_tokens_per_request: Option<u32>,
+        /// T192: one-shot context-occupancy warning, in estimated tokens
+        /// (same knob and remedy as `chug run --ctx-warn-at-tokens`). 0 = off.
+        #[arg(long, default_value_t = 0)]
+        ctx_warn_at_tokens: u64,
         /// Classify every bash command with the laya risk judge before executing.
         #[arg(long)]
         risk_gate: bool,
@@ -406,6 +417,7 @@ fn main() -> ExitCode {
             max_minutes,
             max_tokens,
             max_tokens_per_request,
+            ctx_warn_at_tokens,
             resume,
             tui,
             risk_gate,
@@ -432,6 +444,7 @@ fn main() -> ExitCode {
             max_minutes,
             max_tokens,
             max_tokens_per_request,
+            ctx_warn_at_tokens,
             resume,
             tui,
             risk_gate,
@@ -450,6 +463,7 @@ fn main() -> ExitCode {
             max_minutes,
             max_tokens,
             max_tokens_per_request,
+            ctx_warn_at_tokens,
             risk_gate,
             bash_timeout,
             mcp_config,
@@ -471,6 +485,7 @@ fn main() -> ExitCode {
             max_minutes,
             max_tokens,
             max_tokens_per_request,
+            ctx_warn_at_tokens,
             false,     // no --resume on quick
             false,     // headless
             risk_gate,
@@ -580,6 +595,7 @@ fn cmd_run(
     max_minutes: u64,
     max_tokens: u64,
     max_tokens_per_request: Option<u32>,
+    ctx_warn_at_tokens: u64,
     resume: bool,
     tui: bool,
     risk_gate: bool,
@@ -675,7 +691,8 @@ fn cmd_run(
     if tui {
         run_with_tui(
             spec, goal, goal_pack, approve, cwd, model, max_iters, max_minutes, max_tokens,
-            max_tokens_per_request, resume, risk_gate, bash_timeout, mcp_config, mcp_off,
+            max_tokens_per_request, ctx_warn_at_tokens, resume, risk_gate, bash_timeout, mcp_config,
+            mcp_off,
         )
     } else {
         let cfg = driver::RunConfig {
@@ -687,6 +704,7 @@ fn cmd_run(
             max_minutes,
             max_tokens,
             max_tokens_per_request,
+            ctx_warn_at_tokens,
             resume,
             controls: driver::Controls::detached(),
             risk_gate,
@@ -714,6 +732,7 @@ fn run_with_tui(
     max_minutes: u64,
     max_tokens: u64,
     max_tokens_per_request: u32,
+    ctx_warn_at_tokens: u64,
     resume: bool,
     risk_gate: bool,
     bash_timeout: std::time::Duration,
@@ -734,6 +753,7 @@ fn run_with_tui(
         max_minutes,
         max_tokens,
         max_tokens_per_request,
+        ctx_warn_at_tokens,
         resume,
         risk_gate,
         bash_timeout,
@@ -1374,6 +1394,7 @@ mod tests {
                 10,
                 0,
                 None,
+                0, // ctx_warn_at_tokens
                 false,
                 false,
                 false,
@@ -1588,6 +1609,7 @@ mod tests {
             10,
             0,
             None,
+            0, // ctx_warn_at_tokens
             false,
             false,
             false,
@@ -1615,6 +1637,7 @@ mod tests {
             10,
             0,
             None,
+            0, // ctx_warn_at_tokens
             true,
             false,
             false,

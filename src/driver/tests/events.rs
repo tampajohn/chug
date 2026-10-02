@@ -32,6 +32,7 @@ fn abort_flag_aborts_at_boundary_like_budget_abort() {
         mcp_off: true,
         // T117: a literal test goal — no pack expansion (None wiring leg).
         goal_pack: None,
+        ctx_warn_at_tokens: 0,
         approve: None,
     };
     let client =
@@ -118,6 +119,7 @@ fn run_loop_run_start_carries_goal_pack_from_config_both_ways() {
             mcp_config: None,
             mcp_off: true,
             goal_pack: goal_pack.clone(),
+            ctx_warn_at_tokens: 0,
             approve: None,
         };
         let client =

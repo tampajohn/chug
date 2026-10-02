@@ -338,6 +338,11 @@ impl App {
             // transcript as `[trimmed: …]` markers; the activity stream stays
             // as-is.
             Event::Trim { .. } => {}
+            // T192: telemetry only — an accepted edit is already spliced into
+            // the transcript (`[ctx-edit: …]` markers) and a rejected one left
+            // it untouched (the model got the reason line); the activity
+            // stream stays as-is.
+            Event::CtxEdit { .. } => {}
             // T17: telemetry only — the notice already reached the user as a
             // transcript message; the activity stream stays as-is.
             Event::BudgetLow { .. } => {}

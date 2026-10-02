@@ -73,6 +73,20 @@ pub enum Event {
         /// Total `[trimmed: …]` markers in the transcript after the pass.
         marker_count: u32,
     },
+    /// T192 telemetry: one end-of-turn LIVE_CTX parse-back. The model edited
+    /// `.chug/LIVE_CTX.md`; the driver parsed it back and gated it. On accept
+    /// the transcript already carries the spliced list (`[ctx-edit: …]`
+    /// markers per deleted run) and `reason` is `None`; on reject the
+    /// transcript is untouched and the reason is the one-line message the
+    /// model also received. Console/TUI stay silent (Trim precedent:
+    /// telemetry-only). `after_tokens` is the candidate's estimate when one
+    /// was parsed, else `before_tokens` (nothing parseable was proposed).
+    CtxEdit {
+        accepted: bool,
+        before_tokens: u64,
+        after_tokens: u64,
+        reason: Option<String>,
+    },
     /// T17 telemetry: the one-shot budget-low warning was injected into the
     /// transcript. The notice itself already reached the user as a message;
     /// this event exists only so `.chug/events.jsonl` records that it fired,
@@ -389,6 +403,11 @@ impl EventSink for ConsoleSink {
             // T184: telemetry only — the collapse is already recorded in the
             // transcript as `[trimmed: …]` markers; no console output.
             Event::Trim { .. } => {}
+            // T192: telemetry only — an accepted edit is already spliced into
+            // the transcript (`[ctx-edit: …]` markers) and a rejected one left
+            // it untouched; the model got the reason line either way. No
+            // console output.
+            Event::CtxEdit { .. } => {}
             // T17: telemetry only — the notice already reached the user as a
             // transcript message; no console output.
             Event::BudgetLow { .. } => {}
@@ -790,6 +809,29 @@ mod tests {
             after_tokens: 88_000,
             segments_collapsed: 2,
             marker_count: 5,
+        });
+        assert_eq!(out_bytes(&err), "");
+        assert_eq!(out_bytes(&out), "");
+    }
+
+    /// T192: the CtxEdit event is telemetry for `.chug/events.jsonl` only —
+    /// accepted edits are already spliced into the transcript, rejected ones
+    /// surfaced to the model as a tool-visible reason line. Console (and
+    /// TUI, pinned in tui.rs) stays silent, Trim precedent.
+    #[test]
+    fn console_sink_ctx_edit_is_silent() {
+        let (mut sink, out, err) = sink("/w");
+        sink.emit(Event::CtxEdit {
+            accepted: true,
+            before_tokens: 91_000,
+            after_tokens: 44_000,
+            reason: None,
+        });
+        sink.emit(Event::CtxEdit {
+            accepted: false,
+            before_tokens: 91_000,
+            after_tokens: 91_000,
+            reason: Some("pinned turn 0 was removed".into()),
         });
         assert_eq!(out_bytes(&err), "");
         assert_eq!(out_bytes(&out), "");
