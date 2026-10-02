@@ -94,6 +94,7 @@ fn run_loop_run_start_carries_approve_fields_both_ways() {
             risk_gate: false,
             bash_timeout: Duration::from_secs(tools::BASH_TIMEOUT_SECS),
             mcp_config: None,
+            ctx_warn_at_tokens: 0,
             mcp_off: true,
             goal_pack: None,
             approve: approve.map(|(path, text)| crate::driver::ApprovedPlan {
@@ -178,6 +179,7 @@ fn run_loop_prepends_the_approved_plan_to_the_first_outbound_request() {
         mcp_config: None,
         mcp_off: true,
         goal_pack: None,
+        ctx_warn_at_tokens: 0,
         approve: Some(approved("plan.md")),
     };
     let mut sink = RecordingSink::default();

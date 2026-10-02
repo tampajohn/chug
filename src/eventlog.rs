@@ -292,6 +292,24 @@ impl EventSink for EventLogSink<'_> {
                 *segments_collapsed,
                 *marker_count,
             )),
+            // T192: one line per end-of-turn LIVE_CTX parse-back — accepted
+            // edits (spliced into the transcript, `reason` null) and rejected
+            // ones (transcript untouched, the one-line reason the model also
+            // received) alike, so the T184-class jq pass can correlate
+            // cache-token deltas with curation events.
+            Event::CtxEdit {
+                accepted,
+                before_tokens,
+                after_tokens,
+                reason,
+            } => Some(json!({
+                "type": "ctx_edit",
+                "ts": now_rfc3339(),
+                "accepted": accepted,
+                "before_tokens": before_tokens,
+                "after_tokens": after_tokens,
+                "reason": reason,
+            })),
             Event::BudgetLow {
                 remaining_iters,
                 remaining_secs,
@@ -965,6 +983,40 @@ mod tests {
         ] {
             assert!(obj.contains_key(key), "{key} must be PRESENT: {lines:?}");
         }
+    }
+
+    /// T192: CtxEdit events serialize as one jq-mineable `ctx_edit` line —
+    /// `reason` is a real string on reject and a PRESENT null on accept
+    /// (T17 max_tokens honesty shape), so `jq '.reason'` never needs
+    /// old-shape fallbacks.
+    #[test]
+    fn sink_logs_ctx_edit_accept_and_reject() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut inner = NullSink;
+        let mut sink = EventLogSink::new(tmp.path(), &mut inner);
+        sink.emit(Event::CtxEdit {
+            accepted: true,
+            before_tokens: 91_000,
+            after_tokens: 44_000,
+            reason: None,
+        });
+        sink.emit(Event::CtxEdit {
+            accepted: false,
+            before_tokens: 91_000,
+            after_tokens: 91_000,
+            reason: Some("pinned turn 0 was removed".into()),
+        });
+        let lines = read_lines(tmp.path());
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0]["type"], "ctx_edit");
+        assert_eq!(lines[0]["accepted"], true);
+        assert_eq!(lines[0]["before_tokens"], 91_000);
+        assert_eq!(lines[0]["after_tokens"], 44_000);
+        assert!(lines[0].as_object().unwrap().contains_key("reason"));
+        assert!(lines[0]["reason"].is_null());
+        assert_eq!(lines[1]["type"], "ctx_edit");
+        assert_eq!(lines[1]["accepted"], false);
+        assert_eq!(lines[1]["reason"], "pinned turn 0 was removed");
     }
 
     /// The pre-T25 200-char pin, re-anchored by T25 to the **ok leg**: the

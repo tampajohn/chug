@@ -21,6 +21,7 @@ mod events;
 mod goal;
 mod hooks_policy;
 mod image;
+mod live_ctx;
 mod lock;
 mod mcp;
 mod observability;
@@ -179,6 +180,7 @@ pub(crate) fn ctx_for<'a>(
         obs,
         plan_out: None,
         plan_kind: crate::plan::PlanKind::Plan,
+        ctx_warn_at_tokens: 0,
     }
 }
 
@@ -232,6 +234,7 @@ fn ctx_for_plan<'a>(
         obs: &observ::Sink::Noop,
         plan_out,
         plan_kind: crate::plan::PlanKind::Plan,
+        ctx_warn_at_tokens: 0,
     }
 }
 
