@@ -45,6 +45,17 @@
 //! no `target/debug/chug` launch path may survive in loopd.sh or either
 //! template. The spec `check:` convention stays plain `cargo test` (debug) —
 //! release is for gates only.
+//!
+//! T195 — the gate source-touch guard: every gate template aimed at a
+//! shared role-keyed target dir from a NON-MAIN checkout rebinds the dir's
+//! artifacts to the local checkout first (`touch src/*.rs tests/*.rs;`
+//! immediately before the cargo invocation) — cargo's mtime-only freshness
+//! check otherwise reads a foreign checkout's artifacts as fresh against
+//! this checkout's older sources. The touched carriers (step 1's warm
+//! build, step 3's gate pair, step 4's validator gate runs, META-SPEC §5/§7)
+//! are pinned here; the structural walk over the alarm-280 gate lines lives
+//! in nextest_gate_runner.rs. The T57 `target-shared-main` dir is the
+//! exempt carrier (every builder there is a main checkout).
 
 use std::path::PathBuf;
 
@@ -224,6 +235,15 @@ fn loop_spec_templates_export_the_shared_dir() {
         1,
         "LOOP-SPEC step-1 worktree build line (T47)",
     );
+    // (1b) T195: the step-1 warm build is touch-guarded — a REUSED worktree
+    //     (T63 resume, next-cycle recovery) carries old mtimes against a
+    //     foreign checkout's newer-built artifacts, the highest-risk case.
+    count_eq(
+        &spec,
+        "touch src/*.rs tests/*.rs; cargo build --release",
+        1,
+        "LOOP-SPEC step-1 warm build carries the T195 touch guard",
+    );
     // (2) step-2 delegate goal text — carries the export to the child.
     count_eq(
         &spec,
@@ -232,18 +252,19 @@ fn loop_spec_templates_export_the_shared_dir() {
         "LOOP-SPEC step-2 delegate goal text (T47)",
     );
     // (3) step-3 review-gate env prefix — both legs of the T82 runner
-    //     (nextest leg and fallback leg) carry the T47 prefix.
+    //     (nextest leg and fallback leg) carry the T47 prefix, and (T195)
+    //     the touch guard immediately before it.
     count_eq(
         &spec,
-        &format!("{SHARED} perl -e 'alarm 280; exec @ARGV' cargo nextest run --release"),
+        &format!("touch src/*.rs tests/*.rs; {SHARED} perl -e 'alarm 280; exec @ARGV' cargo nextest run --release"),
         1,
-        "LOOP-SPEC step-3 review-gate prefix, nextest leg (T47+T82)",
+        "LOOP-SPEC step-3 review-gate prefix, nextest leg (T47+T82; T195 touch)",
     );
     count_eq(
         &spec,
-        &format!("{SHARED} perl -e 'alarm 280; exec @ARGV' cargo test --release"),
+        &format!("touch src/*.rs tests/*.rs; {SHARED} perl -e 'alarm 280; exec @ARGV' cargo test --release"),
         1,
-        "LOOP-SPEC step-3 review-gate prefix, fallback leg (T47+T82)",
+        "LOOP-SPEC step-3 review-gate prefix, fallback leg (T47+T82; T195 touch)",
     );
     // Tradeoff note: recovery is operator-owned and cheap.
     assert_contains(&spec, "rm -rf target-shared", "LOOP-SPEC.md");
@@ -301,6 +322,14 @@ fn loop_spec_validator_exports_the_validate_dir_always() {
         &format!("{SHARED} before"),
         1,
         "LOOP-SPEC step-2 impl goal export keeps target-shared (T52)",
+    );
+    // (5) T195: the validator's own gate runs carry the touch guard — its
+    //     slot dir persists across cycles and can hold a previous validator
+    //     checkout's artifacts mtime-fresh against this checkout's sources.
+    assert_contains(
+        &spec,
+        "`touch src/*.rs tests/*.rs;` immediately prefixes its cargo gate",
+        "LOOP-SPEC step-4 validator gate runs carry the T195 touch guard",
     );
 }
 
@@ -404,12 +433,13 @@ fn loop_spec_gate_dir_is_role_keyed_for_the_overlap_window() {
     // (1) step 3's gate template keeps the T47 shared dir as its base (the
     //     no-child-in-flight arm) — the T47 carrier pin survives T52 and
     //     T82 (both legs of the runner rule carry the prefix; the counts
-    //     live in loop_spec_templates_export_the_shared_dir).
+    //     live in loop_spec_templates_export_the_shared_dir). T195: the
+    //     pin follows the touched carrier.
     count_eq(
         &spec,
-        &format!("{SHARED} perl -e 'alarm 280; exec @ARGV' cargo nextest run --release"),
+        &format!("touch src/*.rs tests/*.rs; {SHARED} perl -e 'alarm 280; exec @ARGV' cargo nextest run --release"),
         1,
-        "LOOP-SPEC step-3 review-gate base prefix, nextest leg (T47+T82)",
+        "LOOP-SPEC step-3 review-gate base prefix, nextest leg (T47+T82; T195 touch)",
     );
     // (2) the conditional arm carries the gates dir exactly once.
     count_eq(
@@ -480,18 +510,18 @@ fn meta_spec_templates_export_the_shared_dir() {
         "META-SPEC §4 impl nohup launch template (T47)",
     );
     // (3) review gate — the orchestrator's own gate run is env-prefixed on
-    //     BOTH legs of the T82 runner.
+    //     BOTH legs of the T82 runner, and (T195) touch-guarded on both.
     count_eq(
         &spec,
-        &format!("{SHARED} cargo nextest run --release"),
+        &format!("touch src/*.rs tests/*.rs; {SHARED} cargo nextest run --release"),
         1,
-        "META-SPEC §5 review-gate prefix, nextest leg (T47+T82)",
+        "META-SPEC §5 review-gate prefix, nextest leg (T47+T82; T195 touch)",
     );
     count_eq(
         &spec,
-        &format!("{SHARED} cargo test --release -- --test-threads=4"),
+        &format!("touch src/*.rs tests/*.rs; {SHARED} cargo test --release -- --test-threads=4"),
         1,
-        "META-SPEC §5 review-gate prefix, fallback leg (T47+T82)",
+        "META-SPEC §5 review-gate prefix, fallback leg (T47+T82; T195 touch)",
     );
     // (4) validator nohup launch template (§6).
     count_eq(
@@ -955,6 +985,23 @@ fn meta_spec_release_carriers_are_pinned_per_carrier() {
         "timeout 280 cargo nextest run --release",
         1,
         "META-SPEC T6 Linux example wraps the T82 nextest form (T82; T187)",
+    );
+    // T195: §7's merge-gate templates carry the touch guard — the gate may
+    // run against a shared slot still holding §5's worktree-built artifacts
+    // (the T55 mechanism). The needles are adjacency-exact (`; cargo …`
+    // with no env prefix between — §5's touched legs carry CARGO_TARGET_DIR
+    // there, so they cannot satisfy these counts), one per leg.
+    count_eq(
+        &meta,
+        "touch src/*.rs tests/*.rs; cargo nextest run --release",
+        1,
+        "META-SPEC §7 merge-gate nextest leg carries the T195 touch guard",
+    );
+    count_eq(
+        &meta,
+        "touch src/*.rs tests/*.rs; cargo test --release -- --test-threads=4",
+        1,
+        "META-SPEC §7 merge-gate fallback leg carries the T195 touch guard",
     );
 }
 

@@ -112,7 +112,13 @@ passed the goal gate while its README edit broke the
 fc1d691). Spec authors MUST budget the check line's warm wall — prefer
 targeted test binaries that finish in ~300s warm; a check line whose
 warm wall exceeds ~600s (half the gate) must state its
-measured warm wall in the spec's repo-context section.
+measured warm wall in the spec's repo-context section. And a
+`check:` line that exports `CARGO_TARGET_DIR` into a shared slot
+begins its cargo leg with `touch src/*.rs tests/*.rs;` (the T195
+mechanism — a foreign checkout's artifacts in the slot are
+mtime-fresh against this checkout's older sources; the ~30s
+rebuild buys artifact identity; spec authors dogfood it — T195's
+own check line does).
 Every spec carries an `estimate: ~N changed lines` line in
 its repo-context section, and a row estimated above
 ~500 lines of new/modified logic MUST be split into 2–3 rows at filing

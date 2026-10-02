@@ -18,6 +18,16 @@
 //! T48 doctrine: every pin resolves the docs from the checkout the binary
 //! RUNS against (`std::env::current_dir()`; cargo runs test binaries with
 //! cwd = the package root), never via a compile-time path.
+//!
+//! T195 — the gate source-touch guard: every gate template aimed at a
+//! shared role-keyed target dir from a NON-MAIN checkout rebinds the dir's
+//! artifacts to the local checkout first (`touch src/*.rs tests/*.rs;`
+//! immediately before the env-prefixed cargo invocation) — cargo's
+//! mtime-only freshness check otherwise reads a foreign checkout's
+//! artifacts as fresh against this checkout's older sources. The
+//! `shared_dir_gate_lines_carry_the_touch_guard` pin below is the
+//! structural walk; the touched-form carriers are pinned in
+//! shared_target_dir.rs.
 
 use std::path::Path;
 use std::process::Command;
@@ -234,16 +244,18 @@ fn both_runners_measurement_is_in_the_acceptance_path() {
 /// (f) The bounded caps wrap the nextest form: LOOP-SPEC step 3's template
 /// and META-SPEC T6's examples carry the nextest command under the same
 /// perl/timeout caps the fallback uses (the T78 bounded-cap rule applies
-/// to the new runner unchanged).
+/// to the new runner unchanged). T195: LOOP-SPEC's gate template is
+/// touch-guarded, so the pin follows the touched carrier.
 #[test]
 fn bounded_caps_wrap_the_nextest_form() {
     let loop_spec = read("LOOP-SPEC.md");
     count_eq(
         &loop_spec,
-        "perl -e 'alarm 280; exec @ARGV' cargo nextest run --release",
+        "touch src/*.rs tests/*.rs; CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared perl -e 'alarm 280; exec @ARGV' cargo nextest run --release",
         1,
-        "LOOP-SPEC step-3 template caps the nextest form (T178 re-keyed the \
-         alarm below the CHUG_BASH_TIMEOUT=300 bash cap)",
+        "LOOP-SPEC step-3 template caps the nextest form under the T195 touch \
+         guard (T178 re-keyed the alarm below the CHUG_BASH_TIMEOUT=300 bash \
+         cap; T195 prefixed the touch)",
     );
     let meta = read("META-SPEC.md");
     count_eq(
@@ -251,7 +263,8 @@ fn bounded_caps_wrap_the_nextest_form() {
         "perl -e 'alarm 280; exec @ARGV' cargo nextest run --release",
         1,
         "META-SPEC T6 macOS example caps the nextest form (T187 re-keyed the \
-         alarm below the bash cap, matching T178's LOOP-SPEC templates)",
+         alarm below the bash cap, matching T178's LOOP-SPEC templates; the \
+         T6 illustration names no shared dir, so it carries no touch — T195)",
     );
     count_eq(
         &meta,
@@ -274,4 +287,61 @@ fn guard_floor_is_exempt_from_the_runner_rule() {
         1,
         "LOOP-SPEC states the guard-floor exemption",
     );
+}
+
+/// (h) T195 — the gate source-touch guard, structural: every `perl -e
+/// 'alarm 280` gate line whose env prefix names a `target-shared` dir
+/// OTHER than `target-shared-main` is immediately preceded by the touch
+/// guard (`touch src/*.rs tests/*.rs;` directly before the env-prefixed
+/// cargo invocation). Mechanism: cargo's freshness check is mtime-only and
+/// its artifact filename excludes the checkout path, so a shared role dir
+/// can hold a foreign checkout's mtime-fresh artifacts against this
+/// checkout's older sources — the touch rebinds them to the local checkout
+/// at gate time (`;` not `&&`, so a touch hiccup never blocks the gate).
+/// Exempt: `target-shared-main` env prefixes (T57 — every builder in that
+/// dir is a main checkout and git refreshes mtimes on merge/checkout) and
+/// alarm-280 lines with NO env prefix on the line (META-SPEC T6's cap
+/// illustration, not a gate template). Exact walked-line counts per file
+/// keep carrier drift observable: a new shared-dir gate line without the
+/// touch dies on the prefix assert; a removed or re-keyed template dies on
+/// the count.
+#[test]
+fn shared_dir_gate_lines_carry_the_touch_guard() {
+    const TOUCH_PREFIX: &str = "touch src/*.rs tests/*.rs; CARGO_TARGET_DIR=";
+    for (file, want) in [("LOOP-SPEC.md", 2usize), ("META-SPEC.md", 0)] {
+        let text = read(file);
+        let mut walked = 0usize;
+        for line in text.lines() {
+            if !line.contains("perl -e 'alarm 280") {
+                continue;
+            }
+            // The env prefix must sit on the same line to key the gate to a
+            // shared dir; a line without one is a cap illustration.
+            let dir = match line.split("CARGO_TARGET_DIR=").nth(1) {
+                Some(rest) => rest.split_whitespace().next().unwrap_or(""),
+                None => continue,
+            };
+            if dir.contains("target-shared-main") {
+                continue; // T57: every builder in that dir is a main checkout
+            }
+            assert!(
+                dir.contains("target-shared"),
+                "{file}: an alarm-280 gate line's env prefix does not name a \
+                 target-shared dir — unexpected carrier form: {line}"
+            );
+            let prefix = line.split("perl -e 'alarm 280").next().unwrap_or("");
+            assert!(
+                prefix.contains(TOUCH_PREFIX),
+                "{file}: a shared-dir gate line lacks the T195 touch guard \
+                 immediately before its cargo invocation: {line}"
+            );
+            walked += 1;
+        }
+        assert_eq!(
+            walked, want,
+            "{file}: the T195 structural pin must walk exactly {want} \
+             shared-dir alarm-280 gate line(s) — a drift means a carrier \
+             was added, removed, or re-keyed without amending this pin"
+        );
+    }
 }
