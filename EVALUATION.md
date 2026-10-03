@@ -218,6 +218,37 @@ Per-item entries below; wrap adds skipped/deferred + cycle notes.
   Validation: T189 gates-only lane (all four inputs computed from the
   diff: tests-only, 68 ≤ 150 lines, no new surface, no CI/check change).
 
+- **T205 (pri 3, FEATURE — the F13 consumption path) — landed cb52c53.**
+  HF org hosting for laya checkpoints per the operator's 2026-10-02
+  gating decision: `src/hf_hosting.rs` (ungated so the pins run in the
+  plain gate) carries `org/model@REV` revision pinning
+  (`Repo::with_revision` keys the cache off the revision — a
+  policy-affecting artifact never moves under a running fleet), the
+  endpoint override `CHUG_HF_ENDPOINT > HF_ENDPOINT > public default`
+  (hf-hub 0.4.3 reads NEITHER env var itself — verified against vendored
+  source), `HF_TOKEN` passthrough, and the auth honesty gate (ONE stderr
+  fix line + ONE `judge_checkpoint_auth_error` events note recording
+  `token_set` as a BOOLEAN — the value never crosses any output).
+  loopd.sh K7 wiring loads `$HOME/.chug/loopd.env` (allowlisted keys
+  only, explicit env wins, contents never logged, absent = silent
+  no-op). DEPENDENCIES.md gains the HF row + the publish contract
+  (PRIVATE at creation / gitleaks-class corpus scan in the model card /
+  consumer revision pins); runbooks/laya-hf-hosting.md holds the
+  operator steps PENDING the Monday 2026-10-05 hosting decision
+  (do-not-execute honored). Arc: glm impl died at BOTH budgets (80/80
+  iterations; resume 39/80 50-min wall) with the work
+  complete-uncommitted → T63 resume once → T55 orchestrator-finish; 3
+  review fixes (auth clause rides the error chain — the child's own pin
+  demanded it; no_secret_spill runtime root per the T48 pin's catch; T95
+  README layout). kimi validator PASS (5/5 reqs traced, gates reproduced
+  exactly, M2 endpoint-precedence mutant CAUGHT; 3 LOW hardening
+  findings → next-eval rows: runtime token canary pin, loopd loader
+  pin, retry-knob comment). Post-merge: the T48/T95 guards and the
+  walker's target*-family skip (4661635 — main-only slowness >240s→2.0s)
+  all did their jobs. Gates: 1480+21+9 plain, 1515 daemon-profile,
+  clippy both profiles.
+
+
 
 ### Cycle 95 (2026-10-03, ~04:45 UTC–) — kimi MANDATORY fresh-eval cycle (predicate failed: eval dated 2026-10-02 vs launch 2026-10-03; T81 routing correct 5-for-5) — opened with cycle-94 bookkeeping recovery (T204 merged-but-unflipped; glm seg-3 died 200/200 mid-wrap)
 
