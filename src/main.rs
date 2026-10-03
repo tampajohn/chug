@@ -36,6 +36,13 @@ mod todos;
 mod valroute;
 mod webfetch;
 mod judge_pack;
+/// T204 phase 1 (F15): the baked-in judge's inference core (RLAgent
+/// checkpoint loader + candle ModernBERT + decision head). Compiled only
+/// under the `daemon` feature — off by default, so the hot `chug run` path
+/// never compiles candle (pinned by tests/daemon_feature_off.rs). The
+/// socket server + lifecycle that host this core are the next T204 slice.
+#[cfg(feature = "daemon")]
+mod judge_model;
 mod websearch;
 
 /// T151: the ONE shared serialization domain for wall-clock/spawn-timing
