@@ -173,6 +173,28 @@ in the section, acceptable. No docs row filed.
 
 ## Outcomes (filled at cycle wrap — LOOP-SPEC Phase 3)
 
+### Cycle 95 (2026-10-03, ~04:45 UTC–) — kimi MANDATORY fresh-eval cycle (predicate failed: eval dated 2026-10-02 vs launch 2026-10-03; T81 routing correct 5-for-5) — opened with cycle-94 bookkeeping recovery (T204 merged-but-unflipped; glm seg-3 died 200/200 mid-wrap)
+
+Per-item entries below; wrap adds skipped/deferred + cycle notes.
+
+- **T206 (pri 1, deflake) — landed 1a41a00.** The flock fork-inheritance
+  race the T204 round-2 addendum caught: reproduced 3/3 pre-fix (threads=4
+  + judge_path spawn co-tenant), mechanism diagnosed (inherited lock fds
+  across `pre_exec` forks vs the test's microsecond drop→reacquire window),
+  fixed test-side ONLY (bounded 10s/25ms retry on the reacquire + the
+  stale-socket errno classification, refusal leg untouched single-shot,
+  classifier pinned both sides killing the always-refused mutant,
+  lifecycle `.keep()` litter + rival-pid guard). glm impl died at the
+  50-min wall 58/80 with diagnosis done and hardenings pending → T63
+  resume goal-accepted 7/80; orchestrator review caught a clippy
+  `unused_assignments` the child deferred (fixed on-branch). T189
+  gates-only lane (4/4 inputs hold, d1791008618-20): orchestrator ran the
+  spec's RED-proofs directly — M1 never-release RED at 10.15s, M2
+  always-refused RED at 0.13s. Acceptance: 8/8 fresh-build threaded (the
+  failing regime), 12/12 stale, 3 full threaded legs (one leg died to a
+  host signal kill, retry green), nextest release 1496/1496 worktree +
+  post-merge, clippy `-D warnings`.
+
 ### Cycle 94 (2026-10-02, ~19:40 UTC–) — kimi routine freshness-skip cycle (predicate held post-reconcile: eval cycle-91 same UTC day + operator T203–T205 rows merged in) — opened with the ahead-10/behind-6 reconcile (85b63a0)
 
 - **T203** (DEPENDENCIES.md audit doc) landed `c3c5975` (merge of loop-t203: 8ef6ce9) — the operator's 2026-10-02 dependency audit codified: 117-line DEPENDENCIES.md with the inventory table (9 runtime crates + 2 dev-deps + LLM proxy + 5 services + 6 spawned-process rows — dep / kind / required-for / env knobs / failure mode / first-added-by row), the "one hard dependency: the LLM proxy" fail-closed section, the exhaustive env surface (every `std::env::var`/`var_os` literal in `src/` + `build.rs` — verified mechanically in BOTH directions at review: every source literal appears in the doc, every doc-listed var appears in source), the three-polarity failure-semantics spine (fail-open / fail-closed / blocking), and the adding-a-dependency rules (check the doc first; fail-open unless policy surface; default-features off; record the row) + README Development-section link (integrated, no append-sprawl). Impl arc: glm child committed 8ef6ce9 then died at the 50-minute wall 57/80 (the T173 census ticks again — minutes binding on a docs row whose spec `check:` is the full `cargo test`: each check run costs minutes of the child's wall) → orchestrator-finish per T55/T150 (committed-complete, no resume burned). Docs-only classification (+121/-1, every file .md): guard floor green worktree + main (todo_consistency 19/19 + readme_layout 1/1 — README is a pinned carrier, its pin ran with the floor). kimi skipped per the T189 gates-only lane, all four mechanical inputs diff-computed (routing d1790974130-2). Sequencing note: T203 worked first despite pri 3 < T204's 2 — T204 req 6 edits this file (dependency-order decision d1790970794-1).
