@@ -3062,3 +3062,308 @@ fn wrap_state_note_rule_exactly_once_as_phase3_first_bullet() {
          ({missing})"
     );
 }
+
+// ---- T209 — the dispatch-time spec-size gate (the T173 measure clause resolves) ----
+//
+// The T110 filing-time ~500-line estimate ceiling exists, but nothing
+// enforced it AT DISPATCH, and the cycles-91–94 census says the cost is
+// now the binding one: t197 impl died 50m29s at 54/80 (minutes-bound,
+// goal unaccepted), t203 impl died 50m35s at 57/80 (minutes-bound), and
+// the T204 arc lost 6 glm impl/fixup segments (iteration ×4, time ×2,
+// stuck ×1) plus both kimi validators at 60/60 — 10 child segments, 9
+// aborts, ZERO goal-accepted children, all on one row that filed at
+// "~800" and landed ~3,000+ all-in across both halves (child B alone:
+// ~2,100 added lines, 4× the ceiling, because the split was BY COMPONENT
+// — inference core / daemon surface — not by acceptance surface). That
+// trips LOOP-SPEC's T173 measure clause ("if >2 of the next 8 impl
+// children still die at the 50-minute budget with the goal unaccepted,
+// the next eval considers spec-size discipline instead of further
+// raises"), and the remedy is a dispatch-time gate, NOT further budget
+// raises. Legs (ah)–(ak) pin the doctrine edits in the T48/T64 pattern:
+// every needle exactly-once, inside its step's window, in the written
+// order — the gate BEFORE the launch template it gates, the
+// by-acceptance-surface rule after the gate, the RESOLVED marker after
+// the tripwire it resolves, and the META-META-SPEC dispatch-contract
+// sentence in the spec-quality-bar window after the ~400 band it
+// qualifies.
+
+/// The dispatch gate's action needle — the orchestrator's re-read of the
+/// spec's `estimate:` line, in one contiguous run, verbatim per the
+/// spec's line-wise check: grep (so the LOOP-SPEC wrap must keep it on a
+/// single line). Must occur EXACTLY once in LOOP-SPEC.md.
+const DISPATCH_GATE_NEEDLE: &str = "re-reads the spec's `estimate:` line";
+
+/// The by-acceptance-surface rule's needle — the split rule's core claim,
+/// contiguous as written. Must occur EXACTLY once in LOOP-SPEC.md.
+const SPLIT_RULE_NEEDLE: &str = "by acceptance surface, not by component";
+
+/// The naming rule's needle — each split half's own independently
+/// gateable `check:` surface, contiguous as written. Must occur EXACTLY
+/// once in LOOP-SPEC.md.
+const NAMING_RULE_NEEDLE: &str = "independently-gateable `check:` surface";
+
+/// The launch template's opening line — the gate must sit BEFORE it (the
+/// gate is a dispatch precondition, not a post-hoc note; unique in the
+/// file today).
+const LAUNCH_BLOCK_OPEN: &str = "delegate  action:";
+
+/// The T173 clause's RESOLVED marker — the measure-clause resolution
+/// language (the T110 precedent: "Measure clause RESOLVED at the
+/// cycle-60 eval (T110)"), with this row's ref. Must occur EXACTLY once
+/// in LOOP-SPEC.md.
+const T173_RESOLVED_MARKER: &str = "Measure clause RESOLVED at the cycle-96 eval (T209)";
+
+/// The validator note's evidence needle — both T204 validators died at
+/// budget WITH verdicts written, so the T155 clause's letter (verdict
+/// UNANNOUNCED) is not tripped. Must occur EXACTLY once in LOOP-SPEC.md.
+const VALIDATOR_NOTE_NEEDLE: &str = "both t204 validators died 60/60 WITH verdicts written";
+
+/// The META-META-SPEC sentence's commitment needle — the estimate is a
+/// dispatch-time contract, contiguous as written. Must occur EXACTLY
+/// once in META-META-SPEC.md.
+const DISPATCH_CONTRACT_NEEDLE: &str = "DISPATCH-TIME contract";
+
+/// (ah) T209 — step 2's dispatch-time spec-size gate: the gate needle
+/// occurs EXACTLY once in LOOP-SPEC.md, inside step 2's window (the T64
+/// loose-heading scope), BEFORE the launch template it gates (the gate
+/// is a precondition — an over-ceiling row is never dispatched, so the
+/// check must precede `delegate`'s launch block, not follow it). Delete
+/// the gate and this goes red at count 0; moving it below the launch
+/// block (or into the polling paragraph) dies on the ordering assert; a
+/// duplicate statement elsewhere also goes red.
+#[test]
+fn dispatch_size_gate_sits_before_the_launch_template_in_step2() {
+    // Needle self-check (T48 idiom): a mangled needle must not let this
+    // pin pass silently.
+    assert!(
+        DISPATCH_GATE_NEEDLE.starts_with("re-reads")
+            && DISPATCH_GATE_NEEDLE.contains("`estimate:`")
+            && DISPATCH_GATE_NEEDLE.ends_with("line"),
+        "the gate needle must carry the estimate-line re-read verbatim"
+    );
+    let spec = loop_spec();
+    assert_eq!(
+        spec.matches(DISPATCH_GATE_NEEDLE).count(),
+        1,
+        "LOOP-SPEC must state the dispatch-time estimate re-read exactly \
+         once — zero means the dispatch gate was deleted (or rewrapped \
+         across a line break, which also breaks the spec check's \
+         line-wise grep), more than one means it is stated twice"
+    );
+    let start = spec
+        .find(STEP2_HEADING_LOOSE)
+        .expect("step-2 heading (`2. **`) present");
+    let end = start
+        + spec[start..]
+            .find(STEP3_HEADING)
+            .expect("step-3 heading present after step 2's");
+    let window = &spec[start..end];
+    let gate = window
+        .find(DISPATCH_GATE_NEEDLE)
+        .expect("step-2 window must carry the dispatch gate (moved out of step 2?)");
+    let launch = window
+        .find(LAUNCH_BLOCK_OPEN)
+        .expect("step-2 window must carry the launch template (`delegate  action:`)");
+    assert!(
+        gate < launch,
+        "the dispatch gate must sit BEFORE the launch template it gates — \
+         gate ({gate}), launch block ({launch})"
+    );
+}
+
+/// (ai) T209 — the split rule is BY ACCEPTANCE SURFACE, not by component:
+/// both the split rule's needle and the naming rule's needle occur
+/// EXACTLY once in LOOP-SPEC.md, inside step 2's window, AFTER the
+/// dispatch gate they qualify. The T204 evidence is the named cost: a
+/// by-component split left child B at ~2,100 added lines, 4× the
+/// ceiling. Delete either rule and its leg goes red at count 0; move it
+/// out of step 2 and the window find dies; reorder it before the gate
+/// and the ordering assert dies.
+#[test]
+fn split_rule_is_by_acceptance_surface_with_naming_rule_in_step2() {
+    // Needle self-checks (T48 idiom).
+    assert!(
+        SPLIT_RULE_NEEDLE.starts_with("by acceptance")
+            && SPLIT_RULE_NEEDLE.ends_with("component"),
+        "the split-rule needle must carry the by-acceptance-surface claim \
+         verbatim"
+    );
+    assert!(
+        NAMING_RULE_NEEDLE.starts_with("independently")
+            && NAMING_RULE_NEEDLE.ends_with("surface"),
+        "the naming needle must carry the independently-gateable check: \
+         surface requirement verbatim"
+    );
+    let spec = loop_spec();
+    assert_eq!(
+        spec.matches(SPLIT_RULE_NEEDLE).count(),
+        1,
+        "LOOP-SPEC must state the by-acceptance-surface rule exactly once \
+         — zero means the split rule was deleted (or rewrapped across a \
+         line break), more than one means it is stated twice"
+    );
+    assert_eq!(
+        spec.matches(NAMING_RULE_NEEDLE).count(),
+        1,
+        "LOOP-SPEC must state the independently-gateable check: surface \
+         naming rule exactly once — zero means the naming rule was \
+         deleted (or rewrapped across a line break), more than one means \
+         it is stated twice"
+    );
+    let start = spec
+        .find(STEP2_HEADING_LOOSE)
+        .expect("step-2 heading (`2. **`) present");
+    let end = start
+        + spec[start..]
+            .find(STEP3_HEADING)
+            .expect("step-3 heading present after step 2's");
+    let window = &spec[start..end];
+    let gate = window
+        .find(DISPATCH_GATE_NEEDLE)
+        .expect("step-2 window must carry the dispatch gate");
+    let split = window
+        .find(SPLIT_RULE_NEEDLE)
+        .expect("step-2 window must carry the by-acceptance-surface rule");
+    let naming = window
+        .find(NAMING_RULE_NEEDLE)
+        .expect("step-2 window must carry the naming rule");
+    assert!(
+        gate < split && split < naming,
+        "the split rules must FOLLOW the dispatch gate they qualify, in \
+         written order — gate ({gate}), acceptance-surface rule ({split}), \
+         naming rule ({naming})"
+    );
+}
+
+/// (aj) T209 — the T173 measure clause carries its RESOLVED marker: the
+/// marker occurs EXACTLY once in LOOP-SPEC.md, inside step 2's window,
+/// AFTER the byte-pinned >2-of-8 tripwire it resolves (the T110 leg-(h)
+/// ordering pattern), and the validator note (req 5) occurs EXACTLY once
+/// inside step 4's window (the same paragraph that carries the T155
+/// validator measure clause). Delete the marker or the note and the
+/// counts go red; move the note out of step 4 and the window find dies;
+/// reorder the marker before its tripwire and the ordering assert dies.
+#[test]
+fn t173_measure_clause_resolved_marker_and_validator_note() {
+    // Needle self-checks (T48 idiom).
+    assert!(
+        T173_RESOLVED_MARKER.starts_with("Measure clause RESOLVED")
+            && T173_RESOLVED_MARKER.ends_with("(T209)"),
+        "the marker must be the T110-style resolution language with this \
+         row's ref verbatim"
+    );
+    assert!(
+        VALIDATOR_NOTE_NEEDLE.starts_with("both t204 validators")
+            && VALIDATOR_NOTE_NEEDLE.ends_with("verdicts written"),
+        "the validator-note needle must carry the died-at-budget-with-\
+         verdicts evidence verbatim"
+    );
+    let spec = loop_spec();
+
+    // The RESOLVED marker, exactly once, inside step 2's window, AFTER
+    // the tripwire it resolves.
+    assert_eq!(
+        spec.matches(T173_RESOLVED_MARKER).count(),
+        1,
+        "LOOP-SPEC must mark the T173 measure clause RESOLVED exactly \
+         once — zero means the resolution marker was deleted (or \
+         rewrapped across a line break), more than one means it is \
+         stated twice"
+    );
+    let start = spec
+        .find(STEP2_HEADING_LOOSE)
+        .expect("step-2 heading (`2. **`) present");
+    let end = start
+        + spec[start..]
+            .find(STEP3_HEADING)
+            .expect("step-3 heading present after step 2's");
+    let window = &spec[start..end];
+    let tripwire = window
+        .find(IMPL_MEASURE_TRIPWIRE)
+        .expect("step-2 window must carry the >2-of-8 tripwire (T173 leg w)");
+    let resolved = window
+        .find(T173_RESOLVED_MARKER)
+        .expect("step-2 window must carry the RESOLVED marker (moved out of step 2?)");
+    assert!(
+        tripwire < resolved,
+        "the RESOLVED marker must FOLLOW the measure clause it resolves — \
+         tripwire ({tripwire}), marker ({resolved})"
+    );
+
+    // The validator note, exactly once, inside step 4's window (the T155
+    // budget-rationale anchors).
+    assert_eq!(
+        spec.matches(VALIDATOR_NOTE_NEEDLE).count(),
+        1,
+        "LOOP-SPEC must record the T204 validator-death note exactly once \
+         — zero means the note was deleted (or rewrapped across a line \
+         break), more than one means it is stated twice"
+    );
+    let step4_start = spec
+        .find(STEP4_HEADING_LOOSE)
+        .expect("step-4 heading (`4. **`) present");
+    let step4_end = step4_start
+        + spec[step4_start..]
+            .find(STEP5_HEADING_LOOSE)
+            .expect("step-5 heading present after step 4's");
+    let step4 = &spec[step4_start..step4_end];
+    assert!(
+        step4.contains(VALIDATOR_NOTE_NEEDLE),
+        "step 4's window must carry the validator note — it belongs in \
+         the paragraph that carries the validator measure clause, not \
+         another section"
+    );
+}
+
+/// (ak) T209 — META-META-SPEC's spec-quality bar carries the
+/// dispatch-contract sentence: the needle occurs EXACTLY once in
+/// META-META-SPEC.md, inside the spec-quality-bar window (the T114/T125
+/// anchors), AFTER the ~400 band it qualifies and BEFORE the Priority
+/// doctrine sentence that closes the bar's estimate region. Delete the
+/// sentence and this goes red at count 0; move it out of the quality
+/// bar (or past the Priority doctrine) and the window/ordering asserts
+/// die.
+#[test]
+fn meta_meta_estimate_is_a_dispatch_time_contract() {
+    // Needle self-check (T48 idiom).
+    assert!(
+        DISPATCH_CONTRACT_NEEDLE.starts_with("DISPATCH-TIME")
+            && DISPATCH_CONTRACT_NEEDLE.ends_with("contract"),
+        "the contract needle must carry the DISPATCH-TIME contract claim \
+         verbatim"
+    );
+    let spec = meta_meta_spec();
+    assert_eq!(
+        spec.matches(DISPATCH_CONTRACT_NEEDLE).count(),
+        1,
+        "META-META-SPEC must state the estimate-is-a-dispatch-contract \
+         sentence exactly once — zero means the sentence was deleted (or \
+         rewrapped across a line break), more than one means it is \
+         stated twice"
+    );
+    let start = spec
+        .find(EXTEND_TODO_HEADING)
+        .expect("the Extend-TODO heading present");
+    let end = start
+        + spec[start..]
+            .find(HANDOFF_HEADING)
+            .expect("the Handoff heading present after the Extend-TODO heading");
+    let window = &spec[start..end];
+    let band = window
+        .find(SPLIT_BAND_NEEDLE)
+        .expect("the spec-quality-bar window must carry the ~400 band (T125)");
+    let contract = window
+        .find(DISPATCH_CONTRACT_NEEDLE)
+        .expect("the spec-quality-bar window must carry the dispatch-\
+                 contract sentence (moved out of the bar?)");
+    let priority = window
+        .find(PRIORITY_DOCTRINE)
+        .expect("the spec-quality-bar window must carry the Priority \
+                 doctrine sentence");
+    assert!(
+        band < contract && contract < priority,
+        "the dispatch-contract sentence must sit after the ~400 band it \
+         qualifies and before the Priority doctrine — band ({band}), \
+         contract ({contract}), priority ({priority})"
+    );
+}
