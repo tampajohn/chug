@@ -24,8 +24,12 @@ const NEEDLE: &str = "HF_TOKEN";
 fn skip_dir(dir: &Path) -> bool {
     matches!(
         dir.file_name().and_then(|n| n.to_str()),
-        Some(".git") | Some("target") | Some(".chug") | Some("node_modules")
-    )
+        Some(".git") | Some(".chug") | Some("node_modules")
+    ) || dir
+        .file_name()
+        .and_then(|n| n.to_str())
+        .map(|n| n.starts_with("target"))
+        .unwrap_or(false)
 }
 
 /// Collect every text file under `root` (UTF-8 readable; binaries and
