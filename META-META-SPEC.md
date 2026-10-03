@@ -137,7 +137,12 @@ SHOULD be split at filing time even though the hard ceiling stays
 byte-identical move-row exemption is unchanged and applies to both
 numbers. Each evaluation re-checks landed actuals against filing
 estimates (the Outcomes records) and re-calibrates in the eval text —
-it does not edit the threshold number in passing.
+it does not edit the threshold number in passing. Every estimate is a
+DISPATCH-TIME contract, not just a filing-time one: the orchestrator
+re-checks the `estimate:` line at dispatch (LOOP-SPEC §2 step 2's
+dispatch-time spec-size gate) — filing-time honesty is not enforcement
+(the T204 row said "~800" and the arc landed ~3,000+ all-in across
+both halves of its by-component split).
 Priority doctrine: bugs > robustness > features > DX
 friction > performance — features are first-class (LOOP-SPEC §2): at
 equal pri, a credible feature row is worked before a DX-friction row.

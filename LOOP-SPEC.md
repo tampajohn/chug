@@ -104,7 +104,22 @@ simultaneously past gates — T194 amends T161's 2-child cap):
    that cap is why `delegate`, not bash, is the launch mechanism: it
    spawns the child detached and returns at spawn (never
    foreground-and-wait, now by construction), and its `status` action
-   replaces the old ps+tail+jq poll. Launch:
+   replaces the old ps+tail+jq poll.
+   **Dispatch-time spec-size gate (T209) — re-checked at EVERY launch,
+   before the template below runs.** At dispatch the orchestrator
+   re-reads the spec's `estimate:` line; an estimate above ~500 lines —
+   or a missing estimate on a non-trivial row — is NOT dispatched: the
+   row is re-split first (2–3 rows) and the specs rewritten, by the
+   orchestrator or via a quick filing pass. The split rule is
+   by acceptance surface, not by component: each half must carry its
+   own independently-gateable `check:` surface and its own diff
+   estimate ≤ ~500 lines — a split whose half still exceeds the
+   ceiling (T204 child B: ~2,100 added lines after a by-component
+   split) is re-split again. Filing-time honesty is not enforcement —
+   the T204 row said "~800" and the arc landed ~3,000+ all-in across
+   both halves (10 child segments, 9 aborts, zero goal-accepted
+   children).
+   Launch:
    ```
    delegate  action: "launch"
      cwd:         "/tmp/chug-loop-t<N>"        (absolute — the one cwd NOT confined to yours)
@@ -158,6 +173,12 @@ simultaneously past gates — T194 amends T161's 2-child cap):
    children still die at the 50-minute budget with the goal unaccepted,
    the next eval considers spec-size discipline instead of further
    raises.
+   Measure clause RESOLVED at the cycle-96 eval (T209): the census
+   tripped — t197 and t203 died minutes-bound at the 50-minute wall
+   with the goal unaccepted, and the T204 arc added four
+   iteration-bound child deaths — so the remedy enacted is the
+   dispatch-time spec-size gate (step 2's launch gate), not further
+   budget raises.
    T183: the delegate block passes the T47 shared dir to the child at
    spawn (`env`, the template's last line) — the build-cache discipline is
    a process-spawn fact now, not only goal text. The goal's `export
@@ -372,7 +393,11 @@ simultaneously past gates — T194 amends T161's 2-child cap):
    death — the raise's reason. Measure: if
    >1 of the next 8 validator runs still dies at 60/50 with the verdict
    unannounced, the next eval considers trimming default mutation-leg
-   counts instead of further raises), and §6's goal text
+   counts instead of further raises. Validator note (T209, cycle-96):
+   both t204 validators died 60/60 WITH verdicts written and the
+   verdict-file doctrine absorbed both deaths, so this clause's letter
+   (verdict UNANNOUNCED) is NOT tripped; no validator budget change;
+   the next trip trims default mutation-leg counts), and §6's goal text
    verbatim except its export line, which becomes
    `export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-validate-a`
    before every cargo command — ALWAYS, never conditionally (T52 role-keyed
