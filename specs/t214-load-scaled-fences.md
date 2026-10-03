@@ -2,12 +2,15 @@
 
 ## Repo context
 
-The two through-loopd spawn-heavy integration families —
-`tests/loopd_orphan_reaper.rs` (21 tests) and `tests/loopd_spoof_guard.rs`
-(9 tests) — fence their child-verdict waits with a wall-clock deadline:
+The through-loopd spawn-heavy integration families —
+`tests/loopd_orphan_reaper.rs` (21 tests), `tests/loopd_spoof_guard.rs`
+(9 tests), and `tests/loopd_daemon_ensure.rs` (11 tests, landed cycle 98
+by T215 with the SAME 90s-deadline full-suite flake signature — 3 legs
+tripped under nextest full-suite load, 11/11 green isolated in 5.4s) —
+fence their child-verdict waits with a wall-clock deadline:
 `Instant::now() + Duration::from_secs(30)` (reaper:436; spoof:163 and the
 six T158 legs whose comments name the fence "a liveness fence, not a load
-fence"). Solo the waits finish in ~3.4s; under full-suite parallel gate
+fence"; daemon_ensure:269's 90s fence). Solo the waits finish in ~3.4s; under full-suite parallel gate
 load on a busy host they stretch past 30s (T152 measured 30.8s at 17-way
 parallelism — the deadline's own margin gone). The flake signature fired
 twice in cycle-96's gates: both post-merge gate runs needed the T82
@@ -46,10 +49,10 @@ in 2 families + pins; test-dense per the cycle-98 eval calibration)
    helper) — zero timeout bumps; the helper only re-bases the fence on
    measured load. The comments at each adoption site are updated to name
    T214 and the load basis (replacing the "not a load fence" apology).
-3. Adoption: BOTH families' verdict-deadline constructions route through
-   `load_scaled_deadline`. A grep pin asserts no bare
-   `Duration::from_secs(30)` deadline construction remains in either
-   family file.
+3. Adoption: ALL THREE families' verdict-deadline constructions route
+   through `load_scaled_deadline`. A grep pin asserts no bare
+   `Duration::from_secs(30)` / `Duration::from_secs(90)` deadline
+   construction remains in any family file.
 4. Fail-safe: when load or cores are unreadable the fence is exactly the
    base (byte-identical to today) — the helper never panics and never
    returns less than the base or more than 4× the base.
@@ -63,8 +66,8 @@ in 2 families + pins; test-dense per the cycle-98 eval calibration)
 - Seam legs: `read_loadavg_1m` returning `None` (or a garbage spawn
   result) → deadline == base exactly; available_parallelism failure path
   (via the pure seam) → factor 1.0.
-- Adoption grep pin: `Duration::from_secs(30)` occurs ZERO times in the
-  two family files (deadline constructions only — a comment naming the
+- Adoption grep pin: bare `Duration::from_secs(30)` / `(90)` deadline
+  constructions occur ZERO times in the three family files (deadline constructions only — a comment naming the
   base is fine; assert on the code pattern, not comments, by grepping
   non-comment lines or pinning the helper-call count ≥ the old deadline
   count).
@@ -97,4 +100,4 @@ in 2 families + pins; test-dense per the cycle-98 eval calibration)
   the T151 lock; no third family adopts the helper in this row).
 - Loopd.sh or any production code.
 
-check: set -o pipefail; export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared; touch src/*.rs tests/*.rs; cargo test --bin chug testsupport && cargo test --test loopd_orphan_reaper --test loopd_spoof_guard --test t172_load_lock_semantics
+check: set -o pipefail; export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared; touch src/*.rs tests/*.rs; cargo test --bin chug testsupport && cargo test --test loopd_orphan_reaper --test loopd_spoof_guard --test loopd_daemon_ensure --test t172_load_lock_semantics
