@@ -1,6 +1,6 @@
 # T209 — dispatch-time spec-size gate (the T173 measure clause resolves)
 
-check: export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared; touch src/*.rs tests/*.rs; cargo test --test todo_consistency --test loop_spec_recovery
+check: export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-validate-a; touch src/*.rs tests/*.rs; cargo test --test todo_consistency --test loop_spec_recovery
 
 ## Repo context
 
