@@ -97,13 +97,16 @@ TAUS = [0.50, 0.60, 0.70, 0.80, 0.90, 0.95, 0.99]
 # change — are diff-computed at dispatch time and are NOT recoverable from
 # decision-record text; no lexical proxy here implements them.
 #
-# STRICT tokens = the LOOP-SPEC §2 step-4 REQUIRED list as it stands
-# (src/driver.rs, src/api.rs, src/tools.rs, src/events.rs) + the doctrine
-# clause. EXTENDED tokens = strict + delegate.rs / mcp / permissions.rs /
-# hooks.rs / trim.rs — the WIDER core list LOOP-SPEC §2 step 4 quoted at
-# T189 filing time (since narrowed); the extension is NOT verbatim step 4
-# and is disclosed as such, with both rows reported side by side. No
-# tuning on the held-out set, no synonyms added.
+# STRICT tokens = the LOOP-SPEC §2 step-4 REQUIRED list as it stands and
+# has always stood (src/driver.rs, src/api.rs, src/tools.rs, src/events.rs)
+# + the doctrine clause — pickaxe-verified: step-4 was never wider, and
+# src/valroute.rs CORE_FILES pins exactly these 4. EXTENDED tokens = strict
+# + delegate.rs / mcp / permissions.rs / hooks.rs / trim.rs — the source of
+# the wider list is the T189 SPEC's over-broad quote of step-4
+# (specs/t189-low-stakes-lane.md lists 9 files; step-4 + valroute.rs pin 4)
+# — the extension is NOT and never was verbatim step 4 and is disclosed as
+# such, with both rows reported side by side. No tuning on the held-out
+# set, no synonyms added.
 STRICT_CORE_FILE_TOKENS = ["driver.rs", "api.rs", "tools.rs", "events.rs"]
 EXTENDED_CORE_FILE_TOKENS = STRICT_CORE_FILE_TOKENS + [
     "delegate.rs", "mcp", "permissions.rs", "hooks.rs", "trim.rs",
@@ -639,7 +642,7 @@ Leakage controls (requirement 2):
 |---|---|---|---|---|
 | majority baseline (train-majority class = {baselines['train_majority']}) | {pct(b_maj['accuracy'])} | {f3(b_maj['macro_f1'])} | {f3(b_maj['f1_REQUIRED'])} | {f3(b_maj['f1_LANE'])} |
 | T189 strict keyword proxy — step-4 list only (input (a) as text mentions) | {pct(b_kws['accuracy'])} | {f3(b_kws['macro_f1'])} | {f3(b_kws['f1_REQUIRED'])} | {f3(b_kws['f1_LANE'])} |
-| extended keyword proxy — strict + pre-narrowing core-list tokens | {pct(b_kw['accuracy'])} | {f3(b_kw['macro_f1'])} | {f3(b_kw['f1_REQUIRED'])} | {f3(b_kw['f1_LANE'])} |
+| extended keyword proxy — strict + the T189-spec over-quote tokens (9-file list in specs/t189-low-stakes-lane.md; step-4 pins 4) | {pct(b_kw['accuracy'])} | {f3(b_kw['macro_f1'])} | {f3(b_kw['f1_REQUIRED'])} | {f3(b_kw['f1_LANE'])} |
 | **probe — frozen laya encoder + linear head (primary)** | **{pct(probe['accuracy'])}** | {f3(probe['macro_f1'])} | {f3(probe['f1_REQUIRED'])} | {f3(probe['f1_LANE'])} |
 | fine-tune — full ModernBERT classifier (secondary) | {pct(ft['accuracy'])} | {f3(ft['macro_f1'])} | {f3(ft['f1_REQUIRED'])} | {f3(ft['f1_LANE'])} |
 
@@ -735,10 +738,12 @@ run-to-run wobble of up to 5 held-out records (≈{pct(5 / he['n'])}, §6 — ob
 65.5%–82.8% across this report's verification re-runs), so no trained head shows a
 stable accuracy edge over majority; the probe's one real edge —
 macro-F1 {f3(probe['macro_f1'])} vs {f3(b_maj['macro_f1'])} — does not survive the
-confidence gate: across BOTH heads' τ-curves, no operating point reaches 95% accuracy
-at more than a {pct(best95_both_stats['coverage'])} coverage sliver
+confidence gate: across BOTH heads' τ-curves, this run's best ≥95%-accuracy operating
+point covers only a {pct(best95_both_stats['coverage'])} sliver
 ({best95_both_stats['n']} records{'; best: ' + best95_both_stats['head'] + ' τ=' + f"{best95_both_stats['tau']:.2f}" if best95_both_stats['head'] else ''}) —
-below the ≥50%-coverage wiring bar and inside small-n noise; and the mechanical
+the sliver number is itself wobble-dependent (a verification re-run's FT hit 100% at
+44.8% coverage), but in EVERY observed wobble state the best ≥95% point stays below
+the ≥50%-coverage wiring bar and inside small-n noise; and the mechanical
 keyword proxies are WORSE than
 majority (strict {pct(b_kws['accuracy'])}, extended {pct(b_kw['accuracy'])}), so no
 mechanical fallback already does the job

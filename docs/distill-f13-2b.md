@@ -6,7 +6,7 @@ changes). Corpus commit at run time: `a92d837cf2a11821cf89fdd4594f08bfbac00dd6` 
 gitignored and append-only — the input pin is §8's snapshot copy, not this ref). Base
 snapshot:
 `/Users/jadams/.cache/huggingface/hub/models--convaiinnovations--laya/snapshots/55cf4c4ebb4ebe31b2550e8bdf3bd21b99753851` (convaiinnovations/laya @ 55cf4c4e). Seed 13, device
-`mps`, wall 138s, artifacts `/Users/jadams/models/laya/distill-f13-2b`.
+`mps`, wall 171s, artifacts `/Users/jadams/models/laya/distill-f13-2b`.
 
 ## 1. Question and scope
 
@@ -96,20 +96,20 @@ Leakage controls (requirement 2):
 |---|---|---|---|---|
 | majority baseline (train-majority class = REQUIRED) | 79.3% | 0.442 | 0.885 | 0.000 |
 | T189 strict keyword proxy — step-4 list only (input (a) as text mentions) | 65.5% | 0.597 | 0.750 | 0.444 |
-| extended keyword proxy — strict + pre-narrowing core-list tokens | 69.0% | 0.626 | 0.780 | 0.471 |
+| extended keyword proxy — strict + the T189-spec over-quote tokens (9-file list in specs/t189-low-stakes-lane.md; step-4 pins 4) | 69.0% | 0.626 | 0.780 | 0.471 |
 | **probe — frozen laya encoder + linear head (primary)** | **79.3%** | 0.718 | 0.864 | 0.571 |
-| fine-tune — full ModernBERT classifier (secondary) | 69.0% | 0.495 | 0.809 | 0.182 |
+| fine-tune — full ModernBERT classifier (secondary) | 75.9% | 0.540 | 0.857 | 0.222 |
 
 Confusion (held-out): probe pred-REQUIRED/true-REQUIRED 19,
 pred-REQUIRED/true-LANE 2, pred-LANE/true-REQUIRED
 4, pred-LANE/true-LANE 4
 (8/29 held-out records predicted LANE);
-fine-tune: 19/5/
-4/1
-(5/29 predicted LANE).
+fine-tune: 21/5/
+2/1
+(3/29 predicted LANE).
 Train accuracy for the overfit check: probe 97.3%,
 fine-tune 99.1% (the fine-tune memorizes the train split —
-loss ≈ 0.035 by epoch 3 — while the probe stays a
+loss ≈ 0.057 by epoch 3 — while the probe stays a
 linear function of frozen features).
 
 Reading: at FULL coverage (argmax, no threshold) the probe's accuracy sits
@@ -117,8 +117,8 @@ Reading: at FULL coverage (argmax, no threshold) the probe's accuracy sits
 79.3%) while its macro-F1 moves +0.275
 (0.718 vs 0.442) — the probe's only measured edge
 is minority-class recall (F1 LANE 0.571 vs the baseline's
-0.000), not top-line accuracy. The fine-tune lands -10.3pp
-on accuracy and +0.053 on macro-F1 against the baseline — inside its
+0.000), not top-line accuracy. The fine-tune lands -3.4pp
+on accuracy and +0.097 on macro-F1 against the baseline — inside its
 documented run-to-run wobble (§6: up to 17.2% at n=29) — on
 112 train examples the full ~396M-parameter fine-tune memorizes the split
 (train acc 99.1%); its held-out movement is not a stable edge
@@ -145,13 +145,13 @@ take at that τ.
 
 | τ | probe n | probe coverage | probe accuracy | probe macro-F1 | FT n | FT coverage | FT accuracy | FT macro-F1 |
 |---|---|---|---|---|---|---|---|---|
-| 0.50 | 29 | 100.0% | 79.3% | 0.718 | 29 | 100.0% | 69.0% | 0.495 |
-| 0.60 | 23 | 79.3% | 82.6% | 0.744 | 29 | 100.0% | 69.0% | 0.495 |
-| 0.70 | 18 | 62.1% | 83.3% | 0.778 | 28 | 96.6% | 67.9% | 0.491 |
-| 0.80 | 10 | 34.5% | 90.0% | 0.867 | 24 | 82.8% | 70.8% | 0.521 |
+| 0.50 | 29 | 100.0% | 79.3% | 0.718 | 29 | 100.0% | 75.9% | 0.540 |
+| 0.60 | 23 | 79.3% | 82.6% | 0.744 | 27 | 93.1% | 81.5% | 0.590 |
+| 0.70 | 18 | 62.1% | 83.3% | 0.778 | 24 | 82.8% | 83.3% | 0.619 |
+| 0.80 | 10 | 34.5% | 90.0% | 0.867 | 21 | 72.4% | 85.7% | 0.659 |
 | 0.90 | 5 | 17.2% | 100.0% | 1.000 | 16 | 55.2% | 93.8% | 0.816 |
-| 0.95 | 0 | 0.0% | — | — | 14 | 48.3% | 92.9% | 0.813 |
-| 0.99 | 0 | 0.0% | — | — | 4 | 13.8% | 100.0% | 0.500 |
+| 0.95 | 0 | 0.0% | — | — | 12 | 41.4% | 100.0% | 1.000 |
+| 0.99 | 0 | 0.0% | — | — | 1 | 3.4% | 100.0% | 0.500 |
 
 The ≥95%-accuracy operating point with the most coverage (probe): τ=0.90 — 5/29 held-out records (17.2% coverage). Best covered accuracy anywhere on the probe curve:
 τ=0.90 → 5/29 at 100.0%.
@@ -193,15 +193,17 @@ The ≥95%-accuracy operating point with the most coverage (probe): τ=0.90 — 
 **NO-GO** — measured reason: the deterministic primary head does not escape the
 mechanical majority baseline on accuracy (79.3% probe =
 +0.0pp vs 79.3% majority on n=29), and the
-fine-tune's argmax number (69.0% = -10.3pp) carries a
+fine-tune's argmax number (75.9% = -3.4pp) carries a
 run-to-run wobble of up to 5 held-out records (≈17.2%, §6 — observed
 65.5%–82.8% across this report's verification re-runs), so no trained head shows a
 stable accuracy edge over majority; the probe's one real edge —
 macro-F1 0.718 vs 0.442 — does not survive the
-confidence gate: across BOTH heads' τ-curves, no operating point reaches 95% accuracy
-at more than a 17.2% coverage sliver
-(5 records; best: probe τ=0.90) —
-below the ≥50%-coverage wiring bar and inside small-n noise; and the mechanical
+confidence gate: across BOTH heads' τ-curves, this run's best ≥95%-accuracy operating
+point covers only a 41.4% sliver
+(12 records; best: fine-tune τ=0.95) —
+the sliver number is itself wobble-dependent (a verification re-run's FT hit 100% at
+44.8% coverage), but in EVERY observed wobble state the best ≥95% point stays below
+the ≥50%-coverage wiring bar and inside small-n noise; and the mechanical
 keyword proxies are WORSE than
 majority (strict 65.5%, extended 69.0%), so no
 mechanical fallback already does the job
@@ -244,7 +246,7 @@ export TRANSFORMERS_OFFLINE=1 HF_HUB_OFFLINE=1   # forced by the script itself
   copy names the copy in the corpus-path/commit lines (expected).
 - Corpus read at run time: /Users/jadams/workspace/chug/.chug/decisions.jsonl @ commit a92d837cf2a11821cf89fdd4594f08bfbac00dd6
   (869 records = 869 raw lines, pinned above).
-- Runtime: 138s wall on the operator host (bound: 30 min) — device mps.
+- Runtime: 171s wall on the operator host (bound: 30 min) — device mps.
 - Artifacts (outside git): /Users/jadams/models/laya/distill-f13-2b — `corpus-snapshot.jsonl` (the pinned
   input, above), `dataset.jsonl` (rows with labels + both heads' predictions and
   confidences), `metrics.json` (every number in this report), `probe_head.pt` (the
