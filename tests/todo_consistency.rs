@@ -793,3 +793,91 @@ fn unreadable_todo_spec_is_flagged_fail_closed() {
     assert_eq!(problems.len(), 1, "{problems:?}");
     assert!(problems[0].contains("unreadable"), "{problems:?}");
 }
+
+// ---------------------------------------------------------------------------
+// T210 — the step-2 launch template's placeholder-literalization guard.
+//
+// Cycle-94 seg-3 (glm orchestrator, events-20261003-044541.jsonl): FOUR
+// placeholder-literalization incidents in one stream — a delegate launch
+// with a literal `specs/tN-dae…` spec path, `path escapes cwd` on
+// `/tmp/chug-loop-tN/README.md` and `…/loopd.sh`, and a garbled `Nfe TN
+// CHILD A` commit attempt. glm followed the step-2 template's `<N>`
+// placeholders literally instead of substituting the row number. LOOP-SPEC
+// step 2 now carries (a) an inline marker sentence at the template's first
+// `<N>` occurrence (the `cwd:` line) and (b) a pre-launch checklist line
+// (grep the rendered goal and the `cwd`/`spec` arguments for `<N>`/`tN`
+// BEFORE the delegate call). This pin asserts the marker and the checklist
+// EXIST — never the absence of `<N>`: the template itself must keep its
+// placeholders (T48: LOOP-SPEC.md resolves from the runtime checkout; T78:
+// needles match whitespace-collapsed text because the prose and the
+// template wrap mid-phrase).
+
+/// (a) The marker sentence's stable opening. Must occur EXACTLY once in
+/// LOOP-SPEC.md: zero means the marker was deleted (the T210 deletion
+/// mutant), more than one means it is stated twice.
+const PLACEHOLDER_MARKER: &str =
+    "PLACEHOLDER MARKER: every `<N>` in this template is the row number's slot";
+
+#[test]
+fn loop_spec_step2_template_carries_the_placeholder_marker_and_checklist() {
+    let root = std::env::current_dir().expect("cargo sets the test cwd to the package root");
+    let spec =
+        std::fs::read_to_string(root.join("LOOP-SPEC.md")).expect("LOOP-SPEC.md readable");
+    let flat = spec.split_whitespace().collect::<Vec<_>>().join(" ");
+
+    // (a) the marker sentence, exactly once.
+    assert_eq!(
+        flat.matches(PLACEHOLDER_MARKER).count(),
+        1,
+        "LOOP-SPEC step 2's launch template lost the T210 placeholder marker: every `<N>` \
+         must be substituted with the real row number before dispatch — a literal `<N>`, \
+         `t<N>`, or `chug-loop-tN` in a launched goal, delegate spec path, or bash command \
+         is a dispatch defect (the cycle-94 glm evidence)"
+    );
+    // …and it sits inline at the template's FIRST `<N>` occurrence (the
+    // `cwd:` line's annotation), not as a detached paragraph later in
+    // step 2. The annotation wraps: the line itself or its immediate
+    // continuation must carry the marker.
+    let cwd_idx = spec
+        .lines()
+        .position(|line| line.contains("cwd:") && line.contains("/tmp/chug-loop-t<N>"))
+        .expect("step 2's launch template carries the `cwd: /tmp/chug-loop-t<N>` line");
+    let inline_window = spec
+        .lines()
+        .skip(cwd_idx)
+        .take(2)
+        .collect::<Vec<_>>()
+        .join(" ");
+    assert!(
+        inline_window.contains("PLACEHOLDER MARKER:"),
+        "the placeholder marker must sit inline at the template's first `<N>` occurrence \
+         (the `cwd:` line's annotation)"
+    );
+
+    // (b) the template KEEPS its `<N>` placeholders — the marker pins their
+    // substitution, never their removal.
+    assert!(
+        spec.contains("specs/t<N>-<slug>.md")
+            && spec.matches("/tmp/chug-loop-t<N>").count() >= 2,
+        "the launch template must keep its `<N>` placeholders — the guard pins \
+         substitution, not deletion"
+    );
+
+    // (c) the pre-launch checklist line: after rendering the goal, grep it
+    // (and the `cwd`/`spec` arguments) for `<N>` / `tN` placeholders BEFORE
+    // the delegate call — one cheap look, not a tool.
+    for (needle, what) in [
+        (
+            "grep it (and the `cwd`/`spec` arguments) for `<N>` / `tN` placeholders BEFORE the delegate call",
+            "the pre-launch placeholder-grep checklist",
+        ),
+        ("one cheap look, not a tool", "the checklist's cost note"),
+    ] {
+        assert_eq!(
+            flat.matches(needle).count(),
+            1,
+            "LOOP-SPEC must state {what} exactly once — zero means dropped or \
+             reworded, more than one means duplicated"
+        );
+    }
+}

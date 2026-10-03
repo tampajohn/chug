@@ -122,7 +122,12 @@ simultaneously past gates — T194 amends T161's 2-child cap):
    Launch:
    ```
    delegate  action: "launch"
-     cwd:         "/tmp/chug-loop-t<N>"        (absolute — the one cwd NOT confined to yours)
+     cwd:         "/tmp/chug-loop-t<N>"        (absolute — the one cwd NOT confined to yours.
+                  PLACEHOLDER MARKER: every `<N>` in this template is the row number's slot —
+                  substitute every `<N>` with the real row number before dispatch; a literal
+                  `<N>`, `t<N>`, or `chug-loop-tN` surviving into a launched goal, a delegate
+                  spec path, or a bash command is a dispatch defect — the cycle-94 glm
+                  evidence: four literalization tool errors in one stream)
      spec:        "/Users/jadams/workspace/chug/specs/t<N>-<slug>.md"  (absolute)
      goal:        "Implement TODO item t<N> ONLY. export
              CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared before
@@ -144,6 +149,15 @@ simultaneously past gates — T194 amends T161's 2-child cap):
      max_minutes: 50
      env:         {"CARGO_TARGET_DIR": "/Users/jadams/workspace/chug/target-shared"}
    ```
+   **Pre-launch placeholder check (T210):** after rendering the goal from
+   this template, grep it (and the `cwd`/`spec` arguments) for `<N>` / `tN`
+   placeholders BEFORE the delegate call — one cheap look, not a tool. The
+   cycle-94 glm stream burned four tool errors on literalized placeholders
+   before anyone re-read the rendered text: a delegate launch carrying a
+   literal `specs/tN-dae…` path, `path escapes cwd` on
+   `/tmp/chug-loop-tN/README.md` and `…/loopd.sh`, and a garbled `Nfe TN
+   CHILD A` commit attempt — each a round trip inside a 200-iteration
+   budget that later ran out unwrapped.
    The clippy bar in that goal is the `-D warnings` form — the child runs
    `cargo clippy --all-targets -- -D warnings` and must reach zero
    warnings, not merely exit-0 clippy (the cycle-77 T166 instance is the
