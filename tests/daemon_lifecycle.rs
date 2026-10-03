@@ -35,11 +35,18 @@ use std::time::{Duration, Instant};
 /// Deadline for a fresh stub daemon to answer /healthz (the stub skips the
 /// model load, so the bind is immediate; the budget only covers machine
 /// load).
-const HEALTH_DEADLINE: Duration = Duration::from_secs(30);
-/// Deadline for a lifecycle CLI verb to exit.
-const CLI_DEADLINE: Duration = Duration::from_secs(60);
-/// Deadline for a daemon expected to DIE (lock refusal / stop) to exit.
-const EXIT_DEADLINE: Duration = Duration::from_secs(15);
+const HEALTH_DEADLINE: Duration = Duration::from_secs(90);
+/// Deadline for a lifecycle CLI verb to exit. MUST exceed the ensure's own
+/// internal SPAWN_WAIT_BUDGET (60s) — a deadline at parity loses the race
+/// deterministically whenever the child legitimately needs its full budget —
+/// plus headroom for the macOS first-exec stall (a freshly rebuilt test
+/// binary's first execs can sit in _dyld_start under Gatekeeper/syspolicyd
+/// assessment for tens of seconds; observed live: a 48s sample mid-stall).
+const CLI_DEADLINE: Duration = Duration::from_secs(150);
+/// Deadline for a daemon expected to DIE (lock refusal / stop) to exit —
+/// generous for the same first-exec stall (the child must LOAD before it can
+/// refuse anything).
+const EXIT_DEADLINE: Duration = Duration::from_secs(60);
 
 /// One test's daemon home: a tempdir used as `CHUG_HOME` (the host-scoped
 /// daemon home — lock, socket, and log all live inside it), plus the daemon
@@ -88,6 +95,28 @@ impl Home {
         let child = self.spawn_cli(&["daemon"], true);
         self.pid = Some(child.id());
         child
+    }
+
+    /// Absorb the macOS first-exec stall (Gatekeeper/syspolicyd assessment of
+    /// a freshly rebuilt binary — `sample` shows the child parked in
+    /// `_dyld_start` for tens of seconds): exec the binary once, bounded, and
+    /// wait for it BEFORE any timed lifecycle section. `--version` is instant
+    /// and side-effect-free. Called at the top of every test.
+    fn warm_exec(&self) {
+        let child = Command::new(env!("CARGO_BIN_EXE_chug"))
+            .arg("--version")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn the warm-up exec");
+        let output = wait_with_deadline(child, Duration::from_secs(120))
+            .expect("the warm-up exec never exited");
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "the warm-up exec (--version) failed"
+        );
     }
 
     /// Run a bounded CLI verb to completion, returning (status, stdout, stderr).
@@ -203,6 +232,7 @@ fn lock_pid(lock: &Path) -> Option<u32> {
 #[test]
 fn second_daemon_exits_on_the_lock() {
     let mut home = Home::new();
+    home.warm_exec();
     let mut first = home.spawn_daemon();
     let body = wait_healthz(&home.sock());
     assert!(body.contains("\"status\":\"ok\""), "healthz body: {body}");
@@ -234,6 +264,7 @@ fn second_daemon_exits_on_the_lock() {
 #[test]
 fn ensure_brings_up_a_healthy_daemon_and_socket_is_0600() {
     let home = Home::new();
+    home.warm_exec();
     let (code, stdout, stderr) = home.run_cli(&["daemon", "--ensure"], true);
     assert_eq!(code, Some(0), "ensure failed: {stdout} / {stderr}");
     assert!(stdout.contains("healthy"), "ensure stdout: {stdout}");
@@ -281,6 +312,7 @@ fn ensure_brings_up_a_healthy_daemon_and_socket_is_0600() {
 #[test]
 fn stop_leaves_no_orphan() {
     let mut home = Home::new();
+    home.warm_exec();
     // HOLD the child handle: dropping it would close the daemon's piped
     // stdout/stderr and SIGPIPE its banner write (the daemon dies, the test
     // degrades into the stale-socket shape).
@@ -320,6 +352,7 @@ fn stop_leaves_no_orphan() {
 #[test]
 fn stale_socket_after_sigkill_recovers() {
     let mut home = Home::new();
+    home.warm_exec();
     let mut first = home.spawn_daemon();
     wait_healthz(&home.sock());
     let old_pid = lock_pid(&home.lock()).expect("lock pid before the kill");
@@ -352,6 +385,7 @@ fn stale_socket_after_sigkill_recovers() {
 #[test]
 fn feature_off_build_refuses_to_serve() {
     let home = Home::new();
+    home.warm_exec();
     // No CHUG_DAEMON_STUB: serve takes the lock, then refuses on the missing
     // inference stack.
     let child = home.spawn_cli(&["daemon"], false);
