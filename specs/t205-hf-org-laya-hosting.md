@@ -1,6 +1,6 @@
 # T205 — HF org hosting for laya checkpoints: org-private fine-tunes + token path
 
-check: cargo test
+check: export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared; touch src/*.rs tests/*.rs; cargo test
 
 estimate: ~250 lines (daemon token/revision support + docs + loopd env wiring + operator runbook)
 
