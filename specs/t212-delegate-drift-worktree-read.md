@@ -90,4 +90,4 @@ Unit legs in `src/delegate.rs`'s test module (tempdir fixtures):
 - Teaching the orchestrator anything (doctrine unchanged — the T175
   re-key stays a dispatch-time act; this fix makes the advisory see it).
 
-check: export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared; touch src/*.rs tests/*.rs; cargo test --bin chug
+check: export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-validate-a; touch src/*.rs tests/*.rs; cargo test --bin chug
