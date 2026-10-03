@@ -141,7 +141,7 @@ impl Drop for Home {
                 .stderr(Stdio::null())
                 .status();
         } else if self.sock().exists() {
-            let _ = self.spawn_cli(&["daemon", "--stop"], false);
+            let _ = self.spawn_cli(&["daemon", "--stop"], false).wait();
         }
     }
 }
@@ -306,7 +306,7 @@ fn ensure_brings_up_a_healthy_daemon_and_socket_is_0600() {
     assert!(text.starts_with("HTTP/1.1 500"), "stub /judge status: {text}");
     assert!(text.contains("\"detail\""), "stub /judge error shape: {text}");
 
-    home.spawn_cli(&["daemon", "--stop"], false);
+    let _ = home.spawn_cli(&["daemon", "--stop"], false).wait();
 }
 
 #[test]
@@ -374,7 +374,7 @@ fn stale_socket_after_sigkill_recovers() {
     let new_pid = lock_pid(&home.lock()).expect("lock pid after recovery");
     assert_ne!(new_pid, old_pid, "a NEW daemon process owns the lock");
 
-    home.spawn_cli(&["daemon", "--stop"], false);
+    let _ = home.spawn_cli(&["daemon", "--stop"], false).wait();
 }
 
 /// A default (feature-off) build refuses to serve with a clear message —
