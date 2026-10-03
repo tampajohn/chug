@@ -779,7 +779,9 @@ impl JudgeBackend for crate::judge_model::JudgeModel {
             crate::judge_model::CheckpointSpec::Dir(path) => {
                 format!("rl-agent (local {})", path.display())
             }
-            crate::judge_model::CheckpointSpec::Hub(repo) => format!("rl-agent (hub {repo})"),
+            crate::judge_model::CheckpointSpec::Hub { repo, revision } => {
+                format!("rl-agent (hub {repo}@{revision})")
+            }
         }
     }
 }

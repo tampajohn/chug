@@ -31,7 +31,11 @@
 //! rl_agent_config.json + tokenizer/ + encoder/config.json), resolved from
 //! a local dir or the HF hub — cache-first into the standard HF cache
 //! (~/.cache/huggingface), downloading on a miss, clear error offline.
-//! CHUG_LAYA_CHECKPOINT overrides the default (convaiinnovations/laya).
+//! CHUG_LAYA_CHECKPOINT overrides the default (convaiinnovations/laya);
+//! T205 extends the value with `org/model@REV` (pinned revision) and the
+//! HF_TOKEN / CHUG_HF_ENDPOINT passthroughs — the reference parsing, the
+//! token/endpoint rules and the 401/403 honesty gate live in hf_hosting.rs
+//! (compiled ungated, so its pins run in the plain `cargo test` gate).
 //!
 //! Phase-1 slice note: the daemon slice wires the served path; until it
 //! lands this surface is test-only, hence the scoped allow.
@@ -74,11 +78,13 @@ const F_ENCODER_CONFIG: &str = "encoder/config.json";
 // ---------------------------------------------------------------------------
 
 /// Where the checkpoint comes from: a local RLAgent-layout directory or an
-/// HF hub repo id (cache-first, standard HF cache).
+/// HF hub repo id (cache-first, standard HF cache), optionally
+/// revision-pinned (`org/model@REV` — T205: reproducibility for a
+/// policy-affecting artifact).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CheckpointSpec {
     Dir(PathBuf),
-    Hub(String),
+    Hub { repo: String, revision: String },
 }
 
 impl CheckpointSpec {
@@ -87,20 +93,20 @@ impl CheckpointSpec {
     pub fn resolve() -> Self {
         match std::env::var(CHECKPOINT_ENV) {
             Ok(v) if !v.trim().is_empty() => Self::from_user(v.trim()),
-            _ => Self::Hub(DEFAULT_CHECKPOINT.to_string()),
+            _ => Self::from_user(DEFAULT_CHECKPOINT),
         }
     }
 
+    /// The dir-vs-hub decision is single-homed in `hf_hosting::resolve_ref`
+    /// (T205 — its ungated pins guard the real branch); this only maps the
+    /// shape into the daemon's own enum.
     fn from_user(v: &str) -> Self {
-        if Path::new(v).is_dir() {
-            Self::Dir(PathBuf::from(v))
-        } else {
-            Self::Hub(v.to_string())
+        match crate::hf_hosting::resolve_ref(v) {
+            crate::hf_hosting::CheckpointRef::Dir(path) => Self::Dir(path),
+            crate::hf_hosting::CheckpointRef::Hub { repo, revision } => {
+                Self::Hub { repo, revision }
+            }
         }
-    }
-
-    fn hub(repo: &str) -> Self {
-        Self::Hub(repo.to_string())
     }
 }
 
@@ -114,7 +120,11 @@ struct CheckpointFiles {
 }
 
 impl CheckpointFiles {
-    fn resolve(spec: &CheckpointSpec) -> Result<Self> {
+    /// Resolve the five layout files. `note_cwd` is where the auth-error
+    /// events note lands (production: None -> the daemon's cwd — the
+    /// spawner's run dir, whose `.chug/events.jsonl` is the run's event
+    /// stream; tests pass a tempdir to stay hermetic).
+    fn resolve(spec: &CheckpointSpec, note_cwd: Option<&Path>) -> Result<Self> {
         const LAYOUT: &str = "expected the RLAgent layout: model.safetensors, \
              rl_agent_config.json, tokenizer/tokenizer.json, \
              tokenizer/tokenizer_config.json, encoder/config.json";
@@ -139,19 +149,40 @@ impl CheckpointFiles {
                     encoder_config: join(F_ENCODER_CONFIG)?,
                 })
             }
-            CheckpointSpec::Hub(repo) => {
+            CheckpointSpec::Hub { repo, revision } => {
                 // hf-hub's ApiRepo::get is cache-first: a warm HF cache
                 // (the spec's standard ~/.cache/huggingface) never touches
                 // the network; a miss downloads; offline + cold is a clear
                 // error the daemon surfaces (clients fail-open as today).
-                let api = hf_hub::api::sync::Api::new()
-                    .context("initializing the HF hub client")?;
-                let repo_api = api.model(repo.clone());
+                // T205: the client is built with the HF_TOKEN env
+                // passthrough and the CHUG_HF_ENDPOINT/HF_ENDPOINT override
+                // (hf-hub 0.4.3 honors neither on its own), and the fetch
+                // is revision-pinned — `Repo::with_revision` keys the cache
+                // off the revision too, so a pin never resolves under a
+                // moved branch.
+                let api = crate::hf_hosting::build_hub_api()?;
+                let hf_repo = hf_hub::Repo::with_revision(
+                    repo.clone(),
+                    hf_hub::RepoType::Model,
+                    revision.clone(),
+                );
+                let repo_api = api.repo(hf_repo);
+                // The auth-fix decision needs the token PRESENCE, not the
+                // value — read once, pass the boolean down (the value never
+                // reaches an error path, log, or note).
+                let token_set = crate::hf_hosting::hub_token().is_some();
                 let get = |rel: &str| -> Result<PathBuf> {
-                    repo_api.get(rel).with_context(|| {
-                        format!(
-                            "checkpoint {repo}: fetching {rel} from the HF hub \
-                             (offline? pre-stage the cache with the standard HF tooling)"
+                    repo_api.get(rel).map_err(|e| {
+                        crate::hf_hosting::map_hub_fetch_error(
+                            anyhow::Error::new(e).context(format!(
+                                "checkpoint {repo}@{revision}: fetching {rel} from \
+                                 the HF hub"
+                            )),
+                            repo,
+                            revision,
+                            rel,
+                            token_set,
+                            note_cwd,
                         )
                     })
                 };
@@ -458,7 +489,7 @@ impl JudgeModel {
 
     /// Load one checkpoint: local dir or hub repo, cache-first.
     pub fn load(spec: &CheckpointSpec) -> Result<Self> {
-        let files = CheckpointFiles::resolve(spec)?;
+        let files = CheckpointFiles::resolve(spec, None)?;
         let rl = RLAgentConfig::load(&files.rl_config)?;
 
         let enc_json: serde_json::Value = parse_json_file(&files.encoder_config)?;
@@ -911,27 +942,144 @@ mod tests {
 
     #[test]
     fn checkpoint_spec_resolves_env_override() {
-        // unset -> shipped base model
+        let _env = crate::hf_hosting::ENV_LOCK.lock().unwrap();
+        // unset -> shipped base model at the default revision
         let saved = std::env::var(CHECKPOINT_ENV).ok();
         unsafe { std::env::remove_var(CHECKPOINT_ENV) };
-        assert_eq!(CheckpointSpec::resolve(), CheckpointSpec::Hub(DEFAULT_CHECKPOINT.into()));
+        assert_eq!(
+            CheckpointSpec::resolve(),
+            CheckpointSpec::Hub {
+                repo: DEFAULT_CHECKPOINT.into(),
+                revision: crate::hf_hosting::DEFAULT_REVISION.into(),
+            }
+        );
 
-        // set to an existing dir -> Dir; set to anything else -> Hub repo id
+        // set to an existing dir -> Dir (even with an `@` in the name); set
+        // to a bare repo id -> Hub at main; set to repo@REV -> pinned Hub.
         let dir = tempfile::tempdir().unwrap();
         unsafe { std::env::set_var(CHECKPOINT_ENV, dir.path()) };
         assert_eq!(CheckpointSpec::resolve(), CheckpointSpec::Dir(dir.path().to_path_buf()));
+        let at_dir = dir.path().join("x@y");
+        std::fs::create_dir(&at_dir).unwrap();
+        unsafe { std::env::set_var(CHECKPOINT_ENV, &at_dir) };
+        assert_eq!(CheckpointSpec::resolve(), CheckpointSpec::Dir(at_dir.clone()));
         unsafe { std::env::set_var(CHECKPOINT_ENV, "tampajohn/laya-stop-completion-judge") };
         assert_eq!(
             CheckpointSpec::resolve(),
-            CheckpointSpec::Hub("tampajohn/laya-stop-completion-judge".into())
+            CheckpointSpec::Hub {
+                repo: "tampajohn/laya-stop-completion-judge".into(),
+                revision: "main".into(),
+            }
+        );
+        unsafe { std::env::set_var(CHECKPOINT_ENV, "org/laya-judge@9c6af39c") };
+        assert_eq!(
+            CheckpointSpec::resolve(),
+            CheckpointSpec::Hub {
+                repo: "org/laya-judge".into(),
+                revision: "9c6af39c".into(),
+            }
         );
         unsafe { std::env::set_var(CHECKPOINT_ENV, "") };
-        assert_eq!(CheckpointSpec::resolve(), CheckpointSpec::Hub(DEFAULT_CHECKPOINT.into()));
+        assert_eq!(
+            CheckpointSpec::resolve(),
+            CheckpointSpec::Hub {
+                repo: DEFAULT_CHECKPOINT.into(),
+                revision: "main".into(),
+            }
+        );
 
         match saved {
             Some(v) => unsafe { std::env::set_var(CHECKPOINT_ENV, v) },
             None => unsafe { std::env::remove_var(CHECKPOINT_ENV) },
         }
+    }
+
+    // ------------------------------------------------------------------
+    // T205: endpoint-agnostic fetch + auth-failure honesty (daemon-gated:
+    // these run under --features daemon, where hf-hub is compiled in).
+    // ------------------------------------------------------------------
+
+    /// A private-repo 401 through the REAL fetch path: CHUG_HF_ENDPOINT
+    /// points hf-hub at a local one-response server standing in for the
+    /// private host, and resolve() must (a) hit THAT endpoint, (b) surface
+    /// ONE error naming the HF_TOKEN fix, (c) fire exactly one
+    /// judge_checkpoint_auth_error note into the given events dir, and (d)
+    /// make EXACTLY ONE request — resolve bails on the first failed file
+    /// and the builder's max_retries is 0, so there is no retry storm (the
+    /// client latches instead, daemon.rs).
+    #[test]
+    fn private_repo_401_names_the_fix_without_retrying() {
+        use std::io::{Read, Write};
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let _env = crate::hf_hosting::ENV_LOCK.lock().unwrap();
+        let chug_ep = crate::hf_hosting::env_guard(crate::hf_hosting::CHUG_HF_ENDPOINT_ENV);
+        let tok = crate::hf_hosting::env_guard(crate::hf_hosting::HF_TOKEN_ENV);
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let hits = Arc::new(AtomicUsize::new(0));
+        let server_hits = hits.clone();
+        let server = std::thread::spawn(move || {
+            // Count EVERY request the client makes and answer each with the
+            // same 401 — the hit counter is the no-retry-storm assertion.
+            for stream in listener.incoming() {
+                let mut s = match stream {
+                    Ok(s) => s,
+                    Err(_) => break,
+                };
+                server_hits.fetch_add(1, Ordering::SeqCst);
+                let mut buf = [0u8; 2048];
+                let _ = s.read(&mut buf); // drain the request head
+                let _ = s.write_all(
+                    b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                );
+                let _ = s.flush();
+            }
+        });
+
+        chug_ep.set(&format!("http://{addr}")); // the T205 override under test
+        tok.unset(); // the missing-token arm of the fix line
+        let events = tempfile::tempdir().unwrap();
+        let spec = CheckpointSpec::Hub {
+            repo: "t205-private/laya-judge".to_string(),
+            revision: "feedc0de".to_string(),
+        };
+        let err = match CheckpointFiles::resolve(&spec, Some(events.path())) {
+            Ok(_) => panic!("a 401 private repo must not resolve"),
+            Err(e) => e,
+        };
+        let text = format!("{err:#}");
+        assert!(text.contains("t205-private/laya-judge"), "names the repo: {text}");
+        assert!(text.contains("feedc0de"), "names the pinned revision: {text}");
+        assert!(text.contains("set HF_TOKEN"), "names the fix: {text}");
+        assert!(text.contains("401"), "names the status: {text}");
+
+        // exactly ONE note, in the cwd the caller chose (never the process
+        // cwd), and the token value — absent here by construction — never
+        // appears in it.
+        let log = std::fs::read_to_string(events.path().join(".chug/events.jsonl")).unwrap();
+        let notes: Vec<&str> = log.lines().collect();
+        assert_eq!(notes.len(), 1, "one events note per load attempt: {log}");
+        let note: serde_json::Value = serde_json::from_str(notes[0]).unwrap();
+        assert_eq!(note["type"], "judge_checkpoint_auth_error");
+        assert_eq!(note["repo"], "t205-private/laya-judge");
+        assert_eq!(note["revision"], "feedc0de");
+        assert_eq!(note["token_set"], false);
+
+        // the endpoint override reached the wire (the local server was hit)
+        // and there was exactly one request — no retry storm.
+        let waited = {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            while std::time::Instant::now() < deadline && hits.load(Ordering::SeqCst) == 0 {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100)); // any stragglers
+            hits.load(Ordering::SeqCst)
+        };
+        assert_eq!(waited, 1, "exactly one HTTP request (no retry storm)");
+        drop(server); // detached — the accept loop ends at process exit
     }
 
     // ------------------------------------------------------------------
@@ -1041,11 +1189,12 @@ mod tests {
             if current.as_ref().map(|(c, _)| c != ckpt).unwrap_or(true) {
                 // the default checkpoint honors CHUG_LAYA_CHECKPOINT (a
                 // local-dir override of the base model); fine-tunes hub-load
-                // cache-first.
+                // cache-first (from_user parses a bare repo id to the hub
+                // arm at the default revision).
                 let spec = if ckpt == DEFAULT_CHECKPOINT {
                     CheckpointSpec::resolve()
                 } else {
-                    CheckpointSpec::hub(ckpt)
+                    CheckpointSpec::from_user(ckpt)
                 };
                 let model = JudgeModel::load(&spec)
                     .unwrap_or_else(|e| panic!("loading checkpoint {ckpt}: {e:#}"));

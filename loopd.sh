@@ -37,6 +37,49 @@ LOG=$STATE/loopd.log
 
 ts() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 
+# T205 — the laya judge's private-checkpoint env reaches every cycle from
+# ONE out-of-repo env file: default $HOME/.chug/loopd.env, override with
+# CHUG_LOOPD_ENV. K7 wiring: the supervisor loads it ONCE at startup (the
+# T47 lesson — no env mutation inside the cycle loop; a token rotation is
+# edit + restart), and the orchestrator + delegate children + the spawned
+# judge daemon all inherit the exports. Format: KEY=VALUE lines, `#`
+# comments, optional `export ` prefix and one pair of surrounding quotes.
+# ONLY the allowlisted judge keys are applied (a secret file must not
+# inject arbitrary env into every cycle), and only when the operator has
+# not already set them in the environment (explicit env wins). The file's
+# CONTENTS are never echoed or logged (the T205 hygiene gate — tokens were
+# once spilled by an env dump); only the path and a skipped-line COUNT may
+# reach the log. Absent file is a silent no-op: public chug keeps the
+# public base laya, no auth wall.
+LOOPD_ENV_FILE="${CHUG_LOOPD_ENV:-$HOME/.chug/loopd.env}"
+if [ -f "$LOOPD_ENV_FILE" ]; then
+  _loopd_env_skipped=0
+  while IFS= read -r _line || [ -n "$_line" ]; do
+    _line="${_line%$'\r'}"
+    case "$_line" in ''|\#*) continue ;; esac
+    _line="${_line#export }"
+    case "$_line" in
+      CHUG_LAYA_CHECKPOINT=*|HF_TOKEN=*|CHUG_HF_ENDPOINT=*)
+        _key="${_line%%=*}"
+        _val="${_line#*=}"
+        case "$_val" in
+          \"*\") _val="${_val#\"}"; _val="${_val%\"}" ;;
+          \'*\') _val="${_val#\'}"; _val="${_val%\'}" ;;
+        esac
+        # explicit process env wins over the file
+        if [ -z "${!_key:-}" ]; then
+          export "$_key=$_val"
+        fi
+        ;;
+      *) _loopd_env_skipped=$((_loopd_env_skipped + 1)) ;;
+    esac
+  done < "$LOOPD_ENV_FILE"
+  if [ "$_loopd_env_skipped" -gt 0 ]; then
+    echo "[loopd $(ts)] env file $LOOPD_ENV_FILE: $_loopd_env_skipped non-allowlisted or malformed line(s) ignored (contents never logged)" >> "$LOG"
+  fi
+  unset _line _key _val _loopd_env_skipped
+fi
+
 # T81 — per-phase model routing (operator-approved 2026-09-26). The
 # ORCHESTRATOR's model is per-cycle and the switch is the freshness rule —
 # never model judgment: when the queue holds `todo` rows AND EVALUATION.md
