@@ -51,6 +51,11 @@ mod judge_pack;
 #[cfg(feature = "daemon")]
 mod judge_model;
 mod websearch;
+/// T205: the chug-side HF consumption path for laya checkpoints (revision
+/// parsing, endpoint/token passthroughs, the auth-failure honesty gate).
+/// Compiled in EVERY build — its pins run in the plain `cargo test` gate;
+/// the feature-gated `judge_model` is its only production caller.
+mod hf_hosting;
 
 /// T151: the ONE shared serialization domain for wall-clock/spawn-timing
 /// tests (see the module doc). Compiled only under `cargo test` — a
