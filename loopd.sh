@@ -224,6 +224,79 @@ if command -v cargo-nextest >/dev/null 2>&1; then
 else
   echo "$(ts) gate runner: cargo test --release -- --test-threads=4 (fallback — cargo-nextest absent)" >> "$LOG"
 fi
+# T215 — resolve the judge-daemon binary ONCE per loopd run (the probe cache).
+# The daemon is HOST-SCOPED (one per box, serves any run over
+# $CHUG_HOME/daemon.sock), so its carrier is the INSTALLED release binary —
+# never the repo dev build: T204 keeps loopd's own builds feature-lean, so
+# ./target/release/chug is a CLIENTS-ONLY binary whose `daemon` subcommand
+# is the fail-open stub. That stub is the K7 diagnosis: every cycle-start
+# ensure exited nonzero with the feature-off refusal (the literal the (c)
+# leg greps for, below) for ~16h, fail-open, while the release workflow's
+# daemon-capable binaries sat uninstalled in ~/.local/bin. Resolution order:
+#   (a) $CHUG_DAEMON_BIN — the operator's explicit override, used as-is when
+#       executable (no probe: an explicit choice is not second-guessed; a
+#       set-but-unusable value is noted and the list falls through);
+#   (b) $HOME/.local/bin/chug — install.sh's release install location — when
+#       it REPORTS daemon support: `chug daemon --help` exit 0 (a pre-T204
+#       release refuses the subcommand, so the probe doubles as the
+#       dogfood-upgrade detector; dashd owns those upgrades, never loopd);
+#   (c) ./target/release/chug — only when it hosts the judge, detected by the
+#       ABSENCE of the feature-off refusal literal (src/daemon.rs
+#       real_backend's cfg(not(feature = "daemon")) bail — the same string
+#       daemon.log logged six times). Under loopd this leg never fires (the
+#       build gate rebuilds feature-lean every cycle) — it exists for a
+#       pre-existing operator-built daemon-capable binary at startup.
+# Nothing daemon-capable → the ensure is SKIPPED for the whole run: the one
+# log line below is the record (fail-open — the judge client degrades per
+# command exactly as before; repo dev builds are clients only). The probe
+# runs ONCE here, never per cycle: the installed binary changes on dogfood
+# upgrades, not on cycles — a re-exec (script changed on disk) is a fresh
+# run and re-resolves.
+DAEMON_BIN=""
+DAEMON_SKIP_REASON=""
+DAEMON_OVERRIDE_NOTE=""
+judge_probe_ok() { # daemon-capable? the probe: subcommand recognized (exit 0)
+  "$1" daemon --help >/dev/null 2>&1
+}
+resolve_daemon_bin() { # sets DAEMON_BIN / DAEMON_SKIP_REASON; always rc 0
+  DAEMON_BIN=""
+  DAEMON_SKIP_REASON=""
+  DAEMON_OVERRIDE_NOTE=""
+  if [ -n "${CHUG_DAEMON_BIN:-}" ]; then
+    if [ -x "$CHUG_DAEMON_BIN" ]; then
+      DAEMON_BIN="$CHUG_DAEMON_BIN"
+      return 0
+    fi
+    DAEMON_OVERRIDE_NOTE="CHUG_DAEMON_BIN=$CHUG_DAEMON_BIN is not executable — ignored; "
+    DAEMON_SKIP_REASON="CHUG_DAEMON_BIN=$CHUG_DAEMON_BIN is set but not executable"
+  fi
+  local installed="${HOME:-}/.local/bin/chug"
+  if [ -x "$installed" ] && judge_probe_ok "$installed"; then
+    DAEMON_BIN="$installed"
+    return 0
+  fi
+  local repo_bin="$ROOT/target/release/chug" grep_rc=0
+  if [ -x "$repo_bin" ]; then
+    # T142 house style: the grep's rc is latched, never sailed past — 0 =
+    # the feature-off stub literal compiled in (clients only), 1 = no match
+    # (the binary hosts the judge), 2 = unreadable (unusable, fail-open).
+    grep -aq "built without the judge daemon" "$repo_bin" 2>/dev/null || grep_rc=$?
+    if [ "$grep_rc" -eq 1 ]; then
+      DAEMON_BIN="$repo_bin"
+      return 0
+    fi
+    DAEMON_SKIP_REASON="the repo release build is feature-lean (T204: clients only)"
+  elif [ -z "$DAEMON_SKIP_REASON" ]; then
+    DAEMON_SKIP_REASON="no daemon-capable binary found (no usable CHUG_DAEMON_BIN, no daemon-capable $installed, no repo build)"
+  fi
+  return 0
+}
+resolve_daemon_bin
+if [ -n "$DAEMON_BIN" ]; then
+  echo "$(ts) judge daemon binary: $DAEMON_BIN (${DAEMON_OVERRIDE_NOTE}probe cached for this run — T215; the ensure spawns this, not the repo dev build)" >> "$LOG"
+else
+  echo "$(ts) judge daemon: ensure skipped for this run — $DAEMON_SKIP_REASON (fail-open, T215; the judge client degrades per command as before)" >> "$LOG"
+fi
 # T50: content fingerprint of the running script, recorded BEFORE the cycle
 # loop. POSIX cksum is content-based — `touch` or a git checkout that
 # preserves content must not trigger a spurious re-exec; only a real content
@@ -336,21 +409,31 @@ while [ ! -f "$STOP" ]; do
   # this lands pays a cold release build here AND into the shared cache;
   # every later one is warm.
   # T204/F15 — ensure the baked-in judge daemon (build warmth for the risk
-  # gate): spawn it NOW, on the freshly built release binary, so the cycle's
-  # first risk-gated bash command does not pay the 650MB cold load itself
-  # (the daemon loads ONCE per host and every run/child shares the warm
-  # model). Best-effort like the reaper and the digest — a daemon that will
-  # not come up must never block the launch: the client's fail-open degrade
-  # is the same shape as today's unreachable-layad path. `chug daemon
-  # --ensure` is idempotent (healthy daemon -> instant exit 0) and bounded
-  # (spawn + wait-for-socket with a fixed budget). LOOP_DAEMON_ENSURE=0
-  # opts out (the LOOP_REAPER pattern).
-  if [ "${LOOP_DAEMON_ENSURE:-1}" = "1" ]; then
+  # gate): spawn it NOW, before the cycle, so the first risk-gated bash
+  # command does not pay the model load itself (the daemon loads ONCE per
+  # host and every run/child shares the warm model). Best-effort like the
+  # reaper and the digest — a daemon that will not come up must never block
+  # the launch: the client's fail-open degrade is the same shape as today's
+  # unreachable-layad path. `chug daemon --ensure` is idempotent (healthy
+  # daemon -> instant exit 0) and bounded (spawn + wait-for-socket with a
+  # fixed budget). LOOP_DAEMON_ENSURE=0 opts out (the LOOP_REAPER pattern).
+  # T215 — the spawned binary is $DAEMON_BIN, resolved ONCE at loopd startup
+  # (the probe cache): the installed release binary when daemon-capable, not
+  # the repo dev build (feature-lean by T204 — its `daemon` subcommand is
+  # the fail-open stub that made every ensure exit nonzero). When nothing
+  # daemon-capable resolved, the ensure is skipped silently here: the
+  # startup resolution already logged the one skip line for this run. A
+  # cold FIRST weight load (~650 MB HF download) exceeds the ensure's
+  # bounded wait budget — the detached daemon keeps loading and the cycle
+  # proceeds fail-open (warm by the next cycles); the pinned remedy is the
+  # runbook pre-warm one-liner (`<daemon binary> daemon` foreground once,
+  # runbooks/loop-ops.md), not a bigger budget.
+  if [ "${LOOP_DAEMON_ENSURE:-1}" = "1" ] && [ -n "$DAEMON_BIN" ]; then
     # stdout/stderr to /dev/null — the supervisor log carries SUPERVISOR
     # lines only (the spoof-guard invariant: chug output reaches the log
     # only through the sanctioned cycle-child record at verdict time);
     # daemon diagnostics live in <chug home>/daemon.log.
-    "$ROOT/target/release/chug" daemon --ensure >/dev/null 2>&1 \
+    "$DAEMON_BIN" daemon --ensure >/dev/null 2>&1 \
       || echo "$(ts) daemon ensure: nonzero exit (best-effort, ignored — the judge fails open)" >> "$LOG"
   fi
   # T46: refresh the Phase-1 corpus digest so every cycle's evaluation reads

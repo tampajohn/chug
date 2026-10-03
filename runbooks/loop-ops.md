@@ -50,3 +50,40 @@ LOOP_REAPER_DRY_RUN=1 scripts/orphan-reaper.sh   # list leftover loop processes;
 
 The reaper also runs automatically before every cycle (SIGTERM only,
 fail-closed); `LOOP_REAPER=0` opts out.
+
+## The judge daemon (T204/T215)
+
+The risk gate's judge (`CHUG_JUDGE=daemon`, the default) is a host-scoped
+daemon: one per box, serving every run over `~/.chug/daemon.sock`. On loop
+hosts it comes from the installed release binary — the release workflow
+builds `--features daemon` into `~/.local/bin/chug`. The repo dev builds
+are CLIENTS ONLY (T204 keeps them feature-lean): their `daemon` subcommand
+is the fail-open stub, so never point the ensure at a repo build.
+
+`loopd.sh` resolves the daemon binary ONCE per run (one startup line in
+`.chug/loopd/loopd.log`) and ensures it at every cycle start, best-effort:
+
+1. `$CHUG_DAEMON_BIN` — explicit override (wins when executable);
+2. `~/.local/bin/chug` — when `chug daemon --help` exits 0 (a pre-T204
+   release refuses the subcommand: the dogfood upgrade hasn't landed —
+   upgrade the install; `loopd` never self-upgrades);
+3. the repo release build — only when it hosts the judge (never loopd's own
+   feature-lean build);
+
+else the ensure is skipped for the whole run behind that one log line
+(fail-open: the judge client degrades per command exactly as it did when
+layad was down). `LOOP_DAEMON_ENSURE=0` opts out entirely.
+
+**First run — pre-warm the weights (the pinned remedy, T215):** the daemon
+loads the ~650 MB checkpoint BEFORE the socket binds, and the ensure's wait
+budget stays bounded, so a cold first load exceeds it: the first cycle runs
+fail-open while the detached daemon finishes downloading, and later cycles
+find it warm. To pay the download outside a cycle, pre-warm once:
+
+```bash
+~/.local/bin/chug daemon      # foreground; Ctrl-C after "judge model warm"
+```
+
+The HF cache then serves every later spawn in seconds. `chug daemon
+--status` reports running/starting/absent; `chug daemon --stop` stops the
+lock holder. Diagnostics: `~/.chug/daemon.log`.

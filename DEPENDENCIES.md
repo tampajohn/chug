@@ -103,6 +103,7 @@ Every variable read via `std::env::var`/`var_os` in `src/` (+ `build.rs`):
 - `LAYA_URL` — layad notify sink + the `CHUG_JUDGE=http` escape hatch
 - `CHUG_JUDGE` — risk-gate judge client: `daemon` (default) | `http` | `off`
 - `CHUG_DAEMON_SOCK` / `CHUG_HOME` — the baked-in judge daemon's 0600 unix socket location
+- `CHUG_DAEMON_BIN` — loopd's judge-daemon binary override (T215): used when executable, else loopd falls through to the installed `~/.local/bin/chug` (probed via `daemon --help`) / a feature-on repo build; the daemon comes from the INSTALLED release binary on loop hosts — repo dev builds are clients only (T204 keeps them feature-lean), and with nothing daemon-capable the cycle-start ensure is skipped behind one log line (fail-open)
 - `CHUG_LAYA_CHECKPOINT` — the daemon's model checkpoint (local dir, `org/model`, or `org/model@REV` — a pinned revision sha/tag; T205)
 - `HF_TOKEN` — private/gated HF repo access for the daemon's checkpoint fetch: read-scoped, passed through to hf-hub (which reads only its cached token file on its own); the VALUE never enters a log, event, or error (tests/no_secret_spill.rs pins the repo to the name only)
 - `CHUG_HF_ENDPOINT` (chug-specific, wins) / `HF_ENDPOINT` (standard, fallback) — point the checkpoint fetch at Artifactory or any HF-compatible host; hf-hub 0.4.3 ignores `HF_ENDPOINT` via `Api::new()`, so the override is applied by `hf_hosting` (T205)
