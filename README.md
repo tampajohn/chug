@@ -442,11 +442,15 @@ structured decision records to `.chug/decisions.jsonl` (append-only,
 best-effort) feeding the F13 distillation corpus — outcome records'
 `choice` is a closed set (`landed-clean`/`fixed-up`/`reverted`) enforced
 at write time, `scripts/decisions-audit.sh` prints the corpus-health
-summary, and `scripts/decisions-export.sh` joins each non-outcome record
+summary, `scripts/decisions-export.sh` joins each non-outcome record
 to its outcome label into the training JSONL — one row per decision in
 file order, `{id, ts, class, subject, inputs, options, choice,
 confidence, outcome}`, with `outcome` null until an outcome record names
-the id; like the file tools it is cwd-sandboxed, so the three documented
+the id — and `scripts/distill_experiment.py` is the phase-2b consumer:
+the measure-first training + evaluation run (time-ordered split, mechanical
+baselines, τ-curve) whose go/no-go report lives at
+`docs/distill-f13-2b.md` (operator-host venv only, offline, corpus read
+never written); like the file tools it is cwd-sandboxed, so the three documented
 sandbox exceptions stay exactly three.
 
 `todo_add` / `todo_update` / `todo_list` are the other bookkeeping surface
