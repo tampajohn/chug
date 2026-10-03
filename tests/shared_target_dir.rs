@@ -613,14 +613,17 @@ fn gitignore_ignores_the_t57_main_dedicated_dir() {
 fn loop_spec_post_merge_gates_name_the_main_dedicated_dir() {
     let spec = read("LOOP-SPEC.md");
     // (4b) Strictly stronger than "named at least once": the full env
-    // prefix occurs EXACTLY twice — step 5's post-merge re-run + Phase 3's
-    // final gates. Dropping either carrier (or duplicating one) fails.
+    // prefix occurs EXACTLY three times — step 5's post-merge re-run,
+    // Phase 3's final gates, and the spec's own `check:` line (the goal
+    // gate; added 67e11fc — the gate env scrubs CARGO_TARGET_DIR by
+    // design, so the shared cache must ride inside the check line
+    // itself). Dropping any carrier (or duplicating one) fails.
     count_eq(
         &spec,
         MAIN,
-        2,
+        3,
         "LOOP-SPEC target-shared-main env-prefix carriers: step-5 post-merge \
-         re-run + Phase-3 final gates (T57)",
+         re-run + Phase-3 final gates + the goal-gate check: line (T57)",
     );
     // The post-merge gate instruction itself names the dir: everything
     // between `re-run gates in main` and the row-flip clause carries the
@@ -651,6 +654,20 @@ fn loop_spec_post_merge_gates_name_the_main_dedicated_dir() {
     assert!(
         w3.contains(MAIN),
         "Phase 3's final-gates bullet must name {MAIN} (T57); got:\n{w3}"
+    );
+    // The goal-gate check line is the third carrier: the gate env scrubs
+    // CARGO_TARGET_DIR by design (harness note), so the cache rides INSIDE
+    // the check line itself (67e11fc) — a bare `cargo test` there
+    // cold-builds the root crate into the repo's own target/.
+    let chk = spec
+        .lines()
+        .find(|l| l.starts_with("check:"))
+        .expect("LOOP-SPEC keeps a `check:` line");
+    assert!(
+        chk.contains(MAIN),
+        "the spec check line must name {MAIN} — the gate env scrubs \
+         CARGO_TARGET_DIR, so the shared cache rides in the check line \
+         itself (T57); got:\n{chk}"
     );
     // Mechanism sentence, T52 paragraph style: artifact filename excludes
     // the checkout path → last-builder-wins → only a main-builders-only dir
