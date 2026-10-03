@@ -262,6 +262,37 @@
 //! merge sentence it guards. Reverting either doctrine sentence drops
 //! its needles to 0 and the named leg goes red; duplicating one fires
 //! the count-2 leg.
+//!
+//! T207 doctrine: cycle-94 seg-3 (glm) ran its orchestrator to the
+//! 200/200 iteration ceiling over 5h01m and DIED at the ceiling with the
+//! work done but the wrap unwritten — T204's merge (dbce0e2) was
+//! committed, but the row flip, the push (18 commits sat unpushed), the
+//! Outcomes entry, the harvest, and the decision records were all
+//! missing, and the ledger at death was ~150 iterations stale (it named
+//! an impl pid from the arc's middle); cycle-95 spent ~6 iterations
+//! reconstructing the true state from the git record before any
+//! productive work. This is the T10/T12 loss class one level up —
+//! children die between the code commit and the row flip, and so do
+//! orchestrators. Root cause: step 6's stop-dispatch margin ("fewer than
+//! 15 iterations left") was calibrated when orchestrator budgets were 120
+//! iterations; loopd now launches 200 iterations / 360 minutes, and the
+//! wrap tail (final gates ~5–10 min wall + row flips + Outcomes +
+//! harvest + release check + push + goal gate) measures ~15–25
+//! iterations — a 15-iteration margin at 200 is structurally too thin,
+//! and seg-3 dispatched a validation round inside the margin and never
+//! came back. Two doctrine edits, pinned by legs (af)–(ag) in the
+//! T48/T64 pattern: (1) the step-6 threshold is raised to 30 WITH the
+//! calibration sentence that sizes it (the number is sized to the wrap
+//! tail's measured cost at the 200-iteration orchestrator budget), and
+//! the OLD 15-threshold phrasing is asserted ZERO times (the
+//! BARE_CLIPPY_PHRASE revert-detector idiom); (2) Phase 3 gains a hard
+//! rule — crossing the stop-dispatch boundary makes the orchestrator's
+//! NEXT ledger write carry a wrap-state note naming every
+//! merged-but-unflipped row, every unharvested worktree, every unpushed
+//! commit count, and every missing decision record, so a mid-wrap death
+//! is recoverable from the ledger alone with zero git reconstruction.
+//! The T81 anti-sprint-burn guard is untouched by this row — a wrap IS
+//! an act, and its own pin lives in tests/loopd_model_routing.rs.
 
 /// The leg's signature phrase: "resume" + the one-attempt cap language in
 /// one contiguous run. Must occur EXACTLY once in LOOP-SPEC.md.
@@ -2739,5 +2770,295 @@ fn validator_verdict_first_file_named_once_in_each_spec() {
         "the verdict-first sentence must precede `End with a verdict \
          line` — the write happens FIRST, the summary line after ({write} \
          vs {end_line})"
+    );
+}
+
+// ---- T207 — the orchestrator wrap window: step-6 threshold 15 → 30 + the wrap-state note ----
+//
+// Cycle-94 seg-3 (glm, 5h01m) ran its orchestrator to the 200/200
+// iteration ceiling and died with the work done but the wrap unwritten:
+// T204's merge (dbce0e2) was committed, but the row flip, the push (18
+// commits sat unpushed), the Outcomes entry, the harvest, and the decision
+// records were all missing, and the ledger at death was ~150 iterations
+// stale (it named a mid-arc impl pid); cycle-95 spent ~6 iterations
+// reconstructing the true state from the git record before any productive
+// work. This is the T10/T12 loss class one level up — children die between
+// the code commit and the row flip, and so do orchestrators. Root cause:
+// step 6's stop-dispatch margin (15 iterations) was calibrated when
+// orchestrator budgets were 120 iterations; loopd now launches 200
+// iterations / 360 minutes, and the wrap tail (final gates ~5–10 min wall
+// + row flips + Outcomes + harvest + release check + push + goal gate)
+// measures ~15–25 iterations — a 15-iteration margin at 200 is
+// structurally too thin, and seg-3 dispatched a validation round inside
+// the margin and never came back. Legs (af)–(ag) pin both doctrine edits
+// in the T48/T64 pattern: every needle exactly-once in LOOP-SPEC.md and
+// inside its window; the OLD threshold phrasing asserted ZERO times (the
+// BARE_CLIPPY_PHRASE revert-detector idiom). The T81 anti-sprint-burn
+// guard is untouched — a wrap IS an act, and its own pin lives in
+// tests/loopd_model_routing.rs.
+
+/// The raised threshold's commitment needle — verbatim per the spec's
+/// line-wise check: grep. Must occur EXACTLY once in LOOP-SPEC.md.
+const WRAP_WINDOW_THRESHOLD: &str = "Fewer than 30 iterations left";
+
+/// The OLD threshold phrasing — the revert detector (the BARE_CLIPPY_PHRASE
+/// idiom). Must occur ZERO times in LOOP-SPEC.md after the raise: a revert
+/// to the seg-3-death margin (the exact T207 fix undone) resurrects it and
+/// the leg goes red.
+const OLD_WRAP_THRESHOLD: &str = "Fewer than 15 iterations left";
+
+/// The calibration sentence's wrap tail — the cost the threshold is sized
+/// against. Must occur EXACTLY once.
+const WRAP_TAIL_NEEDLE: &str = "wrap tail";
+
+/// The calibration sentence's measured range — the wrap tail's
+/// ~15–25 iteration cost, en dash spelled as an escape so an editor
+/// normalization cannot silently unpin it (\u{2013} = en dash, the
+/// DENSITY_NEEDLE idiom). Must occur EXACTLY once.
+const MEASURED_RANGE_NEEDLE: &str = "~15\u{2013}25 iteration cost";
+
+/// The calibration sentence's orchestrator-budget token — the 200 / 360
+/// pair loopd launches at (loopd.sh's `--max-iters 200 --max-minutes 360`).
+/// Must occur EXACTLY once.
+const ORCH_BUDGET_NEEDLE: &str = "200-iteration / 360-minute";
+
+/// The calibration sentence's death evidence — the seg-3 ceiling death
+/// with the merge committed and the wrap unwritten. Must occur EXACTLY
+/// once.
+const SEG3_DEATH_NEEDLE: &str = "cycle-94 seg-3 died 200/200";
+
+/// The calibration sentence's failure mode — the validation round
+/// dispatched inside the margin that never came back. Must occur EXACTLY
+/// once.
+const MARGIN_DISPATCH_NEEDLE: &str = "dispatching a validation round inside the margin";
+
+/// (af) T207 — step 6's stop-dispatch threshold is 30, WITH its
+/// calibration: the raised threshold occurs EXACTLY once in LOOP-SPEC.md
+/// inside step 6's window (the T64 loose-heading scope: step 6's heading
+/// through the Phase-3 heading), the OLD 15-threshold phrasing occurs ZERO
+/// times anywhere in the file, and the calibration sentence's tokens — the
+/// wrap tail the number is sized against, the measured ~15–25 iteration
+/// range, the 200-iteration / 360-minute orchestrator budget loopd now
+/// launches, the seg-3 ceiling death, and the margin-dispatch failure
+/// mode — each occur EXACTLY once, AFTER the threshold they calibrate.
+/// Reverting the threshold sentence (the text-revert mutant) drops the
+/// raised needle to 0 AND resurrects the old one — TWO legs of this file
+/// go red at once; moving the calibration out of step 6 dies on the
+/// window find.
+#[test]
+fn wrap_window_threshold_is_30_with_calibration_inside_step_6() {
+    // Needle self-checks (T48 idiom): a mangled needle must not let this
+    // pin pass silently.
+    assert!(
+        WRAP_WINDOW_THRESHOLD.starts_with("Fewer than 30")
+            && WRAP_WINDOW_THRESHOLD.ends_with("left"),
+        "the threshold needle must carry the raised 30 threshold verbatim"
+    );
+    assert!(
+        OLD_WRAP_THRESHOLD.starts_with("Fewer than 15") && OLD_WRAP_THRESHOLD.ends_with("left"),
+        "the revert detector must be the OLD 15 threshold phrasing verbatim"
+    );
+    assert!(
+        MEASURED_RANGE_NEEDLE.starts_with("~15")
+            && MEASURED_RANGE_NEEDLE.ends_with("iteration cost"),
+        "the measured-range needle must carry the ~15–25 iteration cost \
+         verbatim, en dash included"
+    );
+    assert!(
+        ORCH_BUDGET_NEEDLE.starts_with("200-iteration")
+            && ORCH_BUDGET_NEEDLE.ends_with("360-minute"),
+        "the budget needle must carry the 200-iteration / 360-minute pair \
+         verbatim"
+    );
+    let spec = loop_spec();
+
+    // The raised threshold, exactly once; the old one, zero times.
+    assert_eq!(
+        spec.matches(WRAP_WINDOW_THRESHOLD).count(),
+        1,
+        "LOOP-SPEC step 6 must state the 30-iteration stop-dispatch \
+         threshold exactly once — zero means the threshold sentence was \
+         deleted (or rewrapped across a line break, which also breaks the \
+         spec's own line-wise grep), more than one means it is stated twice"
+    );
+    assert_eq!(
+        spec.matches(OLD_WRAP_THRESHOLD).count(),
+        0,
+        "the OLD 15-iteration threshold phrasing must not survive anywhere \
+         in LOOP-SPEC — the pre-T207 step 6 was reverted (the exact \
+         cycle-94 seg-3 death class), or a second budget check \
+         reintroduced the old number"
+    );
+
+    // Scope + order: inside step 6's window, calibration AFTER threshold.
+    let start = spec
+        .find(STEP6_HEADING_LOOSE)
+        .expect("step-6 heading (`6. **`) present");
+    let end = start
+        + spec[start..]
+            .find(PHASE3_HEADING)
+            .expect("the Phase-3 heading present after step 6's");
+    let window = &spec[start..end];
+    let threshold = window
+        .find(WRAP_WINDOW_THRESHOLD)
+        .expect("step-6 window must carry the raised threshold (moved out of step 6?)");
+    for (needle, what) in [
+        (WRAP_TAIL_NEEDLE, "the wrap tail the threshold is sized against"),
+        (MEASURED_RANGE_NEEDLE, "the measured ~15–25 iteration cost"),
+        (
+            ORCH_BUDGET_NEEDLE,
+            "the 200-iteration / 360-minute orchestrator budget",
+        ),
+        (SEG3_DEATH_NEEDLE, "the cycle-94 seg-3 ceiling-death evidence"),
+        (MARGIN_DISPATCH_NEEDLE, "the margin-dispatch failure mode"),
+    ] {
+        assert_eq!(
+            spec.matches(needle).count(),
+            1,
+            "LOOP-SPEC must state {what} exactly once — zero means the \
+             calibration sentence was deleted (or a needle was rewrapped \
+             across a line break), more than one means it is stated twice"
+        );
+        let at = window.find(needle).unwrap_or_else(|| {
+            panic!(
+                "step 6's window must carry {what} ({needle:?}) — the \
+                 calibration drifted out of the budget check"
+            )
+        });
+        assert!(
+            threshold < at,
+            "the calibration must FOLLOW the threshold it sizes — threshold \
+             ({threshold}), then {what} ({at})"
+        );
+    }
+}
+
+/// The wrap-state rule's tokens — the hard rule's bold lead, the boundary
+/// link to step 6, the NEXT-ledger-write commitment, the four named items
+/// in the order the rule lists them, the recoverability claim, and the
+/// seg-3/cycle-95 evidence. Each contiguous as written and EXACTLY once
+/// in LOOP-SPEC.md.
+const WRAP_STATE_LEAD: &str = "Wrap-state note at the boundary (T207";
+const BOUNDARY_LINK: &str = "stop-dispatch boundary (step 6)";
+const WRAP_STATE_COMMITMENT: &str = "NEXT ledger write must carry a wrap-state note";
+const UNFLIPPED_ROWS_NEEDLE: &str = "merged-but-unflipped row";
+const UNHARVESTED_NEEDLE: &str = "unharvested worktree";
+const UNPUSHED_NEEDLE: &str = "unpushed commit count";
+const MISSING_RECORDS_NEEDLE: &str = "missing decision record";
+const LEDGER_RECOVERABLE_NEEDLE: &str = "zero git reconstruction";
+const STALE_LEDGER_EVIDENCE: &str = "seg-3 death left a ledger ~150";
+const CYCLE95_COST_NEEDLE: &str = "cycle-95";
+
+/// (ag) T207 — Phase 3's wrap-state-note hard rule: the rule's trigger
+/// (crossing the stop-dispatch boundary, linked to step 6), its one-write
+/// commitment, its four named items in the written order, the
+/// recoverability claim, and the stale-ledger / cycle-95 evidence — every
+/// token EXACTLY once in LOOP-SPEC.md and inside the Phase-3 window (the
+/// `## Phase 3 — Wrap` heading through `## Hard rules`, the T186
+/// anchors), with the rule as the window's FIRST bullet (before the
+/// TODO.md-truthful duty it precedes — the note is due before any other
+/// wrap duty). Delete the rule — the text-revert mutant — and every token
+/// drops to 0 and this leg goes red; duplicate a token and the count-2
+/// leg fires; move the rule out of Phase 3 (e.g. into step 6's budget
+/// check, whose boundary the trigger names) and the window leg fires;
+/// demote it below the TODO.md bullet and the first-bullet ordering
+/// fires.
+#[test]
+fn wrap_state_note_rule_exactly_once_as_phase3_first_bullet() {
+    // Needle self-checks (T48 idiom): a mangled needle must not let this
+    // pin pass silently.
+    assert!(
+        WRAP_STATE_LEAD.starts_with("Wrap-state note") && WRAP_STATE_LEAD.contains("T207"),
+        "the lead needle must be the wrap-state bullet's bold lead verbatim"
+    );
+    assert!(
+        WRAP_STATE_COMMITMENT.starts_with("NEXT")
+            && WRAP_STATE_COMMITMENT.ends_with("wrap-state note"),
+        "the commitment needle must carry the next-ledger-write commitment \
+         verbatim"
+    );
+    assert!(
+        UNFLIPPED_ROWS_NEEDLE.ends_with("row")
+            && UNHARVESTED_NEEDLE.ends_with("worktree")
+            && UNPUSHED_NEEDLE.ends_with("count")
+            && MISSING_RECORDS_NEEDLE.ends_with("record"),
+        "the four item needles must name the rule's four mandated \
+         disclosures verbatim"
+    );
+    let spec = loop_spec();
+    let tokens: [(&str, &str); 10] = [
+        (WRAP_STATE_LEAD, "the wrap-state bullet's bold lead"),
+        (BOUNDARY_LINK, "the boundary link to step 6"),
+        (WRAP_STATE_COMMITMENT, "the NEXT-ledger-write commitment"),
+        (UNFLIPPED_ROWS_NEEDLE, "the merged-but-unflipped-rows item"),
+        (UNHARVESTED_NEEDLE, "the unharvested-worktrees item"),
+        (UNPUSHED_NEEDLE, "the unpushed-commit-count item"),
+        (MISSING_RECORDS_NEEDLE, "the missing-decision-records item"),
+        (LEDGER_RECOVERABLE_NEEDLE, "the zero-git-reconstruction claim"),
+        (STALE_LEDGER_EVIDENCE, "the stale-ledger evidence"),
+        (CYCLE95_COST_NEEDLE, "the cycle-95 archaeology-cost evidence"),
+    ];
+    for (needle, what) in &tokens {
+        assert_eq!(
+            spec.matches(needle).count(),
+            1,
+            "LOOP-SPEC must state {what} ({needle:?}) exactly once — zero \
+             means the wrap-state rule was deleted (or a needle was \
+             rewrapped across a line break, which also breaks the spec's \
+             own line-wise grep), more than one means it is stated twice"
+        );
+    }
+
+    // Scope: the rule lives INSIDE Phase 3's window (the T186 anchors).
+    let start = spec
+        .find(PHASE3_HEADING)
+        .expect("Phase-3 heading present");
+    let end = start
+        + spec[start..]
+            .find(HARD_RULES_HEADING)
+            .expect("Hard-rules heading present after Phase 3's");
+    let window = &spec[start..end];
+    for (needle, what) in &tokens {
+        assert!(
+            window.contains(needle),
+            "the Phase-3 window must carry {what} ({needle:?}) — the \
+             wrap-state rule drifted out of the wrap section"
+        );
+    }
+
+    // The rule is the window's FIRST bullet, before the TODO.md-truthful
+    // duty it precedes.
+    let lead = window
+        .find(WRAP_STATE_LEAD)
+        .expect("window carries the wrap-state lead (count leg above)");
+    let todo_duty = window
+        .find("- TODO.md truthful")
+        .expect("Phase-3 window must carry the TODO.md-truthful bullet (untouched)");
+    assert!(
+        lead < todo_duty,
+        "the wrap-state rule must be Phase 3's FIRST bullet — the note is \
+         due before the other wrap duties: lead ({lead}), TODO.md bullet \
+         ({todo_duty})"
+    );
+
+    // The four named disclosures read in the written order.
+    let unflipped = window
+        .find(UNFLIPPED_ROWS_NEEDLE)
+        .expect("window carries the unflipped-rows item (count leg above)");
+    let unharvested = window
+        .find(UNHARVESTED_NEEDLE)
+        .expect("window carries the unharvested-worktrees item (count leg above)");
+    let unpushed = window
+        .find(UNPUSHED_NEEDLE)
+        .expect("window carries the unpushed-commits item (count leg above)");
+    let missing = window
+        .find(MISSING_RECORDS_NEEDLE)
+        .expect("window carries the missing-records item (count leg above)");
+    assert!(
+        unflipped < unharvested && unharvested < unpushed && unpushed < missing,
+        "the four named disclosures must read in the written order — \
+         unflipped rows ({unflipped}), unharvested worktrees \
+         ({unharvested}), unpushed commits ({unpushed}), missing records \
+         ({missing})"
     );
 }
