@@ -306,13 +306,7 @@ while [ ! -f "$STOP" ]; do
     # stdout/stderr to /dev/null — the supervisor log carries SUPERVISOR
     # lines only (the spoof-guard invariant: chug output reaches the log
     # only through the sanctioned cycle-child record at verdict time);
-    # daemon diagnostics live in <chug home>/daemon.log. Best-effort like
-    # the reaper and the digest: a daemon that will not come up must never
-    # block the launch — the client's fail-open degrade is the same shape
-    # as today's unreachable-layad path. `chug daemon --ensure` is
-    # idempotent (healthy daemon -> instant exit 0) and bounded (spawn +
-    # wait-for-socket with a fixed budget). LOOP_DAEMON_ENSURE=0 opts out
-    # (the LOOP_REAPER pattern).
+    # daemon diagnostics live in <chug home>/daemon.log.
     "$ROOT/target/release/chug" daemon --ensure >/dev/null 2>&1 \
       || echo "$(ts) daemon ensure: nonzero exit (best-effort, ignored — the judge fails open)" >> "$LOG"
   fi
