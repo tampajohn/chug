@@ -66,7 +66,7 @@ pin-dense per the cycle-98 eval calibration)
 3. **Restore the slot residue**: main's copies of
    `specs/t209-dispatch-size-gate.md` and
    `specs/t210-placeholder-guard.md` check lines return to
-   `export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared;`
+   `export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-validate-a;`
    (the default slot; slot-keying is a dispatch-time act on the branch,
    never main-resident state).
 4. **Pin** (todo_consistency.rs, the T210 pin's home): the template's
@@ -116,4 +116,4 @@ pin-dense per the cycle-98 eval calibration)
   behavior; this row makes the mechanism match it).
 - src/ changes beyond the revert (none intended).
 
-check: export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared; touch src/*.rs tests/*.rs; cargo test --bin chug && cargo test --test todo_consistency --test loop_spec_recovery --test shared_target_dir
+check: export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-validate-a; touch src/*.rs tests/*.rs; cargo test --bin chug && cargo test --test todo_consistency --test loop_spec_recovery --test shared_target_dir
