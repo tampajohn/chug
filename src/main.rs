@@ -7,6 +7,13 @@ mod build_info;
 mod chat;
 mod commands;
 mod complete;
+/// T204 phase 1 (F15): the baked-in judge daemon — the `chug daemon`
+/// subcommand (serve/stop/status/ensure), the 0600 unix-socket HTTP/1.1
+/// transport, the single-instance lock, and the auto-spawn lifecycle. The
+/// inference core it hosts is `judge_model` (feature `daemon`); the client
+/// half (`DaemonJudge`, `CHUG_JUDGE=daemon`) compiles in EVERY build so the
+/// default (feature-off) binary still fails open with a clear message.
+mod daemon;
 mod delegate;
 mod decisions;
 mod driver;
@@ -40,7 +47,7 @@ mod judge_pack;
 /// checkpoint loader + candle ModernBERT + decision head). Compiled only
 /// under the `daemon` feature — off by default, so the hot `chug run` path
 /// never compiles candle (pinned by tests/daemon_feature_off.rs). The
-/// socket server + lifecycle that host this core are the next T204 slice.
+/// socket server + lifecycle hosting this core live in `daemon.rs`.
 #[cfg(feature = "daemon")]
 mod judge_model;
 mod websearch;
@@ -252,6 +259,23 @@ enum CliCommand {
         #[command(subcommand)]
         action: ForkAction,
     },
+    /// T204 phase 1 (F15): the baked-in Laya judge daemon — hosts the /judge
+    /// inference server over a 0600 unix domain socket (no TCP listener, no
+    /// port). Serve mode loads the checkpoint once and serves until killed;
+    /// `--stop`/`--status`/`--ensure` are the lifecycle verbs (the
+    /// single-instance flock on the daemon lock admits one server per host).
+    Daemon {
+        /// Stop a running daemon (TERM the lock holder, remove the socket).
+        #[arg(long, conflicts_with_all = ["status", "ensure"])]
+        stop: bool,
+        /// Report status: exit 0 running, 1 starting or absent.
+        #[arg(long, conflicts_with_all = ["stop", "ensure"])]
+        status: bool,
+        /// Ensure a healthy daemon: spawn + bounded wait (the loopd
+        /// cycle-start step; best-effort — a nonzero exit never blocks).
+        #[arg(long, conflicts_with_all = ["stop", "status"])]
+        ensure: bool,
+    },
     /// Print the current LEDGER.md.
     Ledger {
         /// Working directory. Defaults to `.`.
@@ -374,6 +398,7 @@ fn main() -> ExitCode {
             cmd_mcp_serve(allow_launch, allow_control)
         }
         CliCommand::Fork { action } => cmd_fork(action),
+        CliCommand::Daemon { stop, status, ensure } => cmd_daemon(stop, status, ensure),
         CliCommand::Plan {
             goal,
             spec,
@@ -918,6 +943,26 @@ fn cmd_mcp_serve(allow_launch: bool, allow_control: bool) -> anyhow::Result<i32>
         allow_control,
     })?;
     Ok(0)
+}
+
+/// `chug daemon` (T204 phase 1): serve mode (no flags) takes the
+/// single-instance lock, loads the checkpoint, binds the 0600 socket, and
+/// serves /healthz + /judge until killed — like mcp-serve, it dispatches
+/// STRAIGHT to the server loop (no banner, no ledger, no driver lock, no
+/// events write: a long-lived host process). The lifecycle verbs are pure
+/// CLI ops in the cmd_fork shape. On a default (feature-off) build serve
+/// refuses with a clear message; clients fail open meanwhile.
+fn cmd_daemon(stop: bool, status: bool, ensure: bool) -> anyhow::Result<i32> {
+    if stop {
+        return daemon::stop();
+    }
+    if status {
+        return daemon::status();
+    }
+    if ensure {
+        return daemon::ensure_cmd();
+    }
+    daemon::serve()
 }
 
 /// `chug fork` (T105): a pure CLI op over the two session files — no driver,

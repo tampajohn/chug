@@ -18,7 +18,7 @@ use crate::events::{Event, EventSink};
 use crate::ledger;
 use crate::mcp::McpRegistry;
 use crate::observ;
-use crate::riskgate::{LayaJudge, RiskGate};
+use crate::riskgate::{RiskGate, judge_from_env};
 use crate::transcript;
 
 /// Chat state machine:
@@ -187,7 +187,8 @@ pub enum AutoSpecRequest {
 pub fn run_chat(cfg: ChatConfig, sink: &mut dyn EventSink) -> anyhow::Result<i32> {
     let mut client = Client::new(&cfg.model, cfg.max_tokens_per_request)?;
     let gate = if cfg.risk_gate {
-        Some(RiskGate::new(Box::new(LayaJudge::from_env()?), &cfg.cwd))
+        // T204 spec req 5: the judge client per CHUG_JUDGE (default daemon).
+        Some(RiskGate::new(judge_from_env()?, &cfg.cwd))
     } else {
         None
     };
