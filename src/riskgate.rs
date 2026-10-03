@@ -70,10 +70,48 @@ impl Judge for LayaJudge {
     }
 }
 
+/// `CHUG_JUDGE` — the judge client selection (T204 spec req 5):
+/// `daemon` | `http` | `off`. Unset (or empty) defaults to `daemon` — the
+/// baked-in judge daemon over its 0600 unix socket (auto-spawned on the
+/// first judge call); `http` is the external layad at `LAYA_URL`
+/// byte-for-byte today's path (the escape hatch); `off` disables the judge.
+pub const JUDGE_ENV: &str = "CHUG_JUDGE";
+
+/// Select the judge client per `CHUG_JUDGE` (see [`JUDGE_ENV`]). The risk
+/// gate owns fail-open; every mode's judge errors degrade exactly as the
+/// HTTP path's do today (logged `gate_failure`, command allowed).
+pub fn judge_from_env() -> anyhow::Result<Box<dyn Judge>> {
+    let mode = std::env::var(JUDGE_ENV)
+        .ok()
+        .map(|s| s.trim().to_ascii_lowercase())
+        .unwrap_or_default();
+    match mode.as_str() {
+        "" | "daemon" => Ok(Box::new(crate::daemon::DaemonJudge::from_env()?)),
+        "http" => Ok(Box::new(LayaJudge::from_env()?)),
+        "off" => Ok(Box::new(OffJudge)),
+        other => anyhow::bail!(
+            "unknown {JUDGE_ENV} mode {other:?} (expected daemon|http|off)"
+        ),
+    }
+}
+
+/// `CHUG_JUDGE=off`: the judge is disabled — every classification fails
+/// open, logged as a `gate_failure` in `.chug/risk_verdicts.jsonl` (the same
+/// degrade shape as an unreachable judge, so "the gate was off" is visible
+/// in the verdict log rather than silent).
+struct OffJudge;
+
+impl Judge for OffJudge {
+    fn judge(&mut self, _command: &str) -> Result<Verdict, String> {
+        Err("judge disabled (CHUG_JUDGE=off)".into())
+    }
+}
+
 /// Request body per SPEC-3-tools-riskgate.md. Fixed context + criteria: laya
 /// does text classification ONLY, so the command string is the only variable
-/// input.
-fn judge_request_body(command: &str) -> Value {
+/// input. `pub(crate)`: the daemon client (`CHUG_JUDGE=daemon`) POSTs the
+/// exact same body over the unix socket.
+pub(crate) fn judge_request_body(command: &str) -> Value {
     json!({
         "state": {
             "context": "An autonomous coding agent working toward a goal in a project directory wants to execute a bash command.",
@@ -93,7 +131,7 @@ fn judge_request_body(command: &str) -> Value {
     })
 }
 
-fn parse_verdict(value: &Value) -> Result<Verdict, String> {
+pub(crate) fn parse_verdict(value: &Value) -> Result<Verdict, String> {
     let choice = value
         .pointer("/answers/risk/choice")
         .and_then(Value::as_str)
