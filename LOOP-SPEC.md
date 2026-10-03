@@ -128,7 +128,20 @@ simultaneously past gates — T194 amends T161's 2-child cap):
                   `<N>`, `t<N>`, or `chug-loop-tN` surviving into a launched goal, a delegate
                   spec path, or a bash command is a dispatch defect — the cycle-94 glm
                   evidence: four literalization tool errors in one stream)
-     spec:        "/Users/jadams/workspace/chug/specs/t<N>-<slug>.md"  (absolute)
+     spec:        "/tmp/chug-loop-t<N>/specs/t<N>-<slug>.md"  (absolute — the WORKTREE copy.
+                  SPEC-ARG RULE: the goal gate re-reads the spec arg every iteration
+                  (driver.rs:1171) and parses its `check:` line from THAT text, while the
+                  T175 dispatch-time re-key edits the worktree copy on-branch — so the
+                  spec arg MUST name the worktree copy; a main-path arg (the main repo's
+                  `specs/…` copy) makes the gate read MAIN's un-keyed text, which is
+                  exactly the cycle-97 true-positive drift WARNs (the t209/t210
+                  validators' verifying events ran the un-keyed `target-shared` check
+                  while their worktree copies were keyed validate-a) the round-1
+                  validator finding proved. The T63 resume relaunch (`resume: true`, same
+                  worktree, same spec arg) and step 4's validator launch (which launches
+                  exactly like step 2) inherit this same worktree-copy path — one
+                  template, one copy, and the T197 drift advisory (which reads the spec
+                  ARG path) then judges the very text the gate enforces)
      goal:        "Implement TODO item t<N> ONLY. export
              CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared before
              every cargo command (T47 shared build cache — delegate has no env

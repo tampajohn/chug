@@ -1,6 +1,6 @@
 # T210 — launch-template placeholder guard (glm literalized `<N>` 4×)
 
-check: export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-validate-a; touch src/*.rs tests/*.rs; cargo test --test todo_consistency
+check: export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared; touch src/*.rs tests/*.rs; cargo test --test todo_consistency
 
 ## Repo context
 

@@ -881,3 +881,95 @@ fn loop_spec_step2_template_carries_the_placeholder_marker_and_checklist() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// T212 — the step-2 launch template's spec arg must name the WORKTREE copy.
+//
+// The round-1 validator finding (the corrected t212 premise): the child's
+// goal gate re-reads the spec ARG path every iteration (driver.rs:1171) and
+// parses its `check:` line from THAT text, while the T175 dispatch-time
+// re-key edits the WORKTREE copy on-branch. The template's old main-path
+// spec arg therefore made the gate read MAIN's un-keyed copy — the cycle-97
+// drift WARNs were TRUE positives and T197's advisory (which reads the same
+// arg-path copy) was correct all along. The fix is the template: point the
+// spec arg at the worktree copy so gate, advisory, and prompt read ONE
+// text, and pin the rule sentence so the mechanism cannot silently revert.
+
+/// The template's `spec:` line — the worktree copy, the ONE launch arg the
+/// gate re-reads every iteration. Exactly once: the template is the single
+/// launch surface (T63 resume relaunches and step 4's validator launch
+/// inherit it verbatim), so zero means the line was deleted or reverted to
+/// a main-path arg and more than one means a duplicated launch block.
+const T212_WORKTREE_SPEC_ARG_LINE: &str =
+    "spec:        \"/tmp/chug-loop-t<N>/specs/t<N>-<slug>.md\"";
+
+/// The OLD main-path template form — must occur ZERO times in
+/// LOOP-SPEC.md: a main-path arg makes the gate read MAIN's un-keyed copy
+/// (the cycle-97 true-positive WARNs; the round-1 validator finding).
+const T212_OLD_MAIN_PATH_SPEC_ARG: &str =
+    "spec:        \"/Users/jadams/workspace/chug/specs/t<N>-";
+
+#[test]
+fn loop_spec_step2_template_spec_arg_names_the_worktree_copy() {
+    let root = std::env::current_dir().expect("cargo sets the test cwd to the package root");
+    let spec =
+        std::fs::read_to_string(root.join("LOOP-SPEC.md")).expect("LOOP-SPEC.md readable");
+    let flat = spec.split_whitespace().collect::<Vec<_>>().join(" ");
+
+    // (a) the template's `spec:` line carries the worktree copy EXACTLY once.
+    assert_eq!(
+        spec.matches(T212_WORKTREE_SPEC_ARG_LINE).count(),
+        1,
+        "LOOP-SPEC step 2's launch template must point its `spec:` arg at the WORKTREE \
+         copy (`/tmp/chug-loop-t<N>/specs/t<N>-<slug>.md`) exactly once: the goal gate \
+         re-reads the spec arg every iteration (driver.rs:1171) and the T175 re-key \
+         edits the worktree copy on-branch — a main-path arg makes the gate read MAIN's \
+         un-keyed copy (the cycle-97 true-positive drift WARNs)"
+    );
+
+    // (b) the rule sentence sits immediately at that line and names the
+    // mechanism: the gate's per-iteration re-read, the copy the T175 re-key
+    // edits, and the true-positive WARN history. Whitespace-collapsed
+    // matching (T78): the annotation wraps mid-phrase.
+    for (needle, what) in [
+        (
+            "the goal gate re-reads the spec arg every iteration",
+            "the goal gate's per-iteration spec re-read (driver.rs:1171)",
+        ),
+        (
+            "T175 dispatch-time re-key edits the worktree copy on-branch",
+            "the copy the dispatch-time re-key edits",
+        ),
+        (
+            "the cycle-97 true-positive drift WARNs",
+            "the true-positive naming (the WARNs were correct; round 1 reverted)",
+        ),
+        (
+            "The T63 resume relaunch",
+            "the T63 resume inheriting the same template spec arg",
+        ),
+        (
+            "step 4's validator launch",
+            "the step-4 validator launch inheriting the same template spec arg",
+        ),
+    ] {
+        assert_eq!(
+            flat.matches(needle).count(),
+            1,
+            "LOOP-SPEC step 2's spec-arg rule must state {what} exactly once — zero means \
+             dropped or reworded, more than one means duplicated"
+        );
+    }
+
+    // (c) the OLD main-path template form occurs ZERO times: the residue of
+    // the pre-T212 template (a main-repo absolute spec arg) is the exact
+    // defect this row fixes — its return is the round-1 bug resurrected.
+    assert_eq!(
+        spec.matches(T212_OLD_MAIN_PATH_SPEC_ARG).count(),
+        0,
+        "LOOP-SPEC must not carry the old main-path spec arg \
+         (`/Users/jadams/workspace/chug/specs/t<N>-…`) — the gate reads the spec ARG path \
+         every iteration, so a main-path arg re-arms the cycle-97 false-premise defect \
+         (gate and re-keyed worktree copy disagree silently)"
+    );
+}
