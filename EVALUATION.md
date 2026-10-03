@@ -248,6 +248,25 @@ Per-item entries below; wrap adds skipped/deferred + cycle notes.
   all did their jobs. Gates: 1480+21+9 plain, 1515 daemon-profile,
   clippy both profiles.
 
+**Cycle-96 wrap notes.** Landed 3/3 high-pri rows (T207 → T211 → T205) —
+the F13 consumption path (T205) was the cycle's feature mandate and is the
+minor-bump driver for v0.16.0. Skipped/deferred: T209 (pri 3, doctrine
+SOLO — dispatch-time spec-size gate, spec ready) and T210 (pri 4, doctrine
+SOLO — launch-template placeholder guard, spec ready); both hit the
+stop-dispatch wall, not a quality judgment — next cycle opens with them in
+queue order. Cycle-level: the process changes T207 shipped were exercised
+by this very wrap (the T207 hard rule's wrap-state note is in the resumed
+segment's ledger — the cycle's own medicine taken on its last segment,
+which resumed mid-wrap after the prior segment died post-flip/pre-release);
+child economics stayed in the measured band the T173 census tracks (t211:
+50-min wall, work complete-committed → orchestrator-finish, no resume
+burned; t205: both budgets died with complete-uncommitted work → one
+resume then orchestrator-finish — the T63/T55 routing pair worked as
+designed). Final state: queue = T209 + T210 (specs ready, doctrine SOLO);
+next cycle is a routine glm freshness-skip (eval same UTC day). Tag:
+v0.16.0 (3 items since v0.15.0, T205 a feature).
+
+
 
 
 ### Cycle 95 (2026-10-03, ~04:45 UTC–) — kimi MANDATORY fresh-eval cycle (predicate failed: eval dated 2026-10-02 vs launch 2026-10-03; T81 routing correct 5-for-5) — opened with cycle-94 bookkeeping recovery (T204 merged-but-unflipped; glm seg-3 died 200/200 mid-wrap)
