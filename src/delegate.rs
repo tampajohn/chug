@@ -484,6 +484,28 @@ fn target_dir_drift(spec_text: &str, goal: &str, env_dir: Option<&str>) -> Optio
     Some(warning)
 }
 
+/// T212: the spec text the drift advisory judges — resolved to the copy the
+/// child's goal gate will READ. The dispatch-time re-key (T175/T52 doctrine)
+/// edits the WORKTREE copy (`<cwd>/specs/<basename-of-spec-arg>`) on-branch
+/// before launch, so a correctly pre-keyed dispatch leaves MAIN's copy at the
+/// spec ARG path still naming the default `target-shared` slot while goal/env
+/// name the role-keyed one — reading MAIN's copy unconditionally fired a
+/// false-positive `WARN target-dir drift:` on both cycle-97 validator
+/// launches. Resolution rule: when `<cwd>/specs/<basename>` is a file, THAT
+/// copy is judged (an unreadable worktree copy stays unreadable — None —
+/// rather than silently judging MAIN's stale copy); otherwise the spec ARG
+/// path is read exactly as before, so chat-side and cwd-external spec
+/// launches keep today's behavior. Neither candidate readable → None: the
+/// advisory never blocks a launch (T197's pin). File reads only, no spawn —
+/// the comparison itself stays in the pure [`target_dir_drift`].
+fn advisory_spec_text(spec_arg: &Path, cwd: &Path) -> Option<String> {
+    let worktree_copy = cwd.join("specs").join(spec_arg.file_name()?);
+    if worktree_copy.is_file() {
+        return fs::read_to_string(&worktree_copy).ok();
+    }
+    fs::read_to_string(spec_arg).ok()
+}
+
 /// Spawn a detached `chug run` child and return immediately. Never waits on
 /// the child — no sleeps, no retries, no waiting anywhere in this function.
 ///
@@ -553,12 +575,18 @@ pub(crate) fn delegate_launch(input: &Value) -> anyhow::Result<ToolResult> {
     // T197: the target-dir drift advisory — computed over the three surfaces
     // this spawn just assembled, AFTER the argv/env assembly and BEFORE the
     // spawn returns. The spec text is read best-effort (unreadable → no
-    // advisory, launch proceeds — the spec's existence/readability probe
-    // already ran, so this only guards a TOCTOU vanish); the goal text and
-    // the `env` map are in hand. Advisory only, never a refusal; with no
-    // drift the return text stays byte-identical (`drift_note` is empty).
-    let drift_note = fs::read_to_string(&spec)
-        .ok()
+    // advisory, launch proceeds); the goal text and the `env` map are in
+    // hand. Advisory only, never a refusal; with no drift the return text
+    // stays byte-identical (`drift_note` is empty).
+    // T212: the advisory must judge the copy the goal gate READS. The
+    // dispatch-time re-key (T175) edits the WORKTREE copy
+    // (`<cwd>/specs/<basename>` of the spec arg) on-branch, so the
+    // resolution rule is: when that worktree copy exists, feed IT to the
+    // advisory; otherwise feed the spec arg path as before. Reading MAIN's
+    // arg-path copy unconditionally warned on every correctly pre-keyed
+    // dispatch (cycle 97, two sightings) — a false positive that trains
+    // orchestrators to ignore true drift.
+    let drift_note = advisory_spec_text(&spec, &cwd)
         .and_then(|spec_text| {
             let env_dir = env_map
                 .iter()
