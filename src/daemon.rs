@@ -1037,6 +1037,39 @@ mod tests {
         panic!("the fixture server never answered /healthz");
     }
 
+    /// Ordered-object field lookup (judge_model's `field_pub` is its own
+    /// test-module helper; this is the same one-liner, local to daemon's).
+    #[cfg(feature = "daemon")]
+    fn ov_field<'a>(v: &'a OValue, key: &str) -> Option<&'a OValue> {
+        match v {
+            OValue::Obj(entries) => {
+                entries.iter().find(|(k, _)| k == key).map(|(_, v)| v)
+            }
+            _ => None,
+        }
+    }
+
+    /// OValue -> serde_json Value for the golden comparison (object key order
+    /// is not a shape concern for the response contract).
+    #[cfg(feature = "daemon")]
+    fn ov_to_json(v: &OValue) -> Value {
+        match v {
+            OValue::Null => Value::Null,
+            OValue::Bool(b) => Value::Bool(*b),
+            OValue::Int(i) => json!(i),
+            OValue::Float(f) => json!(f),
+            OValue::Str(s) => json!(s),
+            OValue::Arr(items) => Value::Array(items.iter().map(ov_to_json).collect()),
+            OValue::Obj(entries) => {
+                let mut m = serde_json::Map::new();
+                for (k, v) in entries {
+                    m.insert(k.clone(), ov_to_json(v));
+                }
+                Value::Object(m)
+            }
+        }
+    }
+
     /// Structural equality with a float tolerance — the same contract the
     /// judge_model live test asserts, applied to socket responses.
     fn assert_value_close(got: &Value, want: &Value, tol: f64, name: &str) {
@@ -1225,7 +1258,7 @@ mod tests {
                 self.0.push(e);
             }
         }
-        let mut judge = DaemonJudge {
+        let judge = DaemonJudge {
             sock: tmp.path().join("absent.sock"),
             spawned: None,
             dead: Some("the judge daemon is unreachable (latched)".into()),
@@ -1275,7 +1308,34 @@ mod tests {
         }
         let model = crate::judge_model::JudgeModel::load_default()
             .expect("loading the default checkpoint");
-        let fx = fixture("riskgate_base");
+        // The wire body must carry the SDK's ORIGINAL question order: the
+        // packing is order-sensitive (parse_ordered exists for exactly this),
+        // so a serde_json roundtrip (BTreeMap-sorted) silently reorders the
+        // questions and drifts the probabilities. Parse the golden file with
+        // the order-preserving parser and serialize with OValue::dumps —
+        // byte-for-byte what the Python SDK client would put on the wire.
+        let golden_raw =
+            std::fs::read_to_string("tests/fixtures/laya/golden-vectors.json")
+                .expect("reading golden-vectors.json");
+        let golden = crate::judge_pack::parse_ordered(&golden_raw)
+            .expect("parsing golden-vectors.json");
+        let fixtures = match ov_field(&golden, "fixtures") {
+            Some(OValue::Arr(items)) => items,
+            other => panic!("fixtures array, got {other:?}"),
+        };
+        let fx = fixtures
+            .iter()
+            .find(|fx| matches!(ov_field(fx, "name"), Some(OValue::Str(s)) if s == "riskgate_base"))
+            .expect("riskgate_base fixture missing");
+        let state = ov_field(fx, "state").expect("fixture state").clone();
+        let questions = ov_field(fx, "questions")
+            .expect("fixture questions")
+            .clone();
+        let request = OValue::Obj(vec![
+            ("state".to_string(), state),
+            ("questions".to_string(), questions),
+        ])
+        .dumps(false);
         let backend: Arc<dyn JudgeBackend> = Arc::new(model);
         let tmp = tempfile::tempdir().expect("tempdir");
         let sock = tmp.path().join("live.sock");
@@ -1289,14 +1349,14 @@ mod tests {
         }
         healthz_ok(&sock).expect("the live daemon never became healthy");
 
-        let request = json!({"state": fx["state"], "questions": fx["questions"]}).to_string();
         let started = Instant::now();
         let (status, body) =
             uds_request(&sock, "POST", "/judge", Some(&request)).expect("live judge");
         let elapsed = started.elapsed();
         assert_eq!(status, 200, "live judge status");
         let value: Value = serde_json::from_str(&body).expect("live judge JSON");
-        assert_value_close(&value, &fx["expected"], 1e-3, "riskgate_base over the socket");
+        let expected = ov_field(fx, "expected").expect("fixture expected");
+        assert_value_close(&value, &ov_to_json(expected), 1e-3, "riskgate_base over the socket");
         // The judge latency budget (spec req 5): warm ~50ms-class on MPS,
         // bounded CPU forward here — never the seconds-scale stall.
         assert!(
