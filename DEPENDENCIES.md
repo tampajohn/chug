@@ -82,6 +82,8 @@ Every variable read via `std::env::var`/`var_os` in `src/` (+ `build.rs`):
 - `CHUG_JUDGE` — risk-gate judge client: `daemon` (default) | `http` | `off`
 - `CHUG_DAEMON_SOCK` / `CHUG_HOME` — the baked-in judge daemon's 0600 unix socket location
 - `CHUG_LAYA_CHECKPOINT` — the daemon's model checkpoint (local dir or HF repo)
+- `CHUG_DAEMON_STUB` — the daemon lifecycle test seam (`chug daemon` serve mode, SHIPPING code path read at startup): `1` serves the real transport with NO model — /judge refuses outright (a stub must never fabricate classifications)
+- `CHUG_LAYA_LIVE_PARITY` — test-only: `=1` enables the weights-loaded golden-parity tests (judge_model + daemon socket paths)
 
 Adjacent, not chug-owned knobs: mcp.json header values expand `${VAR}` from
 the process env at load time (`REMOTE_TOKEN` in tests is an example of a
