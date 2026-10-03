@@ -1305,17 +1305,14 @@ mod tests {
         // Poll for the exact ECONNREFUSED classification (raw errno, not the
         // shipping bool) so an over-eager classifier cannot make this pass.
         let deadline = Instant::now() + STALE_CLASSIFY_DEADLINE;
-        let mut last_transient: Option<std::io::Error> = None;
         loop {
             match UnixStream::connect(&sock) {
                 Err(e) if e.raw_os_error() == Some(libc::ECONNREFUSED) => break,
                 Err(e) => {
-                    last_transient = Some(e);
                     assert!(
                         Instant::now() < deadline,
                         "connect to the dead socket never classified ECONNREFUSED within \
-                         {STALE_CLASSIFY_DEADLINE:?} (last transient: {})",
-                        last_transient.as_ref().expect("just stored")
+                         {STALE_CLASSIFY_DEADLINE:?} (last transient: {e})"
                     );
                     std::thread::sleep(STALE_CLASSIFY_BACKOFF);
                 }
