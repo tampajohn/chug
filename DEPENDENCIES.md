@@ -46,6 +46,7 @@ degraded note, and the loop continues.
 | `rg` → `grep -rn` | process | `grep` tool | — | `rg` missing → `grep` fallback; both missing → tool error naming the spawn failure | birth `f911488` |
 | `osascript` | process | macOS notify sink (opt-in via `.chug/notify.json`) | — | delivery failure noted exactly once per run; run never affected | T190 |
 | `.chug/mcp.json` servers | process | user-configured MCP children (stdio + streamable HTTP) | per-entry `env` map; `${VAR}` header expansion from the process env | per-server fail-soft: bad entry skipped with a note, dead server errors its calls — never aborts the run | SPEC-7 (stdio), SPEC-9 (HTTP) |
+| python venv `~/models/laya/venv` (torch + transformers) + HF snapshot cache (`convaiinnovations/laya` @ 55cf4c4e) | operator-host tooling — **NOT a chug build dep** (nothing in `src/` or `Cargo.toml` touches it; the cargo build never needs it) | F13 phase-2b distillation experiment ONLY — `scripts/distill_experiment.py` (T208) reads the decision corpus and trains the evaluation heads | `TRANSFORMERS_OFFLINE` / `HF_HUB_OFFLINE` (forced on by the script itself — no network fetch) | venv or snapshot absent → the script exits naming the venv path; the loop never depends on it (report + committed metrics are the product) | T208 (this slice) |
 
 Deliberately absent: **no database, no docker, no `gh` CLI at runtime** (gh
 exists only inside the GHA release job), **no external config service**, no
