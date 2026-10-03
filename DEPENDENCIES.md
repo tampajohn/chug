@@ -35,7 +35,8 @@ degraded note, and the loop continues.
 | serde_yaml 0.9 | dev-dep | `tests/release_workflow.rs` parses the GHA workflow | — | test-only | T100 |
 | LLM endpoint + credentials | service | every model call — the loop's fuel | `ANTHROPIC_BASE_URL` / `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` | **fail-closed**: no credentials → run refuses; unreachable → per-call error → abort path | birth `f911488` |
 | Langfuse v3 (self-hosted) | service | traces/generations/spans, outcome + iteration scores | `LANGFUSE_HOST` / `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` (fallbacks `~/.langfuse-keys-chug`, `~/.langfuse-keys`) | unset → silently off; delivery failure counted + ignored — telemetry never changes run behavior | SPEC-8 |
-| layad judge | service | `--risk-gate` bash classification + layad notify sink | `LAYA_URL` (default `http://127.0.0.1:8420`) | fail-open: judge down → command allowed, degradation logged (verdicts → `.chug/risk_verdicts.jsonl`) | SPEC-3 `db6fea6` |
+| `chug daemon` (baked-in judge, `daemon` feature) | crate-in-binary | `--risk-gate` bash classification provider (T204/F15 phase 1): `chug daemon` hosts the Laya model in-process (candle 0.11 + hf-hub 0.4 + tokenizers 0.22, optional feature — OFF in the default build, pinned zero-candle by `tests/daemon_feature_off.rs`) over a 0600 unix socket (`CHUG_HOME`/`CHUG_DAEMON_SOCK`, default `~/.chug/daemon.sock`) | `CHUG_JUDGE` (default `daemon`; `http`/`off` escape hatches), `CHUG_LAYA_CHECKPOINT` (local dir or HF repo; first load downloads ~650MB into the HF cache) | fail-open unchanged: daemon absent/unreachable → command allowed, degradation logged (verdicts → `.chug/risk_verdicts.jsonl`); auto-spawn + stale-socket recovery; single-instance flock | T204/F15 (this slice) |
+| layad judge (external, deprecated as judge) | service | layad notify sink (`/hook/notification` push-vs-silent) — and the `CHUG_JUDGE=http` escape hatch for the risk gate | `LAYA_URL` (default `http://127.0.0.1:8420`) | fail-open: judge down → command allowed, degradation logged (verdicts → `.chug/risk_verdicts.jsonl`); the notify sink degrades to a `notify_error` event | SPEC-3 `db6fea6`; judge role replaced by the daemon (T204) |
 | DuckDuckGo HTML | service | `web_search` (keyless default provider) | `CHUG_WEB_SEARCH_PROVIDER` / `CHUG_WEB_SEARCH_BASE_URL` | scrape breakage/rate-limit → tool error to the model, never a silent empty result; one attempt, no retry | T180 |
 | arbitrary URLs | capability | `web_fetch` (bounded read-only GET — not a service, the same reqwest seam) | — | non-2xx/transport → tool error; one attempt, no retry | T37 |
 | GitHub via plain `git push`/tag | service | delivery of work + releases | — | in-binary git calls degrade to notes; delivery (push/tag) blocks — git is the transport of record | T100 (releases), loop protocol (work) |
@@ -77,7 +78,12 @@ Every variable read via `std::env::var`/`var_os` in `src/` (+ `build.rs`):
   gets the baseline plus its entry's `env` map, never the whole inherited
   environment (API keys do not leak into children)
 - `LANGFUSE_HOST`, `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` — telemetry
-- `LAYA_URL` — risk-gate judge + layad notify sink
+- `LAYA_URL` — layad notify sink + the `CHUG_JUDGE=http` escape hatch
+- `CHUG_JUDGE` — risk-gate judge client: `daemon` (default) | `http` | `off`
+- `CHUG_DAEMON_SOCK` / `CHUG_HOME` — the baked-in judge daemon's 0600 unix socket location
+- `CHUG_LAYA_CHECKPOINT` — the daemon's model checkpoint (local dir or HF repo)
+- `CHUG_DAEMON_STUB` — the daemon lifecycle test seam (`chug daemon` serve mode, SHIPPING code path read at startup): `1` serves the real transport with NO model — /judge refuses outright (a stub must never fabricate classifications)
+- `CHUG_LAYA_LIVE_PARITY` — test-only: `=1` enables the weights-loaded golden-parity tests (judge_model + daemon socket paths)
 
 Adjacent, not chug-owned knobs: mcp.json header values expand `${VAR}` from
 the process env at load time (`REMOTE_TOKEN` in tests is an example of a

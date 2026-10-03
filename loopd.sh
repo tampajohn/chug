@@ -292,6 +292,24 @@ while [ ! -f "$STOP" ]; do
   # --release` (LOOP-SPEC step 3, META-SPEC gates rule). First cycle after
   # this lands pays a cold release build here AND into the shared cache;
   # every later one is warm.
+  # T204/F15 — ensure the baked-in judge daemon (build warmth for the risk
+  # gate): spawn it NOW, on the freshly built release binary, so the cycle's
+  # first risk-gated bash command does not pay the 650MB cold load itself
+  # (the daemon loads ONCE per host and every run/child shares the warm
+  # model). Best-effort like the reaper and the digest — a daemon that will
+  # not come up must never block the launch: the client's fail-open degrade
+  # is the same shape as today's unreachable-layad path. `chug daemon
+  # --ensure` is idempotent (healthy daemon -> instant exit 0) and bounded
+  # (spawn + wait-for-socket with a fixed budget). LOOP_DAEMON_ENSURE=0
+  # opts out (the LOOP_REAPER pattern).
+  if [ "${LOOP_DAEMON_ENSURE:-1}" = "1" ]; then
+    # stdout/stderr to /dev/null — the supervisor log carries SUPERVISOR
+    # lines only (the spoof-guard invariant: chug output reaches the log
+    # only through the sanctioned cycle-child record at verdict time);
+    # daemon diagnostics live in <chug home>/daemon.log.
+    "$ROOT/target/release/chug" daemon --ensure >/dev/null 2>&1 \
+      || echo "$(ts) daemon ensure: nonzero exit (best-effort, ignored — the judge fails open)" >> "$LOG"
+  fi
   # T46: refresh the Phase-1 corpus digest so every cycle's evaluation reads
   # .chug/eval-digest.md instead of re-mining raw events archives. T137:
   # best-effort — a nonzero exit must not kill the supervisor under set -e;
