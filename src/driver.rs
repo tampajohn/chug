@@ -21,7 +21,7 @@ use crate::mcp::McpRegistry;
 use crate::notify::NotifySink;
 use crate::observ;
 use crate::permissions;
-use crate::riskgate::{GateDecision, LayaJudge, RiskGate};
+use crate::riskgate::{GateDecision, RiskGate, judge_from_env};
 use crate::tools::{self, ToolCtx, ToolResult};
 use crate::transcript;
 use crate::trim;
@@ -340,7 +340,9 @@ enum VerifyOutcome {
 pub fn run(cfg: RunConfig, sink: &mut dyn EventSink) -> anyhow::Result<i32> {
     let client = Client::new(&cfg.model, cfg.max_tokens_per_request)?;
     let gate = if cfg.risk_gate {
-        Some(RiskGate::new(Box::new(LayaJudge::from_env()?), &cfg.cwd))
+        // T204 spec req 5: the judge client per CHUG_JUDGE (default daemon —
+        // the baked-in judge daemon over its unix socket).
+        Some(RiskGate::new(judge_from_env()?, &cfg.cwd))
     } else {
         None
     };

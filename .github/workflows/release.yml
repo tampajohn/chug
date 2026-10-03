@@ -64,8 +64,12 @@ jobs:
         if: matrix.target == 'aarch64-unknown-linux-gnu'
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends gcc-aarch64-linux-gnu libc6-dev-arm64-cross
 
-      - name: build (release, locked)
-        run: cargo build --release --locked --target ${{ matrix.target }}
+      - name: build (release, locked, with the judge daemon)
+        # T204/F15: release binaries ship the baked-in judge daemon (metal on
+        # macos-14, cpu on linux). `cargo build --release --locked` stays a
+        # substring (tests/release_workflow.rs pins it); the `daemon` feature
+        # adds candle/hf-hub/tokenizers.
+        run: cargo build --release --locked --features daemon --target ${{ matrix.target }}
         env:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
 

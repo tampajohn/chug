@@ -38,16 +38,25 @@ pub struct LayaJudge {
 
 impl LayaJudge {
     pub fn from_env() -> anyhow::Result<Self> {
-        let url = std::env::var("LAYA_URL")
-            .ok()
-            .filter(|s| !s.trim().is_empty())
-            .unwrap_or_else(|| DEFAULT_LAYA_URL.to_string());
+        // One env read at the one call site; the selection logic is the pure
+        // [`laya_url`] (the mcp_serve.rs env rule), pinned by table tests.
+        let url = laya_url(std::env::var("LAYA_URL").ok().as_deref());
         let http = reqwest::blocking::Client::builder()
             .timeout(Duration::from_secs(JUDGE_TIMEOUT_SECS))
             .build()
             .context("building risk-gate HTTP client")?;
         Ok(Self { url, http })
     }
+}
+
+/// The layad base URL, parsed PURELY from an optional `LAYA_URL` value
+/// ([`LayaJudge::from_env`] is the only env reader): a set, non-blank value
+/// wins VERBATIM (trimming would silently alter the URL the operator
+/// configured); unset or blank falls back to [`DEFAULT_LAYA_URL`].
+pub(crate) fn laya_url(raw: Option<&str>) -> String {
+    raw.filter(|s| !s.trim().is_empty())
+        .unwrap_or(DEFAULT_LAYA_URL)
+        .to_string()
 }
 
 impl Judge for LayaJudge {
@@ -70,10 +79,80 @@ impl Judge for LayaJudge {
     }
 }
 
+/// `CHUG_JUDGE` — the judge client selection (T204 spec req 5):
+/// `daemon` | `http` | `off`. Unset (or empty) defaults to `daemon` — the
+/// baked-in judge daemon over its 0600 unix socket (auto-spawned on the
+/// first judge call); `http` is the external layad at `LAYA_URL`
+/// byte-for-byte today's path (the escape hatch); `off` disables the judge.
+pub const JUDGE_ENV: &str = "CHUG_JUDGE";
+
+/// Select the judge client per `CHUG_JUDGE` (see [`JUDGE_ENV`]). The risk
+/// gate owns fail-open; every mode's judge errors degrade exactly as the
+/// HTTP path's do today (logged `gate_failure`, command allowed).
+pub fn judge_from_env() -> anyhow::Result<Box<dyn Judge>> {
+    // One env read at the one call site; the selection table itself is the
+    // pure [`judge_mode`] (the mcp_serve.rs env rule), pinned branch-by-
+    // branch by table tests below.
+    let raw = std::env::var(JUDGE_ENV).ok();
+    match judge_mode(raw.as_deref()).map_err(|e| anyhow::anyhow!(e))? {
+        JudgeMode::Daemon => Ok(Box::new(crate::daemon::DaemonJudge::from_env()?)),
+        JudgeMode::Http => Ok(Box::new(LayaJudge::from_env()?)),
+        JudgeMode::Off => Ok(Box::new(OffJudge)),
+    }
+}
+
+/// Which judge client [`judge_mode`] selected.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum JudgeMode {
+    /// The baked-in judge daemon over its 0600 unix socket (auto-spawned).
+    Daemon,
+    /// The external layad at `LAYA_URL` — today's reqwest TCP path.
+    Http,
+    /// The judge is disabled — every classification fails open, logged.
+    Off,
+}
+
+/// The PURE `CHUG_JUDGE` selection table ([`judge_from_env`] is its only
+/// caller — the process-global env is read exactly once, there). Unset,
+/// empty, or blank defaults to [`JudgeMode::Daemon`] (T204 spec req 5: the
+/// baked-in daemon is the default judge); `daemon` (case/whitespace
+/// tolerant, matching today's trim+lowercase) is explicit Daemon, `http` is
+/// the external layad escape hatch, `off` disables the judge. Any other
+/// value is a HARD ERROR naming the valid modes: an unknown mode must
+/// refuse the run (driver.rs/chat.rs propagate the error) rather than
+/// silently picking a client the operator did not ask for.
+pub(crate) fn judge_mode(raw: Option<&str>) -> Result<JudgeMode, String> {
+    let normalized = raw
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_ascii_lowercase());
+    match normalized.as_deref() {
+        None | Some("daemon") => Ok(JudgeMode::Daemon),
+        Some("http") => Ok(JudgeMode::Http),
+        Some("off") => Ok(JudgeMode::Off),
+        Some(other) => Err(format!(
+            "unknown {JUDGE_ENV} mode {other:?} (expected daemon|http|off)"
+        )),
+    }
+}
+
+/// `CHUG_JUDGE=off`: the judge is disabled — every classification fails
+/// open, logged as a `gate_failure` in `.chug/risk_verdicts.jsonl` (the same
+/// degrade shape as an unreachable judge, so "the gate was off" is visible
+/// in the verdict log rather than silent).
+struct OffJudge;
+
+impl Judge for OffJudge {
+    fn judge(&mut self, _command: &str) -> Result<Verdict, String> {
+        Err("judge disabled (CHUG_JUDGE=off)".into())
+    }
+}
+
 /// Request body per SPEC-3-tools-riskgate.md. Fixed context + criteria: laya
 /// does text classification ONLY, so the command string is the only variable
-/// input.
-fn judge_request_body(command: &str) -> Value {
+/// input. `pub(crate)`: the daemon client (`CHUG_JUDGE=daemon`) POSTs the
+/// exact same body over the unix socket.
+pub(crate) fn judge_request_body(command: &str) -> Value {
     json!({
         "state": {
             "context": "An autonomous coding agent working toward a goal in a project directory wants to execute a bash command.",
@@ -93,7 +172,7 @@ fn judge_request_body(command: &str) -> Value {
     })
 }
 
-fn parse_verdict(value: &Value) -> Result<Verdict, String> {
+pub(crate) fn parse_verdict(value: &Value) -> Result<Verdict, String> {
     let choice = value
         .pointer("/answers/risk/choice")
         .and_then(Value::as_str)
@@ -378,5 +457,176 @@ mod tests {
     fn malformed_response_is_an_error() {
         assert!(parse_verdict(&json!({})).is_err());
         assert!(parse_verdict(&json!({"answers": {"risk": {"choice": "safe"}}})).is_err());
+    }
+
+    // ------------------------------------------------------------------
+    // T204 spec req 5 — the CHUG_JUDGE + LAYA_URL selection tables. The
+    // tables are PURE helpers (`judge_mode` / `laya_url`) so every branch
+    // pins without touching process-global env (the mcp_serve.rs env rule);
+    // `judge_from_env` is the single env-reading call site and its wiring
+    // is pinned separately under the crate's one env lock below.
+    // ------------------------------------------------------------------
+
+    /// The full `CHUG_JUDGE` selection table, branch by branch. The
+    /// validator's M3 mutant (unset/empty -> http) and any default drift
+    /// die here: the spec'd default is the DAEMON for unset, empty, AND
+    /// blank values.
+    #[test]
+    fn chug_judge_mode_table_is_pinned() {
+        // Unset / empty / blank / explicit daemon, case- and
+        // whitespace-tolerant (today's trim + to_ascii_lowercase) — all
+        // select the baked-in daemon.
+        for raw in [
+            None,
+            Some(""),
+            Some("   "),
+            Some("daemon"),
+            Some("DAEMON"),
+            Some("  Daemon  "),
+        ] {
+            assert_eq!(judge_mode(raw), Ok(JudgeMode::Daemon), "raw {raw:?}");
+        }
+        // The external layad escape hatch.
+        for raw in [Some("http"), Some("HTTP"), Some(" http ")] {
+            assert_eq!(judge_mode(raw), Ok(JudgeMode::Http), "raw {raw:?}");
+        }
+        // The disabled judge.
+        for raw in [Some("off"), Some("OFF"), Some("Off ")] {
+            assert_eq!(judge_mode(raw), Ok(JudgeMode::Off), "raw {raw:?}");
+        }
+        // Unknown/garbage -> a HARD ERROR naming the valid modes (the
+        // documented fallback: driver.rs/chat.rs propagate the error and
+        // the run refuses to start — it never silently picks a client the
+        // operator did not ask for).
+        for garbage in ["garbage", "daemons", "0", "daemon,http", "GARBAGE"] {
+            let err = judge_mode(Some(garbage)).expect_err(garbage);
+            assert!(err.contains("unknown CHUG_JUDGE mode"), "{garbage}: {err}");
+            assert!(err.contains("expected daemon|http|off"), "{garbage}: {err}");
+        }
+        // The error names the offending (trimmed, lowercased) value.
+        let err = judge_mode(Some("  Bogus  ")).expect_err("bogus");
+        assert!(err.contains("bogus"), "the error names the value: {err}");
+    }
+
+    /// The `LAYA_URL` selection table: unset or blank -> the default layad
+    /// address; a set value is used VERBATIM (blankness is judged on the
+    /// trim, the value is never trimmed — the operator's URL is not
+    /// silently altered).
+    #[test]
+    fn laya_url_table_is_pinned() {
+        assert_eq!(laya_url(None), DEFAULT_LAYA_URL);
+        assert_eq!(laya_url(Some("")), DEFAULT_LAYA_URL);
+        assert_eq!(laya_url(Some("   ")), DEFAULT_LAYA_URL);
+        assert_eq!(laya_url(Some("http://10.0.0.5:9000")), "http://10.0.0.5:9000");
+        assert_eq!(
+            laya_url(Some("  http://10.0.0.5:9000  ")),
+            "  http://10.0.0.5:9000  "
+        );
+    }
+
+    /// SAFETY: set/remove one env var — serialized by [`DELEGATE_ENV_LOCK`]
+    /// (the crate's ONE process-global env lock, T129), saved value
+    /// restored by the caller.
+    fn set_env(var: &str, value: Option<&std::ffi::OsStr>) {
+        unsafe {
+            match value {
+                Some(v) => std::env::set_var(var, v),
+                None => std::env::remove_var(var),
+            }
+        }
+    }
+
+    /// The env WIRING behind the pure table: `judge_from_env` really reads
+    /// `CHUG_JUDGE` once and builds the matching client. Observable per
+    /// leg through each client's error FLAVOR (no type introspection on
+    /// the `Box<dyn Judge>`): `off` says "judge disabled", `http` against a
+    /// dead layad says "layad request failed", and the daemon client says
+    /// "judge daemon" — so the UNSET and EMPTY default legs prove the
+    /// daemon client is what the default builds (an http or off mutant
+    /// flips the flavor and fails here).
+    #[test]
+    fn judge_from_env_wiring_selects_per_chug_judge() {
+        let _timing = crate::testsupport::timing_guard();
+        let _guard = crate::delegate::tests::DELEGATE_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let saved: Vec<(&'static str, Option<std::ffi::OsString>)> = vec![
+            (
+                JUDGE_ENV,
+                std::env::var_os(JUDGE_ENV),
+            ),
+            ("LAYA_URL", std::env::var_os("LAYA_URL")),
+            (
+                crate::daemon::BINARY_ENV,
+                std::env::var_os(crate::daemon::BINARY_ENV),
+            ),
+            (
+                crate::daemon::HOME_ENV,
+                std::env::var_os(crate::daemon::HOME_ENV),
+            ),
+            (
+                crate::daemon::SOCK_ENV,
+                std::env::var_os(crate::daemon::SOCK_ENV),
+            ),
+        ];
+        struct Restore(Vec<(&'static str, Option<std::ffi::OsString>)>);
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                for (var, value) in &self.0 {
+                    set_env(var, value.as_deref());
+                }
+            }
+        }
+        let _restore = Restore(saved);
+
+        // off: the judge is disabled — every classification fails open.
+        set_env(JUDGE_ENV, Some("off".as_ref()));
+        let mut judge = judge_from_env().expect("off constructs");
+        assert_eq!(
+            judge.judge("rm -rf /"),
+            Err("judge disabled (CHUG_JUDGE=off)".to_string())
+        );
+
+        // garbage: the run refuses to start (the pure table's error, live).
+        set_env(JUDGE_ENV, Some("garbage".as_ref()));
+        let err = match judge_from_env() {
+            Ok(_) => panic!("garbage refuses to construct a judge"),
+            Err(e) => e,
+        };
+        assert!(err.to_string().contains("unknown CHUG_JUDGE mode"), "{err}");
+
+        // http: the LAYA_URL client — against a guaranteed-dead address the
+        // error flavor is layad's (never a spawn, never "judge disabled").
+        set_env(JUDGE_ENV, Some("http".as_ref()));
+        set_env("LAYA_URL", Some("http://127.0.0.1:1".as_ref()));
+        let mut judge = judge_from_env().expect("http constructs");
+        let err = match judge.judge("rm -rf /") {
+            Ok(_) => panic!("a dead layad must not judge"),
+            Err(e) => e,
+        };
+        assert!(err.contains("layad request failed"), "{err}");
+
+        // unset + empty: the DEFAULT is the daemon client (spec req 5). With
+        // the delegate seam pointed at /bin/false the daemon client's ensure
+        // fails with the SPAWN flavor — proof the default built the daemon
+        // client (http would say "layad request failed", off "judge
+        // disabled"). CHUG_HOME is scoped to a tempdir so the lock/log
+        // touch nothing real.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        for mode in [None, Some("".as_ref())] {
+            set_env(JUDGE_ENV, mode);
+            set_env(crate::daemon::BINARY_ENV, Some("/bin/false".as_ref()));
+            set_env(crate::daemon::HOME_ENV, Some(tmp.path().as_os_str()));
+            set_env(
+                crate::daemon::SOCK_ENV,
+                Some(tmp.path().join("wiring.sock").as_os_str()),
+            );
+            let mut judge = judge_from_env().expect("default constructs");
+            let err = match judge.judge("rm -rf /") {
+                Ok(_) => panic!("a daemon that cannot come up must not judge"),
+                Err(e) => e,
+            };
+            assert!(err.contains("judge daemon"), "mode {mode:?}: {err}");
+        }
     }
 }
