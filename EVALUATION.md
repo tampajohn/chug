@@ -1,175 +1,284 @@
-# EVALUATION — chug, assessed by chug-loop (2026-10-03, cycle 95)
+# EVALUATION — chug, assessed by chug-loop (2026-10-03, cycle 98)
 
-MANDATORY fresh eval — the freshness predicate failed at launch
-(EVALUATION.md dated 2026-10-02 vs launch day 2026-10-03; the queue held
-rows but the eval half is conjunctive), so loopd routed to kimi per T81 —
-the fifth consecutive correct routing prediction. The cycle opened with
-cycle-94 bookkeeping recovery: the T204 merge (dbce0e2) sat committed but
-unflipped/unpushed/unharvested (the glm seg-3 orchestrator died 200/200
-mid-wrap — §2.2), and the seg-3 ledger was ~150 iterations stale;
-reconstruction from the git record cost ~6 iterations before any
-productive work. Delta corpus since the cycle-91 eval: cycles 91–94 — six
-orchestrator streams (kimi ×3: 163i/3h23m the eval, 17i truncated,
-114i/3h44m accepted-after-rejection; glm ×3: 69i, 142i/4h28m,
-200i/5h01m died-unwrapped) plus ~14 child streams (t195–t204 arcs) —
-read via the fresh digest (482 files, 28,953 iterations, FRESH per its
-own T148 self-exclusion) with drills into the cycle-94 seg-2/seg-3 goal
-events, the harvested t204 segments' abort records, the t202-validate
-rejection, `src/daemon.rs` (the flock race), `.chug/decisions.jsonl`
-(858 records), and the full git record (`v0.13.1..49a16d5`, 30+ commits
-incl. the T203/T204 landings). Headline: the delta landed 10 of 10
-queued rows (T195–T204) including the two heaviest features the loop has
-carried (T199/T200 closing F13 phase 2a, T204's baked-in judge daemon
-opening F15) and self-tagged v0.14.0 — but the cost curve bent hard:
-T204 alone burned 10 child segments with ZERO goal-accepted children,
-and the cycle's last orchestrator died at its ceiling with the wrap
-unwritten. Both costs have rows below (T207, T209), as does a flaky-red
-goal-gate landmine the kimi validator caught pre-merge and the arc
-shipped anyway (T206).
+MANDATORY fresh eval — the freshness predicate failed at launch on the
+todo-rows half (queue DRAINED at the cycle-97 wrap: 0 `todo` rows; the
+eval half alone, EVALUATION.md dated 2026-10-03 = launch day, could not
+hold the conjunction), so loopd routed to kimi per T81 — the eighth
+consecutive correct routing prediction. Delta corpus since the cycle-95
+eval: cycles 95 (wrap tail), 96 (two segments), 97 — four orchestrator
+streams (kimi ×1: 199i/4h35m accepted-after-1-rejection; glm ×3:
+200i/5h35m died-unwrapped-mid-release, 54i/1h32m wrap-recovery
+accepted-after-2-rejections, 79i/2h37m accepted) plus 15 child streams
+(t205–t211 arcs) — read via the fresh digest (507 files, 30,923
+iterations, FRESH per the mechanical check) with drills into the
+cycle-96 seg-2 goal events (the double gate rejection), seg-1's death
+state, the t205 validator's verdict ledger, `.chug/decisions.jsonl` (903
+records, +45 in the delta), and the full git record (`v0.15.0..5b38fde`,
+~20 commits incl. the v0.16.0 release). Headline: the delta landed ALL
+FIVE queued rows (T206, T208, T207, T211, T205, then T209, T210 — the
+cycle-95 eval's entire filing) and self-tagged v0.16.0, and the queue is
+EMPTY for the first time since cycle 78 — but the cost curve kept
+bending: cycle-96 seg-1 died 200/200 mid-release-tag (the third
+orchestrator ceiling death in five cycles), and 5 of 11 impl children
+died minutes-bound at the 50-minute wall, several on SMALL rows where
+host load, not spec size, was the cause. The T209 dispatch gate (landed
+cycle 97) addresses the size half; the load half is measured here and
+held as an observation, not a row.
 
 ## 1. What chug does well
 
-- **The queue converts, including the heavy rows.** 10/10 landed, one
-  self-tagged release with generated notes + pairing check (v0.14.0),
-  and T204 shipped a candle inference server + daemon lifecycle + docs +
-  release wiring — the largest single-item diff the loop has merged.
-- **The recovery doctrine carried the hardest arc yet, end to end.**
-  T204: 10 child segments, 9 aborts (iteration ×6, time ×2, stuck ×1),
-  zero goal acceptances — and every recovery pattern fired and held:
-  T63 resumes ×2, orchestrator-finish ×4 (T55/T150 routing each time,
-  decision-logged), the T110 split executed under pressure, the
-  written-verdict-is-the-verdict rule absorbing both validator budget
-  deaths (60/60 ×2 with verdicts on disk), and the fix-up arc closing
-  kimi's FAIL with RED-proven pins (M3/M4/new mutant all CAUGHT in round
-  2). The item landed mutation-proven, not merely green.
-- **Adversarial validation keeps earning its budget.** kimi round 1 on
-  T204 found the A/B-script vacuity, the impure env-selection tables,
-  and two survivors the full suite missed; round 2's addendum found the
-  threaded-harness flake before it bit a wrap gate (it is T206 now).
-- **The telemetry pull (T184) is paying:** cache economics are visible
-  per stream — orchestrator cache-read 17–21M vs ~1M uncached input
-  (≈95% cache hit) — the trim design's byte-stable prefix works as
-  designed, and the eval can say so with numbers.
-- **Routing and freshness machinery stay correct:** T81 routed glm to
-  cycles 92/93 (routine) and kimi here (stale eval) — 5-for-5; the
-  digest's T148 self-exclusion held; the docs-only T189 lane classified
-  T203 correctly (mechanical inputs, routing record d1790974130-2).
+- **The recovery doctrine keeps absorbing deaths with zero work loss.**
+  T63/T55 routed all five minutes-bound child deaths in the delta
+  (t205-impl ×2 → resume-then-orchestrator-finish; t206-r1, t209-r1 →
+  one resume each; t211 → orchestrator-finish, no resume burned, T150
+  precedent). Cycle-96 seg-2's wrap recovery opened by rebuilding the
+  ledger from the T207 wrap-state note — the doctrine landed in seg-1
+  and was exercised by its own cycle's death, working as designed.
+- **The validator net keeps catching pre-merge defects.** T208 round-1
+  FAIL (5 honesty defects), T205's M2 endpoint-precedence mutant CAUGHT,
+  T209's 6-mutant re-proof incl. the ordering leg, T210's 7/7 serial
+  kills. Zero defective merges in the delta.
+- **The loop self-diagnosed and self-fixed its own goal gate mid-wrap.**
+  Cycle-96 seg-2's two "check command failed" rejections were root-caused
+  in-cycle to the T144 env scrub meeting a bare `cargo test` check line
+  (cold dev-profile rebuild of the version-bumped root crate into the
+  repo's own `target/`, killed at the 1200s cap on a loaded host) — and
+  the fix (67e11fc, check line carries `target-shared-main`) plus its
+  pin update (b825815, T57 count 2→3 carriers) landed in the SAME wrap.
+- **Decision-record discipline is now routine.** 903 records, +45 in the
+  delta across 3 cycles with zero zero-record cycles; the last 5 records
+  show the full arc shape (routing → verdict → outcome backfill).
+- **Estimate honesty at filing is now measured against actuals every
+  eval** (§5 calibration) — and the T209 gate makes the contract
+  enforceable at dispatch.
 
 ## 2. Incidents worth fixing
 
-1. **Flaky-red daemon tests under the libtest threaded harness — the
-   goal gate's own config (T206, pri 1).** The kimi round-2 addendum
-   named it pre-merge; the arc shipped with the addendum deferred.
-   Reproduced on main @ dbce0e2 this cycle:
-   `daemon_lock_is_exclusive` FAILS 3/3 under
-   `cargo test --bin chug daemon::tests:: -- --test-threads=4` with the
-   `judge_path` spawn family co-tenant, green with spawn tests skipped
-   (7/7) and in isolation; one full-suite threaded run went green — a
-   scheduling race, not a hard red. Mechanism diagnosed: `flock` rides
-   the open file description; `spawn_daemon`'s `pre_exec` forces the
-   fork path, a fork co-tenant inherits the lock fd, and fork→exec lag
-   under load (492cc05 documents ~48s syspolicyd stalls) exceeds the
-   test's microseconds drop→reacquire window. A flaky goal gate is a
-   wrap-killer landmine on every future cycle. Filed as T206.
-2. **Orchestrator died 200/200 with the wrap unwritten (T207, pri 2).**
-   Cycle-94 seg-3 (glm, 5h01m): T204's merge committed at dbce0e2, then
-   the ceiling hit before the row flip, push (18 commits), Outcomes,
-   harvest, and decision records. Ledger ~150 iterations stale at death
-   (named a mid-arc impl pid); recovery needed git archaeology. The
-   stop-dispatch margin (15 iterations) was calibrated at 120-iteration
-   budgets; loopd launches 200 now, and the wrap tail measures ~15–25
-   iterations. Filed as T207 (margin → 30 + a wrap-state ledger note at
-   the boundary).
-3. **Child budget deaths: the T173 census tripped (T209, pri 3).**
-   Delta impl deaths with goal unaccepted: t197 (50m29s at 54/80,
-   minutes), t203 (50m35s at 57/80, minutes — a docs row whose `check:`
-   is the full `cargo test`), t202 (106 total iters), t196 (90), t199
-   (112 + 2 goal rejections), and the T204 impl/fixup segments
-   (iteration ×4, time ×2, stuck ×1). T204's child B was ONE HALF of a
-   T110 split and still landed ~2,100 lines — the split cut by
-   component, not by acceptance surface. The clause's remedy is enacted
-   as T209: dispatch-time estimate re-check + split-by-acceptance-
-   surface + the clause marked RESOLVED (no further budget raises).
-   Validator side: both t204 validators died 60/60 with verdicts written
-   — the letter of the validator measure clause (verdict UNANNOUNCED)
-   is not tripped; recorded in T209 req 5.
-4. **glm placeholder-literalization ×4 in one stream (T210, pri 4).**
-   Seg-3 failed-tool classes: a delegate launch carrying a literal
-   `specs/tN-dae…` path, two `path escapes cwd: /tmp/chug-loop-tN/…`
-   errors, a garbled `Nfe TN CHILD A` commit attempt. The step-2
-   template's `<N>` placeholders were followed literally. Filed as T210
-   (template marker + pre-launch grep + pin).
-5. **Goal-gate rejections, two shapes (watching, not filed).**
-   Cycle-94 seg-2: "check command failed" at 23:23Z, green on manual
-   re-run 4 min later — concurrent-child cargo contention the likely
-   cause (T204 children building during the gate), single instance.
-   t202-validate: rejected 168ms after ack (12:54Z); the validator died
-   goal-unaccepted and its verdict was harvested from its LEDGER — the
-   doctrine absorbed it. One instance each; the class gets a row on the
-   second repeat.
+### I1 — Cycle-96 seg-1 died 200/200 mid-release (third ceiling death in five cycles)
+Evidence: `.chug/events-20261003-151057.jsonl` (200/200, abort "iteration
+budget exceeded" at 15:02:44Z, goal: none) — the last two tool calls are
+the v0.16.0 version bump and `check-tag-version: ok`; the tag push and
+goal gate never ran. The wrap cost a second segment (54 iters, 1h32m,
+2 gate rejections before acceptance). Root cause: three items including
+T205's double orchestrator-finish (both child budgets died → resume →
+finish: review fixes + full gates + merge ≈ the most expensive per-item
+arc the loop runs) plus the release mechanics, at glm's ~0.6 iter/min
+wrap throughput. T207's 30-iter stop-dispatch margin landed IN seg-1 —
+too late to govern it. Candidate fix: landed (T207 margin + wrap-state
+note); T209's dispatch gate should shrink orchestrator-finish frequency
+by refusing oversized specs. MEASURE: if the next 4 cycles show another
+200/200 orchestrator death with the wrap unwritten, the eval considers a
+per-cycle item cap (2 items/cycle when any item needs
+orchestrator-finish) instead of more margin.
+
+### I2 — Goal-gate cold-target double rejection (fix LANDED in-cycle)
+Evidence: `.chug/events-20261003-164837.jsonl` goal events at 15:56:07
+and 16:26:49 ("check command failed" ×2, ~30 min apart = two full gate
+runs), then 67e11fc's commit message: the bare `cargo test` check line
+cold-built the version-bumped root crate into the repo's own `target/`
+(6m35s of `Checking` legs observed) and was killed at the 1200s gate cap
+on a loaded host. Cycle-95's wrap hit the same class once (accepted
+summary: "gate retry: default target/ pre-built"). Two and a half cycles
+burned ~1.5h of wall on the class before the fix landed. Lesson now
+pinned: the T144 scrub makes the check line's own export the ONLY cache
+the goal gate sees — a bare `cargo test` in ANY spec's check line is a
+cold-build landmine on a version bump (META-META-SPEC's spec bar dogfoods
+the T195 touch+export; the loop's own check line was the last bare one).
+No row — fixed (67e11fc + b825815).
+
+### I3 — Minutes-bound child deaths persist, but the mix shifted to LOAD
+Evidence (digest): 5 of 11 impl runs died at the 50-minute wall —
+t205-impl ×2 (119 iters total, both budgets), t206-impl r1, t209-impl r1
+(64/80), t211-impl (43/80). The T173 census resolved at cycle 96 into
+T209's spec-size gate, but the delta's deaths are NOT all oversized-spec
+deaths: t211 landed a 64-LINE diff and died at 43/80 with only 21.9k
+input context — ~70s/iteration wall on a host running the loop's own
+gates + children + operator work (the `budget_low` seconds-warning fired
+correctly in each). The size gate cannot help a loaded host; the
+recoveries absorbed everything (zero work lost, ~5-15 orchestrator
+iterations per finish). Candidate fix: NONE FILED — the T209 measure
+clause owns the size half, and a load-adaptive minutes knob is
+speculative until the load pattern survives the gate. MEASURE: if the
+next census shows ≥2 minutes-bound deaths on ≤150-line rows, the next
+eval considers `delegate` reporting a launch-time host-throughput hint
+(iters/min measured at the first status poll is ALREADY computable from
+the status surface — a doctrine line, not code).
+
+### I4 — T197 drift advisory false-positives on a correctly pre-keyed branch (→ T212)
+Evidence: cycle-97 Outcomes carried observation (a) — the WARN fired at
+BOTH validator launches (t209, t210) despite the T175 dispatch-time
+re-key (3d8f6ca, 1526e5a). `src/delegate.rs:553-560` computes the
+advisory over `fs::read_to_string(&spec)` — the MAIN-repo absolute path
+from the launch args — while the child's goal gate reads the WORKTREE
+copy (`/tmp/chug-loop-t<N>/specs/t<N>.md`), which is the copy the
+orchestrator re-keys on-branch. At launch, main's copy still names the
+default slot → false positive. A false-positive advisory on a
+load-bearing warning is the boy-who-cried-wolf class: two sightings in
+one cycle trains orchestrators to ignore TRUE drift. Filed as T212 (pri
+2, bug).
+
+### I5 — Spawn-heavy loopd families still trip their 30s liveness fences under gate load (→ T214)
+Evidence: cycle-96 Outcomes (T207 entry + wrap notes): the post-merge
+gates needed T82 family-isolation TWICE (reaper 21/21 + spoof 9/9 run
+isolated) because through-loopd tests' 30s verdict deadlines stretch
+under full-suite parallel load (T152's measurement: 30.8s at 17-way vs
+3.36s solo — comments at tests/loopd_orphan_reaper.rs:59-77,
+tests/loopd_spoof_guard.rs:163+ name the fence a liveness fence, not a
+load fence). T151/T158/T159 landed the timing-lock domain and spawn
+seams with an explicit zero-timeout-changes doctrine; the residual is a
+fence whose wall-clock basis ignores host load. The T82 isolation rule
+carries the gates today at ~2-5 extra minutes per gate run. Filed as
+T214 (pri 3, robustness — load-scaled fence, mechanism not a blanket
+bump: scale by 1-min loadavg/cores clamped [1x,4x], solo behavior
+byte-identical at load ≤ cores).
+
+### I6 — glm edit_file schema fumbles recur, and the T88/T94 correctives WORKED
+Evidence: t205-impl stream — "missing or non-string field: old (received
+keys: new_string, old_string, path)" ×2 plus "old not found in file"
+anchor misses ×2; the child self-corrected within an iteration each time
+and no death followed. T94's received-keys hint is doing its job.
+Weighed-and-REJECTED: accepting `old_string`/`new_string` aliases
+(Claude Code's schema names — glm is pattern-matching the benchmark) —
+rejected because the corrective error already converts the fumble into a
+~1-iteration self-repair, alias acceptance widens the schema surface
+forever to save ~2 iterations per fumble-prone child, and T88/T94 were
+the considered decision of this exact class (cycle-51). Negative triage
+record logged; re-weigh only if fumble counts RISE despite the hint.
 
 ## 3. Friction hot spots
 
-- **Orchestrator input context is ~1M tokens/stream** (922k–1.3M) but
-  ~95% cache-read (17–21M) — the byte-stable-prefix design holds; T192's
-  ctx-edit fired 0 times this delta (orchestrators never used it) while
-  trim fired 2–3×. No row: the economy is already the designed one.
-- **`check:`-line wall is the minutes-killer on small rows.** t203's
-  docs child died minutes-bound because each full `cargo test` gate run
-  costs minutes of its 50 — META-META-SPEC's ~300s-warm check-line
-  target exists but T203's spec predates compliance; T209's dispatch
-  gate now covers the estimate side, and spec authors should prefer
-  targeted binaries (already doctrine).
-- **Template literalization burns glm iterations** (§2.4) — T210.
+- **Host-load gate friction is the delta's dominant mechanical tax** —
+  I3 (child wall-clock collapse) + I5 (family isolation per gate) + the
+  6m35s dev-profile `Checking` legs in cycle-96 seg-2 are one cause seen
+  from three sides: K7 is a busy host and the loop's gates, children, and
+  the operator's own work contend. The standing mitigations all held
+  (T82 family isolation, T195 touch guard, T57 main-dedicated cache,
+  budget-low warnings, T63/T55 recovery) — the tax is absorbed, not
+  eliminated, and the absorbed cost is now measured per-cycle (I3's
+  census). No new row beyond T214.
+- **Wrap-time goal-gate cost is now cache-carrying but still a full
+  suite run per attempt** (~10 min wall loaded). 67e11fc removed the
+  cold-build leg; the rejection cost is inherent to a full-suite check.
+  No row — the check is the spec's contract.
+- **Context economy holding.** Cycle-95's orchestrator hit 1.7M
+  cumulative input tokens at 199 iters with 2 trim fires (the first
+  orchestrator trim observations since T184's telemetry landed) —
+  T77/T192 working as designed; per-call context stayed manageable
+  (quartile curve 21k→1.7M cumulative, trim engaged twice). glm streams
+  stay lean (860k/200 iters). No action.
+- **edit_file corrective errors converting fumbles to self-repairs**
+  (I6) — the T88/T94 investment is paying; keep, don't widen.
+- **The T63 resume carries a FRESH iteration budget** (cycle-97 carried
+  observation c: t209-impl's resume ran 8 iters into a fresh 80) —
+  headroom well spent, no census impact, noted so the next eval doesn't
+  re-derive it.
 
 ## 4. Capability gaps — ROADMAP PULL
 
-**Pulled: F13 phase 2b → T208** (the top unworked roadmap item's next
-phase, measure-first). The F13 row's blocking dependencies are both
-gone: phase 2a landed (v0.14.0 — hygienic exportable corpus, 858
-records / 216 outcome-labeled at filing) and the co-located-inference
-constraint dissolved with T204's baked classification-only daemon. What
-has never been measured is whether 858 records train a head that beats
-the mechanical baseline at any τ — T208 is exactly that experiment:
-export → time-ordered split → fine-tune → held-out accuracy/F1 vs
-baseline → τ-curve → go/no-go report. Phase-3 routing wiring stays out
-of scope (needs these numbers; its endpoint is F15 phase 2). The
-FEATURES.md F13 row's stale "phases 2–3 deferred pending corpus + layad
-endpoint" is updated this commit. F15 phases 2+ stay deferred (the
-"no consumer yet" reason stands until T208 measures). No new capability
-finds beyond the roadmap this cycle.
+**Pull SKIPPED with written reason — every roadmap item is landed or
+deferred, and the one strategic item is freshly measured NO-GO.**
+
+FEATURES.md state at this eval: F1, F13 (phases 2a/2b), F2 (1, 2a), F3
+(1), F4 (1), F5 (1), F6 (1), F7 (1), F8 (1), F9 (closed), F10 (through
+3a), F11 (1b complete), F12 (1), F14 (2), F15 (1 + child A) — every row
+is LANDED or carries a written deferral reason. The top unworked item by
+tier order is **F13 phase 3** (confidence-gated first-pass routing: Laya
+decides ≥τ, else escalate to kimi) — and T208 (landed cycle 95) measured
+it NO-GO: the frozen-encoder probe TIES majority (79.3%), the fine-tune
+wobbles 65.5–82.8% with no stable edge, and no ≥95%-accuracy operating
+point reaches the ≥50%-coverage wiring bar in ANY wobble state. The GO
+precondition T208 wrote is ~3× the 858-record corpus plus held-out
+n≥60 per task; the corpus is now 903 records (+45 in 3 cycles ≈ 15-22
+records/cycle — ~75+ cycles to precondition at the observed accrual).
+The deferral is evidence-backed and QUANTIFIED; pulling phase 3 now
+would wire a router its own measurement rejects. The F15 phases-2+
+deferrals (/hook/* parity, F13 routing endpoint, hot reload) inherit the
+same evidence — the consumer they'd serve is the thing T208 measured
+NO-GO. All chat-side phase-2 deferrals (F2b/F3-2/F5-2/F7-2/F8-2) stand
+on their written no-loop-consumer reasons; F11-remaining and F12-2 stand
+on no-consumer.
+
+**No new capability find this cycle.** The delta's evidence points at
+reliability economics (I1-I5), not missing capability — the loop's
+feature surface (delegate fleet, MCP both directions, daemon judge, web
+tools, plan/fork/packs) had zero capability-blocked moments in the
+corpus. The one recurring model-facing fumble (I6) is corrective-covered.
+FEATURES.md is unchanged; the next eval re-checks the F13-3 corpus
+precondition (903 → ~2,570) as its standing first look.
 
 ## 5. Top 3 priorities
 
-1. **T206** (pri 1) — a flaky goal gate is a wrap-killer landmine on
-   every future cycle; reproduced 3/3 this morning; fix is test-side
-   bounded retry, no shipping change.
-2. **T207** (pri 2) — the wrap-window margin: seg-3 lost the books at
-   200/200 with the work done; the margin must match the budget loopd
-   actually launches, and the ledger must carry the wrap state at the
-   boundary so the next death needs zero archaeology.
-3. **T208** (pri 2) — the loop's strategic payoff is now measurable;
-   the answer (even a NO-GO) redirects the whole F13/F15 stack.
+1. **T212** (pri 2, bug) — the drift advisory's main-path read
+   false-positives on every correctly pre-keyed dispatch; a warning that
+   cries wolf twice a cycle will be ignored the day it's true. Cheap
+   (~60-90 lines, src/delegate.rs + unit legs), high trust-per-line.
+2. **T214** (pri 3, robustness) — load-scaled liveness fences for the
+   two spawn-heavy loopd families; the T82 isolation tax is paid every
+   gate on a busy host, and the fence's 30s wall-clock basis is the
+   measured wrong variable (30.8s @ 17-way vs 3.36s solo).
+3. **T213** (pri 3, robustness pins, SOLO) — the T205 validator's three
+   LOW survivors (runtime token canary pin, loopd env-loader pin,
+   retry-knob comment) closed while T205 is fresh; the canary pin guards
+   the one secret-hygiene regression class a code change could
+   introduce silently.
 
-## 6. README audit
+**Estimate re-calibration (standing doctrine: text, never the
+threshold).** Delta actuals vs filing estimates: T205 ~250 → 1,032
+insertions (4.1×); T207 ~45 → 338 (7.5×); T209 ~70 → 338 (4.8×); T210
+~30 → 103 (3.4×); T211 ~25 → 64 (2.6×). Pin-carrying doctrine rows run
+3.4-7.5× their estimates — pin legs are verbose and their RED-proofs
+compound; the bar's 1.5-3× density guidance undershoots for
+pin-carriers. Filing guidance from this delta: a doctrine row whose
+narrative estimate is ~70 lines should be filed at ~300 all-in, and
+anything narrative-~150+ is a split candidate under the T209 dispatch
+gate. The ~500 ceiling stands; the gate now enforces it at dispatch, and
+this eval's three rows are filed at ≤~200 all-in each.
 
-Structure holds (Install → Quickstart → Runbooks → modes → Tools →
-policy sections → MCP → Langfuse → specs → loopd → Development; 1053
-lines). (a) Reading order: intact — the T204 daemon docs integrated
-into the Risk gate section in-place (the CHUG_JUDGE selection table +
-the 0600-UDS/no-port rationale + the `daemon` feature flag), not
-append-sprawl; DEPENDENCIES.md is linked from both the risk-gate
-section and Development. (b) Redundancy: the daemon's env knobs appear
-in README (prose) and DEPENDENCIES.md (table) with consistent semantics
-— acceptable split, watch for drift. (c) Staleness: none spotted this
-delta; the module list stays pin-covered (readme_layout caught two real
-misses in the T204 arc — the pin earns its keep). (d) Balance: the MCP
-(~140 lines) and loopd (~112 lines) sections carry spec-grade detail —
-extraction candidates if they grow further, acceptable today; no row.
-(e) Quickstart truth: commands unchanged this delta (`chug run`/`chat`
-as written); the daemon's auto-spawn means the risk-gate quickstart
-gained a silent 650MB first-judge download on fresh hosts — documented
-in the section, acceptable. No docs row filed.
+## 6. README audit (usability)
+
+Cold-read pass (1,059 lines): the reading order holds — Install →
+Quickstart (commands verified working in earlier cycles, unchanged) → a
+one-paragraph Runbooks signpost → chat → packs → run → fork → plan →
+TUI → Tools → risk gate → hooks → permissions → MCP (both directions) →
+Langfuse → self-hosting → loopd → Development. The delta's two features
+landed INTEGRATED, not appended: the baked-in judge daemon is a
+paragraph inside the risk-gate section (line 589, `CHUG_JUDGE`
+selector + socket relocation + feature-gate honesty) and `hf_hosting`
+rides the Development layout brace list (line 1057, T95 guard green).
+No doubled claims found on the delegate, budget, or sandbox surfaces
+(greps: "one exception" 0, delegate defaults stated once at line 474,
+budget knobs per-section but per-mode). (a) Reading order: sound; the
+Runbooks signpost at §3 is a deliberate exit ramp, one paragraph, not
+accretion. (b) Redundancy: none found this pass. (c) Staleness: none —
+T204/T205 are current. (d) Balance: the risk-gate section is the
+heaviest but carries the daemon selector doctrine that has no other
+home; acceptable. (e) Quickstart truth: holds (T35's pin surface
+unchanged). **No docs row filed.**
+
+## Handoff — recommended execution order
+
+Queue for the next cycles (priority order per LOOP-SPEC §2; all three
+specs ready, estimates ≤~200 all-in, T209-gate-clean at filing):
+
+1. **T212** (pri 2, bug) — glm impl; NOT on the step-4 core list
+   (delegate.rs), ≤150 lines, no new surface, no CI/check change → T189
+   lane-eligible at dispatch (mechanical inputs decide).
+2. **T214** (pri 3, robustness, tests-only) — glm impl; T189
+   lane-eligible. DISJOINT with T212 (src/delegate.rs vs
+   tests/loopd_* + src/testsupport.rs) — pipeline-overlap pattern (ii)
+   eligible if the orchestrator wants the 2-impl overlap.
+3. **T213** (pri 3, robustness pins, SOLO — loopd.sh-adjacent: the
+   loader pin drives loopd.sh's env-file behavior; if a sourceable seam
+   is needed the row touches a doctrine carrier) — glm impl, kimi
+   REQUIRED if loopd.sh or hf_hosting.rs is edited, lane-eligible only
+   if the landed diff is tests-only.
+
+To SELF-SPEC (continuous improvement): none new. Big enough for
+META-SPEC fan-out: none new (the loop is the fan-out). Human-decision
+items: the laya HF hosting decision (operator-pending Monday 2026-10-05
+per runbooks/laya-hf-hosting.md — do-not-execute honored) and the F13
+phase-3 GO precondition (corpus 903 / ~2,570 — no human action, stated
+for visibility).
 
 ## Outcomes (filled at cycle wrap — LOOP-SPEC Phase 3)
 
