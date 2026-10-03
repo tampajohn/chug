@@ -537,8 +537,14 @@ simultaneously past gates — T194 amends T161's 2-child cap):
    the row flip, so children never own the row. **Push after each item
    lands green** (`git push` once the todo: commit is in) — the operator
    watches origin; don't hold a batch hostage to the wrap.
-6. **Budget check.** Fewer than 15 iterations left → stop dispatching, go to
-   wrap. Unworked rows stay `todo` — that is a fine outcome.
+6. **Budget check.** Fewer than 30 iterations left → stop dispatching, go to
+   wrap. Unworked rows stay `todo` — that is a fine outcome. The 30 is
+   sized to the wrap tail's measured ~15–25 iteration cost — final gates,
+   row flips, Outcomes, harvest, release check, push, goal gate — at the
+   200-iteration / 360-minute orchestrator budget loopd now launches; the
+   old 15 was calibrated when orchestrator budgets were 120 iterations, and
+   cycle-94 seg-3 died 200/200 with the merge committed but the wrap
+   unwritten after dispatching a validation round inside the margin.
 
 **Trivial-row bundling (T45) — when one child may take up to 3 rows.** The
 per-row arc above carries a fixed cost — a worktree, a fresh build, a
@@ -648,6 +654,15 @@ alike) has been harvested.
 
 ## Phase 3 — Wrap
 
+- **Wrap-state note at the boundary (T207, hard rule).** When the
+  orchestrator crosses the stop-dispatch boundary (step 6), its
+  NEXT ledger write must carry a wrap-state note naming: every
+  merged-but-unflipped row, every unharvested worktree, every
+  unpushed commit count, and every missing decision record — so a
+  mid-wrap death is recoverable from the ledger alone with
+  zero git reconstruction (the seg-3 death left a ledger ~150
+  iterations stale and cost cycle-95 ~6 iterations of git archaeology
+  before any productive work). Write it before the wrap duties below.
 - TODO.md truthful (every `done` row has a commit ref).
 - Child harvests landed in the main repo's `.chug/`: each worked item's
   `events-t<N>-<role>-*.jsonl` — ALL of the segments the worktree held
