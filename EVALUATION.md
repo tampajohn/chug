@@ -173,7 +173,34 @@ in the section, acceptable. No docs row filed.
 
 ## Outcomes (filled at cycle wrap — LOOP-SPEC Phase 3)
 
+### Cycle 96 (2026-10-03, ~09:27 UTC–) — glm routine freshness-skip cycle (predicate holds: eval same UTC day + 5 todo rows; routing correct 6-for-6) — queue: T207 → T211 → T205 → T209 → T210
+
+Per-item entries below; wrap adds skipped/deferred + cycle notes.
+
+- **T207 (pri 2, doctrine, SOLO) — landed (this cycle).** The seg-3 200/200
+  death class closed structurally: LOOP-SPEC step 6's stop-dispatch margin
+  15 → 30 iterations (calibrated to the wrap tail's measured ~15–25
+  iteration cost at loopd's 200/360 orchestrator budget; the old 15 was
+  sized at 120) + a new Phase-3 first-bullet hard rule — crossing the
+  boundary makes the NEXT ledger write carry a wrap-state note naming
+  merged-but-unflipped rows, unharvested worktrees, unpushed commit count,
+  and missing decision records (the zero-git-reconstruction recoverability
+  the seg-3 recovery paid ~6 iters for). T81's anti-sprint-burn guard
+  untouched (its pin positively re-run green). glm impl 56/80
+  goal-accepted first-try (7d640b5); kimi validator PASS (9 findings all
+  MET; both RED-proof mutants re-proven in throwaway worktrees —
+  threshold-revert leg (af), rule-deletion leg (ag); tree byte-identical).
+  Gates: nextest release 1469/1469 rest-of-suite + reaper 20/20 +
+  spoof_guard 9/9 family-isolated (see the load-flake note below) + clippy
+  -D warnings + spec check green. Cycle note: the two spawn-heavy loopd
+  families (through-loopd tests whose inner gate runners take the cargo
+  build lock) trip their 30s probe deadlines under full-suite parallel
+  load on a busy host — the T82 family-isolation rule carried the gates;
+  the hardening candidate is noted for the next eval (T211's __pycache__
+  filter is adjacent but distinct).
+
 ### Cycle 95 (2026-10-03, ~04:45 UTC–) — kimi MANDATORY fresh-eval cycle (predicate failed: eval dated 2026-10-02 vs launch 2026-10-03; T81 routing correct 5-for-5) — opened with cycle-94 bookkeeping recovery (T204 merged-but-unflipped; glm seg-3 died 200/200 mid-wrap)
+
 
 Per-item entries below; wrap adds skipped/deferred + cycle notes.
 
