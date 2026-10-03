@@ -1,6 +1,6 @@
 # T215 — daemon ensure: spawn the judge from a daemon-capable binary
 
-check: export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared; touch src/*.rs tests/*.rs; cargo test
+check: export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-validate-a; touch src/*.rs tests/*.rs; cargo test
 
 estimate: ~150 lines (ensure resolution + pins + runbook note)
 
