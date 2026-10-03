@@ -50,24 +50,28 @@ const EXIT_DEADLINE: Duration = Duration::from_secs(60);
 
 /// One test's daemon home: a tempdir used as `CHUG_HOME` (the host-scoped
 /// daemon home — lock, socket, and log all live inside it), plus the daemon
-/// pid to kill on drop.
+/// pid to kill on drop. The TempDir is OWNED here — it removes itself on
+/// drop, AFTER the daemon-kill guard below has run (a struct's own drop
+/// runs before its fields'), so no `$TMPDIR` litter is left behind.
 struct Home {
-    dir: PathBuf,
+    dir: tempfile::TempDir,
     pid: Option<u32>,
 }
 
 impl Home {
     fn new() -> Self {
-        let dir = tempfile::tempdir().expect("tempdir").keep();
-        Self { dir, pid: None }
+        Self {
+            dir: tempfile::tempdir().expect("tempdir"),
+            pid: None,
+        }
     }
 
     fn sock(&self) -> PathBuf {
-        self.dir.join("daemon.sock")
+        self.dir.path().join("daemon.sock")
     }
 
     fn lock(&self) -> PathBuf {
-        self.dir.join("daemon.lock")
+        self.dir.path().join("daemon.lock")
     }
 
     /// Spawn a `chug` child with the home env scoped to THIS child (never
@@ -76,7 +80,7 @@ impl Home {
         let mut command = Command::new(env!("CARGO_BIN_EXE_chug"));
         command
             .args(args)
-            .env("CHUG_HOME", &self.dir)
+            .env("CHUG_HOME", self.dir.path())
             .env_remove("CHUG_DAEMON_SOCK")
             .env_remove("CHUG_LAYA_CHECKPOINT")
             .env_remove("CHUG_DELEGATE_BIN")
@@ -95,6 +99,17 @@ impl Home {
         let child = self.spawn_cli(&["daemon"], true);
         self.pid = Some(child.id());
         child
+    }
+
+    /// Spawn a RIVAL daemon (the lock-refusal leg) WITHOUT tracking it: the
+    /// rival must exit on the held lock, so the Drop guard must keep killing
+    /// daemon ONE. Tracking the rival would overwrite `pid` — an early
+    /// assertion failure would then kill the (already-exited) rival's pid
+    /// and orphan the live daemon. And the lock file still names daemon one
+    /// at that point (the rival refused before writing its line), so no pid
+    /// read back from the home can ever be attributed to the rival.
+    fn spawn_rival(&self) -> Child {
+        self.spawn_cli(&["daemon"], true)
     }
 
     /// Absorb the macOS first-exec stall (Gatekeeper/syspolicyd assessment of
@@ -238,8 +253,9 @@ fn second_daemon_exits_on_the_lock() {
     assert!(body.contains("\"status\":\"ok\""), "healthz body: {body}");
 
     // The rival: same home, same stub — must refuse on the flock and exit
-    // non-zero with the holder named, never park.
-    let second = home.spawn_daemon();
+    // non-zero with the holder named, never park. NOT tracked in `pid` (see
+    // spawn_rival): the Drop guard must keep pointing at daemon one.
+    let second = home.spawn_rival();
     let output = wait_with_deadline(second, EXIT_DEADLINE)
         .expect("the second daemon never exited on the lock");
     assert_ne!(
