@@ -23,7 +23,15 @@ space matches the lane predicate T189 mechanized.
 
 Usage (operator host, the pre-staged venv, OFFLINE):
   /Users/jadams/models/laya/venv/bin/python scripts/distill_experiment.py \
-      --corpus /Users/jadams/workspace/chug/.chug/decisions.jsonl
+      --corpus /Users/jadams/workspace/chug/.chug/decisions.jsonl \
+      --corpus-record-limit 869
+
+--corpus-record-limit pins a historical input: the corpus is gitignored and
+append-only, so a commit ref pins nothing. The script copies the exact raw
+bytes it read to <artifacts>/corpus-snapshot.jsonl (+ sha256 in metrics.json
+and the report) BEFORE training — any run's input is reconstructible
+byte-for-byte from that copy, and `head -N` is the shell equivalent (the
+report's §8 documents the whole procedure).
 
 The script FORCES TRANSFORMERS_OFFLINE=1 and HF_HUB_OFFLINE=1 before any
 transformers import — the run proves no network fetch. Without torch +
@@ -45,11 +53,13 @@ Leakage controls (the honesty spine, requirement 2 — restated in the report):
 Determinism (requirement 1): seed pinned (default 13) for torch, python
 random, and the probe's shuffle generator. Verified across repeated same-device
 (MPS) reruns: the probe (primary head) and both mechanical baselines were
-byte-identical; the fine-tune (secondary) wobbled within ±2 held-out records
-(±6.9pp accuracy at n=29) — MPS float reductions reorder and the fine-tune's
-4-epoch AdamW trajectory amplifies it. Headline numbers, the τ-curve, and the
-verdict rest on the deterministic probe + baselines; the fine-tune row is
-directional.
+byte-identical — re-verified for this report by running from the main corpus
+path and from the pinned snapshot copy (identical probe/tau/baseline metrics);
+the fine-tune (secondary) wobbles by up to 5 held-out records (≈17.2pp accuracy
+at n=29, observed across this report's verification re-runs) — MPS float
+reductions reorder and the fine-tune's 4-epoch AdamW trajectory amplifies it.
+Headline numbers, the τ-curve, and the verdict rest on
+the deterministic probe + baselines; the fine-tune row is directional.
 """
 
 import argparse
@@ -80,16 +90,37 @@ PROBE_LR = 1e-3
 PROBE_BS = 16
 TAUS = [0.50, 0.60, 0.70, 0.80, 0.90, 0.95, 0.99]
 
-# T189's mechanical lane predicate, lexical proxy: the §2 step-4 REQUIRED
-# list (core files) + loop doctrine carriers, verbatim — no tuning on the
-# held-out set, no synonyms added. Mentions are a WEAK proxy for touches
-# (negated mentions like "not on the REQUIRED list" flip it) — that gap is
-# part of the measurement, reported as-is.
-CORE_FILE_TOKENS = [
-    "driver.rs", "api.rs", "tools.rs", "events.rs", "delegate.rs",
-    "mcp", "permissions.rs", "hooks.rs", "trim.rs",
+# Lexical proxies for T189's lane predicate — input (a) ONLY, as TEXT
+# MENTIONS in subject+inputs (never diff facts; mentions-with-negations are
+# the named weakness, reported as-is). T189's other lane inputs — (b) ≤~150
+# changed lines, (c) no new tool/command surface, (d) no CI/check:-line
+# change — are diff-computed at dispatch time and are NOT recoverable from
+# decision-record text; no lexical proxy here implements them.
+#
+# STRICT tokens = the LOOP-SPEC §2 step-4 REQUIRED list as it stands
+# (src/driver.rs, src/api.rs, src/tools.rs, src/events.rs) + the doctrine
+# clause. EXTENDED tokens = strict + delegate.rs / mcp / permissions.rs /
+# hooks.rs / trim.rs — the WIDER core list LOOP-SPEC §2 step 4 quoted at
+# T189 filing time (since narrowed); the extension is NOT verbatim step 4
+# and is disclosed as such, with both rows reported side by side. No
+# tuning on the held-out set, no synonyms added.
+STRICT_CORE_FILE_TOKENS = ["driver.rs", "api.rs", "tools.rs", "events.rs"]
+EXTENDED_CORE_FILE_TOKENS = STRICT_CORE_FILE_TOKENS + [
+    "delegate.rs", "mcp", "permissions.rs", "hooks.rs", "trim.rs",
 ]
 DOCTRINE_TOKENS = ["loop-spec", "meta-meta-spec", "meta-spec", "spec.md", "doctrine"]
+
+# The off-task records the label rule's else→LANE catch-all absorbs (the
+# known failure mode, DISCLOSED in report §2/§6 — never silently re-tuned):
+# none of these is a does-this-need-kimi validation routing, yet the class
+# and the catch-all sweep them in. The report renders their ids, kinds, and
+# computed split placement + pp effect from this map.
+CATCH_ALL_OFF_TASK = {
+    "d1790471401-24": "a T78 doctrine-item DISPATCH record (its REQUIRED verdict lives in the inputs text; the choice says 'solo dispatch')",
+    "d1790734828-4": "a T161 dispatch-overlap decision (arguable REQUIRED; choice is '2-impl-overlap-t157+t159')",
+    "d1790632587-1": "a goal_complete check-retry decision (no routing content)",
+    "d1790952238-1": "an eval-cycle phase-skip + queue-triage decision",
+}
 
 
 def log(msg):
@@ -99,14 +130,24 @@ def log(msg):
 # ---------------------------------------------------------------- dataset
 
 
-def parse_corpus(path):
-    """Parse the decisions corpus. Same tolerance as decisions-audit.sh /
-    decisions-export.sh: a malformed line (torn tail from a killed writer)
-    drops with a count, it never kills the run."""
+def parse_corpus(path, limit_lines=None):
+    """Parse the decisions corpus, capturing the EXACT raw bytes consumed so
+    they can be pinned as the run's corpus snapshot. Same tolerance as
+    decisions-audit.sh / decisions-export.sh: a malformed line (torn tail
+    from a killed writer) drops with a count, it never kills the run.
+
+    limit_lines: read at most this many raw lines (the corpus is
+    append-only, so a limit pins a historical input; `head -N` is the shell
+    equivalent). Returns (records, malformed, raw_bytes, lines_read)."""
     records, malformed = [], 0
-    with open(path, "r", encoding="utf-8", errors="replace") as fh:
-        for line in fh:
-            line = line.strip()
+    raw, lines_read = [], 0
+    with open(path, "rb") as fh:
+        for raw_line in fh:
+            if limit_lines is not None and lines_read >= limit_lines:
+                break
+            raw.append(raw_line)
+            lines_read += 1
+            line = raw_line.decode("utf-8", errors="replace").strip()
             if not line:
                 continue
             try:
@@ -116,7 +157,12 @@ def parse_corpus(path):
                 continue
             if isinstance(rec, dict):
                 records.append(rec)
-    return records, malformed
+    return records, malformed, b"".join(raw), lines_read
+
+
+def sha256_hex(data):
+    import hashlib
+    return hashlib.sha256(data).hexdigest()
 
 
 def shape(text):
@@ -135,6 +181,13 @@ def derive_label(choice):
         return "DEFERRED"  # ambiguous between classes — excluded, counted
     if "re-validation" in c or "revalidation" in c:
         return "REQUIRED"  # a FAIL-arc re-validation is REQUIRED by doctrine
+    # else→LANE catch-all: this branch ABSORBS off-task records — the known
+    # failure mode, disclosed in report §2/§6 (CATCH_ALL_OFF_TASK), never
+    # silently re-tuned. The absorbed kinds: doctrine-item DISPATCH records
+    # (d1790471401-24), T161 dispatch-overlap decisions (d1790734828-4),
+    # goal_complete check-retries (d1790632587-1), and eval-cycle
+    # phase-skip/queue-triage records (d1790952238-1) — none is a
+    # does-this-need-kimi routing.
     return "LANE"
 
 
@@ -148,11 +201,12 @@ def feature_text(rec):
     )
 
 
-def keyword_proxy(rec):
-    """Mechanical baseline: the T189 lane predicate as a lexical proxy over
-    subject+inputs text (mentions, not diff facts — deliberately untuned)."""
+def keyword_proxy(rec, core_tokens):
+    """Mechanical baseline: an EXTENDED-vs-STRICT lexical proxy for T189's
+    lane predicate over subject+inputs text (input (a) only, mentions not
+    diff facts — deliberately untuned; see the token-list comment above)."""
     text = (rec.get("subject", "") + " " + rec.get("inputs", "")).lower()
-    if any(tok in text for tok in CORE_FILE_TOKENS):
+    if any(tok in text for tok in core_tokens):
         return "REQUIRED"
     if any(tok in text for tok in DOCTRINE_TOKENS):
         return "REQUIRED"
@@ -424,12 +478,26 @@ def render_report(ctx):
         ctx["dataset"], ctx["baselines"], ctx["probe"], ctx["ft"],
         ctx["tau_probe"], ctx["tau_ft"], ctx["run"],
     )
+    catch_all = ctx["catch_all"]
     tr = ds["train_dist"]
     he = ds["held_dist"]
     b_maj = baselines["majority"]
     b_kw = baselines["keyword"]
+    b_kws = baselines["keyword_strict"]
     ambiguous = ", ".join(ds["ambiguous_ids"]) or "none"
     dropped = ", ".join(ds["near_dup_dropped_ids"]) or "none"
+
+    # Catch-all disclosure (§2/§6): rendered from the computed placements.
+    ca_held = [c for c in catch_all if c["part"] == "held-out"]
+    ca_train = [c for c in catch_all if c["part"] == "train"]
+    ca_lines = "; ".join(
+        f"{c['id']} — {c['kind']} ({c['part']} row {c['idx']})" for c in catch_all
+    ) or "none at this run (re-check the dataset)"
+
+    # Keyword-proxy flip: held-out records the extended tokens catch that the
+    # strict step-4 list misses (computed, named in §4).
+    kw_flip_ids = ctx["kw_flip_ids"]
+    kw_flip = ", ".join(kw_flip_ids) or "none"
 
     tau_lines = []
     for tp, tf in zip(tau_probe, tau_ft):
@@ -477,7 +545,9 @@ def render_report(ctx):
 
 **Status: MEASURED — {run['verdict'].upper()} for phase-3 confidence-gated wiring.**
 Generated by `scripts/distill_experiment.py` (measure-first, NO routing wiring, NO src/
-changes). Corpus commit at run time: `{run['corpus_commit']}`. Base snapshot:
+changes). Corpus commit at run time: `{run['corpus_commit']}` (the corpus FILE is
+gitignored and append-only — the input pin is §8's snapshot copy, not this ref). Base
+snapshot:
 `{run['snapshot']}` (convaiinnovations/laya @ 55cf4c4e). Seed {run['seed']}, device
 `{run['device']}`, wall {run['wall_secs']:.0f}s, artifacts `{run['artifacts']}`.
 
@@ -512,11 +582,24 @@ with a vaguer label boundary.
 | held-out (last {pct(1 - SPLIT_FRAC)} by record order) | {he['n']} — REQUIRED {he['REQUIRED']}, LANE {he['LANE']} |
 
 **Label rule (mechanical, from the recorded `choice` text only):** lowercased choice
-contains `required` → REQUIRED (this correctly keeps "REQUIRED … deferred to next
-cycle" — the routing verdict is REQUIRED even when the launch slipped); else contains
-`deferred` → DEFERRED (excluded, named above); else contains `re-validation`/
-`revalidation` → REQUIRED (a FAIL-arc re-validation is REQUIRED by doctrine); else →
-LANE (skipped / optional / exercised-optional / gates-only).
+contains `required` → REQUIRED; else contains `deferred` → DEFERRED (excluded, named
+above); else contains `re-validation`/`revalidation` → REQUIRED (a FAIL-arc
+re-validation is REQUIRED by doctrine); else → LANE (skipped / optional /
+exercised-optional / gates-only). The keep-vs-exclude boundary between the first two
+arms is CHOICE-TEXT-dependent, not semantics-dependent: a choice phrased "REQUIRED …
+deferred to next cycle" keeps REQUIRED (the routing verdict is REQUIRED even when the
+launch slipped), but the same defer-to-next-cycle semantics phrased WITHOUT the
+`required` token — d1790542872-17's `deferred-orchestrator-budget-low`, whose inputs
+say validation launches next cycle — falls through to the DEFERRED exclusion. The
+rule sees text, not intent.
+
+**Known catch-all failure mode (disclosed, not re-tuned):** the else→LANE branch
+absorbs {len(catch_all)}/{ds['n_total']} dataset rows that are not validation
+routings at all — the rule's labels for them stand exactly as computed (hand-relabeling
+would be fitting the eval set): {ca_lines}.
+{len(ca_held)}/{he['n']} held-out gold labels ({pct(len(ca_held) / he['n'])} of the
+held-out set) are noise from this alone, and {len(ca_train)}/{tr['n']} train rows
+carry labels for decisions the task never asked about.
 
 ## 3. Feature set and leakage controls
 
@@ -555,7 +638,8 @@ Leakage controls (requirement 2):
 | head | accuracy | macro-F1 | F1 REQUIRED | F1 LANE |
 |---|---|---|---|---|
 | majority baseline (train-majority class = {baselines['train_majority']}) | {pct(b_maj['accuracy'])} | {f3(b_maj['macro_f1'])} | {f3(b_maj['f1_REQUIRED'])} | {f3(b_maj['f1_LANE'])} |
-| T189 keyword proxy (lexical lane predicate) | {pct(b_kw['accuracy'])} | {f3(b_kw['macro_f1'])} | {f3(b_kw['f1_REQUIRED'])} | {f3(b_kw['f1_LANE'])} |
+| T189 strict keyword proxy — step-4 list only (input (a) as text mentions) | {pct(b_kws['accuracy'])} | {f3(b_kws['macro_f1'])} | {f3(b_kws['f1_REQUIRED'])} | {f3(b_kws['f1_LANE'])} |
+| extended keyword proxy — strict + pre-narrowing core-list tokens | {pct(b_kw['accuracy'])} | {f3(b_kw['macro_f1'])} | {f3(b_kw['f1_REQUIRED'])} | {f3(b_kw['f1_LANE'])} |
 | **probe — frozen laya encoder + linear head (primary)** | **{pct(probe['accuracy'])}** | {f3(probe['macro_f1'])} | {f3(probe['f1_REQUIRED'])} | {f3(probe['f1_LANE'])} |
 | fine-tune — full ModernBERT classifier (secondary) | {pct(ft['accuracy'])} | {f3(ft['macro_f1'])} | {f3(ft['f1_REQUIRED'])} | {f3(ft['f1_LANE'])} |
 
@@ -576,15 +660,25 @@ Reading: at FULL coverage (argmax, no threshold) the probe's accuracy sits
 {pct(b_maj['accuracy'])}) while its macro-F1 moves {macro_delta_probe:+.3f}
 ({f3(probe['macro_f1'])} vs {f3(b_maj['macro_f1'])}) — the probe's only measured edge
 is minority-class recall (F1 LANE {f3(probe['f1_LANE'])} vs the baseline's
-{f3(b_maj['f1_LANE'])}), not top-line accuracy. The fine-tune sits {acc_delta_ft:+.1f}pp
-on accuracy and {macro_delta_ft:+.3f} on macro-F1 against the baseline — on
+{f3(b_maj['f1_LANE'])}), not top-line accuracy. The fine-tune lands {acc_delta_ft:+.1f}pp
+on accuracy and {macro_delta_ft:+.3f} on macro-F1 against the baseline — inside its
+documented run-to-run wobble (§6: up to {pct(5 / he['n'])} at n={he['n']}) — on
 {tr['n']} train examples the full ~396M-parameter fine-tune memorizes the split
-(train acc {pct(ft['train_accuracy'])}) without converting it into a held-out edge.
-The lexical T189 proxy
-lands {100 * (b_kw['accuracy'] - b_maj['accuracy']):+.1f}pp on accuracy against
-majority ({pct(b_kw['accuracy'])}) — the signal is not lexical: `inputs` mentions core
-files inside negations ("not on the REQUIRED list") and for tests-only diffs inside
-core files; a mention-based predicate cannot separate touches from mentions.
+(train acc {pct(ft['train_accuracy'])}); its held-out movement is not a stable edge
+either side of majority.
+The lexical proxies land below majority (strict step-4 list
+{pct(b_kws['accuracy'])}, extended {pct(b_kw['accuracy'])}) — the signal is not
+lexical: `inputs` mentions core files inside negations ("not on the REQUIRED list")
+and for tests-only diffs inside core files; a mention-based predicate cannot separate
+touches from mentions. The extended list's one-record edge over the strict step-4 list
+is {kw_flip}: extended REQUIRED via its `delegate.rs` token — that record's own inputs
+say "delegate.rs NOT on the list", a negated mention the extension catches and matches
+gold by luck of the extra token, not by reading the negation. Provenance, stated
+exactly: both proxies implement T189 lane input (a) ONLY — the core-list file touch,
+as subject+inputs TEXT MENTIONS; lane inputs (b) ≤~150 changed lines, (c)
+no-new-tool/command-surface, and (d) no CI/check:-line change are diff-computed at
+dispatch time and are NOT recoverable from the decision records, so no lexical proxy
+here implements them.
 
 ## 5. The τ-curve (held-out, n={he['n']})
 
@@ -605,6 +699,11 @@ take at that τ.
   high-τ sliver ({best['n']} records at {pct(best['accuracy'])}) is inside small-n
   noise; the ≥95% bar from the F13 framing is not met with statistical confidence at
   any useful coverage.
+- **Label-rule catch-all (§2)**: {len(catch_all)}/{ds['n_total']} rows are off-task
+  (all four named there); {len(ca_held)}/{he['n']} held-out gold labels
+  ({pct(len(ca_held) / he['n'])}) are noise from this alone — every accuracy number
+  above, on both the trained and the mechanical side, carries it. Disclosed, never
+  re-tuned.
 - **Single split** (mandated by-order {pct(SPLIT_FRAC)}/{pct(1 - SPLIT_FRAC)}): no
   variance estimate across folds; a rolling-origin CV is the natural extension when
   the corpus grows.
@@ -617,25 +716,32 @@ take at that τ.
   which runs on this loop's own corpus).
 - **Hardware nondeterminism**: seed {run['seed']} is pinned. Verified across repeated
   same-device (MPS) reruns: the probe (primary) and the mechanical baselines were
-  **byte-identical** every time (same held-out predictions, same τ-curve), while the
-  fine-tune (secondary) wobbled within **±2 held-out records (±{pct(2 / he['n'])}
-  accuracy)** — MPS float reductions reorder, and the 4-epoch AdamW trajectory
-  amplifies the reordering. Every headline number, the τ-curve, and the verdict rest
-  on the deterministic probe + baselines; the FT row is directional{'' if ft['accuracy'] < b_maj['accuracy'] else ' (NOTE: this run landed at or above the majority baseline — the wobble straddles it)'}.
+  **byte-identical** every time (same held-out predictions, same τ-curve — re-verified
+  across this report's own re-runs), while the fine-tune (secondary) wobbles across
+  same-device reruns by up to **5 held-out records (≈{pct(5 / he['n'])} accuracy at
+  n={he['n']}; observed across this report's verification re-runs: FT argmax
+  65.5%–82.8% against the deterministic {pct(b_maj['accuracy'])} majority)** — MPS
+  float reductions reorder, and the 4-epoch AdamW trajectory amplifies the reordering.
+  Every headline number, the τ-curve, and the verdict rest on the deterministic probe
+  + baselines; the FT row is directional at that scale or coarser{'' if ft['accuracy'] < b_maj['accuracy'] else ' (NOTE: this run landed at or above the majority baseline — the wobble straddles it)'}.
 
 ## 7. Go/no-go for phase-3 confidence-gated wiring
 
-**NO-GO** — measured reason: at full coverage the trained heads do not escape the
+**NO-GO** — measured reason: the deterministic primary head does not escape the
 mechanical majority baseline on accuracy ({pct(probe['accuracy'])} probe =
-{acc_delta_probe:+.1f}pp, {pct(ft['accuracy'])} fine-tune = {acc_delta_ft:+.1f}pp, vs
-{pct(b_maj['accuracy'])} majority on n={he['n']}); the probe's one real edge —
+{acc_delta_probe:+.1f}pp vs {pct(b_maj['accuracy'])} majority on n={he['n']}), and the
+fine-tune's argmax number ({pct(ft['accuracy'])} = {acc_delta_ft:+.1f}pp) carries a
+run-to-run wobble of up to 5 held-out records (≈{pct(5 / he['n'])}, §6 — observed
+65.5%–82.8% across this report's verification re-runs), so no trained head shows a
+stable accuracy edge over majority; the probe's one real edge —
 macro-F1 {f3(probe['macro_f1'])} vs {f3(b_maj['macro_f1'])} — does not survive the
 confidence gate: across BOTH heads' τ-curves, no operating point reaches 95% accuracy
 at more than a {pct(best95_both_stats['coverage'])} coverage sliver
 ({best95_both_stats['n']} records{'; best: ' + best95_both_stats['head'] + ' τ=' + f"{best95_both_stats['tau']:.2f}" if best95_both_stats['head'] else ''}) —
 below the ≥50%-coverage wiring bar and inside small-n noise; and the mechanical
-keyword proxy is WORSE than
-majority ({pct(b_kw['accuracy'])}), so no mechanical fallback already does the job
+keyword proxies are WORSE than
+majority (strict {pct(b_kws['accuracy'])}, extended {pct(b_kw['accuracy'])}), so no
+mechanical fallback already does the job
 either. The corpus ({TASK_CLASS}: {ds['in_class']} records, {tr['n']} train) is below
 the size at which a trained head beats a one-line baseline with confidence. This
 measured result CONFIRMS the phase-3 deferral (F15 phase 2, "no consumer yet") —
@@ -647,28 +753,48 @@ validation-routing class ≥3x (~{3 * ds['in_class']} records) or pool adjacent 
 classes so train n ≥ 300 and held-out n ≥ 60, then re-run. Phase 3 is justified the
 day this report shows a τ with ≥95% covered accuracy at ≥50% coverage on held-out
 n ≥ 60. Until then: keep logging decisions (the corpus IS the asset), keep T199/T200
-hygiene, and route validation with T189's mechanical predicate — which this experiment
-shows is at least as good as any trained head at today's corpus size, with the
-mentioned-vs-touched lexical gap (§4) as its named weakness.
+hygiene, and route validation with T189's mechanical predicate — no trained head in
+this experiment beats the majority baseline it would have to beat (§4: the probe ties
+majority, the lexical proxies land below it), so the mechanical predicate stands until
+the corpus does.
 
 ## 8. Reproduction
 
 ```
 export TRANSFORMERS_OFFLINE=1 HF_HUB_OFFLINE=1   # forced by the script itself
 /Users/jadams/models/laya/venv/bin/python scripts/distill_experiment.py \\
-    --corpus /Users/jadams/workspace/chug/.chug/decisions.jsonl
+    --corpus /Users/jadams/workspace/chug/.chug/decisions.jsonl \\
+    --corpus-record-limit {ds['corpus_total']}
 ```
 
+- **Corpus pin** (the corpus is gitignored AND append-only, so a commit ref pins
+  nothing): before any training, the script copies the EXACT bytes it read — the
+  first {ds['corpus_total']} raw lines of the corpus — to
+  `{run['corpus_snapshot_copy']}` (sha256 `{run['corpus_sha256']}`). Truncation
+  restore: because the corpus only grows, `head -{ds['corpus_total']}
+  /Users/jadams/workspace/chug/.chug/decisions.jsonl` reconstructs this run's exact
+  input at any later date; re-running the command above (the limit is pinned in this
+  report) or pointing `--corpus` at the snapshot copy reproduces every measured
+  number here — probe + baselines + τ-curve byte-identical, fine-tune within the §6
+  tolerance. A run WITHOUT the limit measures the corpus as it then stands — a newer
+  dataset once the corpus has grown, not a failed reproduction; a re-run against the
+  copy names the copy in the corpus-path/commit lines (expected).
+- Corpus read at run time: {run['corpus_path']} @ commit {run['corpus_commit']}
+  ({ds['corpus_total']} records = {run['corpus_lines_read']} raw lines, pinned above).
 - Runtime: {run['wall_secs']:.0f}s wall on the operator host (bound: 30 min) — device {run['device']}.
-- Artifacts (outside git): {run['artifacts']} — `dataset.jsonl` (rows with labels +
-  both heads' predictions and confidences), `metrics.json` (every number in this
-  report), `probe_head.pt` (the {run['hidden_size']}-dim linear head, ~40KB),
-  `finetune/` (the full fine-tune checkpoint).
-- Corpus snapshot: {run['corpus_path']} @ commit {run['corpus_commit']} ({ds['corpus_total']}
-  records at run time).
+- Artifacts (outside git): {run['artifacts']} — `corpus-snapshot.jsonl` (the pinned
+  input, above), `dataset.jsonl` (rows with labels + both heads' predictions and
+  confidences), `metrics.json` (every number in this report), `probe_head.pt` (the
+  {run['hidden_size']}-dim linear head, {run['probe_head_bytes']:,} bytes ≈
+  {run['probe_head_bytes'] / 1000:.1f} KB), `finetune/` (the full fine-tune checkpoint).
 - Determinism: seed {run['seed']}; probe + baselines byte-identical across same-device
-  reruns (verified repeatedly), fine-tune tolerance ±2 held-out records on MPS (§6).
+  reruns (re-verified for this report: runs from the main path and from the pinned
+  snapshot copy agree exactly), fine-tune wobble up to 5 held-out records on MPS (§6).
 - The corpus is READ, never written; `scripts/decisions-audit.sh` stays green.
+- Scope note: the T208 diff measured 1085 lines at filing (fd1c7b6) against the
+  ~460-line spec estimate — the report template is embedded in the script so this
+  report is byte-reproducible from a re-run (never hand-edited); the fix-up commit
+  adds the corpus pin and the validator findings' disclosures on top.
 """
 
 
@@ -689,6 +815,9 @@ def corpus_commit(corpus_path):
 def parse_args():
     p = argparse.ArgumentParser(description="T208 / F13 phase 2b distillation experiment")
     p.add_argument("--corpus", default=DEFAULT_CORPUS, help="decisions.jsonl path (main checkout)")
+    p.add_argument("--corpus-record-limit", type=int, default=None,
+                   help="read at most N raw corpus lines — pins a historical input "
+                        "(the corpus is append-only; shell equivalent: head -N)")
     p.add_argument("--snapshot", default=DEFAULT_SNAPSHOT_GLOB, help="HF snapshot dir or glob")
     p.add_argument("--artifacts", default=DEFAULT_ARTIFACTS, help="artifact dir (outside git)")
     p.add_argument("--report", default=DEFAULT_REPORT, help="report path (relative to cwd)")
@@ -726,8 +855,22 @@ def main():
 
     if not Path(args.corpus).is_file():
         sys.exit(f"distill_experiment: corpus not found: {args.corpus}")
-    records, malformed = parse_corpus(args.corpus)
-    log(f"corpus: {args.corpus} — {len(records)} records, {malformed} malformed lines dropped")
+    # Artifacts dir exists from the top so the corpus pin lands even if a
+    # later stage dies.
+    art = Path(args.artifacts).expanduser()
+    art.mkdir(parents=True, exist_ok=True)
+    records, malformed, corpus_raw, corpus_lines = parse_corpus(args.corpus, args.corpus_record_limit)
+    log(f"corpus: {args.corpus} — {corpus_lines} lines read, {len(records)} records, "
+        f"{malformed} malformed lines dropped")
+
+    # Corpus pin: a gitignored, append-only corpus makes a commit ref pin
+    # nothing, so the EXACT bytes this run read are copied to the artifact
+    # dir (outside git) before any training — any run's input is then
+    # reconstructible byte-for-byte (report §8 documents the procedure).
+    snapshot_copy = art / "corpus-snapshot.jsonl"
+    snapshot_copy.write_bytes(corpus_raw)
+    corpus_sha = sha256_hex(corpus_raw)
+    log(f"corpus pin: {snapshot_copy} ({len(corpus_raw)} bytes, sha256 {corpus_sha[:16]}…)")
 
     rows, stats = build_dataset(records)
     log(f"dataset: {TASK_CLASS} {stats['in_class']} in-class, "
@@ -747,10 +890,26 @@ def main():
 
     # ---- baselines (mechanical)
     b_majority = evaluate([train_majority] * len(held_gold), held_gold)
-    b_keyword = evaluate([keyword_proxy(r["rec"]) for r in held_rows], held_gold)
-    kw_all = evaluate([keyword_proxy(r["rec"]) for r in rows], [r["label"] for r in rows])
+    b_keyword = evaluate([keyword_proxy(r["rec"], EXTENDED_CORE_FILE_TOKENS) for r in held_rows], held_gold)
+    b_keyword_strict = evaluate([keyword_proxy(r["rec"], STRICT_CORE_FILE_TOKENS) for r in held_rows], held_gold)
+    kw_all = evaluate([keyword_proxy(r["rec"], EXTENDED_CORE_FILE_TOKENS) for r in rows], [r["label"] for r in rows])
     log(f"baselines: majority {b_majority['accuracy']:.3f} | keyword held {b_keyword['accuracy']:.3f} "
-        f"(all-rows {kw_all['accuracy']:.3f})")
+        f"(strict {b_keyword_strict['accuracy']:.3f}, all-rows {kw_all['accuracy']:.3f})")
+    kw_flip_ids = [held_rows[i]["rec"].get("id") for i in range(len(held_rows))
+                   if keyword_proxy(held_rows[i]["rec"], EXTENDED_CORE_FILE_TOKENS)
+                   != keyword_proxy(held_rows[i]["rec"], STRICT_CORE_FILE_TOKENS)]
+
+    # ---- catch-all disclosure placement (report §2/§6): where each named
+    # off-task record landed in THIS dataset/split, computed, never assumed.
+    catch_all = []
+    for i, row in enumerate(train_rows + held_rows):
+        rid = row["rec"].get("id")
+        if rid in CATCH_ALL_OFF_TASK:
+            catch_all.append({
+                "id": rid, "kind": CATCH_ALL_OFF_TASK[rid],
+                "part": "train" if i < len(train_rows) else "held-out",
+                "idx": i if i < len(train_rows) else i - len(train_rows),
+            })
 
     # ---- heads
     snapshot = find_snapshot(args.snapshot)
@@ -799,9 +958,7 @@ def main():
     verdict = "GO" if strict else "NO-GO"
     log(f"verdict: {verdict}")
 
-    # ---- artifacts (outside git)
-    art = Path(args.artifacts).expanduser()
-    art.mkdir(parents=True, exist_ok=True)
+    # ---- artifacts (outside git; the dir + corpus pin were created at read time)
     with open(art / "dataset.jsonl", "w", encoding="utf-8") as fh:
         for i, row in enumerate(train_rows + held_rows):
             part = "train" if i < len(train_rows) else "held"
@@ -817,18 +974,22 @@ def main():
     metrics = {
         "task": TASK_CLASS, "seed": SEED, "device": device,
         "corpus": str(args.corpus), "corpus_commit": corpus_commit(args.corpus),
+        "corpus_lines_read": corpus_lines, "corpus_record_limit": args.corpus_record_limit,
+        "corpus_snapshot_copy": str(snapshot_copy), "corpus_snapshot_sha256": corpus_sha,
         "snapshot": str(snapshot), "malformed_lines": malformed,
         "dataset": {
             "corpus_total": len(records), "in_class": stats["in_class"],
             "ambiguous_ids": stats["ambiguous_ids"],
             "near_dup_dropped_ids": stats["near_dup_dropped_ids"],
+            "catch_all_off_task": catch_all,
             "distinct_subject_shapes": len({shape(r["rec"].get("subject", "")) for r in rows}),
             "n_total": len(rows), "train_n": len(train_rows), "held_n": len(held_rows),
             "train_dist": dict(Counter(train_gold)), "held_dist": dict(Counter(held_gold)),
         },
         "baselines": {
             "train_majority": train_majority,
-            "majority": b_majority, "keyword": b_keyword, "keyword_all_rows": kw_all,
+            "majority": b_majority, "keyword": b_keyword,
+            "keyword_strict": b_keyword_strict, "keyword_all_rows": kw_all,
         },
         "probe": probe_metrics, "finetune": ft_metrics,
         "tau_probe": tau_probe, "tau_finetune": tau_ft,
@@ -855,14 +1016,20 @@ def main():
             "train_dist": {"n": len(train_rows), **dict(Counter(train_gold))},
             "held_dist": {"n": len(held_rows), **dict(Counter(held_gold))},
         },
-        "baselines": {"train_majority": train_majority, "majority": b_majority, "keyword": b_keyword},
+        "baselines": {"train_majority": train_majority, "majority": b_majority,
+                      "keyword": b_keyword, "keyword_strict": b_keyword_strict},
         "probe": probe_metrics, "ft": ft_metrics,
         "tau_probe": tau_probe, "tau_ft": tau_ft,
+        "catch_all": catch_all, "kw_flip_ids": kw_flip_ids,
         "run": {
             "verdict": verdict, "corpus_commit": metrics["corpus_commit"],
             "snapshot": str(snapshot), "seed": SEED, "device": device,
             "wall_secs": time.time() - t0, "artifacts": str(art),
-            "corpus_path": str(args.corpus), "hidden_size": hidden,
+            "corpus_path": str(args.corpus), "corpus_lines_read": corpus_lines,
+            "corpus_record_limit": args.corpus_record_limit,
+            "corpus_snapshot_copy": str(snapshot_copy), "corpus_sha256": corpus_sha,
+            "hidden_size": hidden,
+            "probe_head_bytes": (art / "probe_head.pt").stat().st_size,
         },
     })
     report_path = Path(args.report)
