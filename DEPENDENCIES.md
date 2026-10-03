@@ -37,6 +37,7 @@ degraded note, and the loop continues.
 | Langfuse v3 (self-hosted) | service | traces/generations/spans, outcome + iteration scores | `LANGFUSE_HOST` / `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` (fallbacks `~/.langfuse-keys-chug`, `~/.langfuse-keys`) | unset → silently off; delivery failure counted + ignored — telemetry never changes run behavior | SPEC-8 |
 | `chug daemon` (baked-in judge, `daemon` feature) | crate-in-binary | `--risk-gate` bash classification provider (T204/F15 phase 1): `chug daemon` hosts the Laya model in-process (candle 0.11 + hf-hub 0.4 + tokenizers 0.22, optional feature — OFF in the default build, pinned zero-candle by `tests/daemon_feature_off.rs`) over a 0600 unix socket (`CHUG_HOME`/`CHUG_DAEMON_SOCK`, default `~/.chug/daemon.sock`) | `CHUG_JUDGE` (default `daemon`; `http`/`off` escape hatches), `CHUG_LAYA_CHECKPOINT` (local dir or HF repo; first load downloads ~650MB into the HF cache) | fail-open unchanged: daemon absent/unreachable → command allowed, degradation logged (verdicts → `.chug/risk_verdicts.jsonl`); auto-spawn + stale-socket recovery; single-instance flock | T204/F15 (this slice) |
 | layad judge (external, deprecated as judge) | service | layad notify sink (`/hook/notification` push-vs-silent) — and the `CHUG_JUDGE=http` escape hatch for the risk gate | `LAYA_URL` (default `http://127.0.0.1:8420`) | fail-open: judge down → command allowed, degradation logged (verdicts → `.chug/risk_verdicts.jsonl`); the notify sink degrades to a `notify_error` event | SPEC-3 `db6fea6`; judge role replaced by the daemon (T204) |
+| Hugging Face Hub (huggingface.co or any HF-compatible host) | service | the baked-in daemon's judge-checkpoint downloads (`daemon` feature): the five-file RLAgent layout, cache-first into the standard HF cache; fine-tunes live in private org repos (the publish contract below) | `CHUG_LAYA_CHECKPOINT` (local dir, `org/model`, or `org/model@REV` — pinned revision), `HF_TOKEN` (private/gated repos; a read-scoped machine token — hf-hub 0.4.3 does NOT read it from env, chug passes it through), `CHUG_HF_ENDPOINT` (else `HF_ENDPOINT`) → Artifactory or any HF-compatible host; default stays public huggingface.co | fail-open (T190 shape): daemon absent/unauthed → command allowed, degradation logged; an auth failure (401/403) is ONE stderr line naming the fix + ONE `judge_checkpoint_auth_error` events note, never a retry storm | T205 |
 | DuckDuckGo HTML | service | `web_search` (keyless default provider) | `CHUG_WEB_SEARCH_PROVIDER` / `CHUG_WEB_SEARCH_BASE_URL` | scrape breakage/rate-limit → tool error to the model, never a silent empty result; one attempt, no retry | T180 |
 | arbitrary URLs | capability | `web_fetch` (bounded read-only GET — not a service, the same reqwest seam) | — | non-2xx/transport → tool error; one attempt, no retry | T37 |
 | GitHub via plain `git push`/tag | service | delivery of work + releases | — | in-binary git calls degrade to notes; delivery (push/tag) blocks — git is the transport of record | T100 (releases), loop protocol (work) |
@@ -47,6 +48,26 @@ degraded note, and the loop continues.
 | `osascript` | process | macOS notify sink (opt-in via `.chug/notify.json`) | — | delivery failure noted exactly once per run; run never affected | T190 |
 | `.chug/mcp.json` servers | process | user-configured MCP children (stdio + streamable HTTP) | per-entry `env` map; `${VAR}` header expansion from the process env | per-server fail-soft: bad entry skipped with a note, dead server errors its calls — never aborts the run | SPEC-7 (stdio), SPEC-9 (HTTP) |
 | python venv `~/models/laya/venv` (torch + transformers) + HF snapshot cache (`convaiinnovations/laya` @ 55cf4c4e) | operator-host tooling — **NOT a chug build dep** (nothing in `src/` or `Cargo.toml` touches it; the cargo build never needs it) | F13 phase-2b distillation experiment ONLY — `scripts/distill_experiment.py` (T208) reads the decision corpus and trains the evaluation heads | `TRANSFORMERS_OFFLINE` / `HF_HUB_OFFLINE` (forced on by the script itself — no network fetch) | venv or snapshot absent → the script exits naming the venv path; the loop never depends on it (report + committed metrics are the product) | T208 (this slice) |
+
+## Private fine-tune hosting — the T205 publish contract
+
+Any laya fine-tune destined for the org HF org (or the interim
+private `tampajohn/*` repos) is, before ANY consumer points at it:
+
+1. **PRIVATE at creation** — org-membership gating is the mechanism, NOT
+   HF's "gated" feature (public + approval workflow — wrong tool).
+2. **Secret-scanned over its training corpus** (gitleaks-class), with the
+   scan result recorded in the model card — the operator's spill history
+   makes this a hard gate, not advice. The repo-wide equivalent lives at
+   `tests/no_secret_spill.rs` (HF_TOKEN appears as a NAME, never a value).
+3. **Revision-pinned by consumers** — `CHUG_LAYA_CHECKPOINT=org/model@REV`
+   (a policy-affecting artifact must not move under a running fleet).
+
+Base laya (`convaiinnovations/laya`, Apache 2.0, public) needs no gating;
+mirroring it to `org/laya-base` is OPTIONAL (availability pinning
+only). The full runbook — consumer config, the loopd env file, and the
+operator checklist (PENDING the 2026-10-05 hosting decision) — is
+`runbooks/laya-hf-hosting.md`.
 
 Deliberately absent: **no database, no docker, no `gh` CLI at runtime** (gh
 exists only inside the GHA release job), **no external config service**, no
@@ -82,7 +103,9 @@ Every variable read via `std::env::var`/`var_os` in `src/` (+ `build.rs`):
 - `LAYA_URL` — layad notify sink + the `CHUG_JUDGE=http` escape hatch
 - `CHUG_JUDGE` — risk-gate judge client: `daemon` (default) | `http` | `off`
 - `CHUG_DAEMON_SOCK` / `CHUG_HOME` — the baked-in judge daemon's 0600 unix socket location
-- `CHUG_LAYA_CHECKPOINT` — the daemon's model checkpoint (local dir or HF repo)
+- `CHUG_LAYA_CHECKPOINT` — the daemon's model checkpoint (local dir, `org/model`, or `org/model@REV` — a pinned revision sha/tag; T205)
+- `HF_TOKEN` — private/gated HF repo access for the daemon's checkpoint fetch: read-scoped, passed through to hf-hub (which reads only its cached token file on its own); the VALUE never enters a log, event, or error (tests/no_secret_spill.rs pins the repo to the name only)
+- `CHUG_HF_ENDPOINT` (chug-specific, wins) / `HF_ENDPOINT` (standard, fallback) — point the checkpoint fetch at Artifactory or any HF-compatible host; hf-hub 0.4.3 ignores `HF_ENDPOINT` via `Api::new()`, so the override is applied by `hf_hosting` (T205)
 - `CHUG_DAEMON_STUB` — the daemon lifecycle test seam (`chug daemon` serve mode, SHIPPING code path read at startup): `1` serves the real transport with NO model — /judge refuses outright (a stub must never fabricate classifications)
 - `CHUG_LAYA_LIVE_PARITY` — test-only: `=1` enables the weights-loaded golden-parity tests (judge_model + daemon socket paths)
 
