@@ -177,6 +177,30 @@ in the section, acceptable. No docs row filed.
 
 Per-item entries below; wrap adds skipped/deferred + cycle notes.
 
+- **T208 (pri 2, F13 phase 2b, ROADMAP PULL) — landed cf6366b. MEASURED
+  NO-GO.** The first distillation experiment: 141-record validation-routing
+  task, time-ordered 112/29 split, leakage controls, corpus pinned
+  (artifacts/corpus-snapshot.jsonl + sha256 + truncation-restore §8).
+  Result: the frozen-encoder probe TIES majority (79.3%; its macro-F1 edge
+  does not survive the confidence gate), the fine-tune wobbles
+  65.5–82.8% with no stable edge, both keyword proxies LOSE to majority
+  (65.5/69.0), and in every observed wobble state no ≥95%-accuracy
+  operating point reaches the ≥50%-coverage wiring bar → phase-3
+  confidence-gated wiring is NO-GO with a measured GO precondition (~3×
+  routing records / held-out n ≥ 60; the same script re-runs). The F15-2
+  "no consumer yet" deferral is now measurement-backed. Arc: glm impl died
+  80/80 with the work complete-uncommitted → T63 resume accepted 8/80;
+  kimi round-1 FAIL (5 findings — snapshot-pin overclaim, 4 off-task
+  labels, false proxy provenance, deferred inconsistency, minors; M1
+  choice-leak mutant flipped the verdict to GO, proving the honest hygiene
+  causal; M2 caught; M3 no-teeth caveat logged) → glm fix-up (all 5 +
+  wobble-band bonus) → kimi round-2 PASS (own-code independent recompute,
+  byte-identical reproduction from the pinned snapshot) → orchestrator
+  round-3 doc-polish (R1: the extended-proxy's true provenance is the
+  T189 spec's 9-file over-quote, pickaxe-verified never step-4; R2: §7
+  sliver-number flagged wobble-dependent; report script-regenerated —
+  byte-reproducibility preserved).
+
 - **T206 (pri 1, deflake) — landed 1a41a00.** The flock fork-inheritance
   race the T204 round-2 addendum caught: reproduced 3/3 pre-fix (threads=4
   + judge_path spawn co-tenant), mechanism diagnosed (inherited lock fds
