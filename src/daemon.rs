@@ -1030,6 +1030,22 @@ mod tests {
             .clone()
     }
 
+    /// Bounded retry for `daemon_lock_is_exclusive`'s post-release
+    /// reacquisition: generous enough to outlive any transient fork child's
+    /// exec lag, short enough that a stuck holder fails the test in seconds
+    /// (the never-releases mutant must time out RED here, never pass).
+    const LOCK_REACQUIRE_DEADLINE: Duration = Duration::from_secs(10);
+    /// Poll cadence for the bounded reacquire (~400 attempts inside the
+    /// deadline; a transient fork child's inherited fd clears the instant
+    /// it execs).
+    const LOCK_REACQUIRE_BACKOFF: Duration = Duration::from_millis(25);
+    /// Bounded retry for `stale_socket_connects_refused`'s classification:
+    /// outlives the suite's fd-pressure/teardown transients, still fails in
+    /// seconds against a genuinely broken classification.
+    const STALE_CLASSIFY_DEADLINE: Duration = Duration::from_secs(10);
+    /// Poll cadence for the bounded classification.
+    const STALE_CLASSIFY_BACKOFF: Duration = Duration::from_millis(25);
+
     /// A backend that answers /judge with a canned payload — the protocol
     /// contract test's server half (no weights, no network).
     struct FixtureBackend {
@@ -1224,8 +1240,31 @@ mod tests {
             "the lock records the holder pid"
         );
         drop(first);
-        // After release (the lock-holding daemon exiting), acquisition works.
-        let third = acquire_lock_at(&lock).expect("acquisition after release");
+        // After release, acquisition works — EVENTUALLY. flock locks ride the
+        // open file description: a `Command::spawn` (fork+exec; sibling
+        // judge_path tests spawn with `pre_exec`, forcing the fork path)
+        // forked while `first` was held inherits this fd, and the child keeps
+        // the description open until its exec lands (CLOEXEC). Under a loaded
+        // threaded harness the fork→exec lag beats this thread from `drop`
+        // to reacquire, so ONE attempt can hit EAGAIN "held by <own pid>"
+        // against an fd that is about to close (cycle-95 eval: 3/3 red at
+        // --test-threads=4 with the spawn family in the run set). What the
+        // test MEANS: once every holder — including those transient fork
+        // children — is gone, the lock is free. Bounded retry on a ~10s
+        // deadline; the live-holder refusal leg above stays single-shot.
+        let deadline = Instant::now() + LOCK_REACQUIRE_DEADLINE;
+        let third = loop {
+            match acquire_lock_at(&lock) {
+                Ok(acquired) => break acquired,
+                Err(err) => {
+                    assert!(
+                        Instant::now() < deadline,
+                        "the lock never became free within {LOCK_REACQUIRE_DEADLINE:?} of release: {err}"
+                    );
+                    std::thread::sleep(LOCK_REACQUIRE_BACKOFF);
+                }
+            }
+        };
         drop(third);
     }
 
@@ -1241,10 +1280,21 @@ mod tests {
 
     /// Stale-socket recovery at the transport level: a socket file with no
     /// listener connects ECONNREFUSED, which is the unlink trigger.
+    ///
+    /// The classification is a BOUNDED RETRY, same shape as
+    /// `daemon_lock_is_exclusive`: under the full-suite threaded run the
+    /// one-shot assert has raced kernel transients that have nothing to do
+    /// with the stale socket — the observed flavors are EMFILE ("Too many
+    /// open files", os error 24: the suite's fd churn against the 256
+    /// default soft limit makes the socket(2) inside connect fail even
+    /// though the bind a moment earlier succeeded) and ENOENT (os error 2,
+    /// the close-vs-connect teardown burst reproduced in the scratch
+    /// bind/drop/connect racer). ECONNREFUSED must EVENTUALLY be the
+    /// classification; on timeout the last observed error names itself.
     #[cfg(unix)]
     #[test]
     fn stale_socket_connects_refused() {
-        use std::os::unix::net::UnixListener;
+        use std::os::unix::net::{UnixListener, UnixStream};
 
         let tmp = tempfile::tempdir().expect("tempdir");
         let sock = tmp.path().join("stale.sock");
@@ -1252,7 +1302,35 @@ mod tests {
         // shape: file present, no listener).
         drop(UnixListener::bind(&sock).expect("bind"));
         assert!(sock.exists(), "the stale socket file exists");
-        assert!(connect_refused(&sock), "connect to the dead socket is ECONNREFUSED");
+        // Poll for the exact ECONNREFUSED classification (raw errno, not the
+        // shipping bool) so an over-eager classifier cannot make this pass.
+        let deadline = Instant::now() + STALE_CLASSIFY_DEADLINE;
+        let mut last_transient: Option<std::io::Error> = None;
+        loop {
+            match UnixStream::connect(&sock) {
+                Err(e) if e.raw_os_error() == Some(libc::ECONNREFUSED) => break,
+                Err(e) => {
+                    last_transient = Some(e);
+                    assert!(
+                        Instant::now() < deadline,
+                        "connect to the dead socket never classified ECONNREFUSED within \
+                         {STALE_CLASSIFY_DEADLINE:?} (last transient: {})",
+                        last_transient.as_ref().expect("just stored")
+                    );
+                    std::thread::sleep(STALE_CLASSIFY_BACKOFF);
+                }
+                Ok(_) => panic!("connect to the dead socket SUCCEEDED — something is listening"),
+            }
+        }
+        // The shipping classifier agrees on BOTH sides of the line: a dead
+        // socket file IS refused; a missing file's ENOENT is NOT (this pair
+        // kills an always-refused mutant of `connect_refused`, which gates
+        // ensure's stale-socket unlink).
+        assert!(connect_refused(&sock), "the dead socket classifies ECONNREFUSED");
+        assert!(
+            !connect_refused(&tmp.path().join("missing.sock")),
+            "ENOENT (no socket file) must not classify as refused"
+        );
         assert!(uds_request(&sock, "GET", "/healthz", None).is_err());
     }
 
