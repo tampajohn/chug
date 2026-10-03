@@ -191,6 +191,11 @@ fn parse_http_response(raw: &[u8]) -> Result<(u16, String), String> {
 /// then POSTs the exact same request body the HTTP path builds.
 pub struct DaemonJudge {
     sock: PathBuf,
+    /// The daemon binary to spawn, resolved ONCE at construction (the one
+    /// env read — judge() never re-reads process-global env). `None` is the
+    /// no-binary seam: ensure fails PERMANENTLY on the spot (production
+    /// never stores None with a clean latch — see [`DaemonJudge::from_env`]).
+    binary: Option<PathBuf>,
     /// The daemon this process spawned, held for opportunistic reaping (a
     /// handle dropped without `wait` would leave a zombie once the daemon
     /// exits while this process is still alive).
@@ -224,10 +229,24 @@ struct EnsureFailure {
 
 impl DaemonJudge {
     pub fn from_env() -> anyhow::Result<Self> {
+        // The daemon binary is resolved ONCE, here — judge() never re-reads
+        // process-global env (the mcp_serve.rs env rule). A resolution
+        // failure is NOT a construction error (the gate must keep failing
+        // open per command): it becomes the client's permanent-failure
+        // latch — byte-for-byte the message and latch semantics a per-call
+        // resolution failure produced before.
+        let (binary, pre_latch) = match daemon_binary() {
+            Ok(path) => (Some(path), None),
+            Err(e) => (
+                None,
+                Some(format!("resolving the chug binary for the judge daemon: {e:#}")),
+            ),
+        };
         Ok(Self {
             sock: sock_path()?,
+            binary,
             spawned: None,
-            dead: None,
+            dead: pre_latch,
             waited: Duration::ZERO,
         })
     }
@@ -235,7 +254,7 @@ impl DaemonJudge {
     /// Bring up a healthy daemon: probe, recover a stale socket, spawn,
     /// bounded wait. Errors carry a latch flag (see [`EnsureFailure`]).
     fn ensure(&mut self) -> Result<(), EnsureFailure> {
-        ensure_with(&self.sock, &mut self.spawned)
+        ensure_at(&self.sock, &mut self.spawned, &self.binary)
     }
 }
 
@@ -248,10 +267,11 @@ impl Judge for DaemonJudge {
         let ensured = self.ensure();
         self.waited += started.elapsed();
         if let Err(failure) = ensured {
-            // Latch on the permanent flavors, or once futile waiting has
-            // consumed the lifetime budget (a daemon that never came up).
-            if failure.latch || self.waited >= MAX_LIFETIME_WAIT {
-                self.dead = Some(failure.message.clone());
+            // The latch decision is the pure [`latch_reason`] (table-tested):
+            // permanent flavors, or futile waiting past the lifetime budget,
+            // latch the client off; transient flavors never do.
+            if let Some(message) = latch_reason(&failure, self.waited) {
+                self.dead = Some(message);
             }
             return Err(failure.message);
         }
@@ -265,6 +285,20 @@ impl Judge for DaemonJudge {
         let value: Value = serde_json::from_str(&resp)
             .map_err(|e| format!("judge daemon response is not valid JSON: {e}"))?;
         crate::riskgate::parse_verdict(&value)
+    }
+}
+
+/// The PURE latch decision behind [`DaemonJudge::judge`] — a
+/// permanent ensure failure, or cumulative futile waiting that has consumed
+/// [`MAX_LIFETIME_WAIT`], latches the client off for the process lifetime
+/// (`Some(message)`: every later judge call replays it instantly instead of
+/// re-spawning per bash command). Any transient flavor below the lifetime
+/// budget never latches: the next call may well succeed.
+fn latch_reason(failure: &EnsureFailure, waited: Duration) -> Option<String> {
+    if failure.latch || waited >= MAX_LIFETIME_WAIT {
+        Some(failure.message.clone())
+    } else {
+        None
     }
 }
 
@@ -1018,11 +1052,12 @@ mod tests {
         }
     }
 
-    /// Spin serve_unix on a fresh temp socket and wait for healthz.
-    fn spawn_fixture_server(response: Value) -> (tempfile::TempDir, PathBuf) {
+    /// Spin serve_unix on a fresh temp socket and wait for healthz —
+    /// parameterized over the backend so the non-200 latch pin can serve a
+    /// failing /judge.
+    fn spawn_fixture_backend(backend: Arc<dyn JudgeBackend>) -> (tempfile::TempDir, PathBuf) {
         let tmp = tempfile::tempdir().expect("tempdir");
         let sock = tmp.path().join("contract.sock");
-        let backend: Arc<dyn JudgeBackend> = Arc::new(FixtureBackend { response });
         let server_sock = sock.clone();
         std::thread::spawn(move || {
             let _ = serve_unix(&server_sock, backend);
@@ -1035,6 +1070,11 @@ mod tests {
             std::thread::sleep(Duration::from_millis(20));
         }
         panic!("the fixture server never answered /healthz");
+    }
+
+    /// Spin serve_unix on a fresh temp socket and wait for healthz.
+    fn spawn_fixture_server(response: Value) -> (tempfile::TempDir, PathBuf) {
+        spawn_fixture_backend(Arc::new(FixtureBackend { response }))
     }
 
     /// Ordered-object field lookup (judge_model's `field_pub` is its own
@@ -1234,12 +1274,176 @@ mod tests {
         // touching the socket again (dead short-circuits before ensure).
         let mut judge = DaemonJudge {
             sock,
+            binary: None,
             spawned: None,
             dead: Some("latched for the test".into()),
             waited: Duration::ZERO,
         };
         let err = judge.judge("rm -rf /").expect_err("latched");
         assert_eq!(err, "latched for the test");
+    }
+
+    /// The PURE latch decision table: a permanent ensure failure latches at
+    /// any `waited`; a transient flavor latches ONLY once cumulative futile
+    /// waiting has consumed [`MAX_LIFETIME_WAIT`] (the unreachable-socket
+    /// leg — retrying forever must never stall a run minutes per bash
+    /// command, but a daemon still loading must never be given up on early).
+    #[test]
+    fn latch_decision_table_is_pinned() {
+        let permanent = EnsureFailure {
+            message: "spawn failed".into(),
+            latch: true,
+        };
+        let transient = EnsureFailure {
+            message: "still loading".into(),
+            latch: false,
+        };
+        assert_eq!(
+            latch_reason(&permanent, Duration::ZERO),
+            Some("spawn failed".into()),
+            "a permanent flavor latches immediately"
+        );
+        assert_eq!(
+            latch_reason(&transient, MAX_LIFETIME_WAIT - Duration::from_secs(1)),
+            None,
+            "a transient flavor below the lifetime budget never latches"
+        );
+        assert_eq!(
+            latch_reason(&transient, MAX_LIFETIME_WAIT),
+            Some("still loading".into()),
+            "cumulative futile waiting past the budget latches even a transient flavor"
+        );
+        assert_eq!(
+            latch_reason(&transient, MAX_LIFETIME_WAIT * 2),
+            Some("still loading".into())
+        );
+    }
+
+    /// THE M4 PIN: the latch is SET by the judge() path the RiskGate
+    /// actually calls through (`Box<dyn Judge>` -> [`DaemonJudge::judge`]).
+    /// The sibling test above pins ensure_at's latch FLAG and the dead
+    /// short-circuit; THIS pins the set itself: one judge() call on a
+    /// permanent ensure failure must STORE the failure, so every later call
+    /// replays it instantly. Deleting the set (the validator's M4 mutant —
+    /// the full suite survived it) leaves `dead` None and re-ensures per
+    /// bash command forever; this test fails on exactly that shape.
+    #[test]
+    fn judge_path_sets_the_latch_on_a_permanent_ensure_failure() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let mut judge = DaemonJudge {
+            sock: tmp.path().join("missing.sock"),
+            binary: None, // the no-binary seam: ensure fails PERMANENTLY, instantly
+            spawned: None,
+            dead: None,
+            waited: Duration::ZERO,
+        };
+        let first = match judge.judge("rm -rf /") {
+            Ok(_) => panic!("a permanent ensure failure must not judge"),
+            Err(e) => e,
+        };
+        assert!(
+            judge.dead.is_some(),
+            "the first judge() call must latch the permanent failure"
+        );
+        assert!(judge.spawned.is_none(), "no daemon was ever spawned");
+        // The latched client replays the SAME recorded failure.
+        let second = match judge.judge("ls") {
+            Ok(_) => panic!("a latched client must not judge"),
+            Err(e) => e,
+        };
+        assert_eq!(second, first, "the latched client replays the recorded failure");
+    }
+
+    /// The spawn-exited permanent flavor through the same judge() path: a
+    /// binary that dies instantly with no lock holder (the feature-off
+    /// binary / unloadable-checkpoint shape) means nothing will ever serve —
+    /// the FIRST judge() call must latch. CHUG_HOME is scoped to a tempdir
+    /// (under the crate's env lock) so the daemon log/lock touch nothing
+    /// real.
+    #[test]
+    fn judge_path_latches_when_the_spawned_daemon_dies_without_serving() {
+        let _timing = crate::testsupport::timing_guard();
+        let _guard = crate::delegate::tests::DELEGATE_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let saved_home = std::env::var_os(HOME_ENV);
+        // SAFETY: env mutation serialized by DELEGATE_ENV_LOCK (held above);
+        // restored by the Restore guard before any other test reads HOME_ENV.
+        unsafe { std::env::remove_var(HOME_ENV) };
+        let tmp = tempfile::tempdir().expect("tempdir");
+        // SAFETY: serialized by DELEGATE_ENV_LOCK; restored before return.
+        unsafe { std::env::set_var(HOME_ENV, tmp.path()) };
+        struct Restore(Option<std::ffi::OsString>);
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                match self.0.as_deref() {
+                    Some(v) => unsafe { std::env::set_var(HOME_ENV, v) },
+                    None => unsafe { std::env::remove_var(HOME_ENV) },
+                }
+            }
+        }
+        let _restore = Restore(saved_home);
+
+        let mut judge = DaemonJudge {
+            sock: tmp.path().join("missing.sock"),
+            // Dies instantly, holds no lock ("false" resolves via PATH on
+            // both macOS — /usr/bin/false — and Linux — /bin/false).
+            binary: Some(PathBuf::from("false")),
+            spawned: None,
+            dead: None,
+            waited: Duration::ZERO,
+        };
+        let err = match judge.judge("rm -rf /") {
+            Ok(_) => panic!("a daemon that died without serving must not judge"),
+            Err(e) => e,
+        };
+        assert!(
+            err.contains("exited before serving"),
+            "the spawn-exited failure is named: {err}"
+        );
+        assert!(
+            judge.dead.is_some(),
+            "the judge() path latched the spawn-exited permanent failure"
+        );
+    }
+
+    /// The non-200 leg: a LIVE daemon that refuses the judgment is a
+    /// TRANSIENT judge failure — the client returns the error but never
+    /// latches (the next bash command retries the POST against the same
+    /// live daemon, which costs no spawn; latch here would turn one bad
+    /// backend response into a judge disabled for the whole process).
+    #[test]
+    fn judge_path_does_not_latch_a_non_200_from_a_live_daemon() {
+        struct FailingBackend;
+        impl JudgeBackend for FailingBackend {
+            fn judge_request(&self, _raw: &str) -> anyhow::Result<Value> {
+                bail!("the judge backend is broken (fixture)")
+            }
+            fn describe(&self) -> String {
+                "failing (non-200 fixture)".into()
+            }
+        }
+        let (tmp, sock) = spawn_fixture_backend(Arc::new(FailingBackend));
+        let mut judge = DaemonJudge {
+            sock,
+            binary: None, // never consulted: healthz answers, ensure returns first
+            spawned: None,
+            dead: None,
+            waited: Duration::ZERO,
+        };
+        let err = match judge.judge("rm -rf /") {
+            Ok(_) => panic!("a failing backend must not judge"),
+            Err(e) => e,
+        };
+        assert!(
+            err.contains("judge daemon returned HTTP 500"),
+            "the non-200 error flavor: {err}"
+        );
+        assert!(
+            judge.dead.is_none(),
+            "a live daemon's non-200 is transient — never latched"
+        );
+        drop(tmp);
     }
 
     /// The gate-level fail-open contract with the REAL daemon client: a
@@ -1260,6 +1464,7 @@ mod tests {
         }
         let judge = DaemonJudge {
             sock: tmp.path().join("absent.sock"),
+            binary: None,
             spawned: None,
             dead: Some("the judge daemon is unreachable (latched)".into()),
             waited: Duration::ZERO,
