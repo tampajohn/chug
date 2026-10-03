@@ -700,8 +700,13 @@ impl JudgeModel {
         let p = softmax(&logits, D::Minus1)?;
         let am = p.argmax(D::Minus1)?; // (b,)
         let onehot = am
-            .unsqueeze(1)?
-            .eq(&Tensor::arange(0u32, batch.kmax as u32, dev)?.unsqueeze(0)?)?
+            .unsqueeze(1)? // (b, 1)
+            .broadcast_as((batch.b, batch.kmax))?
+            .eq(
+                &Tensor::arange(0u32, batch.kmax as u32, dev)?
+                    .unsqueeze(0)? // (1, kmax)
+                    .broadcast_as((batch.b, batch.kmax))?,
+            )?
             .to_dtype(DType::F32)?; // (b, kmax)
         let rest = (&p * &onehot.affine(-1.0, 1.0)?)?; // argmax zeroed out
         let max1 = p.max(D::Minus1)?.unsqueeze(1)?;
