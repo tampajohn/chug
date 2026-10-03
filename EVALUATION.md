@@ -199,6 +199,26 @@ Per-item entries below; wrap adds skipped/deferred + cycle notes.
   the hardening candidate is noted for the next eval (T211's __pycache__
   filter is adjacent but distinct).
 
+- **T211 (pri 3, bug, tests-only) — landed 8e44df1.** The __pycache__
+  copy-bomb class closed: `Sandbox::new()`'s scripts copy extracts to
+  `copy_scripts_dir(src, dst)` with an `entry.file_type().is_file()`
+  filter (dirs/fifos/symlinks skip; the symlink pick is named —
+  `scripts/` is authored content, never a link farm), comment names the
+  cycle-95 incident, and the RED-proof sibling test
+  `sandbox_scripts_copy_skips_non_regular_entries` proves the filter
+  load-bearing (orchestrator re-proved the mutant RED 0.02s at the
+  `fs::copy` with the filter deleted, tree restored byte-identical).
+  Family 21/21 green WITH `scripts/__pycache__/` present (the recurrence
+  acceptance, litter created+removed around the run); rest-of-suite
+  1469/1469 nextest release + spoof_guard 9/9 isolated + clippy -D
+  warnings. Arc: glm impl died at the 50-min wall (43/80) with the work
+  COMPLETE-COMMITTED (46a2646) → T63 orchestrator-finish, no resume
+  burned (T150 precedent) — the T173 measure census should count this
+  (5th of 8: minutes-bound, goal unaccepted, work done).
+  Validation: T189 gates-only lane (all four inputs computed from the
+  diff: tests-only, 68 ≤ 150 lines, no new surface, no CI/check change).
+
+
 ### Cycle 95 (2026-10-03, ~04:45 UTC–) — kimi MANDATORY fresh-eval cycle (predicate failed: eval dated 2026-10-02 vs launch 2026-10-03; T81 routing correct 5-for-5) — opened with cycle-94 bookkeeping recovery (T204 merged-but-unflipped; glm seg-3 died 200/200 mid-wrap)
 
 
