@@ -1003,7 +1003,14 @@ mod tests {
     }
 
     impl JudgeBackend for FixtureBackend {
-        fn judge_request(&self, _raw: &str) -> anyhow::Result<Value> {
+        fn judge_request(&self, raw: &str) -> anyhow::Result<Value> {
+            // The real backend's front door: parse + shape-check the request
+            // body BEFORE serving — a malformed or incomplete body is a
+            // backend error, which is what route() classifies as 400 (the
+            // contract under test). Same pure checks the model parse runs.
+            if let Some(error) = request_shape_error(raw) {
+                return Err(anyhow::anyhow!(error));
+            }
             Ok(self.response.clone())
         }
         fn describe(&self) -> String {
@@ -1174,6 +1181,70 @@ mod tests {
         assert!(sock.exists(), "the stale socket file exists");
         assert!(connect_refused(&sock), "connect to the dead socket is ECONNREFUSED");
         assert!(uds_request(&sock, "GET", "/healthz", None).is_err());
+    }
+
+    /// The permanent-failure latch: an ensure that cannot even spawn (no
+    /// binary) reports latch=true, and a latched client answers every judge
+    /// call with the SAME recorded failure instantly — no re-spawn per bash
+    /// command. (The no-spawn shape is exactly the feature-off refusal's
+    /// client view; exercised here with binary=None, no global env.)
+    #[test]
+    fn daemon_client_latches_after_a_permanent_ensure_failure() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let sock = tmp.path().join("missing.sock");
+        let mut spawned = None;
+        let failure = ensure_at(&sock, &mut spawned, &None).expect_err("no binary, no server");
+        assert!(failure.latch, "a failed spawn is permanent for this process");
+        assert!(spawned.is_none(), "no child was ever created");
+
+        // The latched client: judge() returns the recorded failure without
+        // touching the socket again (dead short-circuits before ensure).
+        let mut judge = DaemonJudge {
+            sock,
+            spawned: None,
+            dead: Some("latched for the test".into()),
+            waited: Duration::ZERO,
+        };
+        let err = judge.judge("rm -rf /").expect_err("latched");
+        assert_eq!(err, "latched for the test");
+    }
+
+    /// The gate-level fail-open contract with the REAL daemon client: a
+    /// client that cannot reach a daemon is an Err judge, so the gate allows
+    /// the command and logs the failure — never blocks, never panics (the
+    /// exact degrade shape the HTTP path has today).
+    #[test]
+    fn risk_gate_fails_open_with_a_dead_daemon_client() {
+        use crate::events::{Event, EventSink};
+        use crate::riskgate::RiskGate;
+
+        let tmp = tempfile::tempdir().expect("tempdir");
+        struct Recording(Vec<Event>);
+        impl EventSink for Recording {
+            fn emit(&mut self, e: Event) {
+                self.0.push(e);
+            }
+        }
+        let mut judge = DaemonJudge {
+            sock: tmp.path().join("absent.sock"),
+            spawned: None,
+            dead: Some("the judge daemon is unreachable (latched)".into()),
+            waited: Duration::ZERO,
+        };
+        let mut gate = RiskGate::new(Box::new(judge), tmp.path());
+        let mut sink = Recording(Vec::new());
+        assert!(
+            matches!(gate.check("rm -rf build/", &mut sink), crate::riskgate::GateDecision::Allowed),
+            "a dead judge must fail OPEN"
+        );
+        assert!(sink.0.is_empty(), "no RiskVerdict event for a failed judgment");
+        let log = std::fs::read_to_string(tmp.path().join(".chug/risk_verdicts.jsonl"))
+            .expect("the verdict log exists");
+        let entry: Value = serde_json::from_str(log.lines().last().expect("one entry"))
+            .expect("log line parses");
+        assert_eq!(entry["choice"], "gate_failure");
+        assert_eq!(entry["blocked"], false);
+        assert_eq!(entry["gate_failure"], "the judge daemon is unreachable (latched)");
     }
 
     /// `request_shape_error` classifies exactly the legs the route() status
