@@ -219,6 +219,25 @@ Per-item entries below; wrap adds skipped/deferred + cycle notes.
   host signal kill, retry green), nextest release 1496/1496 worktree +
   post-merge, clippy `-D warnings`.
 
+**Cycle-95 wrap notes.** Skipped/deferred: T205 (org-side, Monday-blocked,
+spec ready), T207/T209/T210 (doctrine rows, specs ready — the wall went to
+the T206 acceptance battery + the T208 FAIL→fix-up→re-validate arc;
+doctrine arcs need SOLO+kimi ~70 min each and did not fit), T211 (filed
+mid-cycle from found work, deferred — spec ready). Cycle level: the kimi
+T208 round-1 was the cycle's best catch — 5 honesty defects on a
+zero-Rust diff (the corpus-pin overclaim alone voided acceptance leg 1 as
+written; the M1 choice-leak mutant flipping the verdict to GO proved the
+honest hygiene causal, not incidental). The T189 gates-only lane on T206
+saved a validator round without losing assurance (orchestrator RED-proofs
+M1/M2 both killed). The `__pycache__` copy-bomb (untracked python litter
+breaking the reaper sandbox's copy-all) is filed as T211 — a recurring
+class now that python lives in scripts/. Both children budget-died and
+recovered by T63 resume (2-for-2); T81 routing correct 5-for-5 at launch.
+Release: **v0.15.0** tagged at wrap (trigger: ≥3 items + the T204 F15
+check-off since v0.14.0; the cycle-94 wrap death had left T204's release
+uncut — v0.15.0 covers T203/T204/T206/T208). Final gates at HEAD:
+1496/1496 nextest release + clippy `-D warnings` clean, pushed with tag.
+
 ### Cycle 94 (2026-10-02, ~19:40 UTC–) — kimi routine freshness-skip cycle (predicate held post-reconcile: eval cycle-91 same UTC day + operator T203–T205 rows merged in) — opened with the ahead-10/behind-6 reconcile (85b63a0)
 
 - **T203** (DEPENDENCIES.md audit doc) landed `c3c5975` (merge of loop-t203: 8ef6ce9) — the operator's 2026-10-02 dependency audit codified: 117-line DEPENDENCIES.md with the inventory table (9 runtime crates + 2 dev-deps + LLM proxy + 5 services + 6 spawned-process rows — dep / kind / required-for / env knobs / failure mode / first-added-by row), the "one hard dependency: the LLM proxy" fail-closed section, the exhaustive env surface (every `std::env::var`/`var_os` literal in `src/` + `build.rs` — verified mechanically in BOTH directions at review: every source literal appears in the doc, every doc-listed var appears in source), the three-polarity failure-semantics spine (fail-open / fail-closed / blocking), and the adding-a-dependency rules (check the doc first; fail-open unless policy surface; default-features off; record the row) + README Development-section link (integrated, no append-sprawl). Impl arc: glm child committed 8ef6ce9 then died at the 50-minute wall 57/80 (the T173 census ticks again — minutes binding on a docs row whose spec `check:` is the full `cargo test`: each check run costs minutes of the child's wall) → orchestrator-finish per T55/T150 (committed-complete, no resume burned). Docs-only classification (+121/-1, every file .md): guard floor green worktree + main (todo_consistency 19/19 + readme_layout 1/1 — README is a pinned carrier, its pin ran with the floor). kimi skipped per the T189 gates-only lane, all four mechanical inputs diff-computed (routing d1790974130-2). Sequencing note: T203 worked first despite pri 3 < T204's 2 — T204 req 6 edits this file (dependency-order decision d1790970794-1).
@@ -351,90 +370,9 @@ Per-item entries below; wrap adds skipped/deferred + cycle notes.
 
 **T188 done 61aa90c (merge of loop-t188: 4e0a66c impl + 7377425 docs + fe584fb r2-fixup + 5c81faa r3-fixup + e2779c6 r4-drain-pin; routing/recovery records d1790888022-2, d1790890361-3, d1790896112-6; validation records d1790894090-4, d1790897479-7, d1790897512-8).** The auto-spec feature is LANDED: `chug run --goal ... --auto-spec` / `chug quick` drafts spec+check from a bare goal (one read-only LLM call reusing plan-mode machinery, PlanKind::SpecDraft), gates the draft with a real dry-run of its check (vacuous checks rejected, redraft once, abort honestly on a second failure — never loosened), runs against `.chug/auto-spec.md`, plus chat `/auto-spec` + `/auto-spec-approve` and the task-class doctrine sentence in README/SPEC. Cycle-87 arcs: r3 fixup died 80/80 UNCOMMITTED → ONE T63 resume with a noise-strip addendum (the child had mass cargo-fmt'd the whole repo — 83 files +12.6k/−9.2k uncommitted; the resumed child stripped it to 775 real insertions; NEW incident class for the next eval: impl-child tree-wide formatters need a goal-template ban) closing F1 (e2e mock-Llm draft→gate→run→goal_complete + m6 killers), F2 (SpecDraft wiring pins, m7 killed), F7 (parse_slash/tui/CLI entry pins). Kimi narrowed verdict (d1790897479-7): FAIL 1 — the en-route chat drain fix (ui_gone latch + one drain pass so a queued auto-spec request survives UI quit) was UNPINNED (m8 byte-exact revert survives 21/21; session-level tests race). Round-4 fixup e2779c6 factored the idle poll into `poll_step<P: IdlePollSources>` + `PollStep` with a deterministic scripted-source test; the kimi r4 round was skipped on wall budget (routing d1790897512-8, confidence 0.72 — the deviation to watch) and the ORCHESTRATOR RED-proved m8 in lieu: Idle→Drained on the disconnect leg made the new test RED, revert green, nextest 1351/1351 branch + 1352/1352 main (target-shared-main), clippy -D zero. Harvest: events-t188-round34 + LEDGER-t188-round34 on disk; worktree /tmp/chug-loop-t188 kept at wrap (T186 rule) — cleanup is next cycle's first mechanical act. Also this cycle: the 74d3331 class bit AGAIN (branch-side check re-key invisible to the delegate goal gate — check_cmd ran target-shared-impl-a; dispatch fix 82804fb puts the re-key in MAIN's spec copy).
 
-### Cycle 86 (2026-10-01) — glm routine freshness-skip cycle (freshness held: 8 todo rows T186–T193 + EVALUATION.md same-UTC-day; skip record d1790875941-1) — 1 landed (T193), T188 IN-FLIGHT on a kept branch (round-2 validator FAIL, wall-budget stop), T186/T189/T190/T191/T192/T187 unworked (specs ready)
+### Cycle 86 (2026-10-01) — glm freshness-skip; 1 landed (T193), T188 in-flight on kept branch (round-2 FAIL, wall stop), rest unworked specs-ready
 
-- **T193** (pri 3, bug) — site-sync in-flight classifier counts done TODO
-  rows: landed `a3acaac` (impl `a9f631b`, glm first-try 43/80 clean,
-  +112/-7 across exactly the spec's 3 target files). Classifier now
-  pre-filters OPEN rows only before the F-id grep; F6/F12 FEATURES
-  annotations brought to the uppercase-LANDED convention; 5 new
-  site_sync pins. Gates-only routing (d1790876650-3 — no core-list file,
-  ~119 lines ≤ 150, no new surface, no check: change; mirrors the T189
-  predicate its sibling will codify): nextest 1324/1324 independently
-  re-run in worktree AND main, clippy `-D warnings` clean. Child verified
-  end-to-end on a throwaway site fixture: F6 landed, F12 landed, F14
-  in-flight via open T192. Acceptance VERIFIED at this wrap: a
-  CHUG_SITE_SYNC_NO_PUSH=1 dry run against the real site dir renders
-  Session fork (F6) landed, Web search (F12) landed, Context compaction
-  (F14) in-flight — site commit 2c5efb5 local, the post-cycle loopd sync
-  pushes it. Region regenerates at this wrap's site sync —
-  acceptance confirmed in this entry's release section.
-- **T188** (pri 2, feature) — auto-spec: impl died 80/80 twice (fresh arc
-  + ONE T63 resume, d1790876863-6) → orchestrator-finish amendment
-  (d1790878543-7): closed a real vacuous-class bug (bare `cd` = $HOME
-  always-0 = vacuous; `cd src` can fail = real — the child's impl
-  classified `cd src` vacuous), approve_gate fixture, 4 clippy legs,
-  README layout + req-4 docs (README Quickstart paragraph + SPEC.md CLI
-  rows), commits 4e0a66c + 7377425, 1330/1330. kimi round-1 verdict FAIL
-  (7 findings, d1790882387-9): m6 (draft_and_gate 1-attempt) and m7
-  (SpecDraft kick flip) mutants SURVIVED the full suite — headless
-  orchestration + wiring zero-coverage. Fixup child (pid 68910) died at
-  the 50-MINUTE wall 76/80 (first minutes-wall death in the census —
-  measure-clause data) with work complete-but-uncommitted → T55
-  orchestrator-finish commit fe584fb (F3–F6 closed, 1335/1335). kimi
-  round-2 verdict FAIL (3 of 7 open): F1 e2e mock-Llm test absent (m6
-  still survives), F2 SpecDraft wiring pins absent (m7 still survives),
-  F7 parse_slash/CLI pins absent; F3–F6 closed. Wall budget (three
-  children hit budget walls this cycle) forced the stop: branch
-  loop-t188 KEPT in /tmp/chug-loop-t188, recipe on the TODO row, all six
-  child segments + three child ledgers harvested. One process lesson:
-  the first fixup dispatch landed while the round-1 validator was still
-  verifying — the child correctly refused to start on the held
-  driver.lock (2-min loss, no damage); dispatch only after the previous
-  child in the same worktree is fully dead.
-
-### Cycle 85 (2026-10-01) — kimi mandatory fresh-eval cycle (queue drained at cycle-84 wrap fe02689; T81 routing correct 3-for-3) — 4 rows filed (T184–T187 + F14 reframe), 2 landed (T185, T184), T186/T187 DEFERRED to cycle 86 (specs cold-start-ready; T186 gained the defunct-zombie liveness amendment from this cycle's inverse incident) — no tag (2 items < 3 since v0.11.0, F14 phase 1 of 2 not a check-off)
-
-- **T185** (pri 2, bug) — bash reader-grace keeps already-read output when a
-  grandchild holds the pipe: landed `068e223` (impl `a0051b2`, glm 58/80
-  first-try clean, +208/-23 src/tools.rs; orchestrator gap-closer `44faf3b`).
-  kimi REQUIRED PASS (routing d1790865466-14, verdict d1790870511-16): a
-  6-mutant study killed 5; the m6 survivor (`acc = chunk` — a >64KiB
-  multi-chunk coverage gap the whole pre-existing suite missed) was
-  discharged PRE-merge by the orchestrator's RED-proven gap-closer (the
-  mutant fails the new byte-count assertion; revert green). The arc fought
-  TWO T55-class foreign-binary poisonings: (1) the T184 children's goal
-  gates built into `target-shared` because MY branch-side check re-key was
-  invisible — the delegate `spec:` path reads MAIN's copy — dispatch fix
-  `74d3331` + validator-diagnosed; (2) a Sep-29 stale `eval_digest` binary
-  false-red on my own T184 review gate, fixed by the T55 touch-rebuild.
-  Validator died at the 50-minute wall with its final clean run in flight →
-  ONE T63 resume → verdict on a quiet provenance-pure run (1061 lib = its
-  exact content). What the validator caught beyond m6: the delegate-launch
-  stub family's EXTERNAL-load blindness (T151's timing_guard is in-process
-  only) — fed to the next eval's flake watch.
-
-- **T184** (pri 2, feature — F14 phase 1 reframed to telemetry) —
-  context-economy telemetry: landed `198d664` (impl `7c77d85`, +507/-19,
-  9 files — Event::Trim 4-field events-sink-only + cache_read/
-  cache_creation on Event::Usage + trim.rs caller-side TrimStats seam
-  keeping transcript_trim's bool signature + eventlog serialization
-  incl. the resume-path log_trim + driver both call sites + digest
-  cache counters and "trim fires: N" + README bullet). Impl glm died at
-  80/80 with the work uncommitted-but-nearly-complete → ONE T63 resume →
-  accepted; the child HONORED the growth-stop clause (dropped an
-  over-cap scripted end-to-end leg itself — the filing-time discipline
-  working). kimi REQUIRED PASS (routing d1790870669-21): 4 reqs traced
-  incl. the api.rs→driver data chain; m1-m3 mutants CAUGHT in T79
-  parallel legs; m4 (loop-path Trim emission leg) unrun — the spec's own
-  120k-token-run prohibition made it review-asserted (sanctioned gap);
-  the validator ALSO caught a stale pre-T184 release binary in
-  target-shared-validate silently skipping all 6 new legs on its first
-  green run — the THIRD T55-class artifact event this cycle. Cycle-level
-  lesson: role-keyed dirs bound the class but do not end it — a dir
-  shared across TIME by different checkouts stays last-builder-wins;
-  touch-the-target-file before review/validation gates is the cheap
-  guard (feeds the next eval).
+### Cycle 85 (2026-10-01) — kimi fresh-eval, 4 rows (T184–T187 + F14 reframe), 2 landed (T185 068e223, T184 feature F14), T186/T187 deferred; defunct-zombie liveness amendment; no tag (2 < 3 since v0.11.0)
 
 ### Cycle 84 (2026-10-01) — glm routine freshness-skip cycle (freshness held: EVALUATION.md same UTC day, 1 todo row T181; skip record d1790856978-1) — 1 landed (T181) — queue DRAINED
 
