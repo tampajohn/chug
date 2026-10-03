@@ -282,6 +282,29 @@ for visibility).
 
 ## Outcomes (filled at cycle wrap — LOOP-SPEC Phase 3)
 
+### Cycle 98 (2026-10-03, ~19:05 UTC–) — MANDATORY fresh eval (queue drained at cycle-97 wrap; kimi, T81 routing 8-for-8) — 3 rows filed (T212/T214/T213)
+
+- **T212 LANDED (merge 7c76356, round-2, fixed-up)** — the cycle's deep one. Round 1
+  built the advisory fix on a FALSE premise and the round-1 kimi validator caught it
+  (FAIL d1791061091-8, proven three ways: main.rs:87 re-read-every-iteration,
+  driver.rs:462/1171/1556 arg-path reads, the t209/t210 verifying events running the
+  un-keyed check): the goal gate reads the spec ARG path, branch re-keys never reached
+  it, the cycle-97 WARNs were TRUE positives, and T197's advisory was correct all
+  along — round 1 would have silenced the one truthful component. Round 2 (option C,
+  d1791061091-9 — launch-template spec arg → the WORKTREE copy, rejecting a driver-side
+  cwd-shadowing rule for every run): full revert (sha256 byte-identical), the SPEC-ARG
+  RULE sentence in step 2's template (T63 resume + step-4 validator inherit; the
+  advisory then judges the very text the gate enforces), t209/t210 main-spec slot
+  residue restored, todo_consistency pin 21/21 with 3 T79 parallel mutants RED-proven.
+  kimi round-2 PASS (d1791064272-10): all five findings answered + independently
+  re-verified, gates reproduced exactly (1516/1516 nextest, clippy -D, fallback PASS),
+  launch replay re-derived (no-WARN on agreement, WARN naming both carriers on drift).
+  Orchestrator review caught + fixed one sed over-reach (the validate-a re-key had also
+  rewritten req 3's quoted literal — restored pre-merge). The design dogfooded at its
+  own launches: the round-2 fix-up and validator launches carried the worktree-copy
+  spec arg and printed ZERO drift WARNs. glm r1 70/80 (one gate rejection on the
+  T31-named setsid flake, recovered), fix-up 60/80, both goal-accepted.
+
 ### Cycle 97 (2026-10-03, ~16:48 UTC–) — glm routine freshness-skip cycle (predicate holds: eval same UTC day + 2 todo rows; routing correct 7-for-7) — queue: T209 → T210
 
 - **T209 landed** (cc1d446, ff-merge 3d8f6ca, flip cycle 97) — the dispatch-time spec-size gate: LOOP-SPEC step 2 gains the gate stated BEFORE the launch template (re-read the spec's `estimate:` line at dispatch; >~500 lines or missing estimate on a non-trivial row → NOT dispatched, re-split 2–3 rows first, specs rewritten); the split rule is now **by acceptance surface, not by component** — each half carries its own independently-gateable `check:` surface and its own ≤~500-line estimate, a half still over the ceiling (T204 child B: ~2,100 lines after a by-component split) is re-split again; the T173 minutes-raise paragraph carries its Measure-clause RESOLVED marker (census tripped: t197/t203 minutes-bound + T204 iteration-bound; remedy = the dispatch gate, no further budget raises); step 4's validator-budget paragraph records the validator note (both t204 validators died 60/60 WITH verdicts written — the verdict-file doctrine absorbed both, the clause's UNANNOUNCED letter not tripped; the next trip trims default mutation-leg counts); META-META-SPEC's spec quality bar gains the estimate-is-a-DISPATCH-TIME-contract sentence (filing-time honesty is not enforcement — T204 said ~800, landed ~3,000+ all-in). Pins: legs ah–ak in tests/loop_spec_recovery.rs, RED-proven by 5 deletion mutants; the kimi validator independently re-proved 6 mutants (incl. M6 gate-moved — the BEFORE-the-template requirement is pinned by ORDERING, not mere presence) and re-ran gates 1514/1514 nextest release + clippy -D (verdict d1791051840-3). The arc itself tripped the class it fixes: the glm impl died at the 50-minute wall 64/80 with the work complete-uncommitted (a t197/t203-class minutes death) — ONE T63 resume landed it in 8 iters (recovery d1791049411-1), the doctrine's cap working as designed; the T197 drift warning fired at validator launch (spec check line bare `target-shared` vs the validate-a goal/env) and the T175 re-key landed mid-flight on-branch (3d8f6ca) before the validator's next spec read.
