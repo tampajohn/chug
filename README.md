@@ -580,6 +580,18 @@ an error the model can see and route around; `allow destructive` in a steering
 note disables the gate for the run. Fail-open if the judge is down. Verdicts
 logged to `.chug/risk_verdicts.jsonl`.
 
+The judge client is selected by `CHUG_JUDGE` (T204/F15): `daemon` (the
+default) talks to chug's **baked-in judge daemon** — `chug daemon` hosts the
+same Laya model in-process over a `0600` unix domain socket at
+`~/.chug/daemon.sock` (`CHUG_HOME`/`CHUG_DAEMON_SOCK` relocate it; no TCP
+port, no network listener), loads the ~650MB checkpoint once per host, and is
+auto-spawned on the first judge call with stale-socket recovery; `http` sends
+the request to the external layad at `LAYA_URL` byte-for-byte as before (the
+escape hatch); `off` disables classification (every command fails open,
+logged). The inference stack (candle + hf-hub + tokenizers) lives behind the
+`daemon` cargo feature — off by default, so the hot `chug run` build never
+compiles it. See [DEPENDENCIES.md](DEPENDENCIES.md).
+
 ## Hooks (`.chug/hooks.json`)
 
 Operator policy-as-config: shell commands fire around every tool call. The
@@ -983,6 +995,14 @@ the `.chug/events*.jsonl` corpus (per-file iterations, wall time, tool
 distribution, error classes, token curve, aborts, budget-low fires, TODO
 status counts, staleness flag) so the evaluation phase reads one file instead
 of re-mining raw archives.
+The autonomous run's notification leg (`.chug/notify.json`, off unless the
+file exists) fires a macOS banner per configured event — natively via
+`osascript`, or through layad's push-vs-silent judgment by POSTing
+`{LAYA_URL}/hook/notification` when the sink is set to `layad`. Phase 1 of
+the baked-in judge daemon (T204/F15) serves the risk gate's `/judge` only;
+the `/hook/*` surface stays with external layad until a phase-2 migration,
+and a `layad` sink with no layad on the network degrades to a `notify_error`
+event (never a run failure).
 The supervisor creates five gitignored build caches, one per cargo-consumer
 role, warm after first use: `target-shared/` (implementation children and
 worktree-review gates), `target-shared-validate-a/` and
@@ -1029,5 +1049,5 @@ All three must stay green. External dependencies — crates, runtime services,
 spawned processes, the env surface — are inventoried with their failure modes
 in [DEPENDENCIES.md](DEPENDENCIES.md); check it before adding one.
 Layout: `src/{api,autospec,archive,driver,driver_lock,eventlog,events,fork,fsatomic,judge_model,judge_pack,live_ctx,testsupport,tools,todos,tgrep,tui,valroute,webfetch,websearch,chat,
-attach,complete,commands,decisions,delegate,notify,permissions,plan,riskgate,hooks,mcp,mcp_http,mcp_serve,sse,observ,auth,ledger,transcript,trim,build_info}.rs`
+attach,complete,commands,decisions,delegate,notify,permissions,plan,riskgate,hooks,mcp,mcp_http,mcp_serve,sse,observ,auth,daemon,ledger,transcript,trim,build_info}.rs`
 (+ `main.rs`; `build.rs` only bakes the git commit into the startup banner).
