@@ -593,6 +593,16 @@ pub(crate) fn delegate_launch(input: &Value) -> anyhow::Result<ToolResult> {
     // never waited on or reaped here.
     drop(child);
 
+    // T219 — register the child in the daemon's /sessions registry (the
+    // host-scoped 0600 socket) at the one site that already knows the
+    // child's identity. Best-effort by contract: a failed POST is a no-op
+    // (no daemon running is the common case and fails instantly), it never
+    // touches the return text below (byte-identical for identical state),
+    // and it never blocks the launch beyond the judge client's own 2s
+    // socket bound. The launch is the registration; the status action is
+    // the once-per-minute-class heartbeat while the child stays alive.
+    crate::daemon::register_session("delegate-child", &format!("delegate-{pid}"), "launched");
+
     // T115: the goal-integrity echoes, computed over the EXACT `goal` string
     // that went into the child argv above. Byte count + SHA-256 + tail
     // preview turn the cycle-60 eyeball catch (the T111 validator's launch
@@ -662,6 +672,14 @@ fn delegate_status(input: &Value) -> anyhow::Result<ToolResult> {
     }
     let cwd = delegate_cwd(input)?;
     let pid = input.get("pid").and_then(Value::as_u64);
+    // T219 — heartbeat the child's session registration while it is alive:
+    // the orchestrator's status polls are the once-per-minute-class cadence,
+    // a dead child is left to TTL out of the registry. Best-effort by
+    // contract (a failed POST is a silent no-op) and never touches the
+    // render below — byte-identical for identical state, as pinned.
+    if let Some(pid) = pid.filter(|pid| reap_and_alive(*pid) == Some(true)) {
+        crate::daemon::register_session("delegate-child", &format!("delegate-{pid}"), "running");
+    }
     match wait_secs {
         Some(secs) if secs > 0 => delegate_status_wait(&cwd, pid, secs, terminal),
         // Absent and 0 are the same instant behavior — one code path, so the
