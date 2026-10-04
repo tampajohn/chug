@@ -923,6 +923,74 @@ fn t193_inflight_classifier_reads_open_todo_rows_only_and_landed_wins() {
     assert_eq!(count(&ft, "<i class=\"q\">in-flight</i>"), 2, "exactly the two open-referenced rows");
 }
 
+/// T216: a markdown-escaped pipe (`\|`) is cell CONTENT, not a delimiter, but
+/// the features_rows awk split on it anyway — any row carrying `\|` rendered
+/// truncated. The live complaint: chug.sh's F15 card rendered QUEUED with the
+/// what-text `http\` because its name cell carried
+/// `CHUG_JUDGE=daemon\|http\|off` and the LANDED annotation sat beyond the
+/// split. The generator now parks each escape on a line COPY before the split
+/// (a \001 placeholder) and restores the literal pipe in the surviving cells.
+/// Pinned legs: (a) a LANDED annotation beyond a `\|` still classifies landed
+/// — the FULL name cell is tested; (b) the full what-text renders (no `http\`
+/// fragment); (c) a `\|` row with no LANDED still classifies via the open-row
+/// refinement — queued unreferenced, in-flight when an OPEN TODO row
+/// references it.
+#[test]
+fn t216_escaped_pipes_never_split_cells() {
+    let (f, _refs, _orig) = fixture_t99();
+    std::fs::write(
+        f.chug.join("TODO.md"),
+        concat!(
+            "# TODO\n\n| id | title | spec | pri | status | notes |\n",
+            "|----|-------|------|-----|--------|-------|\n",
+            "| T216 | site-sync escaped-pipe parse (F23 phase 1) | specs/t216.md | 3 | todo | operator |\n"
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        f.chug.join("FEATURES.md"),
+        concat!(
+            "# FEATURES\n\n",
+            "| # | Feature | What | Benchmark |\n",
+            "|---|---------|------|-----------|\n",
+            "| F21 | Daemon-mode switch `CHUG_JUDGE=daemon\\|http\\|off` — phase 1 LANDED (T204, abc1234, cycle 95) | picks the baked-in daemon over the connection-refused external layad | n/a |\n",
+            "| F22 | Unreferenced switch `CHUG_JUDGE=daemon\\|http\\|off` — deferred | no TODO row references it | n/a |\n",
+            "| F23 | Open-row switch `CHUG_JUDGE=daemon\\|http\\|off` — in flight | an OPEN row references it | n/a |\n"
+        ),
+    )
+    .unwrap();
+    let out = run_sync(&f, true);
+    assert!(out.status.success(), "run: {:?}", String::from_utf8_lossy(&out.stderr));
+    let ft = region(&page(&f), "FEATURES");
+    // (a) landed classification reads the FULL name cell: the LANDED
+    // annotation sits beyond two escaped pipes and must still win (the
+    // pre-T216 split truncated at "daemon\" and rendered queued), and the
+    // name span carries the escaped pipes as literal pipes, whole
+    assert!(
+        ft.contains("<h3><span>Daemon-mode switch `CHUG_JUDGE=daemon|http|off`</span><i class=\"q\">landed</i></h3>"),
+        "(a) LANDED beyond an escaped pipe must classify landed, name cell whole: {ft}"
+    );
+    // (b) the what-text renders in full — no "http\" fragment (the live bug's
+    // what-text), and the escaped pipes in the what cell render as pipes
+    assert!(
+        ft.contains("<p>picks the baked-in daemon over the connection-refused external layad</p>"),
+        "(b) full what-text must render: {ft}"
+    );
+    assert!(!ft.contains("http\\"), "(b) no http-backslash fragment anywhere: {ft}");
+    // (c) no LANDED annotation: classification survives the escape —
+    // unreferenced stays queued, an OPEN row reference yields in-flight
+    // (landed must NOT leak onto escape-bearing rows)
+    assert!(
+        ft.contains("<h3><span>Unreferenced switch `CHUG_JUDGE=daemon|http|off`</span><i class=\"q\">queued</i></h3>"),
+        "(c) escaped-pipe row with no LANDED and no open reference stays queued: {ft}"
+    );
+    assert!(
+        ft.contains("<h3><span>Open-row switch `CHUG_JUDGE=daemon|http|off`</span><i class=\"q\">in-flight</i></h3>"),
+        "(c) escaped-pipe row referenced by an OPEN todo row is in-flight: {ft}"
+    );
+    assert_eq!(count(&ft, "<i class=\"q\">in-flight</i>"), 1, "exactly the one open-referenced row");
+}
+
 #[test]
 fn t99_best_effort_on_malformed_and_missing_blocks() {
     // missing .tl/.grid blocks (T98 fixture): bootstrap warns, cycle still fine
