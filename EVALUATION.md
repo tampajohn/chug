@@ -337,6 +337,23 @@ for visibility).
   RED, byte-identical restore). T219 (daemon /sessions feature) + T220 (Kev parity
   bake-off) remain queued with ready specs for the next cycle.
 
+- **Release v0.16.2 tagged at wrap** — 4 items since v0.16.1 (T214/T213/T217/T218,
+  none a FEATURES check-off) → patch bump, `cargo check` lock regen, notes generated
+  by scripts/release-notes.sh (HEAD v0.16.1), check-tag-version ok, final gates
+  green at HEAD (build + clippy -D + nextest release 1565/1565), commit bcc98c4 +
+  tag pushed together.
+- **Cycle-level notes** — a routine freshness-skip cycle (glm orchestrator) that
+  landed 4 rows with 2 kimi validation rounds and 2 lane calls; both child budget
+  deaths absorbed by doctrine (T63 resume when uncommitted, T55 orchestrator-finish
+  when complete-committed) with zero work lost; the orchestrator's own step-3 gates
+  caught the one real break children missed (T213's fixture-vs-sourcing-line break —
+  the child died mid-verification of exactly that sweep). Validator deaths: none
+  (all three kimi rounds finished within budget, verdicts written). Deferred: T219
+  (feature, spec ready) and T220 (eval-heavy, spec ready) — 56 iterations at the
+  boundary vs a ~30 wrap tail: does not fit with margin. Three mid-cycle operator
+  push rejections reconciled by merge (T217/T218/T219/T220 filings; one TODO.md
+  conflict, both sides kept). Next cycle opens with 2 ready specs and no blockers.
+
 ### Cycle 98 (2026-10-03, ~19:05 UTC–) — MANDATORY fresh eval (queue drained at cycle-97 wrap; kimi, T81 routing 8-for-8) — 3 rows filed (T212/T214/T213)
 
 - **T215 LANDED (merge 04ac3f1, fixed-up)** — the operator's mid-cycle pri-2 filing
