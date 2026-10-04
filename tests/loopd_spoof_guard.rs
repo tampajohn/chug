@@ -40,21 +40,34 @@ use tempfile::TempDir;
 #[path = "support/load_lock.rs"]
 mod t172_load_lock;
 
+// T214: the load-scaled verdict fence (`load_scaled_deadline`) lives in the
+// ONE shared test-support module, joined by the T159 `#[path]`-include
+// pattern — the same declaration every adopting family compiles, never a
+// copy. This file's timing-lock membership is UNCHANGED (T214 req 5): the
+// T172 flock guard above stays this family's cross-binary domain and no
+// test here takes the T151 process lock; the include exists so the verdict
+// fence routes through the shared helper.
+#[path = "../src/testsupport.rs"]
+mod testsupport;
+
 
 fn repo_root() -> PathBuf {
     std::env::current_dir().expect("cargo sets the test cwd to the package root")
 }
 
-// ---------- T158: the loopd-fixture invalidation seam (the T59/T66/T151
-// Invalidation pattern). The fixture's 30s verdict deadline is a liveness
-// fence, NOT a load assumption (T159's doctrine): under system-wide
-// pressure (a concurrent cargo build, an 8x yes-spinner) the whole sandbox
-// startup has stretched past it while production behavior stayed correct.
-// So the deadline-blow panic is an INVALIDATION MARKER: the seam retries
+// ---------- T158 + T214: the loopd-fixture invalidation seam (the
+// T59/T66/T151 Invalidation pattern). The fixture's 30s verdict deadline is
+// a liveness fence on a LOAD-SCALED basis (T214: base 30s unchanged, basis
+// = clamp(loadavg_1m/cores, 1.0, 4.0), fail-safe to exactly the base when
+// the load seam fails): under system-wide pressure (a concurrent cargo
+// build, an 8x yes-spinner) the whole sandbox startup has stretched past
+// the bare constant while production behavior stayed correct. So the
+// deadline-blow panic is an INVALIDATION MARKER: the seam retries
 // the WHOLE test (fresh sandbox, fresh supervisor) bounded at 3 attempts;
 // any other panic (a verdict reached but wrong — a code-under-test
-// failure) is resumed un-retried, byte-distinct. The 30s constant does not
-// change; exhaustion panics naming the class and attempt count.
+// failure) is resumed un-retried, byte-distinct. The 30s base constant does
+// not change (the zero-timeout-bump doctrine); exhaustion panics naming the
+// class and attempt count.
 const LOOPD_INVALIDATION_MARKER: &str = "loopd never reached ";
 const LOOPD_RETRY_ATTEMPTS: usize = 3;
 
@@ -160,7 +173,14 @@ impl Sandbox {
     /// written BEFORE the inter-cycle sleep, so seeing one means the verdict
     /// for this cycle is final), then kill the loop.
     fn wait_for_verdict(&self, child: &mut Child, needle: &str) -> String {
-        let deadline = Instant::now() + Duration::from_secs(30);
+        // T214: the 30s BASE is unchanged (the zero-timeout-bump doctrine) —
+        // the fence's BASIS is now the host's measured load: base ×
+        // clamp(loadavg_1m/cores, 1.0, 4.0), fail-safe to exactly the base
+        // when the load seam fails. A quiet host sees byte-identical
+        // behavior; a gate-load-melted host gets up to 4× before the fence
+        // blows; a truly hung child still fails, fast — and the T158
+        // invalidation marker in the panic below is unchanged.
+        let deadline = Instant::now() + testsupport::load_scaled_deadline(Duration::from_secs(30));
         let mut content = String::new();
         loop {
             content.clear();
@@ -184,7 +204,9 @@ impl Sandbox {
                     })
                     .unwrap_or_default();
                 panic!(
-                    "loopd never reached the verdict {needle:?} in 30s.\n--- loopd.log ---\n{content}\n--- .chug/loopd: {cycle}"
+                    "loopd never reached the verdict {needle:?} within the \
+                     load-scaled verdict fence (T214: base 30s × measured \
+                     load factor).\n--- loopd.log ---\n{content}\n--- .chug/loopd: {cycle}"
                 );
             }
             std::thread::sleep(Duration::from_millis(100));
@@ -234,10 +256,12 @@ fn spoofed_marker_with_failed_exit_must_not_record_cycle_ok() {
     // processes under nextest) can no longer manufacture scheduler
     // stretch inside this test's clocked verdict window.
     let _t172_load = t172_load_lock::family_guard("loopd-spoof-guard");
-    // T158: the fixture's 30s verdict deadline is a liveness fence, not a load
-    // assumption — a deadline blow invalidates the attempt and the WHOLE test
-    // retries with a fresh sandbox (bounded); a wrong verdict still panics
-    // un-retried.
+    // T158 + T214: the fixture's 30s verdict deadline is a liveness fence on
+    // a load-scaled basis (T214: base 30s unchanged, basis =
+    // clamp(loadavg_1m/cores, 1.0, 4.0), fail-safe to exactly the base when
+    // the load seam fails) — a deadline blow invalidates the attempt and the
+    // WHOLE test retries with a fresh sandbox (bounded); a wrong verdict
+    // still panics un-retried.
     loopd_attempt_with_invalidation_retry(|| {
     let sandbox = Sandbox::new(concat!(
         "#!/bin/sh\n",
@@ -271,10 +295,12 @@ fn accepted_run_records_the_stdout_summary_not_a_model_forged_line() {
     // processes under nextest) can no longer manufacture scheduler
     // stretch inside this test's clocked verdict window.
     let _t172_load = t172_load_lock::family_guard("loopd-spoof-guard");
-    // T158: the fixture's 30s verdict deadline is a liveness fence, not a load
-    // assumption — a deadline blow invalidates the attempt and the WHOLE test
-    // retries with a fresh sandbox (bounded); a wrong verdict still panics
-    // un-retried.
+    // T158 + T214: the fixture's 30s verdict deadline is a liveness fence on
+    // a load-scaled basis (T214: base 30s unchanged, basis =
+    // clamp(loadavg_1m/cores, 1.0, 4.0), fail-safe to exactly the base when
+    // the load seam fails) — a deadline blow invalidates the attempt and the
+    // WHOLE test retries with a fresh sandbox (bounded); a wrong verdict
+    // still panics un-retried.
     loopd_attempt_with_invalidation_retry(|| {
     let sandbox = Sandbox::new(concat!(
         "#!/bin/sh\n",
@@ -316,10 +342,12 @@ fn success_stamp_says_goal_complete_with_the_real_rc() {
     // processes under nextest) can no longer manufacture scheduler
     // stretch inside this test's clocked verdict window.
     let _t172_load = t172_load_lock::family_guard("loopd-spoof-guard");
-    // T158: the fixture's 30s verdict deadline is a liveness fence, not a load
-    // assumption — a deadline blow invalidates the attempt and the WHOLE test
-    // retries with a fresh sandbox (bounded); a wrong verdict still panics
-    // un-retried.
+    // T158 + T214: the fixture's 30s verdict deadline is a liveness fence on
+    // a load-scaled basis (T214: base 30s unchanged, basis =
+    // clamp(loadavg_1m/cores, 1.0, 4.0), fail-safe to exactly the base when
+    // the load seam fails) — a deadline blow invalidates the attempt and the
+    // WHOLE test retries with a fresh sandbox (bounded); a wrong verdict
+    // still panics un-retried.
     loopd_attempt_with_invalidation_retry(|| {
     let sandbox = Sandbox::new(concat!(
         "#!/bin/sh\n",
@@ -348,10 +376,12 @@ fn failure_stamp_says_no_goal_complete_with_the_real_rc() {
     // processes under nextest) can no longer manufacture scheduler
     // stretch inside this test's clocked verdict window.
     let _t172_load = t172_load_lock::family_guard("loopd-spoof-guard");
-    // T158: the fixture's 30s verdict deadline is a liveness fence, not a load
-    // assumption — a deadline blow invalidates the attempt and the WHOLE test
-    // retries with a fresh sandbox (bounded); a wrong verdict still panics
-    // un-retried.
+    // T158 + T214: the fixture's 30s verdict deadline is a liveness fence on
+    // a load-scaled basis (T214: base 30s unchanged, basis =
+    // clamp(loadavg_1m/cores, 1.0, 4.0), fail-safe to exactly the base when
+    // the load seam fails) — a deadline blow invalidates the attempt and the
+    // WHOLE test retries with a fresh sandbox (bounded); a wrong verdict
+    // still panics un-retried.
     loopd_attempt_with_invalidation_retry(|| {
     let sandbox = Sandbox::new(concat!(
         "#!/bin/sh\n",
@@ -385,10 +415,12 @@ fn nonzero_exit_decides_even_when_stdout_ledger_text_carries_the_marker() {
     // processes under nextest) can no longer manufacture scheduler
     // stretch inside this test's clocked verdict window.
     let _t172_load = t172_load_lock::family_guard("loopd-spoof-guard");
-    // T158: the fixture's 30s verdict deadline is a liveness fence, not a load
-    // assumption — a deadline blow invalidates the attempt and the WHOLE test
-    // retries with a fresh sandbox (bounded); a wrong verdict still panics
-    // un-retried.
+    // T158 + T214: the fixture's 30s verdict deadline is a liveness fence on
+    // a load-scaled basis (T214: base 30s unchanged, basis =
+    // clamp(loadavg_1m/cores, 1.0, 4.0), fail-safe to exactly the base when
+    // the load seam fails) — a deadline blow invalidates the attempt and the
+    // WHOLE test retries with a fresh sandbox (bounded); a wrong verdict
+    // still panics un-retried.
     loopd_attempt_with_invalidation_retry(|| {
     let sandbox = Sandbox::new(concat!(
         "#!/bin/sh\n",
@@ -427,10 +459,12 @@ fn zero_exit_without_the_stdout_marker_is_still_a_failed_cycle() {
     // processes under nextest) can no longer manufacture scheduler
     // stretch inside this test's clocked verdict window.
     let _t172_load = t172_load_lock::family_guard("loopd-spoof-guard");
-    // T158: the fixture's 30s verdict deadline is a liveness fence, not a load
-    // assumption — a deadline blow invalidates the attempt and the WHOLE test
-    // retries with a fresh sandbox (bounded); a wrong verdict still panics
-    // un-retried.
+    // T158 + T214: the fixture's 30s verdict deadline is a liveness fence on
+    // a load-scaled basis (T214: base 30s unchanged, basis =
+    // clamp(loadavg_1m/cores, 1.0, 4.0), fail-safe to exactly the base when
+    // the load seam fails) — a deadline blow invalidates the attempt and the
+    // WHOLE test retries with a fresh sandbox (bounded); a wrong verdict
+    // still panics un-retried.
     loopd_attempt_with_invalidation_retry(|| {
     let sandbox = Sandbox::new(concat!(
         "#!/bin/sh\n",
@@ -461,10 +495,12 @@ fn one_cycle_ok_line_per_ok_cycle_even_when_the_forged_summary_names_it() {
     // processes under nextest) can no longer manufacture scheduler
     // stretch inside this test's clocked verdict window.
     let _t172_load = t172_load_lock::family_guard("loopd-spoof-guard");
-    // T158: the fixture's 30s verdict deadline is a liveness fence, not a load
-    // assumption — a deadline blow invalidates the attempt and the WHOLE test
-    // retries with a fresh sandbox (bounded); a wrong verdict still panics
-    // un-retried.
+    // T158 + T214: the fixture's 30s verdict deadline is a liveness fence on
+    // a load-scaled basis (T214: base 30s unchanged, basis =
+    // clamp(loadavg_1m/cores, 1.0, 4.0), fail-safe to exactly the base when
+    // the load seam fails) — a deadline blow invalidates the attempt and the
+    // WHOLE test retries with a fresh sandbox (bounded); a wrong verdict
+    // still panics un-retried.
     loopd_attempt_with_invalidation_retry(|| {
     let sandbox = Sandbox::new(concat!(
         "#!/bin/sh\n",
