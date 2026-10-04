@@ -284,6 +284,23 @@ for visibility).
 
 ### Cycle 101 (2026-10-04, ~09:09 UTC–) — routine freshness-skip cycle (glm; predicate held: EVALUATION mtime 08:33 UTC = launch day [the cycle-100 wrap commit 2810ed9] + T220/T222/T223 todo) — queue: T222 → T223
 
+**WRAP (T220/T222/T223 landed; T224 filed, stays `todo` — wall budget, spec
+ready; v0.17.0 tagged+pushed with final gates green at HEAD: 4 items since
+v0.16.2 ≥ 3, minor for the two features). Books: both worktrees harvested
+(9 t222 artifacts, 9 t223 artifacts incl. 4 event segments + both verdicts)
+then removed with every hosted pid verified gone-or-defunct; all routing/
+verdict/outcome records landed (18 this cycle) incl. the T152-pattern
+correction for the phantom-id outcome subject; one process-hygiene incident
+closed (the round-1 validator's + impl's leaked judge daemons, ~20 GB RSS,
+reaped by the orchestrator before the fix-up); one bookkeeping incident
+closed (the orchestrator's gate chain lacked pipefail and pushed a red
+todo_consistency — the T8 `max|dp|` notes-cell pipes — fixed forward in
+6365b50 with the root cause named in the commit). Handoff: T224 spec ready
+(tests-only, pri 3); the kev DeltaNet candle port is the named first blocker
+for any real two-contestant bake-off (out of scope, needs its own eval
+filing if pulled); the F13 fine-tune is the named follow-up to the holdout
+AUROC 0.374 finding.
+
 - **T222 LANDED (merge cdf2e06, landed-clean)** — the kev-0.8b loader + judge-parity
   harness (T220's code half), and the row's real product is its second premise
   defect: the CONFIRMED contestant `jaredpalmer/kev-0.8b@bf75a6a8` sits on
