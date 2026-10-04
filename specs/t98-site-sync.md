@@ -31,7 +31,13 @@ a DETERMINISTIC script regenerates the stats block — zero LLM per cycle.
    identical output when inputs unchanged.
 2. If the region changed: commit (`site: stats sync <date>`) and push.
    Never force-push; a rejected push warns and exits 0 (not a cycle
-   failure — site sync is best-effort, like observability).
+   failure — site sync is best-effort, like observability). T217: the
+   sync FAILS CLOSED on unreadable repo inputs — TODO.md unreadable,
+   .chug/loopd absent, or git log empty means every number in the block
+   would be a fallback, so the sync writes nothing, commits nothing,
+   prints one named error and exits nonzero (fallback zeros are never
+   published over real stats; the values can't tell them apart from a
+   genuinely empty repo's first run, so the guard keys on readability).
 3. loopd.sh invokes it after each `cycle OK` (one line, failure-tolerant).
 4. The stats block text must be FACTS from the named sources — the script
    cites no number it didn't compute from TODO.md/git log/test output.

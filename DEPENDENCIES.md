@@ -41,6 +41,7 @@ degraded note, and the loop continues.
 | DuckDuckGo HTML | service | `web_search` (keyless default provider) | `CHUG_WEB_SEARCH_PROVIDER` / `CHUG_WEB_SEARCH_BASE_URL` | scrape breakage/rate-limit → tool error to the model, never a silent empty result; one attempt, no retry | T180 |
 | arbitrary URLs | capability | `web_fetch` (bounded read-only GET — not a service, the same reqwest seam) | — | non-2xx/transport → tool error; one attempt, no retry | T37 |
 | GitHub via plain `git push`/tag | service | delivery of work + releases | — | in-binary git calls degrade to notes; delivery (push/tag) blocks — git is the transport of record | T100 (releases), loop protocol (work) |
+| chug-site repo (chug.sh) | service | the public stats/timeline/features publish (`scripts/site-sync.sh`, T98/T99) | `CHUG_SITE_DIR` (site clone path), `CHUG_SYNC_NOW` (date pin), `CHUG_SITE_SYNC_NO_PUSH` | **fail-closed (T217)**: repo inputs unreadable (TODO.md / .chug/loopd / git log) → the sync writes NOTHING, commits NOTHING, one named error, exit 4 — fallback zeros are never published over real stats (the 58c3a0b gutting); missing clone / rejected push stay best-effort (warn + exit 0) | T98, guarded T217 |
 | `sh` | process | `bash` tool (`sh -c`), hooks | — | spawn failure → tool error, loop continues; hook failures fail open | birth `f911488` |
 | `git` | process | banner checkout info, `collect` refs, `@path` completion, delivery (harvest/merge/push) | — | in-binary calls degrade (`head=` omitted, note instead of refs); delivery blocks | birth `f911488` |
 | `ps` | process | stale driver-lock reclaim (T55), mcp-serve ownership re-derivation (T153) | — | mcp-serve legs fail closed: unresolvable leg → nothing signalled | T55 |
@@ -123,9 +124,11 @@ Three polarities, per dependency, pinned by tests: **fail-open** (hooks,
 risk-gate judge, notify sinks, MCP config — a missing/broken optional thing
 is zero behavior change plus at most one logged note); **fail-closed**
 (policy surfaces — a permissions deny has no process to fall back through;
-credentials; mcp-serve ownership legs); **blocking** (git delivery and the
-LLM proxy call itself — the two steps whose failure is the loop's failure).
-Telemetry drops, the judge degrades logged, git blocks.
+credentials; mcp-serve ownership legs; the chug-site publish's input guard,
+T217 — unreadable repo inputs mean every computed stat is a fallback, so the
+sync refuses to publish rather than push zeros over real stats); **blocking**
+(git delivery and the LLM proxy call itself — the two steps whose failure is
+the loop's failure). Telemetry drops, the judge degrades logged, git blocks.
 
 ## Adding a dependency
 
