@@ -325,6 +325,17 @@ for visibility).
   site_sync 27/27 + nextest release 1564/1564 + clippy -D. One MINOR filed forward:
   the git-log guard leg has no isolated fixture pin (a bonus m4 mutant survived only
   that leg — beyond the spec's Tests section, defense-in-depth).
+- **T218 LANDED (merge 104a8d8, landed-clean first try, gates-only lane)** — the
+  third site-generator layer closed: card BODIES are now machine-owned like badges.
+  body_ensure regenerates matched cards' <p> from the row's prep()d what-text in the
+  same pass (position/classes preserved, non-F cards untouched, single-line <p>
+  only, what-text via ENVIRON so backslashes survive) — the F15 "http\" fossil can
+  never re-fossilize; the next sync after any bad write heals it. glm goal-accepted
+  first try 34/80; T189 gates-only lane (~114 lines, re-key-only check change per
+  the T216 precedent): nextest release 1565/1565 + clippy -D in worktree and main;
+  orchestrator RED-proof (body_ensure no-op → the heal pin + 2 t99 idempotence pins
+  RED, byte-identical restore). T219 (daemon /sessions feature) + T220 (Kev parity
+  bake-off) remain queued with ready specs for the next cycle.
 
 ### Cycle 98 (2026-10-03, ~19:05 UTC–) — MANDATORY fresh eval (queue drained at cycle-97 wrap; kimi, T81 routing 8-for-8) — 3 rows filed (T212/T214/T213)
 
