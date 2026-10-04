@@ -282,6 +282,45 @@ for visibility).
 
 ## Outcomes (filled at cycle wrap — LOOP-SPEC Phase 3)
 
+### Cycle 101 (2026-10-04, ~09:09 UTC–) — routine freshness-skip cycle (glm; predicate held: EVALUATION mtime 08:33 UTC = launch day [the cycle-100 wrap commit 2810ed9] + T220/T222/T223 todo) — queue: T222 → T223
+
+- **T222 LANDED (merge cdf2e06, landed-clean)** — the kev-0.8b loader + judge-parity
+  harness (T220's code half), and the row's real product is its second premise
+  defect: the CONFIRMED contestant `jaredpalmer/kev-0.8b@bf75a6a8` sits on
+  `Qwen/Qwen3.5-0.8B-Base@dc7cdfe2` — model_type `qwen3_5`, 18 Gated DeltaNet
+  (linear attention) + 6 full attention layers, LoRA r16/α32 over
+  attention+MLP+DeltaNet projections — and candle-transformers 0.11 (max on
+  crates.io) has NO qwen3_5 model, so the 0.8B contestant is in the spec's OWN
+  "DeltaNet, candle-blocked" out-of-scope category. The impl child refused to
+  substitute candle's dense qwen3 (a different model served under the same name
+  would be a SPEC-3 violation) and delivered the honest surface instead:
+  `src/kev_config.rs` (ungated: both revision pins, PEFT LoRA parse refusing
+  rslora/DoRA/fan_in_fan_out, base-arch classification DeltaNet-vs-plain-qwen3-
+  vs-unknown-never-guessed, provenance base-pin verification — 6 plain-gate unit
+  pins), `src/kev_model.rs` (daemon-gated: kev-layout detection incl. cache-first
+  offline hub fallback, small-files-first inspect, classified refusal BEFORE any
+  big download), `daemon.rs` real_backend kev-routing (clients fail open, zero
+  gating change), `judge_pack` parameterization (model label + `act_probability:
+  Option` — kev omits the rl_agent ext, never fabricated; the laya goldens stay
+  byte-green), and `tests/kev_loader.rs` (the harness: choice top-1, score MAE,
+  noul AUROC via midranks, mean |p_diff|, option-order flip rate over committed
+  fixtures + fixture-shape/determinism/both-orderings/wire-shape pins + a
+  daemon-gated live leg that skips-not-fails offline and re-verifies both
+  revision pins when live). Impl glm run-1 died 80/80 mid-premise-discovery (T63
+  resume), run-2 died 80/80 POST-COMMIT (2ddeca3) → orchestrator-finish (T55/T150
+  precedent): the `readme_layout` pin caught the two new modules missing from
+  README's layout line (880fb8a). T189 lane failed on size (1801 lines) → kimi
+  REQUIRED (d1791109733-4): VERDICT PASS (d1791112723-5) — gates re-run green
+  incl. daemon-feature nextest 1602/1602; the premise deviation independently
+  verified against the LIVE HF API; 2/2 executed mutants killed (m1
+  classify-arm, m2 base-pin); 7 findings — 3 predicted-survivor pin gaps (m8
+  daemon kev-routing Dir arm, m9 AUROC tie-handling, m12 corpus refusal legs)
+  filed forward as T224; T223 (the bake-off run) inherits the DeltaNet port as
+  its first blocker. Bookkeeping incident: the merge commit message first cited
+  a phantom verdict id (d1791109733-5 — the record landed as d1791112723-5);
+  fixed by amend pre-push + the T152-pattern correction record in
+  `.chug/decisions.jsonl` (d1791112737-8).
+
 ### Cycle 100 (2026-10-04, ~05:37 UTC–) — routine freshness-skip cycle (glm; predicate held: EVALUATION mtime 01:28 UTC = launch day + T219/T220 todo) — queue: T219 → T221 → T220
 
 - **T221 LANDED (merge c85f6ba, landed-clean)** — the T219 validator's three
