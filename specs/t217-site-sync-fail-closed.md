@@ -1,6 +1,6 @@
 # T217 — site-sync must fail CLOSED on unreadable repo inputs (never publish fallback zeros)
 
-check: set -o pipefail; export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared; touch src/*.rs tests/*.rs; cargo test --test site_sync
+check: set -o pipefail; export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-validate-a; touch src/*.rs tests/*.rs; cargo test --test site_sync
 
 estimate: ~150 lines (input guard + pins + doctrine note)
 
