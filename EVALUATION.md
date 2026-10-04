@@ -284,6 +284,31 @@ for visibility).
 
 ### Cycle 98 (2026-10-03, ~19:05 UTC–) — MANDATORY fresh eval (queue drained at cycle-97 wrap; kimi, T81 routing 8-for-8) — 3 rows filed (T212/T214/T213)
 
+- **T215 LANDED (merge 04ac3f1, fixed-up)** — the operator's mid-cycle pri-2 filing
+  (daemon ensure spawns the feature-off stub, ~16h of nonzero ensures on K7).
+  loopd.sh resolves the daemon-capable binary ONCE per run before the cycle loop
+  (CHUG_DAEMON_BIN executable probe-free → ~/.local/bin/chug `daemon --help` probe →
+  feature-on repo build via the refusal-literal byte-grep), one startup log line,
+  fail-open skip; the 549-line tests/loopd_daemon_ensure.rs family pins the order
+  behaviorally against the real loopd.sh (11 pins incl. probe-cache and
+  literal-coupling-to-src legs); the runbook pins the pre-warm one-liner (the
+  validator verified spawn_daemon detaches, so a cold 650MB download survives the
+  bounded wait). glm impl died at BOTH budgets (80/80 iterations → T63 resume
+  d1791066541-16 → resume died at the 50-min wall with the goal gate VERIFYING and
+  the work complete-committed → T55/T150 orchestrator-finish, no second resume).
+  kimi validator PASS (d1791072243-18; the validator itself died 60/60 with the
+  verdict WRITTEN — the verdict-file doctrine absorbed it): 9/9 mutant runs RED
+  including the K7-regression leg, gates reproduced exactly (1527/1527 nextest
+  full-suite, fallback 1527, family 11/11 isolated in 4.5s). Findings filed
+  forward: the new family's full-suite fence trips are the T152 load-stretch class
+  (T214's spec amended pre-dispatch to adopt it — 3 legs tripped at ~90.7s on one
+  full-suite run, 11/11 green isolated); LOW: leg-(b)'s `daemon --help` probe does
+  not discriminate feature-off from feature-on (realistic carrier path safe —
+  install.sh installs release.yml's feature-on tarballs) and the client-side
+  daemon_binary() wrong-binary shape (latch:true mitigates; a future sweep row
+  candidate); 3 NITs + 2 bookkeeping observations. Post-merge gates 1527/1527.
+  The operator reconciled two more mid-cycle pushes this cycle (f3e01e0 F15 tidy).
+
 - **T212 LANDED (merge 7c76356, round-2, fixed-up)** — the cycle's deep one. Round 1
   built the advisory fix on a FALSE premise and the round-1 kimi validator caught it
   (FAIL d1791061091-8, proven three ways: main.rs:87 re-read-every-iteration,
