@@ -314,6 +314,17 @@ for visibility).
   widening caught twice, m3 explicit-env-loses), byte-identity independently
   re-verified via git show, 1559/1559 nextest release + clippy -D. T217/T218
   operator filings merged mid-cycle (4d578e1) after a push rejection.
+- **T217 LANDED (merge e242689, landed-clean first try)** — the operator's pri-1
+  "stats are broke" closed fail-closed at the source: scripts/site-sync.sh refuses
+  (one named error, exit 4, zero writes/commits) when TODO.md, .chug/loopd, or git
+  log are unreadable — the 58c3a0b rogue-writer shape (orphan vs worktree-removal
+  race) can no longer gut the live page; --bootstrap is the explicit escape and the
+  commit message now carries items/tests/cycles counts so a gutting commit is
+  distinguishable at a glance. glm goal-accepted first try 39/80; 195-line diff
+  flipped T189 lane (b) → kimi REQUIRED: PASS, 3/3 priority mutants RED, gates
+  site_sync 27/27 + nextest release 1564/1564 + clippy -D. One MINOR filed forward:
+  the git-log guard leg has no isolated fixture pin (a bonus m4 mutant survived only
+  that leg — beyond the spec's Tests section, defense-in-depth).
 
 ### Cycle 98 (2026-10-03, ~19:05 UTC–) — MANDATORY fresh eval (queue drained at cycle-97 wrap; kimi, T81 routing 8-for-8) — 3 rows filed (T212/T214/T213)
 
