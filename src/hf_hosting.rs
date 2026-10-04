@@ -177,6 +177,24 @@ pub fn auth_fix_line(repo: &str, revision: &str, status: u16, token_set: bool) -
     )
 }
 
+/// The stderr seam for the auth fix line: production prints ONE eprintln
+/// (the T205 gate's single clear line); a test can install a recording sink
+/// to capture the line's CONTENTS instead (the T213 canary pin asserts the
+/// token value never rides it). Global state because `eprintln!` has no
+/// receiver; the sink is installed only by tests under [`ENV_LOCK`], never
+/// in production (absent sink ⇒ straight to stderr).
+static FIX_LINE_SINK: std::sync::Mutex<Option<Vec<String>>> = std::sync::Mutex::new(None);
+
+/// Emit the auth fix line — to stderr in production, into the recording
+/// sink while a test holds one installed (see [`FIX_LINE_SINK`]).
+fn emit_fix_line(line: &str) {
+    let mut sink = FIX_LINE_SINK.lock().unwrap();
+    match sink.as_mut() {
+        Some(buf) => buf.push(line.to_string()),
+        None => eprintln!("{line}"),
+    }
+}
+
 /// Map one hub-file fetch failure into the error the daemon surfaces.
 /// Non-auth failures keep the T204 offline hint untouched. Auth failures
 /// (401/403) get the T205 honesty gate: ONE stderr fix line + ONE
@@ -198,7 +216,7 @@ pub fn map_hub_fetch_error(
         return err.context("offline? pre-stage the cache with the standard HF tooling");
     };
     let line = auth_fix_line(repo, revision, status, token_set);
-    eprintln!("{line}");
+    emit_fix_line(&line);
     note_auth_error(note_cwd, repo, revision, file, status, token_set);
     err.context(format!(
         "HF hub auth failed (HTTP {status}) for {repo}@{revision} — {}",
@@ -502,6 +520,116 @@ mod tests {
         assert!(format!("{err2:#}").contains("403"));
         let lines = std::fs::read_to_string(&log).unwrap();
         assert_eq!(lines.lines().count(), 2);
+    }
+
+    // --- T213 M1: the token canary pin ---------------------------------------
+    //
+    // The T205 validator's M1 survivor: the shipped code is clean, but no
+    // test drove a token VALUE through the auth path. These legs wire a
+    // distinctive canary into HF_TOKEN and assert it reaches NONE of the
+    // three surfaces an auth failure produces: the stderr fix line (captured
+    // through FIX_LINE_SINK), the returned error chain (what lands in
+    // daemon.log/transcripts), and the events note (token_set stays a
+    // boolean).
+
+    /// A distinctive fake token VALUE (never a real credential). It lives in
+    /// a const whose name carries no `HF_TOKEN` needle, so the repo-wide
+    /// no_secret_spill guard — which flags `HF_TOKEN=<value>` ASSIGNMENT
+    /// lines — has nothing to flag; the canary is wired to the env through
+    /// [`EnvVar::set`], one call removed from the var name.
+    const CANARY: &str = "hf_CANARY7f3c9d1eNEVERLOG";
+
+    /// Drive one auth-shaped 401 failure through the REAL wiring the daemon
+    /// uses (`hub_token` → `token_set` → [`map_hub_fetch_error`]) with the
+    /// recording sink installed, and hand back the three surfaces: the
+    /// captured stderr fix lines, the returned error chain, and the tempdir
+    /// holding the events note (the caller reads `.chug/events.jsonl`).
+    fn drive_auth_surface(token_set: bool) -> (Vec<String>, String, tempfile::TempDir) {
+        let tmp = tempfile::tempdir().unwrap();
+        let prior = FIX_LINE_SINK.lock().unwrap().replace(Vec::new());
+        let err = map_hub_fetch_error(
+            anyhow::anyhow!(
+                "request error: https://huggingface.co/v/resolve/main/model.safetensors: \
+                 status code 401"
+            ),
+            "org/laya-judge",
+            "abc123",
+            F_SAFETENSORS_PLACEHOLDER,
+            token_set,
+            Some(tmp.path()),
+        );
+        let captured = {
+            let mut guard = FIX_LINE_SINK.lock().unwrap();
+            std::mem::replace(&mut *guard, prior).expect("the recording sink was installed")
+        };
+        (captured, format!("{err:#}"), tmp)
+    }
+
+    /// The events note written for the failure: typed, boolean `token_set`,
+    /// and (asserted by the callers) canary-free.
+    fn first_note(tmp: &tempfile::TempDir) -> (serde_json::Value, String) {
+        let lines =
+            std::fs::read_to_string(tmp.path().join(".chug/events.jsonl")).expect("note written");
+        let note: serde_json::Value = serde_json::from_str(lines.lines().next().unwrap()).unwrap();
+        (note, lines)
+    }
+
+    #[test]
+    fn canary_token_value_never_reaches_any_auth_surface() {
+        let _env = ENV_LOCK.lock().unwrap();
+        // Vacuous guard FIRST: the fixture INPUT — the env — must actually
+        // carry the canary (through the real read path), so the absence
+        // assertions below can never pass by never wiring the token.
+        let tok = EnvVar(HF_TOKEN_ENV);
+        tok.set(CANARY);
+        assert_eq!(
+            std::env::var(HF_TOKEN_ENV).unwrap(),
+            CANARY,
+            "fixture input must carry the canary"
+        );
+        assert_eq!(
+            hub_token().as_deref(),
+            Some(CANARY),
+            "the production read path sees the wired value"
+        );
+        let token_set = hub_token().is_some();
+
+        let (fix_lines, chain, tmp) = drive_auth_surface(token_set);
+        assert!(
+            !fix_lines.is_empty(),
+            "the stderr fix line must fire (the surface under test)"
+        );
+        assert!(
+            !fix_lines.iter().any(|l| l.contains(CANARY)),
+            "canary reached the stderr fix line: {fix_lines:?}"
+        );
+        assert!(!chain.contains(CANARY), "canary reached the error chain: {chain}");
+        let (note, events) = first_note(&tmp);
+        assert_eq!(note["type"], "judge_checkpoint_auth_error");
+        assert_eq!(note["token_set"], true, "token_set stays a boolean");
+        assert!(!events.contains(CANARY), "canary reached the events note: {events}");
+    }
+
+    #[test]
+    fn canary_absent_too_when_no_token_is_set() {
+        let _env = ENV_LOCK.lock().unwrap();
+        // The no-token leg: known-absent env (restored on drop).
+        let _tok = env_guard(HF_TOKEN_ENV);
+        assert_eq!(hub_token(), None, "this leg's fixture is a true absence");
+
+        let (fix_lines, chain, tmp) = drive_auth_surface(false);
+        assert!(
+            !fix_lines.is_empty() && fix_lines[0].contains("set HF_TOKEN"),
+            "the missing-token fix branch fired: {fix_lines:?}"
+        );
+        assert!(
+            !fix_lines.iter().any(|l| l.contains(CANARY)),
+            "canary reached the stderr fix line: {fix_lines:?}"
+        );
+        assert!(!chain.contains(CANARY), "canary reached the error chain: {chain}");
+        let (note, events) = first_note(&tmp);
+        assert_eq!(note["token_set"], false, "no token ⇒ token_set false");
+        assert!(!events.contains(CANARY), "canary reached the events note: {events}");
     }
 
     /// The name of the first fetched layout file, kept as a const so the
