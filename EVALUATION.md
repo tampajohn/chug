@@ -282,6 +282,23 @@ for visibility).
 
 ## Outcomes (filled at cycle wrap — LOOP-SPEC Phase 3)
 
+### Cycle 99 (2026-10-04, ~01:00 UTC–) — routine freshness-skip cycle (glm; predicate held: EVALUATION mtime UTC day = launch day) — working T214/T213 from the cycle-98 eval
+
+- **T214 LANDED (merge 654993d, landed-clean after a T63 resume)** — the isolation
+  tax closed at its root: `load_scaled_deadline(base) = base × clamp(loadavg_1m/cores,
+  1, 4)` with a fail-safe seam (any read failure → factor 1.0, byte-identical base),
+  pure `scale_factor` legs, and all THREE spawn-heavy families' verdict fences
+  (reaper 30s, spoof 30s, daemon_ensure 90s) re-based on measured load — bases
+  unchanged (zero-timeout-bump doctrine), T158 markers kept, adoption grep pin
+  (T48-runtime needles) asserts zero bare `from_secs(30|90)` constructions. glm impl
+  died the 50-min wall at 61/80 UNCOMMITTED → ONE T63 resume committed dc63eba +
+  goal-accepted (1550/1550 full nextest release, NO family isolation, quiet-host note
+  honest per spec). 484-line diff flipped T189 lane criterion (b) → kimi REQUIRED
+  despite the tests-only filing: verdict PASS, 5/5 mutants killed (M2's 8.0-clamp
+  caught only by the child's above-spec legs), 4 non-blocking observations (double
+  seam read race ~0.1%, single-line pin needle, mul_f64 MAX unreachable, sysctl
+  /usr/sbin fallback exercised by the gate shell itself).
+
 ### Cycle 98 (2026-10-03, ~19:05 UTC–) — MANDATORY fresh eval (queue drained at cycle-97 wrap; kimi, T81 routing 8-for-8) — 3 rows filed (T212/T214/T213)
 
 - **T215 LANDED (merge 04ac3f1, fixed-up)** — the operator's mid-cycle pri-2 filing
