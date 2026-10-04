@@ -325,6 +325,45 @@ for visibility).
   consecutive large estimate gap (T204 class); the dispatch gate held because the
   estimate was under the ceiling, so the honesty gap is in filing, not gating.
 
+- **T221 LANDED (merge c85f6ba, landed-clean)** — the T219 validator's three
+  actionable findings closed in one pass: the day-0 `parse_rfc3339` guard (rejects
+  `day < 1` like day 32 → registration fails open to server-now; the debug
+  conn-thread panic / release wrap-and-evict pair the validator verified black-box
+  is gone), the `age_sec` value pin (kills mutant m5), and the 599/601 TTL boundary
+  table (kills mutant m6 — the symbolic const legs could never see it), plus the
+  ±2s band on the roundtrip `now` comparison (finding-4 flake). glm 49/80 with
+  three serial self-mutations killed + reverted before commit (1792a51). T189
+  gates-only lane (d1791101242-6, all four inputs pass: no core file, 122 lines,
+  no new surface, no check change) — full gates still run: nextest release
+  1579/1579 + clippy -D + spec check, worktree AND post-merge in main.
+
+- **T220 SPLIT + DEFERRED (wrap disposition, not an arc)** — the dispatch re-read
+  found the T204-class true surface (new candle architecture + HF weight downloads
+  + live inference + a committed verdict doc behind a ~450L filing estimate — the
+  third consecutive estimate-honesty gap) AND a premise defect found by a 30-second
+  HF API probe: the researched contestant id `Heman10x-NGU/openJev-verdict-2.0`
+  does NOT resolve ("Invalid username or password" = absent/private as written)
+  while `jaredpalmer/kev-0.8b` resolves clean (sha `bf75a6a8…`, LoRA + head.pt +
+  provenance.json). Split by acceptance surface (T209) into **T222** (kev loader +
+  harness, ~400L est) and **T223** (bake-off run + docs/judge-parity.md verdict,
+  ~120L est; T220 closes with T223); the premise defect is written into both specs
+  so the next cycle's dispatch is honest without re-research. Deferred with reason:
+  wrap-margin discipline (T207) — two ~50-min children with T204-class death
+  profiles would have spent the entire remaining wall inside one row.
+
+- **Cycle-level notes.** Routine glm freshness-skip (T81 routing 9-for-9 correct —
+  the predicate held and the cycle was glm). Two full arcs landed (T219 feature +
+  T221 validator-findings bug, both in the daemon area, serial) plus one prepared
+  split; one T63 resume burned (t219 run-1, 80/80 mid-debug of a launch-test flake
+  the child itself A/B-proved not-causal — the delegate launch-test family flakes
+  under concurrent loopd load, passes at --test-threads=1; noted for the next eval
+  as a possible deflake row). The T197/T212 dispatch-time re-key discipline caught
+  its own omission mid-flight: the validator launch WARNed on check-vs-goal
+  target-dir drift and the validate-a re-key landed on-branch (ef19737) before the
+  gate could run against the wrong slot. Queue for the next cycle: T222 → T223
+  (the split bake-off), then whatever the fresh eval files. Release: 2 items landed
+  since v0.16.2 (< 3, no FEATURES check-off) → no tag this wrap.
+
 ### Cycle 99 (2026-10-04, ~01:00 UTC–) — routine freshness-skip cycle (glm; predicate held: EVALUATION mtime UTC day = launch day) — working T214/T213 from the cycle-98 eval
 
 - **T214 LANDED (merge 654993d, landed-clean after a T63 resume)** — the isolation
