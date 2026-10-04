@@ -1,6 +1,6 @@
 # T218 — features_generate preserves card BODIES forever (stale fragments never heal)
 
-check: cargo test --test site_sync
+check: set -o pipefail; export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared; touch src/*.rs tests/*.rs; cargo test --test site_sync
 
 estimate: ~120 lines (body-refresh rule + pins)
 
