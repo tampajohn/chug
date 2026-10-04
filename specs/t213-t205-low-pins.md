@@ -115,4 +115,4 @@ message), and `cargo test --test loopd_env_loader`.
 - Restructuring loopd.sh beyond the one extraction.
 - Widening no_secret_spill's matcher.
 
-check: set -o pipefail; export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared; touch src/*.rs tests/*.rs; cargo test --bin chug hf_hosting && cargo test --test loopd_env_loader --test no_secret_spill && bash -n loopd.sh scripts/loopd_env_loader.sh
+check: set -o pipefail; export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-validate-a; touch src/*.rs tests/*.rs; cargo test --bin chug hf_hosting && cargo test --test loopd_env_loader --test no_secret_spill && bash -n loopd.sh scripts/loopd_env_loader.sh
