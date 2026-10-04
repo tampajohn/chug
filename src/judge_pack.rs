@@ -428,25 +428,32 @@ pub fn confidence_from_probs(p: &[f32], k: usize) -> f64 {
 pub struct Inference {
     pub logits: Vec<f32>,
     /// softmax(act_logits)[0] — the rl_agent escalation-probability ext.
-    pub act_probability: f32,
+    /// `None` for judges without an act head (the kev family, T222): the
+    /// `rl_agent` extension is then OMITTED, never fabricated.
+    pub act_probability: Option<f32>,
 }
 
-/// system_one's response: `{"model": "rl-agent", "answers": {…}, "usage":
+/// system_one's response: `{"model": <model>, "answers": {…}, "usage":
 /// {"input_tokens": n, "output_tokens": 0}}`, answers in the request's
 /// question order. Field sets, types and rounding are drop-in pinned against
-/// the fixture-recorded SDK responses (tests/… parity below).
+/// the fixture-recorded SDK responses (tests/… parity below). `model` names
+/// the answering judge: `"rl-agent"` on the RLAgent path (the layad value,
+/// unchanged wire), the kev family name on the kev path (T222) — the
+/// risk-gate and notify clients read only `answers.*`, so the label is
+/// informational. Kept a parameter so the shared assembly stays the ONE
+/// serializer for both layouts.
 pub fn answers_payload(
     qs: &[(String, InternalQ)],
     inf: &[Inference],
     n_tokens: usize,
     temps: &Temperatures,
+    model: &str,
 ) -> Value {
     let mut answers = serde_json::Map::new();
     for (r, (qid, q)) in qs.iter().enumerate() {
         let qt = qtype_index(&q.t).unwrap_or(0);
         let k = inf[r].logits.len();
         let p = softmax_scaled(&inf[r].logits, temps.lookup(qt, k));
-        let ext = json!({"act_probability": inf[r].act_probability as f64});
         let answer = match &q.crit {
             Crit::Choice(_) => {
                 let keys = q.choice_keys();
@@ -460,13 +467,14 @@ pub fn answers_payload(
                 for (kk, v) in keys.iter().zip(p.iter()) {
                     probabilities.insert(kk.clone(), json!(round4(*v as f64)));
                 }
-                json!({
+                let mut answer = json!({
                     "type": "choice",
                     "choice": keys[best],
                     "probabilities": Value::Object(probabilities),
                     "confidence": round4(confidence_from_probs(&p, k)),
-                    "rl_agent": ext,
-                })
+                });
+                attach_act_ext(&mut answer, inf[r].act_probability);
+                answer
             }
             Crit::Score(levels) => {
                 let score: f64 = p
@@ -482,28 +490,43 @@ pub fn answers_payload(
                 for (i, c) in levels.iter().enumerate() {
                     legend.insert(i.to_string(), json!(c));
                 }
-                json!({
+                let mut answer = json!({
                     "type": "score",
                     "score": round4(score),
                     "legend": Value::Object(legend),
                     "probabilities": Value::Object(probabilities),
                     "confidence": round4(confidence_from_probs(&p, k)),
-                    "rl_agent": ext,
-                })
+                });
+                attach_act_ext(&mut answer, inf[r].act_probability);
+                answer
             }
-            Crit::Noul { .. } => json!({
-                "type": "noul",
-                "noul": round4(p[1] as f64),
-                "rl_agent": ext,
-            }),
+            Crit::Noul { .. } => {
+                let mut answer = json!({
+                    "type": "noul",
+                    "noul": round4(p[1] as f64),
+                });
+                attach_act_ext(&mut answer, inf[r].act_probability);
+                answer
+            }
         };
         answers.insert(qid.clone(), answer);
     }
     json!({
-        "model": "rl-agent",
+        "model": model,
         "answers": Value::Object(answers),
         "usage": {"input_tokens": n_tokens, "output_tokens": 0},
     })
+}
+
+/// The rl_agent escalation-probability extension — present only when the
+/// answering judge HAS an act head (the RLAgent checkpoint); absent
+/// otherwise (kev has none; SPEC-3: nothing fabricated into the wire).
+fn attach_act_ext(answer: &mut Value, act_probability: Option<f32>) {
+    if let Some(a) = act_probability
+        && let Some(obj) = answer.as_object_mut()
+    {
+        obj.insert("rl_agent".to_string(), json!({"act_probability": a as f64}));
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1076,15 +1099,70 @@ mod tests {
                         .iter()
                         .map(|v| v.as_f64().unwrap() as f32)
                         .collect(),
-                    act_probability: fx["act_probability"][r].as_f64().unwrap() as f32,
+                    act_probability: Some(fx["act_probability"][r].as_f64().unwrap() as f32),
                 });
             }
 
             // (c) response payload vs the SDK's own system_one response
-            let got = answers_payload(&qs, &infs, fx["n_tokens"].as_u64().unwrap() as usize, &temps);
+            let got = answers_payload(
+                &qs,
+                &infs,
+                fx["n_tokens"].as_u64().unwrap() as usize,
+                &temps,
+                "rl-agent",
+            );
             let want = &fx["expected"];
             assert_value_close(&got, want, 1.5e-4, name);
         }
+    }
+
+    /// T222: the kev wire seam — the SAME assembly answers for a judge
+    /// without an act head: the `model` field is a parameter, and a
+    /// `None` act_probability omits the `rl_agent` extension entirely
+    /// (never fabricated). The kev-side shape pin in tests/kev_loader.rs
+    /// pins the contract against the committed fixtures; this pins the
+    /// REAL serializer producing it.
+    #[test]
+    fn kev_wire_shape_no_act_head_no_fabricated_ext() {
+        let v = parse_ordered(
+            r#"{"questions": {"risk": {"type": "choice", "instructions": "gate?",
+                "criteria": {"safe": "fine", "destructive": "destroys"}}}}"#,
+        )
+        .unwrap();
+        let questions = match v.field("questions") {
+            Ok(OValue::Obj(entries)) => entries.clone(),
+            other => panic!("questions object, got {other:?}"),
+        };
+        let qs: Vec<(String, InternalQ)> = questions
+            .iter()
+            .map(|(k, qd)| (k.clone(), to_internal(qd).unwrap()))
+            .collect();
+        let inf = vec![Inference { logits: vec![0.4, 1.6], act_probability: None }];
+        let temps = Temperatures { per_qtype: [2.35; 3], by_options: Vec::new() };
+        let got = answers_payload(&qs, &inf, 42, &temps, "kev-0.8b");
+        assert_eq!(got["model"], "kev-0.8b", "the model label is the parameter");
+        let a = &got["answers"]["risk"];
+        assert_eq!(a["type"], "choice");
+        assert!(a.get("rl_agent").is_none(), "no act head -> no rl_agent ext");
+        assert!(a["probabilities"].is_object());
+        let probs: Vec<f64> = a["probabilities"]
+            .as_object()
+            .unwrap()
+            .values()
+            .map(|v| v.as_f64().unwrap())
+            .collect();
+        assert!((probs.iter().sum::<f64>() - 1.0).abs() <= 1e-3);
+        // And the RLAgent path still carries it (the drop-in shape, one ext
+        // richer).
+        let inf_rl = vec![Inference { logits: vec![0.4, 1.6], act_probability: Some(0.25) }];
+        let rl = answers_payload(&qs, &inf_rl, 42, &temps, "rl-agent");
+        assert_eq!(rl["model"], "rl-agent");
+        assert_eq!(rl["answers"]["risk"]["rl_agent"]["act_probability"], 0.25);
+        assert_eq!(
+            rl["answers"]["risk"].as_object().unwrap().len() - 1,
+            a.as_object().unwrap().len(),
+            "the ext is the only shape delta"
+        );
     }
 
     /// parse_ordered: key order preserved, Python dict duplicate-key

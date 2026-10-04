@@ -1,6 +1,6 @@
 # T222 — kev-0.8b loader + judge-parity harness (T220 split, code half)
 
-check: set -o pipefail; export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared; touch src/*.rs tests/*.rs; cargo test --test kev_loader
+check: set -o pipefail; export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-validate-a; touch src/*.rs tests/*.rs; cargo test --test kev_loader
 
 estimate: ~400 lines (qwen3 + LoRA + pointer-head loader, harness metrics module, fixture pins)
 

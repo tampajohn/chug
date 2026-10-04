@@ -1,0 +1,57 @@
+{
+  "generated_by": "T222 wire-shape pin (kev path answers the same /judge JSON shape; logits are the forward output T223 will supply)",
+  "model": "kev-0.8b",
+  "temperature": 2.35,
+  "request": {
+    "state": {
+      "from": "user@acme.com",
+      "subject": "Duplicate charge on invoice #4411",
+      "body": "Hi, we were billed twice for March. Please refund the duplicate today or we will cancel our plan."
+    },
+    "questions": {
+      "department": {
+        "type": "choice",
+        "instructions": "Which department should handle this request?",
+        "criteria": ["billing", "technical", "sales"]
+      },
+      "urgency": {
+        "type": "score",
+        "instructions": "How urgent is this request?",
+        "criteria": ["not urgent", "soon", "critical deadline or blocking issue"]
+      },
+      "churn_risk": {
+        "type": "noul",
+        "instructions": "Does the user threaten to cancel or leave?"
+      }
+    }
+  },
+  "logits": {
+    "department": [1.2, -0.4, -0.8],
+    "urgency": [0.3, 0.9, -0.2],
+    "churn_risk": [0.5, 1.7]
+  },
+  "usage_input_tokens": 312,
+  "expected": {
+    "model": "kev-0.8b",
+    "answers": {
+      "department": {
+        "type": "choice",
+        "choice": "billing",
+        "probabilities": {"billing": 0.5173, "technical": 0.2618, "sales": 0.2209},
+        "confidence": 0.0666
+      },
+      "urgency": {
+        "type": "score",
+        "score": 0.9382,
+        "legend": {"0": "not urgent", "1": "soon", "2": "critical deadline or blocking issue"},
+        "probabilities": {"0": 0.3227, "1": 0.4165, "2": 0.2608},
+        "confidence": 0.0167
+      },
+      "churn_risk": {
+        "type": "noul",
+        "noul": 0.625
+      }
+    },
+    "usage": {"input_tokens": 312, "output_tokens": 0}
+  }
+}
