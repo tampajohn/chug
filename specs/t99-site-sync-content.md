@@ -38,6 +38,11 @@ the loop); the script never writes narrative.
    grid's structure.
 3. T98's rules hold for both regions: byte-identical when inputs
    unchanged; commit+push only on change; best-effort never fails a cycle.
+   T217: the fail-closed input guard is GLOBAL across regions (all three
+   read the same repo) — TODO.md unreadable, .chug/loopd absent, or git
+   log empty refuses the whole publish (write nothing, commit nothing,
+   one named error, nonzero exit); an explicit --bootstrap flag is the
+   first-ever-run-on-a-genuinely-empty-repo escape.
 4. Markers added to index.html in a bootstrap commit on the site repo if
    absent (the timeline child's existing entries become the initial region
    content, deduped against TODO-derived entries by commit ref).

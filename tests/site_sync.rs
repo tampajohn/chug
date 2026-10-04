@@ -458,6 +458,7 @@ fn new_inputs_regenerate_the_block_and_commit_again() {
 /// only (no ~~); F2/F3 are queued/in-flight material.
 /// refs: [0] seed (hand-cited on the site), [1..=4] t5..t8, [5] t11.
 fn chug_fixture_t99(dir: &Path) -> Vec<String> {
+    std::fs::create_dir_all(dir.join(".chug/loopd")).unwrap(); // T217 guard: readable inputs
     std::fs::write(dir.join("EVALUATION.md"), "# EVALUATION — fixture\n").unwrap();
     std::fs::write(dir.join("TODO.md"), "# TODO\n").unwrap();
     std::fs::write(dir.join("FEATURES.md"), "# FEATURES\n").unwrap();
@@ -1277,4 +1278,116 @@ fn t122_same_day_ties_keep_region_order_and_exact_refs_outrank_day_keys() {
     // T101 merge leg intact: curated R renders once, prose wins
     assert_eq!(count(&tl, &rr), 1, "R renders exactly once (curated, no machine twin): {tl}");
     assert!(tl.contains("<p>Cites a real 09-27 chug commit.</p>"), "prose wins: {tl}");
+}
+
+// --- T217 — fail-closed input guard ------------------------------------------
+
+/// T217 req 1: a sync whose repo inputs are unreadable must write NOTHING and
+/// commit NOTHING. The regions' fallback zeros are byte-identical to a
+/// legitimately empty repo's first run — indistinguishable by the values —
+/// so the guard keys on INPUT READABILITY, never on the computed output.
+/// Publishing the fallbacks with the same authority as real data is how
+/// 58c3a0b gutted chug.sh (a rogue runner whose repo path pointed at an
+/// empty or harvested directory still committed AND pushed the zeros).
+#[test]
+fn t217_unreadable_todo_md_refuses_to_publish_without_editing() {
+    let f = fixture();
+    std::fs::remove_file(f.chug.join("TODO.md")).unwrap();
+    let before = std::fs::read(f.site.join("index.html")).unwrap();
+    let out = run_sync(&f, true);
+    assert_eq!(out.status.code(), Some(4), "guard refusal exits nonzero (4), not 0/3");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("refusing to publish"), "one named-error line: {err}");
+    assert!(err.contains("TODO.md"), "the error names the unreadable input: {err}");
+    assert_eq!(
+        std::fs::read(f.site.join("index.html")).unwrap(),
+        before,
+        "index.html must stay byte-identical (req 3)"
+    );
+    assert_eq!(sync_commits(&f), 0, "commits NOTHING");
+}
+
+/// Second guard leg (req 1): .chug/loopd absent — the cycle-count source's
+/// whole directory — refuses identically.
+#[test]
+fn t217_missing_loopd_dir_refuses_to_publish_without_editing() {
+    let f = fixture();
+    std::fs::remove_dir_all(f.chug.join(".chug/loopd")).unwrap();
+    let before = std::fs::read(f.site.join("index.html")).unwrap();
+    let out = run_sync(&f, true);
+    assert_eq!(out.status.code(), Some(4), "guard refusal exits nonzero (4)");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("refusing to publish"), "one named-error line: {err}");
+    assert!(err.contains(".chug/loopd"), "the error names the absent dir: {err}");
+    assert_eq!(std::fs::read(f.site.join("index.html")).unwrap(), before);
+    assert_eq!(sync_commits(&f), 0);
+}
+
+/// The 58c3a0b signature (T186 class): ALL repo inputs unreadable at once —
+/// the runner's repo path pointed at an empty or harvested directory, not
+/// even a git repo. One named-error line, nothing else on stderr; the live
+/// page and its git history stay untouched.
+#[test]
+fn t217_rogue_context_all_inputs_unreadable_one_line_page_untouched() {
+    let f = fixture();
+    let harvested = f._keep.path().join("harvested");
+    std::fs::create_dir_all(&harvested).unwrap();
+    let before = std::fs::read(f.site.join("index.html")).unwrap();
+    let commits_before = all_commit_subjects(&f).len();
+    let mut c = Command::new("bash");
+    c.arg(script_path()).arg(&f.site).arg(&harvested);
+    c.env("CHUG_SYNC_NOW", NOW).env("CHUG_SITE_SYNC_NO_PUSH", "1");
+    let out = c.output().expect("spawn");
+    assert_eq!(out.status.code(), Some(4));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(err.lines().count(), 1, "exactly ONE named-error line: {err:?}");
+    assert!(err.contains("refusing to publish"), "the line is named: {err}");
+    assert_eq!(std::fs::read(f.site.join("index.html")).unwrap(), before);
+    assert_eq!(all_commit_subjects(&f).len(), commits_before, "commits NOTHING");
+}
+
+/// The guard's only escape is the explicit --bootstrap flag (req 1): a
+/// genuinely empty repo's first-ever run — impossible in loop context, where
+/// TODO.md always exists. With the flag the sync proceeds and publishes the
+/// zeros; without it the same fixture refuses (pinned above), so the flag is
+/// the only way through.
+#[test]
+fn t217_bootstrap_flag_is_the_explicit_guard_escape() {
+    let f = fixture();
+    std::fs::remove_file(f.chug.join("TODO.md")).unwrap();
+    let mut c = Command::new("bash");
+    c.arg(script_path()).arg(&f.site).arg(&f.chug).arg("--bootstrap");
+    c.env("CHUG_SYNC_NOW", NOW).env("CHUG_SITE_SYNC_NO_PUSH", "1");
+    let out = c.output().expect("spawn");
+    assert!(
+        out.status.success(),
+        "--bootstrap skips the guard: {:?}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        page(&f).contains("<b>0/0</b>"),
+        "a bootstrap run publishes the genuinely-empty-repo zeros:\n{}",
+        page(&f)
+    );
+}
+
+/// T217 req 5 (adjacent): the sync commit records the input stats — items /
+/// tests / cycles counts — so a gutting commit is distinguishable from a real
+/// one at a glance (58c3a0b's body would read items 0/0, tests n/a, cycles 0).
+#[test]
+fn t217_commit_message_records_the_input_stat_counts() {
+    let f = fixture();
+    let out = run_sync(&f, true);
+    assert!(out.status.success(), "sync: {:?}", String::from_utf8_lossy(&out.stderr));
+    // regions written: the fixture's own facts (2/3 items, t4's 55, 2 cycles)
+    let html = page(&f);
+    assert!(html.contains("<b>2/3</b>"), "items card:\n{html}");
+    assert!(html.contains("<b>55</b>"), "tests card:\n{html}");
+    assert!(html.contains("<b>2</b>"), "cycles card:\n{html}");
+    // ... and the commit body names the same counts
+    let log = git(&f.site, &["log", "-1", "--format=%B"], None);
+    let body = String::from_utf8_lossy(&log.stdout);
+    assert!(body.contains("items 2/3"), "items count in the commit body: {body}");
+    assert!(body.contains("tests 55"), "tests count in the commit body: {body}");
+    assert!(body.contains("cycles 2"), "cycles count in the commit body: {body}");
 }

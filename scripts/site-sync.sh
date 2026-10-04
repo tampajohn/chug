@@ -22,11 +22,31 @@
 #
 # Best-effort, like observability (reqs 2+5): a missing site clone, a
 # non-git site dir, a failed commit, and a REJECTED PUSH all warn and exit 0
-# — site sync must never fail a cycle. Only the marker error exits nonzero.
-# Plain `git push` only — never a force-push.
+# — site sync must never fail a cycle. Only the marker error (exit 3) and the
+# T217 unreadable-inputs refusal (exit 4) exit nonzero. Plain `git push` only
+# — never a force-push.
+#
+# T217: the sync FAILS CLOSED on unreadable repo inputs. The regions'
+# fallback text is only honest for a genuinely readable-but-empty repo; when
+# TODO.md, .chug/loopd, or git log cannot be read AT ALL, every number in the
+# block is a fallback — byte-identical to a legitimately empty repo's first
+# run, and indistinguishable from it by the values alone. Publishing those
+# zeros with the same authority as real data is how 58c3a0b gutted chug.sh
+# (a rogue runner whose repo path pointed at an empty or harvested directory
+# — the T186 orphan class — still had commit+push reach). So BEFORE any
+# region write, bootstrap, or commit: TODO.md unreadable OR .chug/loopd
+# absent OR git log empty => write NOTHING, commit NOTHING, print ONE named
+# error line and exit 4. The guard is global (req 2): all three regions read
+# the same repo, so one check covers them all. It keys on INPUT READABILITY,
+# never on the computed values. A bootstrap path for a genuinely empty repo
+# (impossible in loop context — TODO.md always exists there) must pass the
+# explicit --bootstrap flag.
 #
 # Usage:
-#   scripts/site-sync.sh [SITE_DIR] [CHUG_ROOT]
+#   scripts/site-sync.sh [--bootstrap] [SITE_DIR] [CHUG_ROOT]
+#     --bootstrap  skip the T217 input guard (first-ever run on a genuinely
+#                  empty repo; never needed in loop context, where TODO.md,
+#                  .chug/loopd, and git history always exist)
 #     SITE_DIR   site checkout (default $CHUG_SITE_DIR, else ~/workspace/chug-site)
 #     CHUG_ROOT  chug repo the facts are read from (default: this repo)
 # Env:
@@ -35,6 +55,19 @@
 #   CHUG_SITE_SYNC_NO_PUSH=1  skip the push (fixture tests, offline runs)
 set -u
 export LC_ALL=C
+
+# --bootstrap (T217): the guard's only escape, explicit on the command line.
+# Recognized in ANY argument position (leading `--bootstrap SITE CHUG` or the
+# test harness's `SITE CHUG --bootstrap`); never shifts the positionals.
+BOOTSTRAP=0
+ARGS=()
+for a in "$@"; do
+  case "$a" in
+    --bootstrap) BOOTSTRAP=1 ;;
+    *) ARGS+=("$a") ;;
+  esac
+done
+set -- ${ARGS[@]+"${ARGS[@]}"}
 
 SITE="${1:-${CHUG_SITE_DIR:-$HOME/workspace/chug-site}}"
 CHUG="${2:-$(cd "$(dirname "$0")/.." && pwd)}"
@@ -51,6 +84,25 @@ INDEX="$SITE/index.html"
 if [ ! -f "$INDEX" ]; then
   warn "$INDEX not found — nothing to sync"
   exit 0
+fi
+
+# --- T217 req 1: input guard — refuse to publish before ANY region write ----
+# Checked after the site-presence checks (a missing clone still has nothing
+# to sync — that leg stays exit 0) and before the marker checks: an unreadable
+# repo is the deeper fault, and the T99 marker bootstrap below must never run
+# off unreadable inputs either (it commits to the site). Keyed on readability,
+# never on the computed values — the fallback zeros are identical to a
+# genuinely empty repo's first run. First unreadable input wins; ONE line,
+# nonzero exit, the page untouched.
+guard_refuse() { # <path> — one named-error line, exit 4, nothing written
+  warn "refusing to publish: repo inputs unreadable at $1"
+  exit 4
+}
+if [ "$BOOTSTRAP" != "1" ]; then
+  [ -r "$CHUG/TODO.md" ] || guard_refuse "$CHUG/TODO.md"
+  [ -d "$CHUG/.chug/loopd" ] || guard_refuse "$CHUG/.chug/loopd"
+  [ -n "$(git --no-pager -C "$CHUG" log -1 --format=%H 2>/dev/null)" ] \
+    || guard_refuse "$CHUG (git log empty)"
 fi
 
 # --- markers present and well-formed, else exit 3 WITHOUT editing ------------
