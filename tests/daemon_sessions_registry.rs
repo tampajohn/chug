@@ -18,6 +18,13 @@
 //! (f) /judge and /healthz are untouched (the lifecycle and feature-off
 //!     pins stay green alongside), and the daemon self-registers at startup.
 //!
+//! T221 adds three pins for the T219 validator's findings: a day-0
+//! timestamp fails open to server-now and the entry stays VISIBLE (the
+//! release-profile instant-eviction symptom), age_sec is value-pinned to
+//! the `started` derivation (>= 120s for a 120s-old start with a fresh
+//! heartbeat), and the roundtrip `now` comparison is a ±2s band (the
+//! second-boundary straddle flake).
+//!
 //! Everything here is best-effort-facing on the wire and exact on the
 //! asserts: the daemon is spawned with the real transport, the requests are
 //! raw UDS HTTP, and a pinned failure is a hard failure.
@@ -211,9 +218,27 @@ fn register_then_get_roundtrips_posted_fields() {
     assert_eq!(got["status"], serde_json::json!("running"), "{}", value);
     // The derived pair: age_sec is a number (started is in the past but far
     // before the epoch budget of this box — the value is not pinned, the
-    // derivation is), `now` is the server's RFC3339 clock.
+    // derivation is), `now` is the server's RFC3339 clock — pinned within a
+    // ±2s band of the client's, NOT exact-second (T221 finding 4: a second-
+    // boundary straddle between the server's stamp and this read must not
+    // flake the pin).
     assert!(got["age_sec"].is_number(), "{}", value);
-    assert_eq!(value["now"], serde_json::json!(rfc3339(now_secs())), "{}", value);
+    let now = now_secs();
+    let stamp = value["now"]
+        .as_str()
+        .unwrap_or_else(|| panic!("the body carries the server's now: {}", value));
+    let band: [String; 5] = [
+        rfc3339(now.saturating_sub(2)),
+        rfc3339(now.saturating_sub(1)),
+        rfc3339(now),
+        rfc3339(now + 1),
+        rfc3339(now + 2),
+    ];
+    assert!(
+        band.iter().any(|member| member.as_str() == stamp),
+        "server now {stamp} outside the client's ±2s band {band:?}: {}",
+        value
+    );
 }
 
 // (b) a re-POST upserts: one entry per id, refreshed last_event_ts.
@@ -359,4 +384,64 @@ fn registry_host_keeps_judge_and_healthz_and_self_registers() {
     assert_eq!(self_entry["role"], serde_json::json!("daemon"), "{}", value);
     assert_eq!(self_entry["status"], serde_json::json!("serving"), "{}", value);
     assert!(self_entry["age_sec"].is_number(), "{}", value);
+}
+
+// (T221 finding 1) a day-0 timestamp fails the parse and fails OPEN to
+// server-now: the POST still returns `{"ok":true}` and the entry is VISIBLE
+// in GET (fresh, age 0) — never instantly TTL-evicted. Without the guard,
+// `days_from_civil` underflows on day 0: the debug conn thread panics (the
+// POST never answers) and the release build wraps to the previous day, so
+// the wrapped liveness clock evicts the entry before this GET can see it.
+#[test]
+fn day_zero_timestamp_fails_open_and_stays_visible() {
+    let home = Home::spawn(&[("CHUG_DAEMON_SESSIONS", "1")]);
+    register(
+        &home,
+        &serde_json::json!({
+            "id": "day-zero",
+            "role": "loopd-cycle",
+            "started": "2024-03-00T12:00:00Z",
+            "last_event_ts": "2024-03-00T12:00:00Z"
+        }),
+    );
+    let value = list(&home);
+    let got = entry(&value, "day-zero");
+    // The unparseable strings echo verbatim (the client's words are the
+    // record); the ENTRY itself is fresh — both epochs failed open to
+    // server-now, so it is neither evicted nor mis-aged.
+    assert_eq!(got["started"], serde_json::json!("2024-03-00T12:00:00Z"), "{}", value);
+    assert_eq!(got["last_event_ts"], serde_json::json!("2024-03-00T12:00:00Z"), "{}", value);
+    assert_eq!(got["age_sec"], serde_json::json!(0), "{}", value);
+}
+
+// (T221 finding 2) age_sec derives from `started` — the process age (spec
+// req 2) — NOT from the last heartbeat: a 120s-old start with a fresh
+// heartbeat must render age_sec >= 120. Inverting the derivation (age
+// since the heartbeat ≈ 0) fails this value pin.
+#[test]
+fn age_sec_derives_from_started_not_the_last_heartbeat() {
+    let home = Home::spawn(&[("CHUG_DAEMON_SESSIONS", "1")]);
+    let started = now_secs().saturating_sub(120);
+    let beat = now_secs();
+    register(
+        &home,
+        &serde_json::json!({
+            "id": "age-pin",
+            "role": "loopd-cycle",
+            "started": rfc3339(started),
+            "last_event_ts": rfc3339(beat),
+            "status": "running"
+        }),
+    );
+    let value = list(&home);
+    let got = entry(&value, "age-pin");
+    let age = got["age_sec"]
+        .as_u64()
+        .unwrap_or_else(|| panic!("age_sec is a number: {}", value));
+    assert!(
+        age >= 120,
+        "age tracks `started` (server-now minus 120s), not the fresh heartbeat: \
+         {age}s in {}",
+        value
+    );
 }
