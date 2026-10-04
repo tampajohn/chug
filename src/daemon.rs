@@ -893,6 +893,11 @@ fn parse_rfc3339(text: &str) -> Option<u64> {
     let (year, month, day) = (quad(0..4)?, quad(5..7)?, quad(8..10)?);
     let (hour, minute, second) = (quad(11..13)?, quad(14..16)?, quad(17..19)?);
     if !(1..=12).contains(&month)
+        // T221: day 0 must reject exactly like day 32 — `days_from_civil`
+        // computes `… + d - 1` on u64, so day 0 underflows (a debug panic in
+        // the conn thread, a silent wrap to the previous day in release).
+        // Month is already bounded above by this range check.
+        || day < 1
         || day > u64::from(days_in_month(year as i64, month as u32))
         || hour > 23
         || minute > 59
@@ -2173,6 +2178,29 @@ mod tests {
         assert_eq!(registry.evict_live(now).len(), 1, "future-dated heartbeats stay live");
     }
 
+    /// T221 — the TTL boundary pins the DEFAULT at 600 exactly, in literal
+    /// seconds: a 599s-old entry LIVES and a 601s-old one is EVICTED. The
+    /// symbolic `SESSION_TTL_SECS` legs above cannot see a const flip (they
+    /// move with it); these literal legs fail if the default is tuned to
+    /// anything but 600.
+    #[test]
+    fn session_ttl_boundary_pins_default_at_600() {
+        let now = 1_000_000_000u64;
+        let mut registry = SessionRegistry::default();
+        registry.upsert(session_entry("under", now - 599));
+        registry.upsert(session_entry("over", now - 601));
+        let live = registry.evict_live(now);
+        let ids: Vec<&str> = live.iter().map(|entry| entry.id.as_str()).collect();
+        assert!(
+            ids.contains(&"under"),
+            "a 599s-old entry lives under the 600s TTL: {ids:?}"
+        );
+        assert!(
+            !ids.contains(&"over"),
+            "a 601s-old entry is evicted past the 600s TTL: {ids:?}"
+        );
+    }
+
     /// The wire timestamp helpers: RFC3339 formatting anchors (no chrono —
     /// archive.rs's civil math re-clothed) and the parser's accept/reject
     /// table (the emitter shapes only).
@@ -2200,12 +2228,15 @@ mod tests {
         // Roundtrip: format then parse returns the same epoch second.
         let now = epoch_now();
         assert_eq!(parse_rfc3339(&rfc3339(now)), Some(now));
-        // Rejects: junk, bad shapes, out-of-range fields.
+        // Rejects: junk, bad shapes, out-of-range fields. Day 0 rejects
+        // exactly like day 32 (the T221 guard — no days_from_civil
+        // underflow on either side of the month's day range).
         for text in [
             "", "not a time", "2024-02-29", "2024-02-29T12:00", "24-02-29T12:00:00Z",
             "2024-13-01T00:00:00Z", "2024-02-30T00:00:00Z", "2024-02-29T24:00:00Z",
             "2024-02-29T12:60:00Z", "2024-02-29T12:00:00Z.", "2024-02-29T12:00:00X",
             "2024-02-29T12:00:00+99:00",
+            "2024-03-00T12:00:00Z", "2024-02-00T00:00:00Z", "2024-03-32T00:00:00Z",
         ] {
             assert_eq!(parse_rfc3339(text), None, "rejecting {text:?}");
         }
