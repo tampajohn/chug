@@ -148,6 +148,13 @@ friction > performance — features are first-class (LOOP-SPEC §2): at
 equal pri, a credible feature row is worked before a DX-friction row.
 **Verify T1/T2/T4/T5 actually worked before filing
 anything adjacent** (read the code, run the relevant tests if cheap).
+**Verify the indictment before filing a bug row**: a row whose premise
+indicts a specific component (X is broken / false-positive / dead code)
+MUST be verified against the code before filing — read the component,
+run the cheap repro when one exists; when verification is not feasible
+at eval time, the spec files the SYMPTOM + evidence and labels the
+mechanism a HYPOTHESIS in repo-context, never the row's premise (the
+T212 lesson: the indictment was inverted, a full round reverted).
 
 ## Handoff section in EVALUATION.md
 

@@ -1,6 +1,6 @@
 # T228 — META-META-SPEC: verify the indictment before filing a bug row (doctrine, SOLO)
 
-check: set -o pipefail; export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared; touch src/*.rs tests/*.rs; cargo test --test loop_spec_recovery
+check: set -o pipefail; export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-validate-a; touch src/*.rs tests/*.rs; cargo test --test loop_spec_recovery
 
 estimate: ~50 changed lines (one doctrine clause + one carrier pin leg)
 
