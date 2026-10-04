@@ -567,6 +567,11 @@ simultaneously past gates — T194 amends T161's 2-child cap):
    `goal_complete` at ~118/120 and the run aborted 120/120) — and the
    orchestrator runs `cargo test --test todo_consistency` (seconds)
    after every TODO.md edit, before committing.
+   The todo_consistency run is UNPIPED, or the chain begins
+   `set -o pipefail;` — a piped gate whose filter exits 0 reports
+   green on a red guard (the c06a555 lesson) — and the same rule binds
+   ANY ad-hoc gate chain the orchestrator pipes through
+   tail/head/grep.
    When editing repo files with `sed` or other in-place bash edits
    (bookkeeping, harvest, gates scripting), grep-verify the intended
    needle in the same command line or the immediately following one —

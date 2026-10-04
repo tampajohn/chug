@@ -3493,3 +3493,179 @@ fn indictment_clause_exactly_once_inside_extend_todo_after_verify_adjacent() {
          ({hypothesis}), lesson cite ({lesson})"
     );
 }
+
+// ---- T227 — the TODO.md-edit gate must not swallow a red guard through a pipe ----
+//
+// Cycle-101 pushed a RED main (c06a555): the T220/T223 notes cells carried
+// literal `|` characters that split the rows into 8 cells (the T37/T8
+// class), `cargo test --test todo_consistency` was red — and the
+// orchestrator ran the guard INSIDE a pipe chain without `set -o
+// pipefail`, so the chain reported the filter's exit 0 and the red was
+// swallowed into a push (fixed forward in 6365b50). Cycle-103 added a
+// THIRD instance while the row sat queued: the filing cycle's own T225
+// flip ran `cargo test … | grep "test result"` — grep exits 0 on
+// matching the FAILED line — and pushed a red row-format guard live
+// (71ca2c1, fixed d2bf500). Two of the three recurrences are ORCHESTRATOR
+// filter chains, not model carelessness: the T67→T164 pipe lint covers
+// spec `check:` lines only, and the orchestrator's ad-hoc gate chains had
+// no carrier. Step 5's TODO.md-edit paragraph now carries the sentence
+// beside the gate it qualifies; this leg pins it in the T64/T120 pattern:
+// every needle exactly-once file-wide, inside step 5's window (the T120
+// loose-heading anchors), AFTER the gate sentence it guards and BEFORE
+// the sed bookkeeping paragraph. Deleting the sentence drops every needle
+// to 0 and the leg goes red; a duplicate statement or a rewrap across a
+// line break goes red the same way.
+
+/// The unpiped-gate rule's commitment needle — UNPIPED, or pipefail
+/// first, contiguous as written (single-line per the spec's ~79-col
+/// wrap). Must occur EXACTLY once in LOOP-SPEC.md.
+const GATE_UNPIPED_NEEDLE: &str = "todo_consistency run is UNPIPED, or the chain begins";
+
+/// The rule's mechanism needle — the filter-exit-0 fact the rule exists
+/// for, contiguous as written. Must occur EXACTLY once in LOOP-SPEC.md.
+const PIPED_GATE_MASKS_RED_NEEDLE: &str = "a piped gate whose filter exits 0 reports";
+
+/// The mechanism's outcome + lesson-cite needle — green-on-red and the
+/// c06a555 record, contiguous as written. Must occur EXACTLY once in
+/// LOOP-SPEC.md.
+const RED_GUARD_LESSON_NEEDLE: &str = "green on a red guard (the c06a555 lesson)";
+
+/// The rule's scope needle — it binds ANY ad-hoc orchestrator gate chain
+/// through the filter list, contiguous as written. Must occur EXACTLY
+/// once in LOOP-SPEC.md.
+const AD_HOC_SCOPE_NEEDLE: &str = "ANY ad-hoc gate chain the orchestrator pipes through";
+
+/// The enumerated filter list the scope clause names, contiguous as
+/// written. Must occur EXACTLY once in LOOP-SPEC.md.
+const FILTER_LIST_NEEDLE: &str = "tail/head/grep.";
+
+/// The gate sentence (the existing TODO.md-edit rule) the new sentence
+/// sits AFTER — the carrier extends the gate, never replaces or precedes
+/// it.
+const GATE_SENTENCE_NEEDLE: &str = "runs `cargo test --test todo_consistency` (seconds)";
+
+/// The sed bookkeeping paragraph that CLOSES the region — the sentence
+/// must sit before it (inside the TODO.md-edit paragraph, not drifted
+/// into the sed rule that follows).
+const SED_PARAGRAPH_NEEDLE: &str = "When editing repo files with";
+
+/// (am) T227 — the unpiped-gate sentence occurs EXACTLY once in
+/// LOOP-SPEC.md, inside step 5's window (the T64/T120 loose-heading
+/// scope), AFTER the gate sentence it guards and BEFORE the sed
+/// bookkeeping paragraph. Delete the sentence and all five needles go red
+/// at count 0 (which also breaks any line-wise grep of them); rewrap a
+/// needle across a line break and it goes red the same way; a duplicate
+/// statement of any needle elsewhere also goes red (count 2); moving the
+/// sentence out of step 5, before the gate it guards, or into the sed
+/// paragraph dies on the window/ordering asserts.
+#[test]
+fn todo_edit_gate_unpiped_needles_exactly_once_inside_step_5() {
+    // Needle self-checks (T48 idiom): a mangled needle must not let this
+    // pin pass silently.
+    assert!(
+        GATE_UNPIPED_NEEDLE.starts_with("todo_consistency run")
+            && GATE_UNPIPED_NEEDLE.ends_with("the chain begins"),
+        "the unpiped-gate needle must carry the UNPIPED-or-pipefail \
+         commitment verbatim (contiguous as written, per the spec's wrap)"
+    );
+    assert!(
+        PIPED_GATE_MASKS_RED_NEEDLE.starts_with("a piped gate")
+            && PIPED_GATE_MASKS_RED_NEEDLE.ends_with("exits 0 reports"),
+        "the mechanism needle must carry the filter-exit-0 language verbatim"
+    );
+    assert!(
+        RED_GUARD_LESSON_NEEDLE.starts_with("green on a red guard")
+            && RED_GUARD_LESSON_NEEDLE.ends_with("(the c06a555 lesson)"),
+        "the lesson needle must carry the c06a555 citation verbatim"
+    );
+    assert!(
+        AD_HOC_SCOPE_NEEDLE.starts_with("ANY ad-hoc")
+            && AD_HOC_SCOPE_NEEDLE.ends_with("pipes through"),
+        "the scope needle must carry the ANY-ad-hoc-chain language verbatim \
+         (capital ANY, per the clause's wrapping)"
+    );
+    assert!(
+        FILTER_LIST_NEEDLE.starts_with("tail/") && FILTER_LIST_NEEDLE.ends_with("grep."),
+        "the filter-list needle must carry the tail/head/grep enumeration \
+         verbatim"
+    );
+    let spec = loop_spec();
+    for (needle, what) in [
+        (
+            GATE_UNPIPED_NEEDLE,
+            "the todo_consistency-run-is-UNPIPED-or-pipefail commitment",
+        ),
+        (
+            PIPED_GATE_MASKS_RED_NEEDLE,
+            "the filter-exit-0-masks-red mechanism",
+        ),
+        (RED_GUARD_LESSON_NEEDLE, "the c06a555 lesson citation"),
+        (
+            AD_HOC_SCOPE_NEEDLE,
+            "the ANY-ad-hoc-gate-chain scope clause",
+        ),
+        (FILTER_LIST_NEEDLE, "the tail/head/grep filter list"),
+    ] {
+        assert_eq!(
+            spec.matches(needle).count(),
+            1,
+            "LOOP-SPEC must state {what} exactly once — zero means the \
+             unpiped-gate sentence was deleted (or a needle was rewrapped \
+             across a line break), more than one means it is stated twice"
+        );
+    }
+    let start = spec
+        .find(STEP5_HEADING_LOOSE)
+        .expect("step-5 heading (`5. **`) present");
+    let end = start
+        + spec[start..]
+            .find(STEP6_HEADING_LOOSE)
+            .expect("step-6 heading present after step 5's");
+    let window = &spec[start..end];
+    let gate = window.find(GATE_SENTENCE_NEEDLE).expect(
+        "step-5's window must carry the gate sentence \
+         (`cargo test --test todo_consistency` (seconds)) the unpiped rule \
+         guards",
+    );
+    let unpiped = window.find(GATE_UNPIPED_NEEDLE).unwrap_or_else(|| {
+        panic!(
+            "step-5's window must carry {GATE_UNPIPED_NEEDLE:?} — the \
+             unpiped-gate sentence was deleted, or moved out of step 5's \
+             TODO.md-edit paragraph"
+        )
+    });
+    let masks = window.find(PIPED_GATE_MASKS_RED_NEEDLE).expect(
+        "step-5's window must carry the filter-exit-0 mechanism \
+         (rewrapped across a line break?)",
+    );
+    let lesson = window.find(RED_GUARD_LESSON_NEEDLE).expect(
+        "step-5's window must carry the c06a555 lesson citation \
+         (rewrapped across a line break?)",
+    );
+    let scope = window.find(AD_HOC_SCOPE_NEEDLE).expect(
+        "step-5's window must carry the ANY-ad-hoc-gate-chain scope \
+         clause (rewrapped across a line break?)",
+    );
+    let filter_list = window.find(FILTER_LIST_NEEDLE).expect(
+        "step-5's window must carry the tail/head/grep filter list \
+         (rewrapped across a line break?)",
+    );
+    let sed = window.find(SED_PARAGRAPH_NEEDLE).expect(
+        "step-5's window must carry the sed bookkeeping paragraph \
+         (the region's closer)",
+    );
+    assert!(
+        gate < unpiped
+            && unpiped < masks
+            && masks < lesson
+            && lesson < scope
+            && scope < filter_list
+            && filter_list < sed,
+        "the unpiped-gate sentence must sit INSIDE step 5's \
+         TODO.md-edit paragraph — AFTER the gate sentence it guards \
+         ({gate}) and BEFORE the sed bookkeeping paragraph ({sed}), in \
+         the sentence's own order: commitment ({unpiped}), mechanism \
+         ({masks}), lesson cite ({lesson}), scope ({scope}), filter list \
+         ({filter_list})"
+    );
+}
