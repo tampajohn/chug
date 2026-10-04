@@ -71,6 +71,15 @@ pub const STUB_ENV: &str = "CHUG_DAEMON_STUB";
 /// can point spawns at a fake binary; production resolves the running
 /// chug itself (the one-binary/subcommand pattern).
 pub const BINARY_ENV: &str = "CHUG_DELEGATE_BIN";
+/// `CHUG_DAEMON_SESSIONS=1` — T219's weightless registry host: serve mode
+/// with the REAL transport, lock, socket, and /sessions registry but NO
+/// judge model; /judge refuses exactly as the stub's does (a weightless
+/// host must never fabricate classifications — SPEC-3). This is the seam
+/// the /sessions wire pins run against (the default build has no model and
+/// the lifecycle stub must never fabricate a registry), and an ops shape in
+/// its own right: a daemon-capable binary can host the host-scoped session
+/// registry without pulling ~650 MB of weights onto the box.
+pub const SESSIONS_ENV: &str = "CHUG_DAEMON_SESSIONS";
 
 /// Judge calls must fail fast so the agent loop is never stalled — the same
 /// 2s doctrine as the HTTP path's `JUDGE_TIMEOUT_SECS`.
@@ -700,6 +709,409 @@ pub fn ensure_cmd() -> anyhow::Result<i32> {
 }
 
 // ---------------------------------------------------------------------------
+// T219 — the /sessions registry: chug runs register TTL heartbeats on the
+// same host-scoped 0600 socket (`POST /sessions` upserts one run,
+// `GET /sessions` lists the live ones). The store is in-memory and host-
+// scoped like the daemon itself: it lives and dies with the daemon process
+// (historical archives are out of scope), every store error fails open
+// (a registry problem can never fail /judge — the routes share nothing),
+// and emitters treat a failed POST as a no-op.
+// ---------------------------------------------------------------------------
+
+/// TTL for a session entry: no heartbeat (POST) within this many seconds
+/// evicts it, lazily on read. ONE named const (spec req 2) — the default is
+/// 10 minutes.
+pub const SESSION_TTL_SECS: u64 = 600;
+
+/// The four emitter roles a registration may carry (spec req 1). `dashd`
+/// lives here even though that supervisor is not this repo's code: the
+/// registry is the host-wide answer, and the dogfood loop registers through
+/// the same one-line wire (the shell POST).
+pub const SESSION_ROLES: [&str; 4] = ["loopd-cycle", "delegate-child", "dashd", "daemon"];
+
+/// One registered run. The posted strings are echoed VERBATIM (the client's
+/// words are the record); the parsed epoch copies drive the derived math so
+/// a client that sends a format we cannot parse still registers (fail-open
+/// to server-now) without corrupting the echoed record.
+#[derive(Debug, Clone)]
+struct SessionEntry {
+    id: String,
+    role: String,
+    /// Echoed verbatim. On upsert this STICKS to the first registration: a
+    /// heartbeat is the same shape as a registration, and the session's age
+    /// must track the process, not the last heartbeat (the emitters are
+    /// stateless on purpose — they do not re-send their start time).
+    started: String,
+    /// Parsed `started` (None: the posted string was not a timestamp we
+    /// could read — age renders as 0 rather than inventing one).
+    started_epoch: Option<u64>,
+    /// Echoed verbatim (server-stamped when the POST omits it).
+    last_event_ts: String,
+    /// The TTL clock: the parsed `last_event_ts`, or the server's now when
+    /// absent or unparseable — fail-open FRESH (an emitter with a broken
+    /// clock still registers; it never registers as instantly stale).
+    last_event_epoch: u64,
+    status: String,
+}
+
+/// The store: upsert-by-id, lazy TTL eviction on read. Not `pub`-shaped API —
+/// reached only through the routes and the unit tests.
+#[derive(Default)]
+pub struct SessionRegistry {
+    entries: std::collections::HashMap<String, SessionEntry>,
+}
+
+impl SessionRegistry {
+    /// Insert or refresh one entry by id. A heartbeat is the same shape as a
+    /// first registration (spec req 1): every field takes the POST's value
+    /// EXCEPT `started`, which sticks to the first registration (see the
+    /// field doc).
+    fn upsert(&mut self, entry: SessionEntry) {
+        match self.entries.get_mut(&entry.id) {
+            Some(existing) => {
+                let started = existing.started.clone();
+                let started_epoch = existing.started_epoch;
+                *existing = entry;
+                existing.started = started;
+                existing.started_epoch = started_epoch;
+            }
+            None => {
+                self.entries.insert(entry.id.clone(), entry);
+            }
+        }
+    }
+
+    /// Lazy TTL eviction on read (spec req 2): drop every entry whose last
+    /// heartbeat is older than [`SESSION_TTL_SECS`], return the live ones
+    /// sorted by id (deterministic — identical state renders byte-identical,
+    /// the house render rule). A future-dated heartbeat (client clock ahead)
+    /// stays live: saturating subtraction pins the age at 0, never negative.
+    fn evict_live(&mut self, now: u64) -> Vec<SessionEntry> {
+        self.entries
+            .retain(|_, entry| now.saturating_sub(entry.last_event_epoch) <= SESSION_TTL_SECS);
+        let mut live: Vec<SessionEntry> = self.entries.values().cloned().collect();
+        live.sort_by(|a, b| a.id.cmp(&b.id));
+        live
+    }
+}
+
+/// The serve-side sessions host: the store plus the daemon's own identity.
+/// Cloned into every connection thread (the Arc is the shared store).
+#[derive(Clone, Default)]
+struct SessionsHost {
+    registry: std::sync::Arc<std::sync::Mutex<SessionRegistry>>,
+    /// The daemon's own registration (role `daemon`): upserted at startup
+    /// and refreshed on each registry serve (spec req 1). `None` = no
+    /// registry service at all — the stub, whose /sessions refuses (a stub
+    /// must never fabricate a registry, and an empty-but-200 answer would
+    /// be exactly that fabrication).
+    self_entry: Option<SessionEntry>,
+}
+
+impl SessionsHost {
+    /// A host with the daemon's own registration already stored (startup —
+    /// spec req 1). The id is the bare `daemon`: the single-instance flock
+    /// admits at most one daemon per host home, so the id is unique by
+    /// construction and a restart upserts the same row instead of churning
+    /// pid-keyed ones.
+    fn with_self() -> Self {
+        let self_entry = daemon_self_entry();
+        let registry = std::sync::Arc::new(std::sync::Mutex::new(SessionRegistry::default()));
+        registry
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .upsert(self_entry.clone());
+        Self {
+            registry,
+            self_entry: Some(self_entry),
+        }
+    }
+}
+
+/// The daemon's own session identity.
+fn daemon_self_entry() -> SessionEntry {
+    let now = epoch_now();
+    SessionEntry {
+        id: "daemon".into(),
+        role: "daemon".into(),
+        started: rfc3339(now),
+        started_epoch: Some(now),
+        last_event_ts: rfc3339(now),
+        last_event_epoch: now,
+        status: "serving".into(),
+    }
+}
+
+/// Seconds since the Unix epoch (the registry's one clock). A clock that
+/// went backwards yields 0 — fail-open, never a panic.
+fn epoch_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
+/// Format epoch seconds as RFC3339 UTC (`YYYY-MM-DDTHH:MM:SSZ`) — the wire
+/// timestamp shape every emitter speaks (the shell side emits exactly this
+/// with `date -u +%Y-%m-%dT%H:%M:%SZ`). Reuses archive.rs's civil-from-days
+/// math (no chrono dependency) and re-clothes it in RFC3339 punctuation.
+fn rfc3339(secs: u64) -> String {
+    let compact = crate::archive::format_timestamp(secs); // YYYYMMDD-HHMMSS
+    format!(
+        "{}-{}-{}T{}:{}:{}Z",
+        &compact[0..4],
+        &compact[4..6],
+        &compact[6..8],
+        &compact[9..11],
+        &compact[11..13],
+        &compact[13..15]
+    )
+}
+
+/// Parse an RFC3339 timestamp to epoch seconds. Accepts the emitter shapes:
+/// `YYYY-MM-DDTHH:MM:SS` (space tolerated for `T`), optional fractional
+/// seconds, optional zone (`Z`, or `±HH:MM`/`±HHMM`; a missing zone reads
+/// as UTC). Anything else is `None` — the caller fails open to server-now.
+/// Deliberately narrow: the emitters are this repo's helper and `date -u`;
+/// a full RFC3339 grammar is not the registry's job.
+fn parse_rfc3339(text: &str) -> Option<u64> {
+    let text = text.trim();
+    let bytes = text.as_bytes();
+    if bytes.len() < 19 {
+        return None;
+    }
+    // Fixed-width shape check before any parse: YYYY-MM-DD(T| )HH:MM:SS.
+    if bytes[4] != b'-'
+        || bytes[7] != b'-'
+        || !(bytes[10] == b'T' || bytes[10] == b' ')
+        || bytes[13] != b':'
+        || bytes[16] != b':'
+    {
+        return None;
+    }
+    let quad = |range: std::ops::Range<usize>| text.get(range)?.parse::<u64>().ok();
+    let (year, month, day) = (quad(0..4)?, quad(5..7)?, quad(8..10)?);
+    let (hour, minute, second) = (quad(11..13)?, quad(14..16)?, quad(17..19)?);
+    if !(1..=12).contains(&month)
+        || day > u64::from(days_in_month(year as i64, month as u32))
+        || hour > 23
+        || minute > 59
+        || second > 60
+    {
+        return None;
+    }
+    // Fractional seconds: parsed and discarded (the registry's clock is
+    // second-resolution).
+    let mut rest = &text[19..];
+    if let Some(after_dot) = rest.strip_prefix('.') {
+        let digits = after_dot.find(|c: char| !c.is_ascii_digit()).unwrap_or(after_dot.len());
+        if digits == 0 {
+            return None;
+        }
+        rest = &after_dot[digits..];
+    }
+    let offset_secs: i64 = match rest {
+        "" | "Z" | "z" => 0,
+        _ => {
+            let sign = match rest.as_bytes()[0] {
+                b'+' => 1,
+                b'-' => -1,
+                _ => return None,
+            };
+            let digits: String = rest[1..].chars().filter(|c| c.is_ascii_digit()).collect();
+            if digits.len() != 4 {
+                return None;
+            }
+            let (hh, mm) = (digits[..2].parse::<i64>().ok()?, digits[2..].parse::<i64>().ok()?);
+            if hh > 23 || mm > 59 {
+                return None;
+            }
+            sign * (hh * 3600 + mm * 60)
+        }
+    };
+    let days = days_from_civil(year as i64, month as u32, day as u32);
+    let secs = days * 86_400 + (hour * 3600 + minute * 60 + second) as i64 - offset_secs;
+    u64::try_from(secs).ok()
+}
+
+/// Days in a month of a (possibly leap) year — the proleptic Gregorian rule.
+fn days_in_month(year: i64, month: u32) -> u32 {
+    match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 => {
+            if (year % 4 == 0 && year % 100 != 0) || year % 400 == 0 {
+                29
+            } else {
+                28
+            }
+        }
+        _ => 0,
+    }
+}
+
+/// Howard Hinnant's `days_from_civil` — the inverse of archive.rs's
+/// civil-from-days (the same no-chrono doctrine, mirrored).
+fn days_from_civil(y: i64, m: u32, d: u32) -> i64 {
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = (y - era * 400) as u64; // [0, 399]
+    let mp = if m > 2 { m - 3 } else { m + 9 } as u64; // [0, 11]
+    let doy = (153 * mp + 2) / 5 + u64::from(d) - 1; // [0, 365]
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy; // [0, 146096]
+    era * 146_097 + doe as i64 - 719_468
+}
+
+/// Parse one `POST /sessions` body into a store entry. `id` (non-empty
+/// string) and `role` (one of [`SESSION_ROLES`]) are required — their
+/// absence or a bad role is a 400. `started`, `last_event_ts`, and `status`
+/// are optional: absent or unparseable timestamps fail open to server-now
+/// (an emitter with a broken clock still registers, fresh), an absent
+/// status defaults to `active`.
+fn parse_session_registration(body: &str, now: u64) -> Result<SessionEntry, String> {
+    let parsed: Value =
+        serde_json::from_str(body).map_err(|e| format!("invalid session JSON: {e}"))?;
+    let object = parsed
+        .as_object()
+        .ok_or_else(|| "session body must be a JSON object".to_string())?;
+    let bad_role = || {
+        format!(
+            "session \"role\" must be one of {}",
+            SESSION_ROLES.join(", ")
+        )
+    };
+    let id = object
+        .get("id")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .filter(|id| !id.is_empty())
+        .ok_or_else(|| "session \"id\" must be a non-empty string".to_string())?;
+    let role = object
+        .get("role")
+        .and_then(Value::as_str)
+        .ok_or_else(bad_role)?
+        .to_string();
+    if !SESSION_ROLES.contains(&role.as_str()) {
+        return Err(bad_role());
+    }
+    let started = object
+        .get("started")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .unwrap_or_else(|| rfc3339(now));
+    // The EFFECTIVE started is what gets parsed — the server-stamped default
+    // is a real timestamp, so its epoch must be derived from it, not lost.
+    let started_epoch = parse_rfc3339(&started);
+    let last_event = object
+        .get("last_event_ts")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .unwrap_or_else(|| rfc3339(now));
+    let last_event_epoch = parse_rfc3339(&last_event).unwrap_or(now);
+    let status = object
+        .get("status")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .unwrap_or_else(|| "active".into());
+    Ok(SessionEntry {
+        id,
+        role,
+        started,
+        started_epoch,
+        last_event_ts: last_event,
+        last_event_epoch,
+        status,
+    })
+}
+
+/// The `GET /sessions` body: the daemon's own heartbeat lands first (spec
+/// req 1: heartbeats on each registry serve), expired entries are evicted,
+/// and the live ones render with the derived `age_sec` plus the server's
+/// `now`. A poisoned store lock is recovered (fail-open), never a 500.
+fn sessions_body(host: &SessionsHost, now: u64) -> String {
+    let mut registry = host
+        .registry
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    if let Some(self_entry) = &host.self_entry {
+        let mut heartbeat = self_entry.clone();
+        heartbeat.last_event_ts = rfc3339(now);
+        heartbeat.last_event_epoch = now;
+        registry.upsert(heartbeat);
+    }
+    let sessions: Vec<Value> = registry
+        .evict_live(now)
+        .into_iter()
+        .map(|entry| {
+            // Age tracks the session's own `started` (the client's claim,
+            // echoed); an unparseable one renders 0 rather than a guess.
+            let age_sec = entry
+                .started_epoch
+                .map(|started| now.saturating_sub(started))
+                .unwrap_or(0);
+            json!({
+                "id": entry.id,
+                "role": entry.role,
+                "started": entry.started,
+                "last_event_ts": entry.last_event_ts,
+                "status": entry.status,
+                "age_sec": age_sec,
+            })
+        })
+        .collect();
+    json!({"sessions": sessions, "now": rfc3339(now)}).to_string()
+}
+
+/// The `POST /sessions` route: parse (400 on a bad request), upsert (the
+/// store lock is poisoned-recovered, fail-open), 200 `{"ok":true}`.
+fn session_register(host: &SessionsHost, body: &str) -> (u16, String) {
+    match parse_session_registration(body, epoch_now()) {
+        Ok(entry) => {
+            host.registry
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .upsert(entry);
+            (200, json!({"ok": true}).to_string())
+        }
+        Err(message) => (400, detail(message)),
+    }
+}
+
+/// The stub's refusal shape for /sessions — exactly the stub /judge refusal
+/// (non-2xx + `{"detail": …}`): a stub must never fabricate a registry any
+/// more than it fabricates a verdict (spec req 6).
+fn stub_sessions_refusal() -> (u16, String) {
+    (
+        500,
+        detail("CHUG_DAEMON_STUB test backend: /sessions is never served by the stub"),
+    )
+}
+
+/// T219 — the shared best-effort registration/heartbeat helper for
+/// in-process emitters (the delegate launch site registers its children and
+/// heartbeats them on status polls; loopd.sh and dashd ride the same one
+/// wire from the shell via curl). NEVER errors, NEVER blocks a run beyond
+/// the judge client's own 2s socket bound, NEVER prints: a connect failure
+/// (no daemon running — the common case) is an instant no-op, and every
+/// other failure is swallowed (the registry is visibility, not control).
+/// The POST carries no `started`: the daemon-side upsert stamps it at first
+/// registration and heartbeats keep the original, so one stateless call
+/// serves as both registration and heartbeat.
+pub fn register_session(role: &str, id: &str, status: &str) {
+    let Ok(sock) = sock_path() else {
+        return;
+    };
+    let body = json!({
+        "id": id,
+        "role": role,
+        "last_event_ts": rfc3339(epoch_now()),
+        "status": status,
+    })
+    .to_string();
+    let _ = uds_request(&sock, "POST", "/sessions", Some(&body));
+}
+
+// ---------------------------------------------------------------------------
 // The server: the inference seam + the UDS HTTP loop
 // ---------------------------------------------------------------------------
 
@@ -728,21 +1140,55 @@ impl JudgeBackend for StubBackend {
     }
 }
 
+/// The weightless registry host's backend (`CHUG_DAEMON_SESSIONS=1`): real
+/// transport, lock, socket, and /sessions registry — NO model. /judge
+/// refuses with the stub's shape: a weightless host must never fabricate
+/// classifications (SPEC-3); it only hosts registrations.
+struct SessionsBackend;
+
+impl JudgeBackend for SessionsBackend {
+    fn judge_request(&self, _raw: &str) -> anyhow::Result<Value> {
+        bail!(
+            "CHUG_DAEMON_SESSIONS registry host: /judge is never served without the judge model"
+        )
+    }
+    fn describe(&self) -> String {
+        "registry-only (CHUG_DAEMON_SESSIONS=1 — /judge refused)".into()
+    }
+}
+
 /// `chug daemon` (serve mode): take the single-instance lock, load the model
 /// BEFORE the socket binds (healthz == warm), serve until killed.
 pub fn serve() -> anyhow::Result<i32> {
     let _lock = acquire_daemon_lock()?;
-    let backend: std::sync::Arc<dyn JudgeBackend> = if stub_requested() {
+    let backend: std::sync::Arc<dyn JudgeBackend> = if sessions_requested() {
+        std::sync::Arc::new(SessionsBackend)
+    } else if stub_requested() {
         std::sync::Arc::new(StubBackend)
     } else {
         real_backend()?
     };
-    serve_unix(&sock_path()?, backend)
+    // T219: the sessions registry is served by every real (non-stub) serve —
+    // the full model daemon and the weightless registry host alike. The
+    // stub serves NO registry: /sessions refuses there (a stub must never
+    // fabricate a registry — an empty-but-200 answer would be exactly that
+    // lie).
+    let sessions = if stub_requested() {
+        None
+    } else {
+        Some(SessionsHost::with_self())
+    };
+    serve_unix_with(&sock_path()?, backend, sessions)
 }
 
 /// The `CHUG_DAEMON_STUB=1` test seam switch.
 fn stub_requested() -> bool {
     std::env::var(STUB_ENV).map(|v| v.trim() == "1").unwrap_or(false)
+}
+
+/// The `CHUG_DAEMON_SESSIONS=1` weightless-registry-host switch.
+fn sessions_requested() -> bool {
+    std::env::var(SESSIONS_ENV).map(|v| v.trim() == "1").unwrap_or(false)
 }
 
 /// The real inference backend: CHILD A's `JudgeModel` (feature-gated).
@@ -786,14 +1232,30 @@ impl JudgeBackend for crate::judge_model::JudgeModel {
     }
 }
 
-/// Bind the socket at 0600 and serve until killed. One thread per connection
-/// (a slow client must never starve the healthz probes).
+/// Bind the socket at 0600 and serve until killed, with a fresh (self-less)
+/// sessions registry. Test-fixture entry only (the real serve path is
+/// [`serve_unix_with`] via [`serve`], which brings the daemon's own
+/// identity); one thread per connection (a slow client must never starve
+/// the healthz probes).
+#[cfg(test)]
 pub fn serve_unix(sock: &Path, backend: std::sync::Arc<dyn JudgeBackend>) -> anyhow::Result<i32> {
+    serve_unix_with(sock, backend, Some(SessionsHost::default()))
+}
+
+/// The parameterized serve: `sessions` carries the registry (and the
+/// daemon's own identity); `None` refuses /sessions (the stub serve — a
+/// stub must never fabricate a registry).
+fn serve_unix_with(
+    sock: &Path,
+    backend: std::sync::Arc<dyn JudgeBackend>,
+    sessions: Option<SessionsHost>,
+) -> anyhow::Result<i32> {
     #[cfg(unix)]
     {
         let listener = bind_socket(sock).with_context(|| format!("binding {}", sock.display()))?;
         eprintln!(
-            "chug daemon: serving /healthz + /judge on {} (mode 0600) — {}",
+            "chug daemon: serving /healthz + /judge{} on {} (mode 0600) — {}",
+            if sessions.is_some() { " + /sessions" } else { "" },
             sock.display(),
             backend.describe()
         );
@@ -801,9 +1263,10 @@ pub fn serve_unix(sock: &Path, backend: std::sync::Arc<dyn JudgeBackend>) -> any
             match stream {
                 Ok(stream) => {
                     let backend = backend.clone();
+                    let sessions = sessions.clone();
                     if let Err(e) = std::thread::Builder::new()
                         .name("chug-daemon-conn".into())
-                        .spawn(move || handle_conn(backend, stream))
+                        .spawn(move || handle_conn(backend, sessions, stream))
                     {
                         eprintln!("chug daemon: could not spawn a connection thread: {e}");
                     }
@@ -815,7 +1278,7 @@ pub fn serve_unix(sock: &Path, backend: std::sync::Arc<dyn JudgeBackend>) -> any
     }
     #[cfg(not(unix))]
     {
-        let _ = (sock, backend);
+        let _ = (sock, backend, sessions);
         bail!("unix domain sockets are not supported on this platform")
     }
 }
@@ -863,11 +1326,15 @@ fn set_file_mode(path: &Path, mode: u32) -> anyhow::Result<()> {
 }
 
 #[cfg(unix)]
-fn handle_conn(backend: std::sync::Arc<dyn JudgeBackend>, mut stream: std::os::unix::net::UnixStream) {
+fn handle_conn(
+    backend: std::sync::Arc<dyn JudgeBackend>,
+    sessions: Option<SessionsHost>,
+    mut stream: std::os::unix::net::UnixStream,
+) {
     let _ = stream.set_read_timeout(Some(JUDGE_TIMEOUT));
     let _ = stream.set_write_timeout(Some(JUDGE_TIMEOUT));
     let (status, body) = match read_request(&mut stream) {
-        Ok(request) => route(&*backend, &request),
+        Ok(request) => route(&*backend, sessions.as_ref(), &request),
         Err(message) => (400, detail(message)),
     };
     if let Err(e) = write_response(&mut stream, status, &body) {
@@ -932,8 +1399,17 @@ fn read_request<R: Read>(stream: &mut R) -> Result<HttpRequest, String> {
 }
 
 /// The dispatch: GET /healthz (liveness, warm by construction), POST /judge
-/// (the layad drop-in), everything else 404.
-fn route(backend: &dyn JudgeBackend, request: &HttpRequest) -> (u16, String) {
+/// (the layad drop-in), POST/GET /sessions (the T219 registry — upsert one
+/// run / list the live ones), everything else 404. The registry rides the
+/// same socket and the same failure shapes (`{"detail": …}`) but shares NO
+/// state with the judge path: a registry store error can never fail /judge
+/// (spec req 4), and a stub serve (no registry) refuses /sessions exactly as
+/// it refuses /judge (spec req 6).
+fn route(
+    backend: &dyn JudgeBackend,
+    sessions: Option<&SessionsHost>,
+    request: &HttpRequest,
+) -> (u16, String) {
     match (request.method.as_str(), request.path.as_str()) {
         ("GET", "/healthz") => (
             200,
@@ -953,6 +1429,14 @@ fn route(backend: &dyn JudgeBackend, request: &HttpRequest) -> (u16, String) {
                 }
             }
         }
+        ("POST", "/sessions") => match sessions {
+            Some(host) => session_register(host, &request.body),
+            None => stub_sessions_refusal(),
+        },
+        ("GET", "/sessions") => match sessions {
+            Some(host) => (200, sessions_body(host, epoch_now())),
+            None => stub_sessions_refusal(),
+        },
         _ => (404, detail("not found")),
     }
 }
@@ -1575,6 +2059,314 @@ mod tests {
         // Duplicate keys keep Python dict semantics (first position, last
         // value) and still parse.
         assert!(request_shape_error("{\"state\": 1, \"state\": {}, \"questions\": {}}").is_none());
+    }
+
+    // ------------------------------------------------------------------
+    // T219 — the /sessions registry: pure store/parse/TTL tables plus the
+    // wire shapes over the REAL transport (in-process, no model needed).
+    // ------------------------------------------------------------------
+
+    /// One store entry for the table tests (a loopd-shaped run at `beat`).
+    fn session_entry(id: &str, beat: u64) -> SessionEntry {
+        SessionEntry {
+            id: id.into(),
+            role: "loopd-cycle".into(),
+            started: rfc3339(beat),
+            started_epoch: Some(beat),
+            last_event_ts: rfc3339(beat),
+            last_event_epoch: beat,
+            status: "running".into(),
+        }
+    }
+
+    /// The registration parse table: required fields enforced (400-class
+    /// errors), optional fields defaulted server-side, unparseable
+    /// timestamps fail open to server-now while the client's words still
+    /// echo verbatim.
+    #[test]
+    fn session_registration_parse_table() {
+        let now = 1_709_208_000u64; // 2024-02-29T12:00:00Z (the leap-day anchor)
+        // Full body: every posted field is kept, epochs are parsed.
+        let full = parse_session_registration(
+            "{\"id\":\"loopd-1\",\"role\":\"loopd-cycle\",\"started\":\"2024-02-29T11:00:00Z\",\
+             \"last_event_ts\":\"2024-02-29T11:59:00Z\",\"status\":\"running\"}",
+            now,
+        )
+        .expect("full body parses");
+        assert_eq!(full.id, "loopd-1");
+        assert_eq!(full.role, "loopd-cycle");
+        assert_eq!(full.started, "2024-02-29T11:00:00Z");
+        assert_eq!(full.started_epoch, Some(1_709_204_400));
+        assert_eq!(full.last_event_ts, "2024-02-29T11:59:00Z");
+        assert_eq!(full.last_event_epoch, 1_709_207_940);
+        assert_eq!(full.status, "running");
+
+        // Minimal body: server stamps both timestamps (fail-open fresh) and
+        // defaults the status.
+        let minimal =
+            parse_session_registration("{\"id\":\"child-2\",\"role\":\"delegate-child\"}", now)
+                .expect("minimal body parses");
+        assert_eq!(minimal.started, rfc3339(now));
+        assert_eq!(minimal.started_epoch, Some(now));
+        assert_eq!(minimal.last_event_epoch, now);
+        assert_eq!(minimal.status, "active");
+
+        // Unparseable timestamps fail open (fresh) but echo verbatim.
+        let garbled = parse_session_registration(
+            "{\"id\":\"dashd-1\",\"role\":\"dashd\",\"last_event_ts\":\"yesterday\"}",
+            now,
+        )
+        .expect("a garbled timestamp still registers");
+        assert_eq!(garbled.last_event_ts, "yesterday");
+        assert_eq!(garbled.last_event_epoch, now);
+
+        // 400 class: not JSON, not an object, missing/empty id, missing or
+        // unknown role.
+        assert!(parse_session_registration("{not json", now).is_err());
+        assert!(parse_session_registration("[1]", now).is_err());
+        assert!(parse_session_registration("{\"role\":\"dashd\"}", now).is_err());
+        assert!(parse_session_registration("{\"id\":\"\",\"role\":\"dashd\"}", now).is_err());
+        assert!(parse_session_registration("{\"id\":\"x\"}", now).is_err());
+        let bad_role = parse_session_registration("{\"id\":\"x\",\"role\":\"cron\"}", now)
+            .expect_err("unknown role refused");
+        assert!(bad_role.contains("must be one of"), "{bad_role}");
+        assert!(bad_role.contains("loopd-cycle") && bad_role.contains("daemon"), "{bad_role}");
+    }
+
+    /// The store table: upsert-by-id keeps ONE entry and refreshes liveness
+    /// fields while `started` sticks to the FIRST registration; TTL eviction
+    /// is exact at the boundary (<= TTL live, > TTL evicted) and sorted by
+    /// id (deterministic renders).
+    #[test]
+    fn session_registry_upsert_and_ttl_table() {
+        let now = 1_000_000_000u64;
+        let mut registry = SessionRegistry::default();
+        registry.upsert(session_entry("b-second", now - 100));
+        registry.upsert(session_entry("a-first", now - 200));
+        // Upsert the same id: one entry, started sticks, last_event refreshes.
+        let mut heartbeat = session_entry("a-first", now);
+        heartbeat.started = rfc3339(now - 900);
+        heartbeat.started_epoch = Some(now - 900);
+        heartbeat.status = "wrapping".into();
+        registry.upsert(heartbeat);
+        let live = registry.evict_live(now);
+        assert_eq!(live.len(), 2, "one entry per id");
+        assert_eq!(live[0].id, "a-first", "sorted by id");
+        assert_eq!(
+            live[0].started,
+            rfc3339(now - 200),
+            "started sticks to the FIRST registration (the heartbeat's newer value is discarded)"
+        );
+        assert_eq!(live[0].last_event_epoch, now, "the heartbeat refreshed liveness");
+        assert_eq!(live[0].status, "wrapping", "status takes the latest POST");
+
+        // TTL boundary: exactly SESSION_TTL_SECS old is still live; one
+        // second past it is evicted; a future-dated heartbeat stays live.
+        let mut registry = SessionRegistry::default();
+        registry.upsert(session_entry("edge", now - SESSION_TTL_SECS));
+        assert_eq!(registry.evict_live(now).len(), 1, "TTL boundary is inclusive");
+        registry.upsert(session_entry("edge", now - SESSION_TTL_SECS - 1));
+        assert!(registry.evict_live(now).is_empty(), "past the TTL is evicted");
+        let mut future = session_entry("future", now + 60);
+        future.last_event_ts = "2099-01-01T00:00:00Z".into();
+        registry.upsert(future);
+        assert_eq!(registry.evict_live(now).len(), 1, "future-dated heartbeats stay live");
+    }
+
+    /// The wire timestamp helpers: RFC3339 formatting anchors (no chrono —
+    /// archive.rs's civil math re-clothed) and the parser's accept/reject
+    /// table (the emitter shapes only).
+    #[test]
+    fn rfc3339_format_and_parse_table() {
+        assert_eq!(rfc3339(0), "1970-01-01T00:00:00Z");
+        assert_eq!(rfc3339(1_000_000_000), "2001-09-09T01:46:40Z");
+        assert_eq!(rfc3339(1_709_208_000), "2024-02-29T12:00:00Z");
+        for (text, want) in [
+            ("1970-01-01T00:00:00Z", 0u64),
+            ("2001-09-09T01:46:40Z", 1_000_000_000),
+            ("2024-02-29T12:00:00Z", 1_709_208_000),
+            // Space for T (a `date` dialect) and a missing zone read as UTC.
+            ("2024-02-29 12:00:00", 1_709_208_000),
+            ("2024-02-29T12:00:00", 1_709_208_000),
+            // Fractional seconds parse and are discarded.
+            ("2024-02-29T12:00:00.123456Z", 1_709_208_000),
+            // A +01:00 offset means the wall clock is BEHIND UTC.
+            ("2024-02-29T13:00:00+01:00", 1_709_208_000),
+            ("2024-02-29T13:00:00+0100", 1_709_208_000),
+            ("2024-02-29T11:00:00-01:00", 1_709_208_000),
+        ] {
+            assert_eq!(parse_rfc3339(text), Some(want), "parsing {text}");
+        }
+        // Roundtrip: format then parse returns the same epoch second.
+        let now = epoch_now();
+        assert_eq!(parse_rfc3339(&rfc3339(now)), Some(now));
+        // Rejects: junk, bad shapes, out-of-range fields.
+        for text in [
+            "", "not a time", "2024-02-29", "2024-02-29T12:00", "24-02-29T12:00:00Z",
+            "2024-13-01T00:00:00Z", "2024-02-30T00:00:00Z", "2024-02-29T24:00:00Z",
+            "2024-02-29T12:60:00Z", "2024-02-29T12:00:00Z.", "2024-02-29T12:00:00X",
+            "2024-02-29T12:00:00+99:00",
+        ] {
+            assert_eq!(parse_rfc3339(text), None, "rejecting {text:?}");
+        }
+    }
+
+    /// The /sessions wire over the REAL transport, in-process: register ->
+    /// GET roundtrip with the posted fields, the 400 class, the role gate,
+    /// the daemon's self-entry, the self-heartbeat on each serve, and — on
+    /// the sessions host — /judge refuses exactly as the stub's does while
+    /// /healthz and unknown-path refusals keep today's shapes. The stub
+    /// configuration (no registry) refuses /sessions on BOTH verbs.
+    #[cfg(unix)]
+    #[test]
+    fn sessions_wire_over_uds() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let sock = tmp.path().join("sessions.sock");
+        let server_sock = sock.clone();
+        std::thread::spawn(move || {
+            let _ = serve_unix_with(
+                &server_sock,
+                Arc::new(SessionsBackend),
+                Some(SessionsHost::with_self()),
+            );
+        });
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while Instant::now() < deadline && healthz_ok(&sock).is_err() {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        healthz_ok(&sock).expect("the sessions server never came up");
+
+        // Register one run (all five posted fields) and read it back. The
+        // last_event timestamp is FRESH (near the real clock — a stale one
+        // is honestly evicted by the TTL before the GET); `started` is a
+        // fixed historical string to pin the verbatim echo (it does not
+        // drive the TTL, and an age before the epoch clamps to 0).
+        let beat = epoch_now().saturating_sub(30);
+        let posted = json!({
+            "id": "loopd-42",
+            "role": "loopd-cycle",
+            "started": "2024-02-29T11:00:00Z",
+            "last_event_ts": rfc3339(beat),
+            "status": "running"
+        })
+        .to_string();
+        let (status, body) = uds_request(&sock, "POST", "/sessions", Some(&posted)).expect("register");
+        assert_eq!(status, 200, "register status: {body}");
+        assert_eq!(body, "{\"ok\":true}", "register body");
+        let (status, body) = uds_request(&sock, "GET", "/sessions", None).expect("list");
+        assert_eq!(status, 200, "list status: {body}");
+        let value: Value = serde_json::from_str(&body).expect("list JSON");
+        assert!(value["now"].is_string(), "the body carries the server's now: {body}");
+        let entries = value["sessions"].as_array().expect("sessions array");
+        let entry = entries
+            .iter()
+            .find(|e| e["id"] == json!("loopd-42"))
+            .unwrap_or_else(|| panic!("the posted entry is listed: {body}"));
+        assert_eq!(entry["role"], json!("loopd-cycle"));
+        assert_eq!(entry["started"], json!("2024-02-29T11:00:00Z"));
+        assert_eq!(entry["last_event_ts"], json!(rfc3339(beat)));
+        assert_eq!(entry["status"], json!("running"));
+        assert!(entry["age_sec"].is_number(), "age_sec is derived: {entry}");
+
+        // The daemon's own registration (startup, spec req 1): one entry,
+        // role daemon, refreshed by this very serve (its last_event_ts is
+        // the serve-time now — the roundtrip above happened seconds ago, so
+        // a stale fixed timestamp would have been overwritten).
+        let daemon_entry = entries
+            .iter()
+            .find(|e| e["id"] == json!("daemon"))
+            .unwrap_or_else(|| panic!("the daemon self-registers: {body}"));
+        assert_eq!(daemon_entry["role"], json!("daemon"));
+        assert_eq!(daemon_entry["status"], json!("serving"));
+
+        // The 400 class: bad JSON, missing id, unknown role — each with the
+        // layad error shape.
+        for (bad_body, fragment) in [
+            ("{not json", "invalid session JSON"),
+            ("{\"role\":\"dashd\"}", "\"id\""),
+            ("{\"id\":\"x\",\"role\":\"cron\"}", "must be one of"),
+        ] {
+            let (status, body) =
+                uds_request(&sock, "POST", "/sessions", Some(bad_body)).expect("bad register");
+            assert_eq!(status, 400, "{bad_body} -> {body}");
+            let err: Value = serde_json::from_str(&body).expect("error JSON");
+            assert!(
+                err["detail"].as_str().expect("detail string").contains(fragment),
+                "{bad_body} -> {body}"
+            );
+        }
+
+        // On the registry host /judge refuses with the stub's shape (never
+        // fabricate a classification without the model), while /healthz and
+        // the unknown-path refusal keep today's shapes byte-for-byte.
+        let (status, body) = uds_request(&sock, "POST", "/judge", Some("{\"state\":{},\"questions\":{}}"))
+            .expect("judge on the registry host");
+        assert_eq!(status, 500, "the registry host never serves /judge: {body}");
+        assert!(body.contains("\"detail\""), "refusal shape: {body}");
+        let (status, body) = uds_request(&sock, "GET", "/nope", None).expect("404");
+        assert_eq!(status, 404, "unknown path: {body}");
+        assert!(body.contains("\"detail\""));
+
+        // The stub configuration (sessions = None): BOTH verbs refuse with
+        // the stub judge shape — a stub must never fabricate a registry.
+        let stub_sock = tmp.path().join("stub.sock");
+        let stub_server_sock = stub_sock.clone();
+        std::thread::spawn(move || {
+            let _ = serve_unix_with(&stub_server_sock, Arc::new(StubBackend), None);
+        });
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while Instant::now() < deadline && healthz_ok(&stub_sock).is_err() {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        for (method, body) in [("POST", "{\"id\":\"x\",\"role\":\"daemon\"}"), ("GET", "")] {
+            let request_body = if body.is_empty() { None } else { Some(body) };
+            let (status, text) =
+                uds_request(&stub_sock, method, "/sessions", request_body).expect("stub refusal");
+            assert_eq!(status, 500, "stub {method} /sessions -> {text}");
+            let err: Value = serde_json::from_str(&text).expect("error JSON");
+            assert!(
+                err["detail"].as_str().expect("detail string").contains("never served by the stub"),
+                "stub refusal names itself: {text}"
+            );
+        }
+    }
+
+    /// The self-heartbeat on each registry serve (spec req 1): a daemon
+    /// entry whose stored heartbeat has gone stale is refreshed by the next
+    /// GET instead of being evicted, while an equally stale foreign entry
+    /// IS evicted — the daemon keeps itself alive as long as anyone asks.
+    #[test]
+    fn daemon_self_heartbeat_on_each_registry_serve() {
+        let now = 1_000_000_000u64;
+        let host = SessionsHost::with_self();
+        // Simulate time passing: every stored heartbeat is far past the TTL.
+        {
+            let mut registry = host.registry.lock().unwrap_or_else(|e| e.into_inner());
+            let mut stale_foreign = session_entry("loopd-dead", now - 60);
+            stale_foreign.last_event_epoch = now - 60 - 4 * SESSION_TTL_SECS;
+            stale_foreign.last_event_ts = rfc3339(stale_foreign.last_event_epoch);
+            registry.upsert(stale_foreign);
+            if let Some(self_entry) = registry.entries.get_mut("daemon") {
+                self_entry.last_event_epoch = now - 4 * SESSION_TTL_SECS;
+                self_entry.last_event_ts = rfc3339(self_entry.last_event_epoch);
+            }
+        }
+        let value: Value =
+            serde_json::from_str(&sessions_body(&host, now)).expect("list JSON");
+        let ids: Vec<&str> = value["sessions"]
+            .as_array()
+            .expect("sessions array")
+            .iter()
+            .filter_map(|e| e["id"].as_str())
+            .collect();
+        assert!(
+            ids.contains(&"daemon"),
+            "the daemon's own stale entry is refreshed by the serve, never evicted: {value}"
+        );
+        assert!(
+            !ids.contains(&"loopd-dead"),
+            "an equally stale foreign entry is evicted: {value}"
+        );
     }
 
     // ------------------------------------------------------------------

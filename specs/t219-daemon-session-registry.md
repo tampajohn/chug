@@ -1,6 +1,6 @@
 # T219 — daemon /sessions registry: chug runs register TTL heartbeats on the 0600 socket
 
-check: cargo test --test daemon_sessions_registry
+check: set -o pipefail; export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-validate-a; touch src/*.rs tests/*.rs; cargo test --test daemon_sessions_registry
 
 estimate: ~450 lines (registry store + routes + TTL eviction + self-registration + emitter helper + pins)
 

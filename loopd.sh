@@ -36,6 +36,11 @@ PIDFILE=$STATE/loopd.pid
 LOG=$STATE/loopd.log
 
 ts() { date -u +%Y-%m-%dT%H:%M:%SZ; }
+# T219 — the supervisor's start instant, echoed as the /sessions registry
+# entry's `started` (captured once here, sent at every cycle start; the
+# daemon-side upsert keeps the FIRST-seen value, so the entry's age tracks
+# the supervisor across cycles).
+LOOPD_STARTED="$(ts)"
 
 # T205 — the laya judge's private-checkpoint env reaches every cycle from
 # ONE out-of-repo env file: default $HOME/.chug/loopd.env, override with
@@ -415,6 +420,21 @@ while [ ! -f "$STOP" ]; do
     "$DAEMON_BIN" daemon --ensure >/dev/null 2>&1 \
       || echo "$(ts) daemon ensure: nonzero exit (best-effort, ignored — the judge fails open)" >> "$LOG"
   fi
+  # T219 — register/heartbeat this loopd run in the daemon's /sessions
+  # registry (the same host-scoped 0600 socket the ensure just warmed; the
+  # one host-local answer to "what chug runs are alive on this box"). One
+  # curl line at cycle start, exactly like the ensure's house style:
+  # best-effort (`|| true` — a failed POST is a no-op, never a set -e/pipefail
+  # trip), bounded (--max-time 2, the judge client's own socket bound). The
+  # id is the SUPERVISOR pid ($$ — stable across cycles: one entry, refreshed
+  # at each cycle start; the daemon-side upsert keeps the first-seen started,
+  # so the session age tracks the supervisor, not the cycle). Socket
+  # resolution matches the daemon's own ($CHUG_DAEMON_SOCK overrides, then
+  # $CHUG_HOME, then ~/.chug).
+  curl --unix-socket "${CHUG_DAEMON_SOCK:-${CHUG_HOME:-$HOME/.chug}/daemon.sock}" \
+    --max-time 2 -s -o /dev/null -X POST -H 'Content-Type: application/json' \
+    -d "{\"id\":\"loopd-$$\",\"role\":\"loopd-cycle\",\"started\":\"$LOOPD_STARTED\",\"last_event_ts\":\"$(ts)\",\"status\":\"running\"}" \
+    http://localhost/sessions || true
   # T46: refresh the Phase-1 corpus digest so every cycle's evaluation reads
   # .chug/eval-digest.md instead of re-mining raw events archives. T137:
   # best-effort — a nonzero exit must not kill the supervisor under set -e;
