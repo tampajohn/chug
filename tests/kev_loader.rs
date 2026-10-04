@@ -632,6 +632,215 @@ fn kev_pins_live_in_src() {
 }
 
 // ---------------------------------------------------------------------------
+// T224: the pin-strength closes from the T222 validation findings. Each pin
+// is RED-proven against its named mutant (the T69 sweep doctrine: the whole
+// family in one row, one killing test each): m9 (auroc midranks) and m12
+// (parse_record refusal legs) here; m8 (the daemon's kev routing) in the
+// feature-gated module below.
+// ---------------------------------------------------------------------------
+
+/// m9: the AUROC ranks are MIDRANKS — tied scores split rank credit (a tie
+/// scores 0.5 per cross-class pair), never plain sorted positions. The
+/// committed corpus is tie-free, so the pin needs a tie corpus where the two
+/// rules diverge: scores 0.9/0.5/0.5/0.1 with the 0.5 pair split across the
+/// classes. Midranks 1, 2.5, 2.5, 4 → R_pos = 6.5 → U = 3.5 → AUROC 0.875
+/// exactly; plain sorted positions would give 0.75 (or 1.0 under a different
+/// input order) — the mutant cannot produce 0.875. The all-tied case pins
+/// the 0.5 tie convention itself (every cross-class pair a tie → coin-flip
+/// AUROC; plain ranks collapse it to 0.0 or 1.0 by input order).
+#[test]
+fn auroc_midrank_tie_handling_pin() {
+    let close = |a: f64, b: f64| (a - b).abs() < 1e-12;
+
+    // One tie pair split across the classes — the midrank pin.
+    let tied = [(0.9, true), (0.5, true), (0.5, false), (0.1, false)];
+    assert!(close(auroc(&tied).unwrap(), 0.875), "tied AUROC = {:?}", auroc(&tied));
+
+    // ALL scores tied: AUROC exactly 0.5 (ties score 0.5, per the docstring).
+    let all_tied = [(0.5, true), (0.5, true), (0.5, false), (0.5, false)];
+    assert!(close(auroc(&all_tied).unwrap(), 0.5), "all-tied AUROC = {:?}", auroc(&all_tied));
+
+    // End to end through the real corpus path (load → parse → evaluate):
+    // the same tie structure in a noul family, every metric pinned.
+    let dir = tempfile::tempdir().unwrap();
+    let corpus = serde_json::json!({"records": [
+        {"id": "c1", "qtype": "choice", "options": ["a", "b"], "probs": [0.6, 0.4], "label": 0,
+         "flipped": {"options": ["b", "a"], "probs": [0.4, 0.6]}},
+        {"id": "s1", "qtype": "score", "options": ["0", "1"], "probs": [0.5, 0.5], "label": 0},
+        {"id": "n1", "qtype": "noul", "options": ["no", "yes"], "probs": [0.1, 0.9], "label": 1},
+        {"id": "n2", "qtype": "noul", "options": ["no", "yes"], "probs": [0.5, 0.5], "label": 1},
+        {"id": "n3", "qtype": "noul", "options": ["no", "yes"], "probs": [0.5, 0.5], "label": 0},
+        {"id": "n4", "qtype": "noul", "options": ["no", "yes"], "probs": [0.9, 0.1], "label": 0}
+    ]});
+    std::fs::write(dir.path().join("corpus-ties.json"), corpus.to_string()).unwrap();
+    let m = evaluate(&load_corpus(dir.path()).unwrap()).unwrap();
+    assert!(close(m.noul_auroc, 0.875), "noul_auroc over the tie corpus = {}", m.noul_auroc);
+    // The tie corpus's other metrics (free pins over the same path): the
+    // choice hits, the score's expected 0.5 vs label 0, and the one flipped
+    // pair (mean |Δp| = (0.2 + 0.2) / 2, and it flips).
+    assert!(close(m.choice_top1, 1.0), "choice_top1 = {}", m.choice_top1);
+    assert!(close(m.score_mae, 0.5), "score_mae = {}", m.score_mae);
+    assert!(close(m.mean_abs_p_diff, 0.2), "mean_abs_p_diff = {}", m.mean_abs_p_diff);
+    assert!(close(m.order_flip_rate, 1.0), "order_flip_rate = {}", m.order_flip_rate);
+}
+
+/// m12: parse_record's refusal legs each name their violation — the wire's
+/// round4 keeps committed probabilities at sum 1 ± 1e-3, labels index the
+/// option list, and a flipped record is a REORDERING (same option set), so
+/// any other shape is refused with the specific reason. Deleting the sum
+/// check (the named mutant) turns leg 1 red; the other legs pin the rest of
+/// the contract's negative space.
+#[test]
+fn parse_record_refusal_legs_pin() {
+    // Control: a canonically valid record (sum exactly 1, label in range).
+    let valid = serde_json::json!({
+        "id": "v", "qtype": "choice", "options": ["a", "b"], "probs": [0.5, 0.5], "label": 0
+    });
+    assert!(parse_record(&valid).is_ok(), "the control record parses");
+
+    // Leg 1: probabilities outside 1 ± 1e-3 — three slots at 0.5 sum to a
+    // binary-exact 1.5 (no float-rendering fragility in the pinned message).
+    let bad_sum = serde_json::json!({
+        "id": "bs", "qtype": "choice", "options": ["a", "b", "c"],
+        "probs": [0.5, 0.5, 0.5], "label": 0
+    });
+    let err = parse_record(&bad_sum).expect_err("bad probs sum refuses");
+    assert!(err.contains("bs: probs sum 1.5 outside 1 ± 1e-3"), "named error: {err}");
+
+    // Leg 2: label outside the option range (two options, label 2).
+    let bad_label = serde_json::json!({
+        "id": "bl", "qtype": "choice", "options": ["a", "b"], "probs": [0.5, 0.5], "label": 2
+    });
+    let err = parse_record(&bad_label).expect_err("out-of-range label refuses");
+    assert!(err.contains("bl: label 2 out of range"), "named error: {err}");
+
+    // Leg 3: flipped options are a DIFFERENT option set, not a permutation
+    // of the canonical one — that is a different question, not a reordering.
+    let bad_flip = serde_json::json!({
+        "id": "bf", "qtype": "choice", "options": ["a", "b"], "probs": [0.5, 0.5], "label": 0,
+        "flipped": {"options": ["a", "c"], "probs": [0.5, 0.5]}
+    });
+    let err = parse_record(&bad_flip).expect_err("non-permutation flip refuses");
+    assert!(
+        err.contains("bf: flipped options are not a permutation of the canonical options"),
+        "named error: {err}"
+    );
+}
+
+/// m8: the daemon's kev routing — `real_backend`'s Dir arm — is deletable
+/// without any stub-based lifecycle test noticing (they all run
+/// CHUG_DAEMON_STUB and drop CHUG_LAYA_CHECKPOINT). This pin runs the REAL
+/// backend path against a kev-layout Dir: no stub, no network, no weights —
+/// the classified refusal fires BEFORE any big download, so the daemon must
+/// die at startup naming the candle-blocked gap (T223), never the RLAgent
+/// loader's misleading "missing model.safetensors". Feature-gated like the
+/// code under test: on a feature-off build serve refuses for the missing
+/// inference stack instead (that leg is daemon_lifecycle.rs's).
+#[cfg(all(unix, feature = "daemon"))]
+mod daemon_routing {
+    use std::process::{Command, Stdio};
+    use std::time::{Duration, Instant};
+
+    /// Deadline for the daemon to die with the refusal. Generous for the
+    /// macOS first-exec stall (the daemon_lifecycle.rs rationale: a freshly
+    /// rebuilt binary can sit in _dyld_start for tens of seconds).
+    const EXIT_DEADLINE: Duration = Duration::from_secs(120);
+
+    /// The pinned base identity, as src/kev_config.rs pins it (the
+    /// kev_pins_live_in_src test guards the src copies; these are the
+    /// fixture's matching values — the base pin must VERIFY, so only the
+    /// classification refusal may fire, never the pin-mismatch one).
+    const KEV_BASE_REPO: &str = "Qwen/Qwen3.5-0.8B-Base";
+    const KEV_BASE_REVISION: &str = "dc7cdfe2ee4154fa7e30f5b51ca41bfa40174e68";
+
+    /// A kev-layout tempdir (T222's unit-fixture shape): adapter config +
+    /// provenance + head — the two files the discriminator probes plus the
+    /// pin record inspection reads. NO weights: nothing here is fetched.
+    fn kev_layout_fixture() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            dir.path().join("adapter_config.json"),
+            format!(
+                r#"{{"peft_type":"LORA","base_model_name_or_path":"{KEV_BASE_REPO}","r":16,
+                    "lora_alpha":32,"target_modules":["q_proj","in_proj_qkv","out_proj"]}}"#
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("provenance.json"),
+            format!(
+                r#"{{"config":{{"base":"{KEV_BASE_REPO}","base_revision":"{KEV_BASE_REVISION}"}}}}"#
+            ),
+        )
+        .unwrap();
+        std::fs::write(dir.path().join("head.pt"), b"stub-head").unwrap();
+        dir
+    }
+
+    #[test]
+    fn daemon_dir_arm_routes_kev_layout_to_the_classified_refusal() {
+        // Warm exec first (the lifecycle family's stall absorber):
+        // --version is instant and side-effect-free.
+        let warm = Command::new(env!("CARGO_BIN_EXE_chug"))
+            .arg("--version")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .output()
+            .expect("spawn the warm-up exec");
+        assert!(warm.status.success(), "the warm-up exec (--version) failed");
+
+        let fixture = kev_layout_fixture();
+        let home = tempfile::tempdir().expect("tempdir");
+        let mut child = Command::new(env!("CARGO_BIN_EXE_chug"))
+            .args(["daemon"])
+            .env("CHUG_HOME", home.path())
+            .env("CHUG_LAYA_CHECKPOINT", fixture.path())
+            .env_remove("CHUG_DAEMON_SOCK")
+            .env_remove("CHUG_DAEMON_STUB")
+            .env_remove("CHUG_DAEMON_SESSIONS")
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn CARGO_BIN_EXE_chug");
+
+        // Bounded wait: the daemon is expected to DIE with the refusal
+        // (serve fails in real_backend BEFORE the socket ever binds).
+        let deadline = Instant::now() + EXIT_DEADLINE;
+        let output = loop {
+            if child.try_wait().expect("poll the daemon").is_some() {
+                break child.wait_with_output().expect("collect the output");
+            }
+            assert!(
+                Instant::now() < deadline,
+                "the daemon never exited on the kev refusal"
+            );
+            std::thread::sleep(Duration::from_millis(25));
+        };
+        assert_ne!(
+            output.status.code(),
+            Some(0),
+            "a kev-layout checkpoint must not serve"
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+        assert!(
+            stderr.contains("cannot serve yet"),
+            "the classified kev refusal must surface: {stderr}"
+        );
+        assert!(
+            stderr.contains("candle-blocked"),
+            "the refusal must name the candle-blocked gap, not a layout error: {stderr}"
+        );
+        // And the refusal precedes serving: no socket was ever bound.
+        assert!(
+            !home.path().join("daemon.sock").exists(),
+            "a refusing daemon binds no socket"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
 // The live leg: daemon-feature-gated, skip (never fail) when the fetch is
 // unavailable; when it IS available, verify the artifact against BOTH pins
 // (provenance base repo/revision AND the measured file sha256s) and assert
