@@ -74,7 +74,7 @@ GOLDENS="$REPO_ROOT/tests/fixtures/laya/golden-vectors.json"
 EXPORT_SH="$REPO_ROOT/scripts/decisions-export.sh"
 
 fail() { printf 'judge-parity: FAIL: %s\n' "$*" >&2; }
-note() { printf 'judge-parity: %s\n' "$*" >&2; }  # stderr: serve_leg's stdout IS its socket-path return value
+note() { printf 'judge-parity: %s\n' "$*" >&2; }  # stderr: stdout stays reserved for command substitution — never mix logs into it
 
 # ---------------------------------------------------------------------------
 # 0. Binary + inputs (fail-closed before anything runs)
@@ -92,8 +92,10 @@ fi
 ( cd "$REPO_ROOT" && git rev-parse HEAD ) > "$ART/commit.txt" 2>/dev/null || printf 'unknown\n' > "$ART/commit.txt"
 
 PID_LIST=""
-cleanup() { for p in $PID_LIST; do kill "$p" >/dev/null 2>&1 || true; done; }
-trap cleanup EXIT INT TERM
+cleanup() { for p in $PID_LIST; do kill "$p" >/dev/null 2>&1 || true; done; wait 2>/dev/null || true; PID_LIST=""; }
+trap cleanup EXIT
+trap 'cleanup; exit 130' INT   # Ctrl-C: reap every daemon this script started, then stop
+trap 'cleanup; exit 143' TERM
 
 # ---------------------------------------------------------------------------
 # 1. Corpus (b): the labeled decision-log holdout via T200's export (a pure
@@ -170,7 +172,14 @@ def emit(leg, ckpt, name, order, request, idx=None):
 # with different states — a name key would collide their response files.
 for i, fx in enumerate(goldens["fixtures"]):
     name, ckpt = fx["name"], fx["checkpoint"]
-    spec = laya_default_spec if ckpt == "convaiinnovations/laya" else laya_stop_spec
+    # Fail-closed routing (T217): a fixture naming an unknown checkpoint must
+    # stop the run, never fall open onto the stop spec (a silently misrouted
+    # fixture would measure the wrong judge and read as parity).
+    known = {"convaiinnovations/laya": laya_default_spec,
+             "tampajohn/laya-stop-completion-judge": laya_stop_spec}
+    if ckpt not in known:
+        raise SystemExit(f"fixture {name!r}: unknown checkpoint {ckpt!r} — refusing to route (fail-closed)")
+    spec = known[ckpt]
     for order in ("canon", "flip"):
         questions = {}
         for qid, q in fx["questions"].items():
@@ -217,30 +226,38 @@ PYEOF
 # ---------------------------------------------------------------------------
 RUN_OK=1
 
-wait_healthy() { # $1 sock, $2 attempts
+wait_healthy() { # $1 sock, $2 attempts, [$3 pid — bail out early when the daemon already died]
   local i=0
   while [ "$i" -lt "$2" ]; do
+    if [ -n "${3:-}" ] && ! kill -0 "$3" 2>/dev/null; then return 1; fi  # exited: refusal or crash
     curl -s --max-time 5 --unix-socket "$1" http://chug/healthz 2>/dev/null | grep -q '"status":"ok"' && return 0
     sleep 1; i=$((i + 1))
   done
   return 1
 }
 
-serve_leg() { # $1 checkpoint spec, $2 log suffix; echoes the sock path on success
+serve_leg() { # $1 checkpoint spec, $2 log suffix; sets CUR_SOCK to the socket path on success.
+  # MUST be called from the parent shell — NEVER inside "$( ...)": the daemon
+  # pid is booked into PID_LIST here, and command substitution runs this
+  # function in a subshell whose PID_LIST copy dies with it, orphaning the
+  # daemon (the leak class the T223 fix-up round closed — the validator found
+  # every serve-leg daemon orphaned per run). The kev leg below is this same
+  # pattern written inline, and is why it never leaked.
   local spec="$1" suffix="$2" home sock pid
+  CUR_SOCK=""
   home="$(mktemp -d "${TMPDIR:-/tmp}/jp-home.XXXXXX")" || return 1
   sock="$home/judge.sock"
   CHUG_HOME="$home" CHUG_DAEMON_SOCK="$sock" CHUG_LAYA_CHECKPOINT="$spec" \
     "$CHUG_BIN" daemon > "$ART/daemon-$suffix.log" 2>&1 &
   pid=$!
   PID_LIST="$pid $PID_LIST"
-  if ! wait_healthy "$sock" 240; then
+  if ! wait_healthy "$sock" 240 "$pid"; then
     fail "the $suffix daemon never became healthy (checkpoint $spec) — see $ART/daemon-$suffix.log"
     return 1
   fi
   printf '%s\n' "$spec" > "$ART/served-$suffix.txt"
   note "$suffix daemon warm: $spec"
-  printf '%s' "$sock"
+  CUR_SOCK="$sock"
 }
 
 post_manifest() { # $1 jq select over the request manifest
@@ -260,16 +277,14 @@ post_manifest() { # $1 jq select over the request manifest
 stop_daemons() { for p in $PID_LIST; do kill "$p" >/dev/null 2>&1 || true; done; wait 2>/dev/null || true; PID_LIST=""; }
 
 # --- leg A: the default checkpoint (the holdout + its golden fixtures) ---
-CUR_SOCK=""
-CUR_SOCK="$(serve_leg "$LAYA_DEFAULT_SPEC" "laya-default")" || RUN_OK=0
+serve_leg "$LAYA_DEFAULT_SPEC" "laya-default" || RUN_OK=0
 if [ -n "$CUR_SOCK" ] && [ -S "$CUR_SOCK" ]; then
   post_manifest "select(.leg==\"holdout\" or (.leg==\"goldens\" and .checkpoint==\"$LAYA_DEFAULT_SPEC\"))"
 fi
 stop_daemons
 
 # --- leg B: the stop-completion checkpoint (its golden fixtures) ---
-CUR_SOCK=""
-CUR_SOCK="$(serve_leg "$LAYA_STOP_SPEC" "laya-stop")" || RUN_OK=0
+serve_leg "$LAYA_STOP_SPEC" "laya-stop" || RUN_OK=0
 if [ -n "$CUR_SOCK" ] && [ -S "$CUR_SOCK" ]; then
   post_manifest "select(.leg==\"goldens\" and .checkpoint==\"$LAYA_STOP_SPEC\")"
 fi
@@ -331,7 +346,10 @@ TOL = 1e-3
 OUTCOME_LABELS = ["landed-clean", "fixed-up", "reverted"]
 manifest = [json.loads(l) for l in open(f"{art}/requests.jsonl") if l.strip()]
 
-def argmax(ps):  # first-max — the same deterministic tie rule as the wire
+def argmax(ps):  # first-max on exact ties. NOT the wire's rule — the daemon's
+    # max_by returns the LAST max — but the divergence is harmless: the runner
+    # derives every top-1 here from the stored probability vectors (served and
+    # recorded alike) with this one rule and never reads the daemon's choice.
     best = 0
     for i, v in enumerate(ps):
         if v > ps[best]:
