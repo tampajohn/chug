@@ -3367,3 +3367,129 @@ fn meta_meta_estimate_is_a_dispatch_time_contract() {
          contract ({contract}), priority ({priority})"
     );
 }
+
+// ---- T228 — verify the indictment before filing a bug row (the T212 false-indictment lesson) ----
+//
+// The cycle-98 eval filed T212 on a FALSE indictment ("the T197 drift
+// advisory false-positives on a correctly pre-keyed branch") asserted
+// from secondhand Outcomes text without reading the code path — the
+// WARNs were TRUE positives (the goal gate reads the spec ARG path every
+// iteration, `src/driver.rs:1171`, so the on-branch T175 re-keys never
+// reached it). The filing's premise directed round 1's fix, the round-1
+// kimi validator FAILed it with three-way proof, and the whole round was
+// reverted sha256-byte-identical — one impl round (70/80) + one
+// validation round (48/60) + the revert, the most expensive eval-quality
+// defect in the corpus. META-META-SPEC's filing bar already said "Verify
+// T1/T2/T4/T5 actually worked before filing anything adjacent", but that
+// clause covers fix-ADJACENCY, not a fresh bug row whose premise indicts
+// a specific component. The bar now carries the verify-the-indictment
+// clause; this leg pins it in the T48/T64/T114 pattern: every needle
+// exactly-once, inside the Extend-TODO window, AFTER the verify-adjacent
+// sentence it extends.
+
+/// The indictment clause's commitment needle — the verify-before-filing
+/// demand for any row whose premise indicts a component, contiguous as
+/// written (single-line per the spec's ~79-col wrap). Must occur EXACTLY
+/// once in META-META-SPEC.md.
+const INDICTMENT_VERIFY_NEEDLE: &str = "MUST be verified against the code before filing";
+
+/// The indictment clause's fallback needle — the un-verifiable case files
+/// the symptom and demotes the mechanism to a hypothesis instead of
+/// premising the row on it, contiguous as written. Must occur EXACTLY
+/// once in META-META-SPEC.md.
+const HYPOTHESIS_FALLBACK_NEEDLE: &str = "a HYPOTHESIS in repo-context, never the row's premise";
+
+/// The indictment clause's lesson-cite needle — the T212 record the
+/// clause exists for, contiguous as written. Must occur EXACTLY once in
+/// META-META-SPEC.md.
+const T212_LESSON_NEEDLE: &str = "the indictment was inverted, a full round reverted";
+
+/// The verify-adjacent sentence (the existing filing bar) the indictment
+/// clause sits AFTER — the clause extends it, never replaces or precedes
+/// it (the bar keeps its history: fix-adjacency first, then the
+/// component-indictment bar).
+const VERIFY_ADJACENT_NEEDLE: &str = "Verify T1/T2/T4/T5 actually worked";
+
+/// (al) T228 — the verify-the-indictment clause occurs EXACTLY once in
+/// META-META-SPEC.md, inside the Extend-TODO window (the T64/T114
+/// loose-heading scope), AFTER the verify-adjacent sentence it extends.
+/// Delete the clause and all three needles go red at count 0 (which also
+/// breaks any line-wise grep of them); rewrap a needle across a line
+/// break and it goes red the same way; a duplicate statement of any
+/// needle elsewhere also goes red (count 2); moving the clause out of
+/// the Extend-TODO section (or before the sentence it extends) dies on
+/// the window/ordering assert.
+#[test]
+fn indictment_clause_exactly_once_inside_extend_todo_after_verify_adjacent() {
+    // Needle self-checks (T48 idiom): a mangled needle must not let this
+    // pin pass silently.
+    assert!(
+        INDICTMENT_VERIFY_NEEDLE.starts_with("MUST be verified")
+            && INDICTMENT_VERIFY_NEEDLE.ends_with("before filing"),
+        "the verify needle must carry the verify-before-filing demand \
+         verbatim (capital MUST, per the clause's line-wise wrapping)"
+    );
+    assert!(
+        HYPOTHESIS_FALLBACK_NEEDLE.starts_with("a HYPOTHESIS")
+            && HYPOTHESIS_FALLBACK_NEEDLE.ends_with("the row's premise"),
+        "the hypothesis needle must carry the symptom-not-premise \
+         fallback language verbatim"
+    );
+    assert!(
+        T212_LESSON_NEEDLE.starts_with("the indictment was inverted")
+            && T212_LESSON_NEEDLE.ends_with("full round reverted"),
+        "the lesson needle must carry the T212 inverted-indictment \
+         language verbatim"
+    );
+    let spec = meta_meta_spec();
+    for (needle, what) in [
+        (
+            INDICTMENT_VERIFY_NEEDLE,
+            "the verify-the-indictment-before-filing demand",
+        ),
+        (
+            HYPOTHESIS_FALLBACK_NEEDLE,
+            "the symptom-plus-hypothesis fallback",
+        ),
+        (T212_LESSON_NEEDLE, "the T212 lesson citation"),
+    ] {
+        assert_eq!(
+            spec.matches(needle).count(),
+            1,
+            "META-META-SPEC must state {what} exactly once — zero means the \
+             clause was deleted (or a needle was rewrapped across a line \
+             break), more than one means it is stated twice"
+        );
+    }
+    let start = spec
+        .find(EXTEND_TODO_HEADING)
+        .expect("the Extend-TODO heading present");
+    let end = start
+        + spec[start..]
+            .find(HANDOFF_HEADING)
+            .expect("the Handoff heading present after the Extend-TODO heading");
+    let window = &spec[start..end];
+    let adjacent = window.find(VERIFY_ADJACENT_NEEDLE).expect(
+        "the Extend-TODO window must carry the verify-adjacent sentence \
+         (the T1/T2/T4/T5 filing bar)",
+    );
+    let verify = window.find(INDICTMENT_VERIFY_NEEDLE).expect(
+        "the Extend-TODO window must carry the verify-the-indictment \
+         clause (deleted, or moved out of the section?)",
+    );
+    let hypothesis = window.find(HYPOTHESIS_FALLBACK_NEEDLE).expect(
+        "the Extend-TODO window must carry the symptom-plus-hypothesis \
+         fallback (rewrapped across a line break?)",
+    );
+    let lesson = window.find(T212_LESSON_NEEDLE).expect(
+        "the Extend-TODO window must carry the T212 lesson citation \
+         (rewrapped across a line break?)",
+    );
+    assert!(
+        adjacent < verify && verify < hypothesis && hypothesis < lesson,
+        "the indictment clause must sit INSIDE the Extend-TODO window, \
+         AFTER the verify-adjacent sentence it extends ({adjacent}), in \
+         the clause's own order — verify ({verify}), hypothesis fallback \
+         ({hypothesis}), lesson cite ({lesson})"
+    );
+}
