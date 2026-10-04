@@ -610,6 +610,20 @@ answers "what chug runs are alive on this box" locally. A weightless
 registry host (`CHUG_DAEMON_SESSIONS=1`) serves `/sessions` + `/healthz`
 without loading the model — `/judge` refuses there exactly as on the stub.
 
+Checkpoints are swappable and pinned (T205): `CHUG_LAYA_CHECKPOINT`
+accepts `org/model@REV` or a local dir. A checkpoint whose LoRA base is a
+kev-layout layout (e.g. `jaredpalmer/kev-0.8b`) is **classified before any
+download** (T222) and refused with the precise reason when candle cannot
+serve that architecture — today the Gated-DeltaNet bases (`qwen3_5`):
+the refusal names the blocked class instead of silently serving a
+substituted model. The judge-parity bake-off that motivated this —
+goldens + decision-log holdout over revision-pinned checkpoints, the
+T222 metric set, option-order flips both ways — runs mechanically via
+`scripts/judge-parity.sh` (fail-closed: nonzero exit while any judge
+fails to load), and the recorded verdict — **Laya stays**, with the
+honest one-contestant gaps named — lives in
+[docs/judge-parity.md](docs/judge-parity.md) (T223).
+
 ## Hooks (`.chug/hooks.json`)
 
 Operator policy-as-config: shell commands fire around every tool call. The
