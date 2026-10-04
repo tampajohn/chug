@@ -100,4 +100,4 @@ in 2 families + pins; test-dense per the cycle-98 eval calibration)
   the T151 lock; no third family adopts the helper in this row).
 - Loopd.sh or any production code.
 
-check: set -o pipefail; export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared; touch src/*.rs tests/*.rs; cargo test --bin chug testsupport && cargo test --test loopd_orphan_reaper --test loopd_spoof_guard --test loopd_daemon_ensure --test t172_load_lock_semantics
+check: set -o pipefail; export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-validate-a; touch src/*.rs tests/*.rs; cargo test --bin chug testsupport && cargo test --test loopd_orphan_reaper --test loopd_spoof_guard --test loopd_daemon_ensure --test t172_load_lock_semantics

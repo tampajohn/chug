@@ -40,6 +40,15 @@ use std::time::{Duration, Instant};
 
 use tempfile::TempDir;
 
+// T214: the load-scaled verdict fence (`load_scaled_deadline`) lives in the
+// ONE shared test-support module, joined by the T159 `#[path]`-include
+// pattern — the same declaration every adopting family compiles, never a
+// copy. This file carries no T151/T172 lock membership and gains none
+// (T214 req 5: the families' timing-lock membership is untouched); the
+// include exists so the 90s verdict fence routes through the shared helper.
+#[path = "../src/testsupport.rs"]
+mod testsupport;
+
 fn repo_root() -> PathBuf {
     std::env::current_dir().expect("cargo sets the test cwd to the package root")
 }
@@ -266,7 +275,13 @@ impl Sandbox {
     /// and return both logs. The panic text carries both logs — the
     /// T137-style forensic record.
     fn run_until(&self, child: &mut Child, needle: &str, min: usize) -> (String, String) {
-        let deadline = Instant::now() + Duration::from_secs(90);
+        // T214: the 90s BASE is unchanged (the zero-timeout-bump doctrine) —
+        // the fence's BASIS is now the host's measured load: base ×
+        // clamp(loadavg_1m/cores, 1.0, 4.0), fail-safe to exactly the base
+        // when the load seam fails. A quiet host sees byte-identical
+        // behavior; a gate-load-melted host gets up to 4× before the fence
+        // blows; a truly hung child still fails, fast.
+        let deadline = Instant::now() + testsupport::load_scaled_deadline(Duration::from_secs(90));
         loop {
             let log = self.read_log();
             if log.matches(needle).count() >= min {
@@ -279,7 +294,9 @@ impl Sandbox {
                 let _ = child.wait();
                 let stub_log = self.read_stub_log();
                 panic!(
-                    "loopd never reached {needle}×{min} in 90s.\n\
+                    "loopd never reached {needle}×{min} within the \
+                     load-scaled verdict fence (T214: base 90s × measured \
+                     load factor).\n\
                      --- loopd.log ---\n{log}\n--- daemon-test.log ---\n{stub_log}"
                 );
             }

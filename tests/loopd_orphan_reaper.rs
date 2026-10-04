@@ -56,9 +56,11 @@ use tempfile::TempDir;
 // poison-tolerant `timing_guard()`, the fixed singleton export symbol — so
 // no second lock exists anywhere in the repo (a re-declaration is the T151
 // finding, blocked by review). Every test that spawns a real supervisor is a
-// spawn-timing / wall-clock test: its `wait_for_any` 30s deadline is a
-// quiescence cap, NOT a load assumption, and it stays untouched — what the
-// guard removes is the suite-manufactured contention (the cycle-73
+// spawn-timing / wall-clock test: its `wait_for_any` 30s verdict fence is
+// now LOAD-SCALED (T214 — base 30s unchanged, basis = clamp(loadavg_1m /
+// cores, 1.0, 4.0), fail-safe to exactly the base when the load seam fails),
+// and what the guard removes is the suite-manufactured contention (the
+// cycle-73
 // post-merge gate: the three through-loopd tests ran concurrently with the
 // rest of the suite at 17-way parallelism and each busted its cap; solo each
 // finishes in <4s). Discipline is T151's verbatim: `timing_guard()` is the
@@ -433,7 +435,14 @@ impl Sandbox {
     /// well past any fixed nap — so the settle waits for the log to stop
     /// GROWING (quiescence), capped, and returns the settled snapshot.
     fn wait_for_any(&self, child: &mut Child, needles: &[&str]) -> String {
-        let deadline = Instant::now() + Duration::from_secs(30);
+        // T214: the 30s BASE is unchanged (the zero-timeout-bump doctrine) —
+        // the fence's BASIS is now the host's measured load: base ×
+        // clamp(loadavg_1m/cores, 1.0, 4.0), fail-safe to exactly the base
+        // when the load seam fails. A quiet host sees byte-identical
+        // behavior; a gate-load-melted host gets up to 4× before the fence
+        // blows; a truly hung child still fails, fast — the fence stays a
+        // liveness fence, now on a load-aware basis.
+        let deadline = Instant::now() + testsupport::load_scaled_deadline(Duration::from_secs(30));
         loop {
             let content = self.read_log();
             if needles.iter().any(|n| content.contains(n)) {
@@ -458,7 +467,9 @@ impl Sandbox {
                 let _ = child.kill();
                 let _ = child.wait();
                 panic!(
-                    "loopd never reached any of {needles:?} in 30s.\n--- loopd.log ---\n{content}"
+                    "loopd never reached any of {needles:?} within the \
+                     load-scaled verdict fence (T214: base 30s × measured \
+                     load factor).\n--- loopd.log ---\n{content}"
                 );
             }
             std::thread::sleep(Duration::from_millis(100));
