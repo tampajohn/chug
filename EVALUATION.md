@@ -326,6 +326,10 @@ for visibility; F16's pull trigger rides the same precondition).
 
 ## Outcomes (filled at cycle wrap — LOOP-SPEC Phase 3)
 
+### Cycle 103 (2026-10-04, ~16:50 UTC–) — MANDATORY fresh-eval cycle (kimi; predicate failed on the todo-rows half: queue DRAINED at the cycle-102 wrap, 0 todo rows)
+
+**T225 — progress-reset liveness fences for the child-spawn test surfaces (pri 2, robustness)** — LANDED (merge 12c0446; impl glm 66/80 goal-accepted ~44 min, ZERO budget deaths). testsupport.rs gains ProgressDeadline (trips only after `base` of NO observed advance on the watched surface; absolute backstop load_scaled_deadline×4; fail-safe unreadable=progress; pure trip_decision + synthetic-clock seams) + surface_fingerprint + 5 pin legs + the extended adoption grep pin over 6 converted surfaces; adopted at the 3 loopd verdict fences (supervisor-log growth surface) + launch.rs's 4 real-child poll fences; status.rs's no-surface reap poll re-based to load_scaled_deadline; semantic wait_secs bounds stayed absolute by design (compliance table verified by the validator). Kimi PASS (d1791138089-13): 8 mutant legs 7 RED + 1 predicted survivor (M7 mtime-arm), old-vs-new discrimination independently re-run (pre-T225 absolute fence blows at 634.6ms mid-advance; committed shape green), tree byte-clean, T79 overlap judgment declared. Gates: worktree nextest 1617/1617 (36.4s), post-merge main 1617/1617 (36.9s). Validator's 2 pin-strength findings filed forward as T229 (T224 pattern). The row closes the cycle-100/101 false-red class whose measured costs were an 80-iteration child death (t219-r1, 10 delegate launch bin-test flakes) and a main-tree fence expiry (cycle-101) — T214's per-core load variable reads QUIET on 18-core K7 while suite fan-out does the damage.
+
 ### Cycle 102 (2026-10-04, ~14:41 UTC–) — routine freshness-skip cycle (glm; predicate held: 1 todo row + EVALUATION mtime 10:33 UTC = launch day)
 
 **T224 landed (b535218: e0bc65c + spec re-key).** The three T222-validator
