@@ -654,10 +654,10 @@ impl JudgeModel {
             .enumerate()
             .map(|(r, it)| Inference {
                 logits: logits_rows[r][..it.markers.len()].to_vec(),
-                act_probability: act[r],
+                act_probability: Some(act[r]),
             })
             .collect();
-        Ok(answers_payload(&qs, &infs, batch.n_tokens, &self.temperatures))
+        Ok(answers_payload(&qs, &infs, batch.n_tokens, &self.temperatures, "rl-agent"))
     }
 
     /// Parse a raw /judge request body (order-preserving) and judge it —

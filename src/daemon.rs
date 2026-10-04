@@ -1200,6 +1200,21 @@ fn sessions_requested() -> bool {
 #[cfg(feature = "daemon")]
 fn real_backend() -> anyhow::Result<std::sync::Arc<dyn JudgeBackend>> {
     let spec = crate::judge_model::CheckpointSpec::resolve();
+    // T222: a kev-layout checkpoint (adapter + head — the kev family)
+    // routes to the kev loader, which resolves, pin-verifies and
+    // classifies the base, then refuses with the precise reason (the
+    // confirmed 0.8B sits on a Gated DeltaNet hybrid candle 0.11 cannot
+    // load). Routing here — instead of letting the RLAgent loader 404 on
+    // model.safetensors — is what makes the refusal name the right gap
+    // instead of a misleading layout error; gating behavior is unchanged
+    // and no traffic flows (SPEC-3).
+    if crate::kev_model::is_kev_layout(&spec)? {
+        let insp = crate::kev_model::inspect(&spec)?;
+        bail!(
+            "chug daemon: the kev-layout checkpoint {spec:?} cannot serve yet: {}",
+            crate::kev_model::refusal(&insp)
+        );
+    }
     eprintln!(
         "chug daemon: loading judge checkpoint {spec:?} — the first load may download ~650 MB into the HF cache"
     );

@@ -56,6 +56,18 @@ mod websearch;
 /// Compiled in EVERY build — its pins run in the plain `cargo test` gate;
 /// the feature-gated `judge_model` is its only production caller.
 mod hf_hosting;
+/// T222: the kev checkpoint's pure consumption logic — the pins for BOTH
+/// revisions (adapter repo + base), the PEFT LoRA config parse, the merge
+/// scale and the base-architecture classification. Compiled in EVERY build
+/// (the `hf_hosting` precedent) so its pins run in the plain `cargo test`
+/// gate; the daemon-feature-gated loader that consumes it is `kev_model`.
+mod kev_config;
+/// T222: the kev-layout checkpoint loader (adapter + head + provenance,
+/// resolved through the same T205 machinery) and the base-architecture
+/// gate. Compiled only under the `daemon` feature, like `judge_model` —
+/// the feature-off build stays candle-free (tests/daemon_feature_off.rs).
+#[cfg(feature = "daemon")]
+mod kev_model;
 
 /// T151: the ONE shared serialization domain for wall-clock/spawn-timing
 /// tests (see the module doc). Compiled only under `cargo test` — a
