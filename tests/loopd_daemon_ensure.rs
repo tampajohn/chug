@@ -115,6 +115,32 @@ fn daemon_stub(capable: bool) -> String {
     )
 }
 
+/// The shape-A stub's daemon legs (T226, T215 LOW-(a)): the feature-off
+/// DRIFT shape at ~/.local/bin/chug. Its `daemon --help` answers EXACTLY
+/// like the feature-on build's — clap handles --help from the same ungated
+/// derive in both builds, exit 0 (the real build's exit 0 is anchored in
+/// tests/daemon_feature_off.rs) — while its `daemon --ensure` is the
+/// feature-off stub: the refusal on stderr, exit 1. Same probe verdict as
+/// the feature-on shape; that identity IS the blindness under pin.
+const FEATURE_OFF_DRIFT_LOGIC: &str = r#"log="${CHUG_DAEMON_TEST_LOG:-/dev/null}"
+case "$1 $2" in
+  "daemon --help")
+    printf 'probe %s\n' "$0" >> "$log"
+    exit 0 ;;
+  "daemon --ensure")
+    printf 'ensure %s\n' "$0" >> "$log"
+    echo "this chug binary was built without the judge daemon (the default)" >&2
+    exit 1 ;;
+esac
+"#;
+
+fn feature_off_drift_stub() -> String {
+    format!(
+        "#!/bin/sh\n{}\nexit 9  # unexpected call — the stub only answers daemon verbs\n",
+        FEATURE_OFF_DRIFT_LOGIC
+    )
+}
+
 /// The repo release build at `./target/release/chug`: the cycle child AND
 /// the (c) resolution leg. As the cycle child it prints the goal-complete
 /// block and stops the supervisor after `stop_after` cycles (counter file —
@@ -209,6 +235,17 @@ impl Sandbox {
         fs::create_dir_all(&dir).expect("home/.local/bin dir");
         stub(&dir.join("chug"), &daemon_stub(capable));
         self.installed_capable = capable;
+    }
+
+    /// The feature-off DRIFT shape at `~/.local/bin/chug` (T226, T215
+    /// LOW-(a)): `daemon --help` exits 0 exactly like the feature-on build's
+    /// (the probe CANNOT see the difference — that identity is the accepted
+    /// blindness), `daemon --ensure` exits 1 like the feature-off stub.
+    fn with_installed_feature_off_drift(&mut self) {
+        let dir = self.root.join("home/.local/bin");
+        fs::create_dir_all(&dir).expect("home/.local/bin dir");
+        stub(&dir.join("chug"), &feature_off_drift_stub());
+        self.installed_capable = true; // the probe ANSWERS 0 — same as capable
     }
 
     /// An explicit `$CHUG_DAEMON_BIN` override stub (the (a) leg) —
@@ -463,6 +500,93 @@ fn no_daemon_capable_binary_anywhere_skips_the_ensure() {
     assert!(
         !stub_log.contains("ensure") && !stub_log.contains("probe"),
         "nothing was probed or ensured\n{stub_log}"
+    );
+}
+
+/// T226 (T215 LOW-(a)) — the (b)-leg probe is BLIND to the binary's feature
+/// shape, and that blindness is ACCEPTED — pinned against BOTH binary
+/// shapes through the real script. `chug daemon --help` is clap-generated
+/// from doc comments compiled identically in both builds (the Daemon
+/// subcommand carries no cfg gate), so its exit 0 cannot discriminate a
+/// feature-on release from a feature-off one:
+///   - shape B (feature-on, the carrier norm): accepted AND carries the
+///     ensure;
+///   - shape A (feature-off drift): accepted TOO — the probe's verdict is
+///     IDENTICAL — and the ensure then fails per cycle, best-effort, the
+///     cycle itself fail-open.
+///
+/// The accepted blindness stands on the install.sh carrier argument:
+/// install.sh installs release.yml's feature-on tarballs, so
+/// ~/.local/bin/chug is feature-on in practice; the probe's job is the
+/// pre-T204 dogfood detector ("unrecognized subcommand"), not feature
+/// verification. If the probe ever gains a discriminating needle (a
+/// loopd.sh edit — the T226 spec's preferred branch, which would flip this
+/// row to kimi-REQUIRED routing) or the carrier drifts, THIS pin is the
+/// loud record: update it deliberately, with the carrier argument
+/// re-argued.
+#[test]
+fn daemon_help_probe_accepts_both_binary_shapes_the_accepted_blindness() {
+    // Shape A first: the feature-off drift — the accepted blindness itself.
+    let mut off = Sandbox::new(false, 1);
+    off.with_installed_feature_off_drift();
+    let (log_off, stub_off) = {
+        let mut child = off.run_loopd(None);
+        off.run_until(&mut child, "cycle OK", 1)
+    };
+    let installed_off = off.root.join("home/.local/bin/chug");
+    count_eq(
+        &log_off,
+        &format!("judge daemon binary: {}", installed_off.display()),
+        1,
+        "shape A (feature-off drift): the probe accepts it — the accepted \
+         blindness: the --help exit is identical to feature-on's, so the \
+         drift binary is chosen",
+    );
+    count_eq(
+        &stub_off,
+        &format!("probe {}", installed_off.display()),
+        1,
+        "shape A: exactly one probe (the cached (b) probe)",
+    );
+    count_eq(
+        &stub_off,
+        &format!("ensure {}", installed_off.display()),
+        1,
+        "shape A: the ensure DID spawn the drifted binary",
+    );
+    count_eq(
+        &log_off,
+        "daemon ensure: nonzero exit (best-effort, ignored — the judge fails open)",
+        1,
+        "shape A: the failing ensure is visible in the supervisor log, best-effort",
+    );
+    count_eq(
+        &log_off,
+        "cycle OK",
+        1,
+        "shape A: the cycle still ran — fail-open end to end",
+    );
+
+    // Shape B: the feature-on carrier norm — the SAME probe verdict, and
+    // this one carries the ensure.
+    let mut on = Sandbox::new(true, 1);
+    on.with_installed(true);
+    let (log_on, stub_on) = {
+        let mut child = on.run_loopd(None);
+        on.run_until(&mut child, "cycle OK", 1)
+    };
+    let installed_on = on.root.join("home/.local/bin/chug");
+    count_eq(
+        &log_on,
+        &format!("judge daemon binary: {}", installed_on.display()),
+        1,
+        "shape B (feature-on): the probe ACCEPTS it — the startup line names it",
+    );
+    count_eq(
+        &stub_on,
+        &format!("ensure {}", installed_on.display()),
+        1,
+        "shape B: the ensure carried the feature-on binary",
     );
 }
 
