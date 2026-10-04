@@ -25,7 +25,7 @@ use std::io::Read;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use tempfile::TempDir;
 
@@ -40,13 +40,15 @@ use tempfile::TempDir;
 #[path = "support/load_lock.rs"]
 mod t172_load_lock;
 
-// T214: the load-scaled verdict fence (`load_scaled_deadline`) lives in the
-// ONE shared test-support module, joined by the T159 `#[path]`-include
-// pattern — the same declaration every adopting family compiles, never a
-// copy. This file's timing-lock membership is UNCHANGED (T214 req 5): the
-// T172 flock guard above stays this family's cross-binary domain and no
-// test here takes the T151 process lock; the include exists so the verdict
-// fence routes through the shared helper.
+// T214/T225: the verdict fence lives in the ONE shared test-support module,
+// joined by the T159 `#[path]`-include pattern — the same declaration every
+// adopting family compiles, never a copy. This file's timing-lock membership
+// is UNCHANGED (T214 req 5): the T172 flock guard above stays this family's
+// cross-binary domain and no test here takes the T151 process lock; the
+// include exists so the verdict fence routes through the shared helper —
+// since T225 the progress-reset `ProgressDeadline` (the fence trips on the
+// supervisor log's OBSERVED ADVANCE, not on wall clock), with T214's
+// `load_scaled_deadline` surviving as its outer backstop.
 #[path = "../src/testsupport.rs"]
 mod testsupport;
 
@@ -173,26 +175,33 @@ impl Sandbox {
     /// written BEFORE the inter-cycle sleep, so seeing one means the verdict
     /// for this cycle is final), then kill the loop.
     fn wait_for_verdict(&self, child: &mut Child, needle: &str) -> String {
-        // T214: the 30s BASE is unchanged (the zero-timeout-bump doctrine) —
-        // the fence's BASIS is now the host's measured load: base ×
-        // clamp(loadavg_1m/cores, 1.0, 4.0), fail-safe to exactly the base
-        // when the load seam fails. A quiet host sees byte-identical
-        // behavior; a gate-load-melted host gets up to 4× before the fence
-        // blows; a truly hung child still fails, fast — and the T158
-        // invalidation marker in the panic below is unchanged.
-        let deadline = Instant::now() + testsupport::load_scaled_deadline(Duration::from_secs(30));
+        // T225: the 30s BASE is unchanged (the zero-timeout-bump doctrine) —
+        // the fence's BASIS is now the log's OBSERVED ADVANCE: it trips only
+        // after 30s of NO log growth (the surface this poll already reads
+        // every 100ms), with the load-scaled 4x backstop
+        // (`ProgressDeadline::BACKSTOP_FACTOR`) still failing a genuinely
+        // hung child. T214's per-core loadavg was blind to exactly the case
+        // this fixes (cycle-101: 18 cores, load 9.68 → factor 1.0 → NO
+        // scaling): under suite fan-out the log keeps growing — the child is
+        // making progress, just slowly — and every advance resets the fence.
+        // A log that cannot be READ at all reads as progress (fail-safe),
+        // never a false trip — and the T158 invalidation marker in the panic
+        // below is unchanged.
+        let log = self.log();
+        let mut deadline = testsupport::ProgressDeadline::new(Duration::from_secs(30));
         let mut content = String::new();
         loop {
             content.clear();
-            if let Ok(mut f) = fs::File::open(self.log()) {
+            if let Ok(mut f) = fs::File::open(&log) {
                 let _ = f.read_to_string(&mut content);
             }
+            deadline.observe(testsupport::surface_fingerprint(&log));
             if content.contains(needle) {
                 let _ = child.kill();
                 let _ = child.wait();
                 return content;
             }
-            if Instant::now() > deadline {
+            if let Some(trip) = deadline.tripped() {
                 let _ = child.kill();
                 let _ = child.wait();
                 let cycle = fs::read_dir(self.root.join(".chug/loopd"))
@@ -205,8 +214,9 @@ impl Sandbox {
                     .unwrap_or_default();
                 panic!(
                     "loopd never reached the verdict {needle:?} within the \
-                     load-scaled verdict fence (T214: base 30s × measured \
-                     load factor).\n--- loopd.log ---\n{content}\n--- .chug/loopd: {cycle}"
+                     progress-reset verdict fence (T225: {trip}; backstop \
+                     {:?}).\n--- loopd.log ---\n{content}\n--- .chug/loopd: {cycle}",
+                    deadline.backstop()
                 );
             }
             std::thread::sleep(Duration::from_millis(100));

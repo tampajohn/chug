@@ -13,8 +13,9 @@
 // condition-polling (see src/mcp_http.rs). Nextest gates are unaffected
 // (per-process isolation); the victims this protects are `cargo test`
 // goal-gate runs at default parallelism.
+use std::path::Path;
 use std::sync::{Mutex, MutexGuard};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// The shared test-timing serialization domain. Every test that asserts on
 /// wall-clock windows, spawn timing, deadlines, or probe timing takes
@@ -391,7 +392,11 @@ fn t214_live_deadline_stays_within_base_and_4x() {
 /// T214 req 3 — the adoption grep pin: no bare wall-clock verdict-fence
 /// construction (`Instant::now() + Duration::from_secs(30|90)`) remains in
 /// any of the three spawn-heavy loopd families, and every family still
-/// routes its verdict fence through [`load_scaled_deadline`]. Whole-line
+/// routes its verdict fence through a SHARED fence helper — [`load_scaled_deadline`]
+/// or, since T225, the progress-reset [`ProgressDeadline`] (the T225
+/// extension: a surface-watching fence routes through the progress shape, a
+/// no-surface fence keeps the load-scaled absolute; a BARE construction
+/// counts for neither and the needles above ban it). Whole-line
 /// comments are skipped (a comment naming the base is documentation, not a
 /// fence — the pin binds the CODE); the needles are assembled at runtime so
 /// this pin's own source never carries the pattern it greps for. The
@@ -430,13 +435,602 @@ fn t214_no_bare_verdict_deadline_construction_in_any_loopd_family() {
                  not the bare wall-clock construction)"
             );
         }
-        let calls = code.matches("load_scaled_deadline(").count();
+        let calls = code.matches("load_scaled_deadline(").count()
+            + code.matches("ProgressDeadline::new(").count();
         assert!(
             calls >= 1,
-            "{family} no longer routes its verdict fence through \
-             load_scaled_deadline — the T214 adoption regressed (the family \
+            "{family} no longer routes its verdict fence through a shared \
+             fence helper (load_scaled_deadline, or T225's progress-reset \
+             ProgressDeadline) — the T214/T225 adoption regressed (the family \
              carried exactly one verdict-deadline construction at T214 \
              landing)"
         );
+    }
+}
+
+// ---------- T225: progress-reset liveness fences ----------
+//
+// A fence whose child is making progress is a LIVENESS fence; its trip
+// condition should be "no progress for N seconds", never "wall clock
+// exceeded while progress continued". T214 re-based the loopd fences on
+// measured load, but its per-core loadavg is BLIND to suite fan-out on
+// many-core hosts (the cycle-101 flake: K7 has 18 cores, ambient load 9.68
+// reads 0.54/core → factor 1.0 → NO scaling → the fence blew on main
+// mid-cycle while the child was advancing), and cycle-100 burned a full
+// 80-iteration child on ten delegate launch bin-test false-reds. T225
+// re-bases the fence on the thing the poll ALREADY observes: the watched
+// surface advancing (log growth, events-file mtime, a dump file's byte
+// length). [`ProgressDeadline`] trips only after `base` of NO observed
+// advance; an absolute outer BACKSTOP — `load_scaled_deadline(base)` scaled
+// by the named [`ProgressDeadline::BACKSTOP_FACTOR`] (~4x) — still fails a
+// genuinely hung child. Fail-safe on ANY read error: an unreadable surface
+// reads as PROGRESS, never a false trip (the cost asymmetry is the doctrine:
+// a false trip burns an 80-iteration child; a slower hang diagnosis costs
+// seconds). The reset/trip computation is PURE (the `scale_factor` pattern)
+// and the zero-timeout-bump doctrine holds: every adoption site keeps its
+// base constant, only the BASIS moves.
+//
+// COMPLIANCE NOTES (T225 reqs 2-3) — converted vs stayed, one line each:
+// CONVERTED to ProgressDeadline (surface named):
+// - tests/loopd_orphan_reaper.rs `wait_for_any` 30s verdict fence — surface:
+//   .chug/loopd/loopd.log growth (the poll already reads it every 100ms).
+// - tests/loopd_spoof_guard.rs `wait_for_verdict` 30s verdict fence —
+//   surface: the same supervisor log (self.log()).
+// - tests/loopd_daemon_ensure.rs `run_until` 90s verdict fence — surface:
+//   the supervisor log.
+// - src/delegate/tests/launch.rs launch-then-status 5s poll — surface: the
+//   stub child's .chug/events.jsonl.
+// - launch.rs T144 target-dir-scrub leg 5s poll — surface: env.txt.
+// - launch.rs T183 explicit-env leg 5s poll — surface: env.txt.
+// - launch.rs T183 absent-env leg 5s poll — surface: env.txt.
+// RE-BASED, STAYED ABSOLUTE (no observable progress surface):
+// - status.rs `delegate_status_reaps_own_exited_child_and_reports_false_twice`
+//   10s poll — the watched fact is the child's one-time exit→zombie→reap
+//   transition, a scheduler race with no advancing file/counter/byte-length
+//   to fingerprint (the seam's answer flips once, at the end) — keeps
+//   load_scaled_deadline per the req-2 no-surface rule.
+// STAYED BARE ABSOLUTE (not liveness fences — semantic pins or quiescence):
+// - collect.rs `delegate_collect_mid_run_reports_running` `elapsed < 30s` —
+//   a post-hoc bound on ONE non-blocking call (no poll loop, no real child —
+//   fixture events only); the 30s cap pins the non-blocking contract, and no
+//   surface exists to observe.
+// - wait.rs / wait_terminal.rs `elapsed >= 1s|1.5s|2.9s` lower bounds and
+//   `< 15s|30s` upper bounds — the wait_secs round-trip pins (early return,
+//   deadline honored, churn wakes): call SEMANTICS, not child liveness;
+//   converting them would gut the pin. Also not in the named adoption set
+//   (they poll fixture events files, never real children).
+// - orphan_reaper `wait_for_any`'s 8s settle cap — a QUIESCENCE bound (it
+//   waits for the log to STOP growing); resetting on progress would defeat
+//   its purpose, so it stays a bare absolute 8s.
+
+/// Why a progress-reset fence tripped (T225 req 1). The variant carries the
+/// measured windows so the panicking fence's message IS the forensic record.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProgressTrip {
+    /// The silence base elapsed with NO observed advance on the watched
+    /// surface — the liveness trip.
+    Stalled {
+        /// How long the surface showed the same fingerprint.
+        silent_for: Duration,
+        /// The fence's silence base.
+        base: Duration,
+    },
+    /// The absolute outer backstop elapsed even though the surface kept
+    /// advancing — a genuinely hung child still fails, bounded.
+    Backstop {
+        /// Total wall clock since the fence was armed.
+        elapsed: Duration,
+        /// The backstop that expired.
+        backstop: Duration,
+    },
+}
+
+impl std::fmt::Display for ProgressTrip {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match *self {
+            ProgressTrip::Stalled { silent_for, base } => write!(
+                f,
+                "no surface advance for {silent_for:?} (silence base {base:?})"
+            ),
+            ProgressTrip::Backstop { elapsed, backstop } => write!(
+                f,
+                "surface still advancing but the absolute backstop {backstop:?} \
+                 elapsed (total {elapsed:?})"
+            ),
+        }
+    }
+}
+
+/// The progress-reset liveness fence (T225 req 1). [`ProgressDeadline::new`]
+/// arms two fences: the SILENCE fence — `base` of no observed advance on the
+/// watched surface trips it — and the absolute outer BACKSTOP,
+/// `load_scaled_deadline(base) * BACKSTOP_FACTOR`, which trips no matter how
+/// much progress was observed. The poll loop calls [`ProgressDeadline::observe`]
+/// each iteration with the surface's fingerprint (byte length, mtime mix,
+/// iteration count — any u64 the caller chooses) and
+/// [`ProgressDeadline::tripped`] before panicking. The reset/trip computation
+/// is pure ([`ProgressDeadline::trip_decision`], the `scale_factor` pattern)
+/// and every seam failure fails SAFE: an unreadable surface reads as
+/// PROGRESS, never a false trip.
+pub struct ProgressDeadline {
+    /// Wall clock at arming — the backstop's zero.
+    started: Instant,
+    /// Wall clock at the last observed advance (or unreadable read).
+    last_progress: Instant,
+    /// The last readable fingerprint observed (`None` = none yet).
+    last_seen: Option<u64>,
+    /// The silence base (the adoption site's unchanged constant).
+    base: Duration,
+    /// The absolute outer backstop.
+    backstop: Duration,
+}
+
+impl ProgressDeadline {
+    /// The backstop multiplier (T225 req 1: a NAMED constant, ~4x): the
+    /// absolute outer fence is `load_scaled_deadline(base)` × this — ≥ 4x
+    /// the silence base on a quiet host, up to 16x under measured load.
+    pub const BACKSTOP_FACTOR: u32 = 4;
+
+    /// Arms the fence: silence base `base` (the adoption site's unchanged
+    /// constant), backstop `load_scaled_deadline(base) * BACKSTOP_FACTOR`
+    /// (the T214 load scaling survives on the OUTER fence only — it is what
+    /// bounds the genuinely hung child).
+    pub fn new(base: Duration) -> Self {
+        Self::armed(
+            Instant::now(),
+            base,
+            load_scaled_deadline(base) * Self::BACKSTOP_FACTOR,
+        )
+    }
+
+    /// The construction seam the pure legs drive with a synthetic clock
+    /// (the `scaled_deadline` pattern: the computation separates from the
+    /// host).
+    fn armed(started: Instant, base: Duration, backstop: Duration) -> Self {
+        Self {
+            started,
+            last_progress: started,
+            last_seen: None,
+            base,
+            backstop,
+        }
+    }
+
+    /// Record one observation of the watched surface. A fingerprint CHANGE
+    /// (or the first readable observation) resets the silence clock; the
+    /// SAME fingerprint repeated is no progress. `None` is an UNREADABLE
+    /// surface — fail-SAFE (T225 req 1): the silence clock resets
+    /// unconditionally, so a missing or unreadable file can never
+    /// manufacture a false trip (the backstop still bounds the total).
+    pub fn observe(&mut self, seen: Option<u64>) {
+        self.observe_at(seen, Instant::now());
+    }
+
+    /// [`ProgressDeadline::observe`] on a synthetic clock — the seam the
+    /// pure legs drive.
+    fn observe_at(&mut self, seen: Option<u64>, now: Instant) {
+        match seen {
+            None => {
+                self.last_progress = now;
+                self.last_seen = None;
+            }
+            Some(fp) => {
+                if self.last_seen != Some(fp) {
+                    self.last_progress = now;
+                    self.last_seen = Some(fp);
+                }
+            }
+        }
+    }
+
+    /// The PURE trip decision (the `scale_factor` pattern): the two elapsed
+    /// windows against the two fences. `None` = live. Stall precedence: when
+    /// BOTH windows have expired the silence reason is reported (the
+    /// immediate cause of death).
+    fn trip_decision(
+        total: Duration,
+        silence: Duration,
+        base: Duration,
+        backstop: Duration,
+    ) -> Option<ProgressTrip> {
+        if silence >= base {
+            Some(ProgressTrip::Stalled {
+                silent_for: silence,
+                base,
+            })
+        } else if total >= backstop {
+            Some(ProgressTrip::Backstop { elapsed: total, backstop })
+        } else {
+            None
+        }
+    }
+
+    /// The fence's verdict at a synthetic `now` — the seam the pure legs
+    /// drive. `saturating` so a synthetic clock can never panic the legs.
+    fn tripped_at(&self, now: Instant) -> Option<ProgressTrip> {
+        Self::trip_decision(
+            now.saturating_duration_since(self.started),
+            now.saturating_duration_since(self.last_progress),
+            self.base,
+            self.backstop,
+        )
+    }
+
+    /// The fence's verdict NOW — `None` = live (keep polling); `Some(trip)`
+    /// = blow the fence with `{trip}` in the panic message.
+    pub fn tripped(&self) -> Option<ProgressTrip> {
+        self.tripped_at(Instant::now())
+    }
+
+    /// The absolute outer backstop, for the panicking fence's message.
+    pub fn backstop(&self) -> Duration {
+        self.backstop
+    }
+}
+
+/// The fail-safe surface fingerprint for a file (T225 req 1): the file's
+/// (length, mtime) folded to one u64 — either moving is an advance. ANY read
+/// failure (missing, permission, pre-epoch mtime, ...) is `None`, which
+/// [`ProgressDeadline::observe`] treats as PROGRESS — never a false trip.
+pub fn surface_fingerprint(path: &Path) -> Option<u64> {
+    let md = std::fs::metadata(path).ok()?;
+    let mtime = md
+        .modified()
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_nanos() as u64;
+    Some(md.len().rotate_left(32) ^ mtime)
+}
+
+// T225 pins — the pure reset/trip legs and the fixture legs run in the bin's
+// unit tests AND in every family binary that includes this module (the
+// t151/t214 pin shape): the fence is bound by tests, not by host state.
+
+/// The pure trip legs (T225 req 1 + Tests): advance → not expired; a base of
+/// silence → expired (Stalled); the backstop reached DESPITE continuous
+/// progress → expired (Backstop); stall precedence when both windows expire.
+#[test]
+fn t225_trip_decision_pure_legs() {
+    let base = Duration::from_secs(30);
+    let backstop = Duration::from_secs(120);
+    // Fresh fence, nothing observed: live.
+    assert_eq!(
+        ProgressDeadline::trip_decision(
+            Duration::from_secs(1),
+            Duration::from_secs(1),
+            base,
+            backstop
+        ),
+        None
+    );
+    // An advance at 5s: at 20s the fence is live (15s of silence < base).
+    assert_eq!(
+        ProgressDeadline::trip_decision(
+            Duration::from_secs(20),
+            Duration::from_secs(15),
+            base,
+            backstop
+        ),
+        None
+    );
+    // One tick short of the base of silence: still live.
+    assert_eq!(
+        ProgressDeadline::trip_decision(
+            Duration::from_secs(34),
+            Duration::from_secs(29),
+            base,
+            backstop
+        ),
+        None
+    );
+    // A base of silence trips — Stalled, carrying the measured windows.
+    assert_eq!(
+        ProgressDeadline::trip_decision(
+            Duration::from_secs(35),
+            Duration::from_secs(30),
+            base,
+            backstop
+        ),
+        Some(ProgressTrip::Stalled {
+            silent_for: Duration::from_secs(30),
+            base
+        })
+    );
+    // Continuous progress (silence never exceeds 2s) through 3x base: LIVE —
+    // exactly the shape the old absolute fence blew (the cycle-101 flake).
+    assert_eq!(
+        ProgressDeadline::trip_decision(
+            Duration::from_secs(90),
+            Duration::from_secs(2),
+            base,
+            backstop
+        ),
+        None
+    );
+    // One tick before the backstop, still progressing: live.
+    assert_eq!(
+        ProgressDeadline::trip_decision(
+            Duration::from_secs(119),
+            Duration::from_secs(2),
+            base,
+            backstop
+        ),
+        None
+    );
+    // The backstop reached DESPITE the progress: expired — Backstop.
+    assert_eq!(
+        ProgressDeadline::trip_decision(
+            Duration::from_secs(120),
+            Duration::from_secs(2),
+            base,
+            backstop
+        ),
+        Some(ProgressTrip::Backstop {
+            elapsed: Duration::from_secs(120),
+            backstop
+        })
+    );
+    // Both windows expired: the SILENCE reason wins (the immediate cause).
+    assert_eq!(
+        ProgressDeadline::trip_decision(
+            Duration::from_secs(200),
+            Duration::from_secs(40),
+            base,
+            backstop
+        ),
+        Some(ProgressTrip::Stalled {
+            silent_for: Duration::from_secs(40),
+            base
+        })
+    );
+}
+
+/// The observe legs (T225 Tests): a changed fingerprint resets the silence
+/// clock, a repeated fingerprint does not, and an UNREADABLE surface
+/// (None) reads as PROGRESS — every unreadable read resets, so a surface
+/// that stays unreadable never trips the silence fence (the backstop still
+/// bounds the total — the fail-safe seam leg).
+#[test]
+fn t225_observe_resets_on_advance_and_treats_unreadable_as_progress() {
+    let t0 = Instant::now();
+    let base = Duration::from_secs(30);
+    let backstop = Duration::from_secs(120);
+
+    // The first readable observation IS an advance (None → Some(fp)).
+    let mut pd = ProgressDeadline::armed(t0, base, backstop);
+    pd.observe_at(Some(100), t0 + Duration::from_secs(1));
+    assert_eq!(pd.tripped_at(t0 + Duration::from_secs(29)), None);
+    // The SAME fingerprint again is NOT an advance: the silence clock keeps
+    // running and the base of silence trips.
+    pd.observe_at(Some(100), t0 + Duration::from_secs(29));
+    assert!(
+        matches!(
+            pd.tripped_at(t0 + Duration::from_secs(31)),
+            Some(ProgressTrip::Stalled { .. })
+        ),
+        "a repeated fingerprint must not reset the silence clock"
+    );
+
+    // A CHANGED fingerprint resets the silence clock...
+    let mut pd = ProgressDeadline::armed(t0, base, backstop);
+    pd.observe_at(Some(100), t0 + Duration::from_secs(1));
+    pd.observe_at(Some(200), t0 + Duration::from_secs(20));
+    assert_eq!(
+        pd.tripped_at(t0 + Duration::from_secs(49)),
+        None,
+        "20s of silence after the 20s advance is still short of the base"
+    );
+    assert!(matches!(
+        pd.tripped_at(t0 + Duration::from_secs(51)),
+        Some(ProgressTrip::Stalled { .. })
+    ));
+
+    // Fail-safe: an UNREADABLE read resets, and EVERY unreadable read
+    // resets — a surface that stays unreadable never trips the SILENCE
+    // fence, all the way through and past the silence base; the absolute
+    // backstop still bounds the total (fail-SAFE, not fail-open forever).
+    let mut pd = ProgressDeadline::armed(t0, base, backstop);
+    pd.observe_at(Some(100), t0 + Duration::from_secs(1));
+    for s in 29..120 {
+        pd.observe_at(None, t0 + Duration::from_secs(s));
+        assert_eq!(
+            pd.tripped_at(t0 + Duration::from_secs(s)),
+            None,
+            "an unreadable read at {s}s must reset the silence clock — never \
+             a false trip"
+        );
+    }
+    assert!(matches!(
+        pd.tripped_at(t0 + Duration::from_secs(121)),
+        Some(ProgressTrip::Backstop { .. })
+    ));
+
+    // A missing-then-appearing surface: the reappearance is an advance.
+    let mut pd = ProgressDeadline::armed(t0, base, backstop);
+    pd.observe_at(None, t0 + Duration::from_secs(10));
+    pd.observe_at(Some(7), t0 + Duration::from_secs(11));
+    assert_eq!(pd.tripped_at(t0 + Duration::from_secs(40)), None);
+}
+
+/// The fingerprint seam legs: a missing file is `None` (unreadable →
+/// progress), and an append moves the fingerprint.
+#[test]
+fn t225_surface_fingerprint_moves_on_advance_and_reads_none_when_unreadable() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let surf = dir.path().join("s.log");
+    assert_eq!(
+        surface_fingerprint(&surf),
+        None,
+        "a missing surface is an unreadable surface: None"
+    );
+    std::fs::write(&surf, b"one").expect("seed the surface");
+    let a = surface_fingerprint(&surf).expect("readable once written");
+    std::fs::write(&surf, b"one two").expect("advance the surface");
+    let b = surface_fingerprint(&surf).expect("still readable");
+    assert_ne!(a, b, "an advance must move the fingerprint");
+}
+
+/// Req 4(a) — the stalled fixture: a child double whose surface EXISTS and
+/// never advances trips the fence in ~base, via the SILENCE reason, well
+/// before the backstop. (A surface that never APPEARS at all is the other
+/// fail-safe leg above: it reads as progress and the backstop catches it.)
+#[test]
+fn t225_stalled_surface_double_trips_in_about_base() {
+    let _timing = timing_guard();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let surf = dir.path().join("surface.log");
+    std::fs::write(&surf, b"the double wrote once and hung\n").expect("seed the stalled surface");
+
+    let base = Duration::from_millis(500);
+    let mut pd = ProgressDeadline::new(base);
+    let started = Instant::now();
+    loop {
+        pd.observe(surface_fingerprint(&surf));
+        if let Some(trip) = pd.tripped() {
+            let elapsed = started.elapsed();
+            assert!(
+                matches!(trip, ProgressTrip::Stalled { .. }),
+                "a never-advancing surface must trip the SILENCE fence, not \
+                 the backstop: {trip}"
+            );
+            assert!(elapsed >= base, "tripped before its base: {elapsed:?}");
+            assert!(
+                elapsed < base * 3,
+                "the stall trip must land at ~base, nowhere near the \
+                 backstop: {elapsed:?}"
+            );
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+}
+
+/// Req 4(b) — the slow-progress fixture (THE flake reproduction): a double
+/// that advances every base/6 for 3x base PASSES the progress-reset fence.
+/// Under the pre-T225 absolute fence shape (deadline = start + base) this
+/// exact loop FAILS at `base` while the double is still advancing — the
+/// demonstrated RED (old-shape scratch run recorded in the t225 notes); the
+/// non-vacuousness asserts pin that this leg really outlives the old fence,
+/// so the pass is discrimination, not slack. A Backstop trip under extreme
+/// host load is the OUTER fence working, not a silence trip: the leg ends
+/// early, still having outlived the old fence by 2x (the backstop is ≥ 4x
+/// base by construction, so an early break is impossible).
+#[test]
+fn t225_slow_progress_surface_double_outlives_the_absolute_fence() {
+    let _timing = timing_guard();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let surf = dir.path().join("surface.log");
+    std::fs::write(&surf, b"").expect("seed the surface");
+
+    let base = Duration::from_millis(600);
+    let advance_every = Duration::from_millis(100); // base/6 — well inside the silence base
+    let mut pd = ProgressDeadline::new(base);
+    let started = Instant::now();
+    let mut advances = 0u32;
+    while started.elapsed() < base * 3 {
+        // The double advances: one appended line (len + mtime both move).
+        use std::io::Write as _;
+        let mut f = std::fs::OpenOptions::new()
+            .append(true)
+            .create(true)
+            .open(&surf)
+            .expect("append to the double's surface");
+        writeln!(f, "advance {advances}").expect("write the advance");
+        advances += 1;
+
+        pd.observe(surface_fingerprint(&surf));
+        match pd.tripped() {
+            None => {}
+            // The outer fence, not the silence fence — the leg's claim
+            // already held (it broke at ≥ 4x base, 2x past the old fence).
+            Some(ProgressTrip::Backstop { .. }) => break,
+            Some(trip @ ProgressTrip::Stalled { .. }) => panic!(
+                "the progress-reset fence must stay live while the double \
+                 advances (advance #{advances}) — this is the cycle-101 \
+                 flake shape the old absolute fence blew: {trip}"
+            ),
+        }
+        std::thread::sleep(advance_every);
+    }
+    let total = started.elapsed();
+    // Non-vacuousness: the loop REALLY outlived the pre-T225 absolute fence
+    // (`base`) by 2x — under the old shape this leg dies at `base` mid-run.
+    assert!(
+        total >= base * 2,
+        "the double must outlive the old absolute fence for this leg to \
+         discriminate: total {total:?} vs base {base:?}"
+    );
+    assert!(
+        advances >= 3,
+        "the surface must have actually advanced: {advances} advances"
+    );
+}
+
+/// T225 req 5 — the adoption grep pin EXTENDED to every converted surface:
+/// zero bare wall-clock verdict-fence constructions (`Instant::now() +
+/// Duration::from_secs(N)`) remain on any of them, and every surface that
+/// CARRIES a fence routes it through a shared helper — ProgressDeadline for
+/// the surface-watching fences, load_scaled_deadline for the one no-surface
+/// fence (status.rs's reap poll). The loopd families overlap the T214 pin
+/// above deliberately (belt-and-suspenders on the wider needle set). Same
+/// doctrine as the T214 pin: non-comment code lines only, needles assembled
+/// at runtime, sources resolved at RUNTIME from the package root (never a
+/// baked CARGO_MANIFEST_DIR — the T48 rule).
+#[test]
+fn t225_no_bare_verdict_fence_construction_on_any_converted_surface() {
+    use std::fs;
+
+    const PROGRESS: &str = "ProgressDeadline::new(";
+    const SCALED: &str = "load_scaled_deadline(";
+    // (surface, needle secs, expected fence marker — None = the surface
+    // carries no fence at all, only the bare-needle absence is pinned).
+    let surfaces: &[(&str, &[&str], Option<&str>)] = &[
+        ("tests/loopd_orphan_reaper.rs", &["30", "90"], Some(PROGRESS)),
+        ("tests/loopd_spoof_guard.rs", &["30", "90"], Some(PROGRESS)),
+        ("tests/loopd_daemon_ensure.rs", &["30", "90"], Some(PROGRESS)),
+        (
+            "src/delegate/tests/launch.rs",
+            &["5", "10", "30", "90"],
+            Some(PROGRESS),
+        ),
+        (
+            "src/delegate/tests/status.rs",
+            &["5", "10", "30", "90"],
+            Some(SCALED),
+        ),
+        (
+            "src/delegate/tests/collect.rs",
+            &["5", "10", "30", "90"],
+            None,
+        ),
+    ];
+    let root = std::env::current_dir().expect("cargo sets the test cwd to the package root");
+    for (surface, secs_list, marker) in surfaces {
+        let src = fs::read_to_string(root.join(surface))
+            .unwrap_or_else(|e| panic!("reading {surface}: {e}"));
+        let code = src
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        for secs in *secs_list {
+            let bare = format!("Instant::now() + Duration::from_secs({secs})");
+            assert!(
+                !code.contains(&bare),
+                "{surface} still constructs a bare {secs}s verdict fence — \
+                 the fence's basis must move to the surface's observed \
+                 advance (T225: ProgressDeadline) or, with no observable \
+                 surface, stay load-scaled (T214 req 3)"
+            );
+        }
+        if let Some(marker) = marker {
+            let calls = code.matches(marker).count();
+            assert!(
+                calls >= 1,
+                "{surface} no longer routes its verdict fence through \
+                 {marker} — the T225 adoption regressed"
+            );
+        }
     }
 }

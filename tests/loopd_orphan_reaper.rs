@@ -417,9 +417,13 @@ impl Sandbox {
         cmd.spawn().expect("spawn bash loopd.sh run")
     }
 
+    fn log_path(&self) -> PathBuf {
+        self.root.join(".chug/loopd/loopd.log")
+    }
+
     fn read_log(&self) -> String {
         let mut content = String::new();
-        if let Ok(mut f) = fs::File::open(self.root.join(".chug/loopd/loopd.log")) {
+        if let Ok(mut f) = fs::File::open(self.log_path()) {
             let _ = f.read_to_string(&mut content);
         }
         content
@@ -435,16 +439,24 @@ impl Sandbox {
     /// well past any fixed nap — so the settle waits for the log to stop
     /// GROWING (quiescence), capped, and returns the settled snapshot.
     fn wait_for_any(&self, child: &mut Child, needles: &[&str]) -> String {
-        // T214: the 30s BASE is unchanged (the zero-timeout-bump doctrine) —
-        // the fence's BASIS is now the host's measured load: base ×
-        // clamp(loadavg_1m/cores, 1.0, 4.0), fail-safe to exactly the base
-        // when the load seam fails. A quiet host sees byte-identical
-        // behavior; a gate-load-melted host gets up to 4× before the fence
-        // blows; a truly hung child still fails, fast — the fence stays a
-        // liveness fence, now on a load-aware basis.
-        let deadline = Instant::now() + testsupport::load_scaled_deadline(Duration::from_secs(30));
+        // T225: the 30s BASE is unchanged (the zero-timeout-bump doctrine) —
+        // the fence's BASIS is now the log's OBSERVED ADVANCE: it trips only
+        // after 30s of NO log growth (the surface this poll already reads
+        // every 100ms), with the load-scaled 4x backstop
+        // (`ProgressDeadline::BACKSTOP_FACTOR`) still failing a genuinely
+        // hung child. T214's per-core loadavg was blind to exactly the case
+        // this fixes (cycle-101: 18 cores, load 9.68 → factor 1.0 → NO
+        // scaling): under suite fan-out the log keeps growing — the child is
+        // making progress, just slowly — and every advance resets the fence.
+        // A log that cannot be READ at all reads as progress (fail-safe),
+        // never a false trip. The 8s settle cap below stays absolute: it is
+        // a QUIESCENCE bound — it waits for the log to STOP growing, so
+        // resetting it on progress would defeat its purpose.
+        let log_path = self.log_path();
+        let mut deadline = testsupport::ProgressDeadline::new(Duration::from_secs(30));
         loop {
             let content = self.read_log();
+            deadline.observe(testsupport::surface_fingerprint(&log_path));
             if needles.iter().any(|n| content.contains(n)) {
                 let settle_deadline = Instant::now() + Duration::from_secs(8);
                 let mut settled = content;
@@ -463,13 +475,14 @@ impl Sandbox {
                 let _ = child.wait();
                 return settled;
             }
-            if Instant::now() > deadline {
+            if let Some(trip) = deadline.tripped() {
                 let _ = child.kill();
                 let _ = child.wait();
                 panic!(
                     "loopd never reached any of {needles:?} within the \
-                     load-scaled verdict fence (T214: base 30s × measured \
-                     load factor).\n--- loopd.log ---\n{content}"
+                     progress-reset verdict fence (T225: {trip}; backstop \
+                     {:?}).\n--- loopd.log ---\n{content}",
+                    deadline.backstop()
                 );
             }
             std::thread::sleep(Duration::from_millis(100));
