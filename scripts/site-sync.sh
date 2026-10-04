@@ -231,10 +231,20 @@ last_landed() { # -> lines "<ID>\t<short-ref>\t<date>\t<escaped title>"
 # checked off in FEATURES.md (strikethrough / LANDED annotation); in-flight =
 # a TODO.md row references the F-id; else queued. Names/what text are
 # FEATURES.md facts (markdown emphasis stripped, <=160 bytes, HTML-escaped).
+# T216: a markdown-escaped pipe (`\|`) is cell CONTENT, not a delimiter —
+# neutralized on a line copy BEFORE the split (T216 rule below).
 FT_WHAT_CAP=160
 features_rows() { # -> lines "<F-id>\t<status>\t<name>\t<what>"
   [ -f "$CHUG/FEATURES.md" ] || return 0
-  awk -F'|' -v cap="$FT_WHAT_CAP" '
+  # T216: a -Fpipe split cannot tell a markdown-escaped pipe from a real one,
+  # so `\|` in a cell phantom-splits it: the F15 name cell
+  # `CHUG_JUDGE=daemon\|http\|off` truncated at daemon-backslash — the LANDED
+  # annotation beyond the split was never seen (card rendered QUEUED) and the
+  # what cell was the fragment http-backslash. Park each escape on a line
+  # COPY before the split (a \001 placeholder no markdown row carries), then
+  # restore the literal pipe in the surviving cells — `\|` is markdown for a
+  # literal pipe, so the HTML text renders the pipe.
+  awk -v cap="$FT_WHAT_CAP" '
     function esc(s) { gsub(/&/, "\\&amp;", s); gsub(/</, "\\&lt;", s); gsub(/>/, "\\&gt;", s); return s }
     function strip_md(s) { gsub(/~~/, "", s); gsub(/\*\*/, "", s); return s }
     function prep(s, cap,   n, w, out, kept, i, cand, m, seg, j, rebuilt) {
@@ -256,17 +266,22 @@ features_rows() { # -> lines "<F-id>\t<status>\t<name>\t<what>"
       }
       return out
     }
+    BEGIN { ph = "\001" }
     /^[|]/ {
-      id = $2; gsub(/[ \t]/, "", id)
+      line = $0
+      gsub(/\\[|]/, ph, line)
+      split(line, f, "|")
+      id = f[2]; gsub(/[ \t]/, "", id)
       if (id !~ /^F[0-9]+$/) next
-      namecell = $3
+      namecell = f[3]; gsub(ph, "|", namecell)
       status = "queued"
       if (namecell ~ /~~/ || namecell ~ /LANDED/) status = "landed"
       name = namecell
       sub(/—.*/, "", name)              # name cell = text before the status annotation
       name = strip_md(name); gsub(/^[ \t]+|[ \t]+$/, "", name)
       if (name == "") next
-      print id "\t" status "\t" esc(name) "\t" prep($4, cap)
+      what = f[4]; gsub(ph, "|", what)
+      print id "\t" status "\t" esc(name) "\t" prep(what, cap)
     }' "$CHUG/FEATURES.md"
 }
 
