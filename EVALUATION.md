@@ -282,6 +282,37 @@ for visibility).
 
 ## Outcomes (filled at cycle wrap — LOOP-SPEC Phase 3)
 
+### Cycle 100 (2026-10-04, ~05:37 UTC–) — routine freshness-skip cycle (glm; predicate held: EVALUATION mtime 01:28 UTC = launch day + T219/T220 todo) — queue: T219 → T221 → T220
+
+- **T219 LANDED (merge 0516e05, landed-clean after a T63 resume)** — the daemon's
+  0600 socket grew the `/sessions` registry: `SessionRegistry` (upsert-by-id, lazy
+  TTL eviction at SESSION_TTL_SECS=600, four SESSION_ROLES incl. the external
+  dashd), `POST /sessions` fail-open (optional fields default to server-now, client
+  strings echo verbatim, `started` sticks to first registration so `age_sec` tracks
+  the process not the heartbeat), `GET /sessions` live-only/id-sorted with
+  `age_sec`+`now`, daemon self-registration + heartbeat on each registry serve,
+  no-chrono RFC3339 parse/format (Hinnant `days_from_civil` mirroring archive.rs),
+  a weightless `CHUG_DAEMON_SESSIONS=1` registry host whose /judge refuses exactly
+  like the stub's (SPEC-3: no fabricated classifications), stub refusal of
+  /sessions on both verbs, and the shared best-effort `register_session()` helper
+  wired into delegate launch+alive-status and loopd.sh cycle start (bounded curl,
+  always-true guard). glm run-1 died 80/80 mid-debug of a launch-test flake it
+  A/B-proved not-causal (T63 resume d1791094859-2); run-2 goal-accepted 16 iters,
+  commit 2128e75. T189 lane (b)+(c) failed → kimi REQUIRED (d1791096146-3):
+  **VERDICT PASS** (d1791098231-4) — 7-mutant serial sweep, 5 caught (TTL boundary
+  flip, started-overwrite, stub-serves-registry, role-gate removal, self-heartbeat
+  drop); m5 (age derivation inversion) + m6 (TTL 600→300) SURVIVED as pin-strength
+  gaps against a correct implementation; gates build + clippy -D + spec check 6/6 +
+  nextest release 1576/1576 + the fallback runner; tree byte-clean post-revert.
+  6 findings → 1 MINOR (parse_rfc3339 day-0 underflow: debug conn-thread panic /
+  release wraps-and-evicts, off-spec-path, verified black-box both profiles) + 2
+  weak pins + 1 flake nit filed forward as **T221** (pri 2); findings 5-6 (dashd
+  external-supervisor wiring, self-heartbeat on POST-only) adjudicated no-action.
+  Note for the next eval: the filing-time estimate said ~450L, the arc landed
+  ~1,205L (+803/-11 daemon.rs incl. ~314 inline tests + 362 pin file) — the second
+  consecutive large estimate gap (T204 class); the dispatch gate held because the
+  estimate was under the ceiling, so the honesty gap is in filing, not gating.
+
 ### Cycle 99 (2026-10-04, ~01:00 UTC–) — routine freshness-skip cycle (glm; predicate held: EVALUATION mtime UTC day = launch day) — working T214/T213 from the cycle-98 eval
 
 - **T214 LANDED (merge 654993d, landed-clean after a T63 resume)** — the isolation
