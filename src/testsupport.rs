@@ -1034,3 +1034,185 @@ fn t225_no_bare_verdict_fence_construction_on_any_converted_surface() {
         }
     }
 }
+
+// ---------- T229: closing the T225 validator's pin-strength findings ----------
+//
+// The T225 kimi verdict (PASS, .chug/verdict-t225-validate-20261004.md)
+// left two predicted survivors behind (the T224 pattern — file them
+// forward):
+//
+// - M7-fingerprint-len-only (mtime arm dropped): every T225 leg advances
+//   the watched surface by APPENDING, so a fingerprint keyed on LENGTH
+//   ONLY passed all six legs. Benign today (every adopted surface is
+//   length-monotonic: append-only supervisor logs, appended events.jsonl,
+//   one-shot env dumps) but one refactor from silently never resetting a
+//   fence watching a fixed-width or rewrite-style surface.
+// - BACKSTOP_FACTOR upper bound: the constant was pinned against REDUCTION
+//   (M8-backstop-factor-1 died RED on the slow-progress leg's
+//   non-vacuousness pin) but an INCREASE (4→N) survives — a bigger
+//   backstop only trips LATER, and every wall-clock leg ends before the
+//   backstop. The pure legs pinned the backstop STRUCTURE, not the
+//   constant's value.
+//
+// One pin leg per finding, each RED-proven against its named mutant in the
+// worktree and reverted byte-clean (mutant → red test recorded in the T229
+// commit message, the T69 doctrine).
+
+/// T229 req 1 — the MTIME-arm pin (the M7 survivor): REWRITING the surface
+/// with DIFFERENT bytes of the SAME length while mtime advances must still
+/// MOVE the fingerprint. Both halves of the fold are pinned:
+/// (a) same length, mtime ADVANCED → the fingerprint MOVES — the len-only
+///     mutant's killer (no append leg exercises it: length moves with
+///     mtime there, so a len-only fingerprint passes every append);
+/// (b) same length, mtime RESTORED → the fingerprint is UNCHANGED — the
+///     fold keys (len, mtime), never the content bytes (the doc contract:
+///     "either moving is an advance"); a content arm would break this half
+///     and must revisit the doc + the fail-safe semantics with it.
+/// Both mtimes are pinned explicitly (std `File::set_modified` — a
+/// synthetic clock for the mtime arm, the same reason the trip legs drive
+/// `observe_at`): two real writes microseconds apart can land in ONE
+/// timestamp tick on a coarse filesystem, which would flake (a).
+#[test]
+fn t229_surface_fingerprint_moves_on_same_length_rewrite() {
+    let set_mtime = |path: &Path, t: std::time::SystemTime| {
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(path)
+            .and_then(|f| f.set_modified(t))
+            .unwrap_or_else(|e| panic!("setting the surface's mtime: {e}"));
+    };
+    let dir = tempfile::tempdir().expect("tempdir");
+    let surf = dir.path().join("s.log");
+    let t1 = std::time::SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+    let t2 = t1 + Duration::from_secs(1);
+
+    std::fs::write(&surf, b"aaaa").expect("seed the surface");
+    set_mtime(&surf, t1);
+    let a = surface_fingerprint(&surf).expect("readable at t1");
+
+    // (a) Same length (4 bytes), different bytes, mtime advanced: the
+    // fingerprint MUST move.
+    std::fs::write(&surf, b"bbbb").expect("rewrite, same length");
+    set_mtime(&surf, t2);
+    let b = surface_fingerprint(&surf).expect("readable at t2");
+    assert_ne!(
+        a, b,
+        "a same-length rewrite with an advanced mtime must move the \
+         fingerprint — a length-only fingerprint (the M7 mutant) would \
+         silently never reset a fence watching a fixed-width surface"
+    );
+
+    // (b) Same length, mtime restored to t2: NOT an advance.
+    std::fs::write(&surf, b"cccc").expect("rewrite again, same length");
+    set_mtime(&surf, t2);
+    let c = surface_fingerprint(&surf).expect("readable at t2 again");
+    assert_eq!(
+        b, c,
+        "same length and same mtime must NOT move the fingerprint — the \
+         fold keys (len, mtime), not content"
+    );
+}
+
+/// T229 req 2 — the BACKSTOP_FACTOR VALUE pin: the constant is 4, pinned
+/// through the PURE seam with arithmetic that fails if the factor moves in
+/// EITHER direction. The reduction died RED on the slow-progress leg's
+/// non-vacuousness pin; the INCREASE survived every wall-clock leg because
+/// a bigger backstop only trips later. Every load here is a FIXED SYNTHETIC
+/// value driving the T214 pure seam ([`scaled_deadline`]) — never the
+/// host's:
+/// (a) the value: quiet host (factor exactly 1.0 → scaled == base) times
+///     the named constant == 4× base — the named `BACKSTOP_FACTOR == 4`
+///     assertion routed through the fence arithmetic, not a source grep;
+/// (b) the window it feeds: continuous progress keeps the fence live for
+///     the whole backstop and trips Backstop — never Stalled — exactly AT
+///     it (armed → observe_at → tripped_at, the full pure chain). A
+///     REDUCED factor trips early and dies mid-loop; an INCREASED factor
+///     never trips and dies on the final assert;
+/// (c) the loaded shape: clamp-max load (factor exactly 4.0 → scaled ==
+///     4× base) times the constant == 16× base — the documented "up to 16x
+///     under measured load" upper shape;
+/// plus the LIVE constructor (real host load): the constant still feeds it
+/// and the load scaling only ever stretches — [4× base, 16× base] on any
+/// host (T214's live leg pins load_scaled_deadline to [base, 4× base] on
+/// every run, so this window cannot flake in either direction).
+#[test]
+fn t229_backstop_factor_value_is_pinned_at_four() {
+    let base = Duration::from_secs(30);
+
+    // (a) The named constant's value, through the pure seam.
+    let quiet = scaled_deadline(Some(0.0), Some(1), base);
+    assert_eq!(
+        quiet, base,
+        "the synthetic quiet load must be factor 1.0: scaled == base"
+    );
+    assert_eq!(
+        ProgressDeadline::BACKSTOP_FACTOR,
+        4u32,
+        "BACKSTOP_FACTOR is the named 4x constant"
+    );
+    assert_eq!(
+        quiet * ProgressDeadline::BACKSTOP_FACTOR,
+        base * 4,
+        "the backstop must be exactly 4x base on a quiet host: a SMALLER \
+         factor weakens the genuinely-hung bound (M8-backstop-factor-1 died \
+         RED on the slow-progress leg), a LARGER factor slows every hang \
+         diagnosis by the same multiple (M8's 4→8 increase survived every \
+         wall-clock leg) — BOTH directions are this pin"
+    );
+
+    // (b) The window the factor feeds.
+    let backstop = quiet * ProgressDeadline::BACKSTOP_FACTOR;
+    let t0 = Instant::now();
+    let mut pd = ProgressDeadline::armed(t0, base, backstop);
+    for s in 1u64..120 {
+        pd.observe_at(Some(s), t0 + Duration::from_secs(s));
+        assert_eq!(
+            pd.tripped_at(t0 + Duration::from_secs(s)),
+            None,
+            "observed progress at {s}s must keep the fence live (backstop \
+             {backstop:?}) — a REDUCED factor trips early and dies here"
+        );
+    }
+    pd.observe_at(Some(120), t0 + Duration::from_secs(120));
+    assert!(
+        matches!(
+            pd.tripped_at(t0 + Duration::from_secs(120)),
+            Some(ProgressTrip::Backstop { .. })
+        ),
+        "at the backstop the fence must trip DESPITE continuous progress — \
+         an INCREASED factor never trips by now (the 4→8 mutant dies here), \
+         and the reason must be Backstop, never Stalled"
+    );
+
+    // (c) The loaded shape: the clamp-max synthetic load scales the base
+    // 4x, and the constant multiplies THAT.
+    let loaded = scaled_deadline(Some(32.0), Some(8), base);
+    assert_eq!(
+        loaded, base * 4,
+        "the synthetic 4x-capacity load must scale to the upper clamp"
+    );
+    assert_eq!(
+        loaded * ProgressDeadline::BACKSTOP_FACTOR,
+        base * 16,
+        "under the clamp-max load the backstop is 16x base — the documented \
+         'up to 16x under measured load' shape"
+    );
+
+    // The LIVE constructor (real host load, not synthetic): the constant
+    // still feeds it, and the load scaling only ever stretches.
+    let live = ProgressDeadline::new(base);
+    assert!(
+        live.backstop() >= base * ProgressDeadline::BACKSTOP_FACTOR,
+        "the live backstop {:?} must be at least the constant × base (load \
+         scaling only ever stretches): {:?}",
+        live.backstop(),
+        base * ProgressDeadline::BACKSTOP_FACTOR
+    );
+    assert!(
+        live.backstop() <= base * 4 * ProgressDeadline::BACKSTOP_FACTOR,
+        "the live backstop {:?} must be at most 4× the constant × base (the \
+         load clamp's upper bound): {:?}",
+        live.backstop(),
+        base * 4 * ProgressDeadline::BACKSTOP_FACTOR
+    );
+}

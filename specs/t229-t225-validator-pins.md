@@ -1,6 +1,6 @@
 # T229 — close the T225 validator's pin-strength findings (tests-only)
 
-check: set -o pipefail; export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared; touch src/*.rs tests/*.rs; cargo test --bin chug
+check: set -o pipefail; export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-validate-a; touch src/*.rs tests/*.rs; cargo test --bin chug
 
 estimate: ~60 changed lines (two pin legs, RED-proof each; tests-only)
 
