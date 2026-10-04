@@ -115,13 +115,16 @@ fn fallback_is_unconditional_in_every_carrier() {
         "META-SPEC T6 rule states the fallback is unconditional",
     );
     // The fallback command at its carriers (see shared_target_dir.rs for
-    // the per-carrier story).
+    // the per-carrier story). The 4th LOOP-SPEC carrier is the goal-gate
+    // check line (line 9): the cycle-100 gate rejection proved a plain
+    // `cargo test` there goes 19m cold-debug against the 1200s cap — the
+    // T82 runner rule now governs it too, so it carries the fallback.
     count_eq(
         &loop_spec,
         "cargo test --release -- --test-threads=4",
-        3,
-        "LOOP-SPEC T78-fallback carriers: step-3 template, step-3 runner \
-         rule, step-5",
+        4,
+        "LOOP-SPEC T78-fallback carriers: goal-gate check line, step-3 \
+         template, step-3 runner rule, step-5",
     );
     count_eq(
         &meta,

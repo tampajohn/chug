@@ -6,7 +6,7 @@ runs, validate adversarially, merge, wrap. You combine the META-META
 (evaluator), META (orchestrator), and SELF (worker) roles — the human runs
 ONE command and reads your report.
 
-check: cd /Users/jadams/workspace/chug && CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-main cargo test
+check: cd /Users/jadams/workspace/chug && CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-main sh -c 'if command -v cargo-nextest >/dev/null 2>&1; then exec cargo nextest run --release; else exec cargo test --release -- --test-threads=4; fi'
 
 Read first: `META-META-SPEC.md` (evaluation doctrine), `META-SPEC.md`
 (child-launch and validation doctrine). They apply in full except where this
