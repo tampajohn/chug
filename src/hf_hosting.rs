@@ -244,6 +244,14 @@ fn note_auth_error(
 /// pins above exercise `hub_endpoint`/`hub_token` directly.
 #[cfg(feature = "daemon")]
 pub(crate) fn build_hub_api() -> Result<hf_hub::api::sync::Api> {
+    // T213 (the T205 validator's M3 retry-knob survivor): the one-attempt
+    // shape is DELIBERATE — `ApiBuilder::new()` builds with max_retries = 0
+    // (hf-hub 0.4.3 default; `with_retries` is never called here) and the
+    // wobble metadata stays outside any retry block. A silent retry storm
+    // against a PRIVATE org repo is the worse failure: every retry re-sends
+    // the token at an auth wall and multiplies the fetch latency for a load
+    // that cannot succeed. One attempt, then the honesty gate fires — the
+    // client latches the dead daemon and the run continues fail-open (T190).
     let mut builder = hf_hub::api::sync::ApiBuilder::new();
     if let Some(token) = hub_token() {
         builder = builder.with_token(Some(token));
