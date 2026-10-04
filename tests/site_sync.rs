@@ -1389,6 +1389,67 @@ fn t217_missing_loopd_dir_refuses_to_publish_without_editing() {
     assert_eq!(sync_commits(&f), 0);
 }
 
+/// The guard's THIRD leg (T226 — T217's validator bonus mutant m4): git log
+/// EMPTY while TODO.md and .chug/loopd are present and readable. m4 deleted
+/// exactly this leg (the other two stayed intact) and the whole suite stayed
+/// green: the two sibling pins above each remove an input ENTIRELY, so they
+/// refuse through legs 1/2 and never isolate the git-log leg. The realistic
+/// shape here is the T186 harvested-or-half-cloned worktree: a git repo that
+/// initializes fine but has ZERO commits — every file readable, no history
+/// at all, so every git-derived number would be a fallback published with
+/// real data's authority (the 58c3a0b gutting class).
+#[test]
+fn t217_empty_git_log_refuses_to_publish_without_editing() {
+    let keep = tempfile::tempdir().unwrap();
+    let chug = keep.path().join("chug");
+    let site = keep.path().join("site");
+    std::fs::create_dir_all(&chug).unwrap();
+    std::fs::create_dir_all(&site).unwrap();
+    git(&chug, &["-c", "init.defaultBranch=main", "init", "-q"], None);
+    git(&site, &["-c", "init.defaultBranch=main", "init", "-q"], None);
+    // BOTH text inputs readable — legs 1 and 2 must pass on their own
+    // merits, so ONLY the git-log leg can refuse.
+    let loopd = chug.join(".chug/loopd");
+    std::fs::create_dir_all(&loopd).unwrap();
+    std::fs::write(loopd.join("loopd.log"), "2026-09-25T10:00:00Z cycle OK: x\n").unwrap();
+    std::fs::write(
+        chug.join("TODO.md"),
+        concat!(
+            "# TODO\n\n| id | title | spec | pri | status | notes |\n",
+            "|----|-------|------|-----|--------|-------|\n",
+            "| T3 | first | specs/t3.md | 1 | done | x |\n"
+        ),
+    )
+    .unwrap();
+    site_fixture(&site);
+    let f = Fixture {
+        _keep: keep,
+        chug,
+        site,
+    };
+    let before = std::fs::read(f.site.join("index.html")).unwrap();
+    let commits_before = all_commit_subjects(&f).len();
+    let out = run_sync(&f, true);
+    assert_eq!(out.status.code(), Some(4), "guard refusal exits nonzero (4)");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(err.lines().count(), 1, "exactly ONE named-error line: {err:?}");
+    assert!(err.contains("refusing to publish"), "the line is named: {err}");
+    assert!(
+        err.contains("git log empty"),
+        "the error names THE leg the m4 mutant deleted (zero writes, zero commits): {err}"
+    );
+    assert_eq!(
+        std::fs::read(f.site.join("index.html")).unwrap(),
+        before,
+        "index.html must stay byte-identical (zero writes)"
+    );
+    assert_eq!(
+        all_commit_subjects(&f).len(),
+        commits_before,
+        "commits NOTHING"
+    );
+}
+
 /// The 58c3a0b signature (T186 class): ALL repo inputs unreadable at once —
 /// the runner's repo path pointed at an empty or harvested directory, not
 /// even a git repo. One named-error line, nothing else on stderr; the live

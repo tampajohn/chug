@@ -1,6 +1,6 @@
 # T226 — close the T217+T215 validators' left-behind survivors (tests-only sweep)
 
-check: set -o pipefail; export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared; touch src/*.rs tests/*.rs; cargo test --test site_sync --test loopd_daemon_ensure --test daemon_feature_off
+check: set -o pipefail; export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-validate-a; touch src/*.rs tests/*.rs; cargo test --test site_sync --test loopd_daemon_ensure --test daemon_feature_off
 
 estimate: ~200 changed lines (three pin families, one RED-proof each; tests-only preferred — see req 2's fork)
 
