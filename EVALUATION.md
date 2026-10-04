@@ -321,6 +321,43 @@ for visibility).
   fixed by amend pre-push + the T152-pattern correction record in
   `.chug/decisions.jsonl` (d1791112737-8).
 
+- **T223 + T220 LANDED (merge 1231a89, landed-clean after a FAIL→fix-up→PASS
+  arc)** — the bake-off RUN + verdict doc closes the operator's T220 filing
+  (both halves now in): `scripts/judge-parity.sh` is the fail-closed idempotent
+  runner (T200 export → 211 closed-set labels; the F13 time-ordered last-20%
+  tail = 42-record holdout; the 8 INDEX-keyed stop-judge goldens; one release
+  daemon per revision-pinned checkpoint over the real /judge wire, canonical +
+  option-flipped orderings, the T222 metric set per class), and
+  `docs/judge-parity.md` records the honest one-contestant partial verdict:
+  **LAYA STAYS** (the margin rule is vacuous with one contestant short — kev-0.8b
+  candle-blocked per T222's premise defect #2, verdict-2.0 id still HTTP 401
+  re-probed live, LocalLLaMA anchor not local/skipped) with REAL numbers —
+  goldens parity max|dp| 0.00e+00 / 0 violations / top-1 8/8 / MAE 0.0001
+  (verified 3 runs — the served laya IS the recorded laya); holdout n=42 choice
+  top-1 0.5714, noul AUROC 0.374 (below coin-flip: deep-OOD, no gating signal,
+  SPEC-3 stands — the F13 fine-tune is the named follow-up); option-order flips
+  5/9 goldens + 17/42 holdout (the kev-card caveat holds for laya too; the
+  runner measures both orderings by construction). Arc: glm run-1 died 80/80
+  (runner built + validated by hand, doc unwritten) → T63 resume goal-accepted
+  14/80 (1ef6482); kimi round-1 VERDICT FAIL (d1791123300-14) — MAJOR: the
+  serve legs leaked their model-loaded daemons EVERY run (serve_leg ran inside
+  command substitution so its PID_LIST side effect died with the subshell; the
+  validator proved 6/6 orphans at 2.0–3.4 GB RSS and the orchestrator reaped
+  ~20 GB of accumulated orphans before the fix) + 4 nits; the fix-up (86a6b06)
+  swept the CLASS — both daemon starts now book their pid in the parent shell,
+  cleanup+traps reap on EXIT/INT/TERM (130/143), manifest routing refuses
+  unknown checkpoints fail-closed, wait_healthy bails on early daemon death,
+  the tie-rule comment corrected — verified by orchestrator e2e (exit-1
+  fail-closed, metrics byte-identical, ZERO daemons post-exit) and a proper
+  trap test (an initial "leak" reading was the orchestrator's own test error —
+  `$!` of a `cd && cmd &` compound is the wrapper subshell, not the script);
+  kimi round-2 narrowed reval (d1791122288-13) VERDICT PASS (d1791123300-15).
+  Environmental note recorded: the T214 load-scaled fence test
+  (`a_failing_driver_probe_means_no_sweep`) expired its fence IDENTICALLY on
+  main under ambient load 9.68 (fseventsd + EXO pegged since July) mid-cycle,
+  then passed at post-merge — host-load flake family (T151/T172 lineage), not
+  branch-attributable (the branch diff is script+doc only).
+
 ### Cycle 100 (2026-10-04, ~05:37 UTC–) — routine freshness-skip cycle (glm; predicate held: EVALUATION mtime 01:28 UTC = launch day + T219/T220 todo) — queue: T219 → T221 → T220
 
 - **T221 LANDED (merge c85f6ba, landed-clean)** — the T219 validator's three
