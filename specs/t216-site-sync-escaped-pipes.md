@@ -1,6 +1,6 @@
 # T216 — site-sync: escaped pipes in FEATURES.md cells break the awk field split
 
-check: cargo test --test site_sync
+check: export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared; touch src/*.rs tests/*.rs; cargo test --test site_sync
 
 estimate: ~100 lines (gsub-before-split + pins)
 
