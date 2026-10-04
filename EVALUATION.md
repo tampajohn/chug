@@ -629,64 +629,7 @@ AUROC 0.374 finding.
   push rejections reconciled by merge (T217/T218/T219/T220 filings; one TODO.md
   conflict, both sides kept). Next cycle opens with 2 ready specs and no blockers.
 
-### Cycle 98 (2026-10-03, ~19:05 UTC–) — MANDATORY fresh eval (queue drained at cycle-97 wrap; kimi, T81 routing 8-for-8) — 3 rows filed (T212/T214/T213)
-
-- **T215 LANDED (merge 04ac3f1, fixed-up)** — the operator's mid-cycle pri-2 filing
-  (daemon ensure spawns the feature-off stub, ~16h of nonzero ensures on K7).
-  loopd.sh resolves the daemon-capable binary ONCE per run before the cycle loop
-  (CHUG_DAEMON_BIN executable probe-free → ~/.local/bin/chug `daemon --help` probe →
-  feature-on repo build via the refusal-literal byte-grep), one startup log line,
-  fail-open skip; the 549-line tests/loopd_daemon_ensure.rs family pins the order
-  behaviorally against the real loopd.sh (11 pins incl. probe-cache and
-  literal-coupling-to-src legs); the runbook pins the pre-warm one-liner (the
-  validator verified spawn_daemon detaches, so a cold 650MB download survives the
-  bounded wait). glm impl died at BOTH budgets (80/80 iterations → T63 resume
-  d1791066541-16 → resume died at the 50-min wall with the goal gate VERIFYING and
-  the work complete-committed → T55/T150 orchestrator-finish, no second resume).
-  kimi validator PASS (d1791072243-18; the validator itself died 60/60 with the
-  verdict WRITTEN — the verdict-file doctrine absorbed it): 9/9 mutant runs RED
-  including the K7-regression leg, gates reproduced exactly (1527/1527 nextest
-  full-suite, fallback 1527, family 11/11 isolated in 4.5s). Findings filed
-  forward: the new family's full-suite fence trips are the T152 load-stretch class
-  (T214's spec amended pre-dispatch to adopt it — 3 legs tripped at ~90.7s on one
-  full-suite run, 11/11 green isolated); LOW: leg-(b)'s `daemon --help` probe does
-  not discriminate feature-off from feature-on (realistic carrier path safe —
-  install.sh installs release.yml's feature-on tarballs) and the client-side
-  daemon_binary() wrong-binary shape (latch:true mitigates; a future sweep row
-  candidate); 3 NITs + 2 bookkeeping observations. Post-merge gates 1527/1527.
-  The operator reconciled two more mid-cycle pushes this cycle (f3e01e0 F15 tidy).
-
-- **T216 LANDED (merge f5cd2e4, landed-clean)** — the operator's second mid-cycle
-  filing (chug.sh F15 card rendered QUEUED + fragment what-text: markdown-escaped
-  pipes in the name cell phantom-split under awk -F'|'). The fix is the spec's
-  named remedy — park each escaped pipe on a \001 placeholder in a line COPY
-  before the split, restore the literal pipe in the surviving cells — plus 3
-  site_sync pins (+68 lines). T189 gates-only lane (d1791073767-22: 96 changed
-  lines, no core-list file, no new surface, re-key-only check change) — the lane's
-  first use this cycle and its cheapest arc: glm goal-accepted 38/80 in ~12 min,
-  nextest 1528/1528 + clippy -D in the worktree, post-merge 1528/1528. The F15
-  card renders landed with the full what-text on the next site-sync run.
-
-- **T212 LANDED (merge 7c76356, round-2, fixed-up)** — the cycle's deep one. Round 1
-  built the advisory fix on a FALSE premise and the round-1 kimi validator caught it
-  (FAIL d1791061091-8, proven three ways: main.rs:87 re-read-every-iteration,
-  driver.rs:462/1171/1556 arg-path reads, the t209/t210 verifying events running the
-  un-keyed check): the goal gate reads the spec ARG path, branch re-keys never reached
-  it, the cycle-97 WARNs were TRUE positives, and T197's advisory was correct all
-  along — round 1 would have silenced the one truthful component. Round 2 (option C,
-  d1791061091-9 — launch-template spec arg → the WORKTREE copy, rejecting a driver-side
-  cwd-shadowing rule for every run): full revert (sha256 byte-identical), the SPEC-ARG
-  RULE sentence in step 2's template (T63 resume + step-4 validator inherit; the
-  advisory then judges the very text the gate enforces), t209/t210 main-spec slot
-  residue restored, todo_consistency pin 21/21 with 3 T79 parallel mutants RED-proven.
-  kimi round-2 PASS (d1791064272-10): all five findings answered + independently
-  re-verified, gates reproduced exactly (1516/1516 nextest, clippy -D, fallback PASS),
-  launch replay re-derived (no-WARN on agreement, WARN naming both carriers on drift).
-  Orchestrator review caught + fixed one sed over-reach (the validate-a re-key had also
-  rewritten req 3's quoted literal — restored pre-merge). The design dogfooded at its
-  own launches: the round-2 fix-up and validator launches carried the worktree-copy
-  spec arg and printed ZERO drift WARNs. glm r1 70/80 (one gate rejection on the
-  T31-named setsid flake, recovered), fix-up 60/80, both goal-accepted.
+### Cycle 98 (2026-10-03) — MANDATORY fresh eval (kimi, T81 routing 8-for-8): 3 rows filed (T212/T214/T213); landed T215 daemon-binary resolution 04ac3f1 (fixed-up; glm died at BOTH budgets, T63 resume, orch-finish; kimi PASS 9/9 RED), T216 chug.sh F15 pipe-phantom fix f5cd2e4 (gates-only lane, the lane's first use), T212 SPEC-ARG RULE round-2 7c76356 (fixed-up — round-1 kimi FAIL caught the FALSE premise, sha256-identical revert, the worktree-copy spec arg landed); full narrative in git (row-flip commits + TODO done rows).
 
 ### Cycle 97 (2026-10-03) — glm routine cycle; 2 items landed (T209 dispatch-time spec-size gate 60d5759, T210 pre-launch placeholder check 1d38dcd, both doctrine SOLO kimi PASS); queue rebuilt by the cycle-96 eval; full narrative in git (row-flip commits + TODO done rows).
 
