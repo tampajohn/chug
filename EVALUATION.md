@@ -298,6 +298,22 @@ for visibility).
   caught only by the child's above-spec legs), 4 non-blocking observations (double
   seam read race ~0.1%, single-line pin needle, mul_f64 MAX unreachable, sysctl
   /usr/sbin fallback exercised by the gate shell itself).
+- **T213 LANDED (merge d8e24f3, landed-clean after orchestrator-finish)** — the T205
+  validator's three LOW survivors closed in one SOLO arc: the canary VALUE pin
+  (emit_fix_line recording sink + three-surface absence assert), the BYTE-IDENTICAL
+  loopd.sh env-loader extraction into scripts/loopd_env_loader.sh with a 7-leg
+  driver (allowlist, count-only log, explicit-env-wins, malformed tolerance,
+  absent-file no-op), and the one-attempt-fetch comment. glm committed all three
+  parts then died the 50-min wall at 65/80 mid-verification, goal unaccepted →
+  T55 orchestrator-finish; MY step-3 gates caught a real break the child never saw:
+  loopd_model_routing's minimal fixture_dir copies loopd.sh text WITHOUT the new
+  scripts/ companion, so the sourcing line (line 59, before any mode dispatch) died
+  under set -euo pipefail in 5 sandbox tests — fragment-beside-copy fixture repair
+  committed on-branch before validation. kimi REQUIRED (loopd.sh doctrine carrier):
+  PASS, 3/3 mutants RED (m1 canary leak = the spec's M1 RED-proof, m2 allowlist
+  widening caught twice, m3 explicit-env-loses), byte-identity independently
+  re-verified via git show, 1559/1559 nextest release + clippy -D. T217/T218
+  operator filings merged mid-cycle (4d578e1) after a push rejection.
 
 ### Cycle 98 (2026-10-03, ~19:05 UTC–) — MANDATORY fresh eval (queue drained at cycle-97 wrap; kimi, T81 routing 8-for-8) — 3 rows filed (T212/T214/T213)
 
