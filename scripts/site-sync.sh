@@ -401,10 +401,42 @@ badge_ensure() { # cardfile status
     { print }' "$1"
 }
 
+# body_ensure WHAT (card on stdin -> stdout) — T218: the card's <p> body is a
+# FEATURES.md FACT, machine-owned like the badge, not curation. The text
+# between the first <p…> open tag and its </p> is replaced with WHAT (the
+# row's already-prep()d what-text: capped, emphasis-stripped, escaped, code
+# spans), so a body written by any historically-buggy generator — the live
+# F15 card fossilized the T216 `http\` fragment for HOURS — heals on the
+# next sync, badge and body in one pass, no hand-deletion needed. The open
+# tag is kept VERBATIM (its own class/attributes) plus the line's indent and
+# any prefix, and everything after </p> is untouched. Single-line only, the
+# same convention as badge_ensure's h3: a <p> whose </p> is not on its line
+# is left alone (the generator never writes one, and rewriting across lines
+# could eat a <ul> body — the T99 no-drop shape). WHAT rides ENVIRON rather
+# than -v: -v processes escape sequences, so a what-text carrying a literal
+# backslash (exactly the fossilized class) would be mangled.
+body_ensure() { # what
+  WHAT="$1" awk '
+    !done && match($0, /<p[ \t][^>]*>|<p>/) {
+      pre = substr($0, 1, RSTART - 1)
+      open = substr($0, RSTART, RLENGTH)
+      rest = substr($0, RSTART + RLENGTH)
+      if (match(rest, /<\/p>/)) {
+        $0 = pre open ENVIRON["WHAT"] substr(rest, RSTART)
+        done = 1
+      }
+    }
+    { print }'
+}
+
 # features_generate REGIONFILE OUTFILE — rebuild the region: every existing
 # card keeps its position and markup (CSS classes/order preserved, req 2);
-# cards whose name matches an F-item get their badge ensured; F-items with no
-# card are appended as synthesized cards in FEATURES.md order. No card is
+# cards whose name matches an F-item get their badge ensured AND their <p>
+# body regenerated from the row's what-text (T218: name, badge, and body are
+# all FEATURES.md facts — a stale body written by any historically-buggy
+# generator heals on the next sync, so the operator never hand-deletes a
+# card again); F-items with no card are appended as synthesized cards in
+# FEATURES.md order. No card is
 # ever dropped (flush_card prints every chunk — fix-up finding 1), so nothing
 # outside FEATURES.md is lost.
 features_generate() { # regionfile outfile
@@ -462,14 +494,16 @@ features_generate() { # regionfile outfile
                 [ -n "$fn" ] || continue
                 if [ "${#cn}" -le "${#fn}" ]; then short="$cn"; long="$fn"; else short="$fn"; long="$cn"; fi
                 if [ "${#short}" -ge 4 ] && case "$long" in *"$short"*) true ;; *) false ;; esac; then
-                  match_id="$fid"; match_status="$fstatus"
+                  match_id="$fid"; match_status="$fstatus"; match_what="$fwhat"
                   break
                 fi
               done < "$rows"
             fi
             if [ -n "$match_id" ]; then
               matched="$matched $match_id"
-              badge_ensure "$TMP_CARD" "$match_status"
+              # T218: badge AND body in one pass — the h3 and the <p> are
+              # disjoint lines, so the filter order does not matter
+              badge_ensure "$TMP_CARD" "$match_status" | body_ensure "$match_what"
             else
               cat "$TMP_CARD"
             fi

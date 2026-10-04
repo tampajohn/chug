@@ -772,12 +772,17 @@ fn t99_features_badges_cards_and_idempotence() {
     assert_eq!(count(&html, "<!-- FEATURES:BEGIN -->"), 1);
     let ft = region(&html, "FEATURES");
     // landed badge (checked off in FEATURES.md — strikethrough-ONLY leg of
-    // finding 3) on the matched existing card, which keeps position and prose
+    // finding 3) on the matched existing card, which keeps position and
+    // markup; T218: the body is machine-owned too — the seeded stale prose
+    // heals to the row's prep()d what-text in the same pass as the badge
     assert!(
         ft.contains("<h3><span>delegate</span> sub-agents<i class=\"q\">landed</i></h3>"),
         "matched card badge: {ft}"
     );
-    assert!(ft.contains("<p>Launch and collect child runs.</p>"));
+    assert!(
+        ft.contains("<p>Structured child result: <code>goal_complete</code> summary + refs.</p>"),
+        "matched card body regenerated from the row's what-text (T218): {ft}"
+    );
     assert!(ft.contains("    <div class=\"card\">\n      <h3><span>tools</span> ×13</h3>\n      <p>read_file etc.</p>\n    </div>"),
         "non-F card verbatim: {ft}");
     // finding 1 (RED-proven): a card with NO <p> (h3 + <ul> body) must survive
@@ -990,6 +995,67 @@ fn t216_escaped_pipes_never_split_cells() {
         "(c) escaped-pipe row referenced by an OPEN todo row is in-flight: {ft}"
     );
     assert_eq!(count(&ft, "<i class=\"q\">in-flight</i>"), 1, "exactly the one open-referenced row");
+}
+
+/// T218: the card BODY is machine-owned, like the badge. features_generate
+/// used to preserve every existing card's markup wholesale and ensure only
+/// the badge — the <p> was written once at card creation and never
+/// refreshed, so a body written by any historically-buggy generator (chug.sh's
+/// F15 card showed the T216 `http\` fragment for HOURS) was locked in
+/// forever, and the operator's only remedy was deleting the card (9a1a6e0).
+/// Pinned legs: (a) a stale-fragment body heals to the row's prep()d
+/// what-text in one sync, badge and body together; (b) position and CSS
+/// classes still hold — card order, the card/h3/badge markup, even the <p>
+/// open tag's own class; (c) a non-F-item card's body is untouched
+/// (forward-compat for hand-authored cards); and the healed page is
+/// idempotent — drift heals exactly once.
+#[test]
+fn t218_stale_card_bodies_regenerate_from_the_features_row() {
+    let (f, _refs, _orig) = fixture_t99();
+    // the delegate card (matches F1 "delegate collect") carries the live
+    // bug's stale fragment plus a classed <p> open tag; COMMIT it so the
+    // sync repairs a published broken card — the operator's exact situation
+    let stale = page(&f).replace(
+        "      <p>Launch and collect child runs.</p>\n",
+        "      <p class=\"what\">http\\</p>\n",
+    );
+    assert_ne!(stale, page(&f), "seed edit must land");
+    std::fs::write(f.site.join("index.html"), &stale).unwrap();
+    commit(&f.site, "operator: broken card body from an old generator", None, "2026-09-25", false);
+    let out = run_sync(&f, true);
+    assert!(out.status.success(), "run: {:?}", String::from_utf8_lossy(&out.stderr));
+    let ft = region(&page(&f), "FEATURES");
+    // (a) the fossil is gone, healed to F1's what-text — no hand-deletion
+    assert!(!ft.contains("http\\"), "(a) stale fragment body must not survive: {ft}");
+    assert!(
+        ft.contains("<p class=\"what\">Structured child result: <code>goal_complete</code> summary + refs.</p>"),
+        "(a) body healed to the row's prep()d what-text: {ft}"
+    );
+    // (b) position + classes preserved: still the FIRST card, card/h3/badge
+    // markup intact, the <p> open tag's own class survived the rewrite
+    let dg = ft.find("<div class=\"card\">").expect("delegate card present");
+    let head = &ft[dg..(dg + 300).min(ft.len())];
+    assert!(
+        head.contains("<h3><span>delegate</span> sub-agents<i class=\"q\">landed</i></h3>"),
+        "(b) card position + h3/badge classes intact: {head}"
+    );
+    assert!(
+        ft.find("delegate").unwrap() < ft.find("tools").unwrap()
+            && ft.find("tools").unwrap() < ft.find("misc").unwrap(),
+        "(b) card order preserved: {ft}"
+    );
+    // (c) a non-F-item card keeps its body verbatim (forward-compat)
+    assert!(
+        ft.contains("    <div class=\"card\">\n      <h3><span>tools</span> ×13</h3>\n      <p>read_file etc.</p>\n    </div>"),
+        "(c) non-F-item card body untouched: {ft}"
+    );
+    // drift heals exactly once: the next sync is byte-identical, no commit
+    let before = page(&f);
+    let n = all_commit_subjects(&f).len();
+    let out2 = run_sync(&f, true);
+    assert!(out2.status.success());
+    assert_eq!(page(&f), before, "healed page is idempotent");
+    assert_eq!(all_commit_subjects(&f).len(), n, "no second sync commit");
 }
 
 #[test]
