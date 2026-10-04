@@ -21,6 +21,13 @@ piped unguarded. The spec-`check:` pipe lint (T67→T164,
 tests/todo_consistency.rs:205+) covers spec check lines; the
 ORCHESTRATOR's ad-hoc gate chains have no carrier.
 
+Cycle-103 added a THIRD instance while this row sat queued: the
+filing cycle's own T225 flip ran `cargo test ... | grep "test result"`
+— grep exits 0 on matching the FAILED line and the chain pushed a red
+row-format guard live (71ca2c1, ~3 min, fixed d2bf500). Two of the
+three recurrences are orchestrator filter chains, not model carelessness
+— the carrier sentence must name the grep-filter shape explicitly.
+
 ## Requirements
 
 1. LOOP-SPEC Phase-2 step 5's TODO.md-edit paragraph gains one sentence:
