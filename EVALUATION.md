@@ -309,6 +309,17 @@ for visibility).
   candidate); 3 NITs + 2 bookkeeping observations. Post-merge gates 1527/1527.
   The operator reconciled two more mid-cycle pushes this cycle (f3e01e0 F15 tidy).
 
+- **T216 LANDED (merge f5cd2e4, landed-clean)** — the operator's second mid-cycle
+  filing (chug.sh F15 card rendered QUEUED + fragment what-text: markdown-escaped
+  pipes in the name cell phantom-split under awk -F'|'). The fix is the spec's
+  named remedy — park each escaped pipe on a \001 placeholder in a line COPY
+  before the split, restore the literal pipe in the surviving cells — plus 3
+  site_sync pins (+68 lines). T189 gates-only lane (d1791073767-22: 96 changed
+  lines, no core-list file, no new surface, re-key-only check change) — the lane's
+  first use this cycle and its cheapest arc: glm goal-accepted 38/80 in ~12 min,
+  nextest 1528/1528 + clippy -D in the worktree, post-merge 1528/1528. The F15
+  card renders landed with the full what-text on the next site-sync run.
+
 - **T212 LANDED (merge 7c76356, round-2, fixed-up)** — the cycle's deep one. Round 1
   built the advisory fix on a FALSE premise and the round-1 kimi validator caught it
   (FAIL d1791061091-8, proven three ways: main.rs:87 re-read-every-iteration,
