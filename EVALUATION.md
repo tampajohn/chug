@@ -284,6 +284,18 @@ for visibility).
 
 ### Cycle 100 (2026-10-04, ~05:37 UTC–) — routine freshness-skip cycle (glm; predicate held: EVALUATION mtime 01:28 UTC = launch day + T219/T220 todo) — queue: T219 → T221 → T220
 
+- **T221 LANDED (merge c85f6ba, landed-clean)** — the T219 validator's three
+  actionable findings closed in one pass: the day-0 `parse_rfc3339` guard (rejects
+  `day < 1` like day 32 → registration fails open to server-now; the debug
+  conn-thread panic / release wrap-and-evict pair the validator verified black-box
+  is gone), the `age_sec` value pin (kills mutant m5), and the 599/601 TTL boundary
+  table (kills mutant m6 — the symbolic const legs could never see it), plus the
+  ±2s band on the roundtrip `now` comparison (finding-4 flake). glm 49/80 with
+  three serial self-mutations killed + reverted before commit (1792a51). T189
+  gates-only lane (d1791101242-6, all four inputs pass: no core file, 122 lines,
+  no new surface, no check change) — full gates still run: nextest release
+  1579/1579 + clippy -D + spec check, worktree AND post-merge in main.
+
 - **T219 LANDED (merge 0516e05, landed-clean after a T63 resume)** — the daemon's
   0600 socket grew the `/sessions` registry: `SessionRegistry` (upsert-by-id, lazy
   TTL eviction at SESSION_TTL_SECS=600, four SESSION_ROLES incl. the external
