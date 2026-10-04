@@ -282,6 +282,46 @@ for visibility).
 
 ## Outcomes (filled at cycle wrap — LOOP-SPEC Phase 3)
 
+### Cycle 102 (2026-10-04, ~14:41 UTC–) — routine freshness-skip cycle (glm; predicate held: 1 todo row + EVALUATION mtime 10:33 UTC = launch day)
+
+**T224 landed (b535218: e0bc65c + spec re-key).** The three T222-validator
+pin-strength findings closed as tests-only (+209/-0 in tests/kev_loader.rs,
+zero production diff), each RED-proven against its named mutant then
+reverted shasum-byte-clean (T69 sweep-the-family): m9
+`auroc_midrank_tie_handling_pin` (divergent tie corpus pins midrank 0.875
+EXACT — plain rank gives 0.75/1.0, so the mutant cannot produce it; all-tied
+corpus pins the 0.5 convention; same structure end-to-end through
+load_corpus→parse_record→evaluate); m12 `parse_record_refusal_legs_pin`
+(bad probs sum 1.5 binary-exact / label 2 out of range / non-permutation
+flip, each refused by its named error, valid control first); m8
+`daemon_routing::daemon_dir_arm_routes_kev_layout_to_the_classified_refusal`
+cfg(all(unix, feature="daemon")) — every lifecycle test runs
+CHUG_DAEMON_STUB and drops CHUG_LAYA_CHECKPOINT, so the real_backend Dir-arm
+routing was deletable unnoticed; the pin spawns the REAL binary (no stub)
+with CHUG_LAYA_CHECKPOINT at a kev-layout tempdir (adapter_config +
+provenance + stub head.pt — the classified refusal fires BEFORE any big
+fetch) and pins non-zero exit + 'cannot serve yet'+'candle-blocked' stderr +
+no socket bound. Arc: glm impl goal-accepted 55/80 (~35 min, first try);
+T189 lane call (d1791128510-1) computed from the diff — input (b) flipped
+(209 changed lines > ~150), so FULL adversarial validation ran despite the
+row's filed gates-only expectation (that expectation was keyed to the
+~120-line estimate; the honest arc ran 209); kimi validator (pid 66267,
+slot validate-a, 41/60, goal-accepted) VERDICT PASS (d1791130461-2): 5
+mutants re-run RED in throwaway worktrees with the T222-predicted signatures
+(m9 0.75; m8 'missing model.safetensors' fall-through; m12 sum/label/
+permutation deletions), m9/m12 serial (overlapping file) + m8 parallel
+(disjoint src/daemon.rs), gates re-run green both feature legs (nextest
+1593/1593, daemon 9/9, clippy -D clean), production tree shasum-verified
+byte-clean. Two non-blocking validator observations recorded (m8 deadline
+path drops the Child without kill — matches the daemon_lifecycle.rs pattern;
+209 vs ~120 estimate = the m8 fixture scaffolding). Post-merge gates in main
+1593/1593. Dispatch note: the validator-launch target-dir drift WARN was
+resolved by the dispatch-time spec re-key (b535218, T175/T212) — committed
+after the validator exited because its live git index lock held the
+worktree; the goal gate reads the FILE per iteration, so the validator's
+check legs ran validate-a regardless. Queue EMPTY after flip — next cycle
+is a mandatory fresh eval.
+
 ### Cycle 101 (2026-10-04, ~09:09 UTC–) — routine freshness-skip cycle (glm; predicate held: EVALUATION mtime 08:33 UTC = launch day [the cycle-100 wrap commit 2810ed9] + T220/T222/T223 todo) — queue: T222 → T223
 
 **WRAP (T220/T222/T223 landed; T224 filed, stays `todo` — wall budget, spec
