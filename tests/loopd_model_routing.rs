@@ -341,7 +341,8 @@ fn todo_table(rows: &[(&str, &str)]) -> String {
     s
 }
 
-/// Fixture dir: a copy of the real loopd.sh plus TODO.md/EVALUATION.md.
+/// Fixture dir: a copy of the real loopd.sh (plus its T213 loader fragment)
+/// plus TODO.md/EVALUATION.md.
 /// The script cd's to its own directory, so the copy sees only the
 /// fixtures. Returns the TempDir guard (RAII cleanup); use `.path()`.
 fn fixture_dir(todo: Option<String>) -> tempfile::TempDir {
@@ -351,6 +352,18 @@ fn fixture_dir(todo: Option<String>) -> tempfile::TempDir {
         std::fs::read_to_string(repo_root().join("loopd.sh")).expect("loopd.sh readable"),
     )
     .expect("copy loopd.sh into fixture dir");
+    // T213: loopd.sh sources scripts/loopd_env_loader.sh relative to its own
+    // path (the M4 loader extraction) — the fixture copy needs the fragment
+    // beside it or the sourcing dies under set -euo pipefail before any
+    // mode dispatch (the reaper + daemon_ensure sandboxes copy scripts/
+    // wholesale; this minimal fixture copies exactly what loopd.sh needs).
+    let scripts = tmp.path().join("scripts");
+    std::fs::create_dir_all(&scripts).expect("fixture scripts dir");
+    std::fs::copy(
+        repo_root().join("scripts/loopd_env_loader.sh"),
+        scripts.join("loopd_env_loader.sh"),
+    )
+    .expect("copy loopd_env_loader.sh into fixture dir");
     if let Some(todo) = todo {
         std::fs::write(tmp.path().join("TODO.md"), todo).expect("write fixture TODO.md");
     }
