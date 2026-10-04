@@ -598,6 +598,18 @@ logged). The inference stack (candle + hf-hub + tokenizers) lives behind the
 `daemon` cargo feature — off by default, so the hot `chug run` build never
 compiles it. See [DEPENDENCIES.md](DEPENDENCIES.md).
 
+The same socket also hosts the **session registry** (T219): every chug run
+registers a TTL heartbeat — `POST /sessions` upserts one entry
+(`{id, role, started, last_event_ts, status}`; roles `loopd-cycle`,
+`delegate-child`, `dashd`, `daemon`), `GET /sessions` lists the live ones
+with `age_sec`; entries expire after 10 idle minutes. loopd heartbeats at
+each cycle start and delegate children register at launch (all best-effort —
+a downed daemon is a silent no-op), and the daemon lists itself while
+serving. One `curl --unix-socket ~/.chug/daemon.sock localhost/sessions`
+answers "what chug runs are alive on this box" locally. A weightless
+registry host (`CHUG_DAEMON_SESSIONS=1`) serves `/sessions` + `/healthz`
+without loading the model — `/judge` refuses there exactly as on the stub.
+
 ## Hooks (`.chug/hooks.json`)
 
 Operator policy-as-config: shell commands fire around every tool call. The
