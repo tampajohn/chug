@@ -1,328 +1,256 @@
-# EVALUATION — chug, assessed by chug-loop (2026-10-04, cycle 103)
+# EVALUATION — chug, assessed by chug-loop (2026-10-04, cycle 105)
 
 MANDATORY fresh eval — the freshness predicate failed at launch on the
-todo-rows half (queue DRAINED at the cycle-102 wrap: 0 `todo` rows;
-EVALUATION.md's mtime was same-day from the cycle-102 wrap-notes append,
+todo-rows half (queue DRAINED at the cycle-104 wrap: 0 `todo` rows;
+EVALUATION.md's mtime was same-day from the cycle-104 wrap-notes append,
 but the conjunction needs both), so loopd routed to kimi per T81 — the
 routing decision has been correct every cycle of the delta and for this
-launch. Delta corpus since the cycle-98 eval: cycles 98 (work phase), 99,
-100, 101, 102 — five orchestrator streams (kimi ×1: 184i/5h22m accepted,
-trim fires 2; glm ×4: 157i/4h31m, 133i/3h25m, 158i/5h26m, 63i/2h3m — all
-accepted) plus 20 child streams (the t212–t224 arcs: 13 impl runs, 1
-fix-up, 8 validator runs) — read via the fresh digest (537 files, 33,106
-iterations, FRESH per the mechanical check) with drills into the t219-impl
-stream (the launch-test flake), the t212 spec's CORRECTED PREMISE section,
-`.chug/decisions.jsonl` (967 records, +64 in the delta — zero zero-record
-cycles), and the full git record (`f4c96b5..a38ff48`, ~35 commits incl.
-the v0.16.2 and v0.17.0 releases). Headline: **all twelve queued rows
-landed** (T212–T224, including two operator filings worked mid-cycle and
-the T220 dispatch-time split), the loop self-tagged twice, and the queue
-is EMPTY for the second time in three evals — while the cost center
-shifted decisively to two places: the recovery tax (9 of 15 impl-side
-child runs died at a budget, every one absorbed by T63/T55 with zero work
-lost) and contention false-reds (the delegate launch-test flake family +
-the T214 fence's blind variable, filed as T225). The loop's own
-measurement machinery also delivered its first real verdict: the T223
-judge-parity bake-off ran end-to-end and returned LAYA STAYS with numbers
-(goldens parity max-abs-dp 0.00e+00, holdout n=42 AUROC 0.374) — the F13
-roadmap question now has TWO independent measurements saying not-yet.
+launch. Delta corpus since the cycle-103 eval: cycles 103 and 104 — two
+orchestrator streams (kimi ×1: 166i/4h55m accepted, trim fires 2; glm ×1:
+57i/1h40m accepted) plus 10 child streams (the t225–t229 arcs: 5 impl
+runs, 5 validator runs) — read via the fresh digest (549 files, 33,813
+iterations, FRESH per the mechanical check) with drills into the
+cycle-104 orchestrator stream (the four wrap-gate timeouts, I2), the
+t226-impl stream (the 80/80 exact landing), `.chug/decisions.jsonl`
+(1,003 records, +36 in the delta — zero zero-record cycles), and the
+full git record (`a38ff48..3e7c118`, 26 commits incl. the v0.17.1
+release). Headline: **the delta's entire queue landed — five rows, five
+first-round PASSes, ZERO child budget deaths, ZERO fix-up arcs, ZERO
+validator findings filed forward** — the first death-free delta in the
+recorded corpus, two cycles after the cycle-103 eval named a 60%
+impl-side death rate the delta's dominant cost. The queue is EMPTY for
+the third time in four evals. The two forward-looking watch-items from
+the cycle-103 eval resolved one each way: the ctx-edit zero-fires
+trigger-calibration clause TRIPPED (0 fires across all 549 events files
+→ T230 filed), and the validator-death census did NOT trip (0 deaths in
+5 runs; 1-in-13 and announced-to-file).
 
 ## 1. What chug does well
 
-- **Recovery doctrine absorbed a 60% child-death rate with zero work
-  lost.** 9 of 15 impl-side runs in the delta died at a budget (t215 ×2,
-  t219-r1, t222 ×2, t223-r1, t223-fixup, t213, t214 — iteration-bound on
-  novel-infrastructure rows, minutes-bound under host load); every one
-  routed correctly: T63 resume when uncommitted (t214, t219, t223),
-  T55/T150 orchestrator-finish when complete-committed (t215, t213,
-  t222-r2, t223-fixup). One resume (t215) died at the SECOND budget with
-  the goal gate VERIFYING and the doctrine's cap (one resume per child)
-  held.
-- **The validator net keeps catching what review misses — including a
-  20 GB process leak.** T223 round-1 FAIL (the serve-leg daemons leaked
-  via subshell PID bookkeeping: 6/6 orphans at 2–3.4 GB RSS, ~20 GB
-  reclaimed; the fix-up swept the CLASS — parent-shell booking, traps,
-  fail-closed routing, early-death bail) is the delta's best catch. T212
-  round-1 FAIL caught a false-premise fix before merge (I6). T219's
-  7-mutant sweep found the day-0 underflow + two pin-strength gaps. Zero
-  defective merges in the delta.
-- **The dispatch-time spec-size gate (T209) caught its first live
-  oversized row.** Cycle 100 re-read T220 at dispatch (~450L filing over
-  a T204-class true surface), split it by acceptance surface into
-  T222+T223 with the premise defect written into both specs — the gate
-  working exactly as designed, filing-time honesty not required for
-  enforcement.
-- **The loop's measurement machinery produced its first honest
-  verdict.** T223's bake-off: fail-closed idempotent runner, real /judge
-  wire, both option orderings, three named gaps, no fabricated
-  comparison — and the classified kev refusal (T222) proved the SPEC-3
-  honesty surface end-to-end (no architecture substituted when the
-  premise broke mid-flight).
-- **Decision-record discipline is background noise now** (the goal):
-  967 records, +64 across 5 cycles, including the negative class
-  (eval-triage rejects, model/recovery routing, outcome backfills).
-- **Verdict-file doctrine absorbed the one validator death** (t215-val
-  died 60/60 with VERDICT written; the T209 validator measure clause's
-  UNANNOUNCED letter not tripped), and cycle-101's narrowed re-validation
-  ran 24/25 on a trimmed budget — budget-tailoring to scope working.
+- **The recovery tax went to zero this delta.** 5 of 5 impl children
+  goal-accepted on their FIRST runs (66/80, 80/80, 40/80, 39/80, 47/80
+  — no resumes, no orchestrator-finishes), and 5 of 5 validators
+  finished announced PASSes inside budget. The cycle-103 eval's
+  mitigations are the plausible cause and deserve the credit honestly:
+  the T209 dispatch gate plus honest ≤~350 estimates meant no row
+  entered dispatch oversized, and no novel-infrastructure row (the
+  2.7–5.6× undershoot class) was in the delta's queue. The sample is
+  small and row-kind-skewed — one delta, five pin/doctrine rows — so
+  this is evidence the mitigation WORKS on the row kinds it covers, not
+  that the death rate is structurally closed. The I3 MEASURE clause
+  stands armed.
+- **The validator net filed zero findings forward for the first time.**
+  Five PASS verdicts, and the T224-pattern forward-filing ledger (the
+  predicted-survivor pin rows) fully closed: T229 closed the T225
+  verdict's two survivors with the validator independently RED-proving
+  both legs in parallel throwaway worktrees, then filed nothing new.
+  The validators still added discrimination beyond the children's own
+  RED-proofs (T228: 4 extra legs; T227: the pin-flip vacuousness leg) —
+  the net is catching weaker things, then nothing.
+- **Same-cycle incident-to-doctrine closure worked twice.** The T227
+  class (piped gate chains swallowing red guards) recurred DURING its
+  own filing cycle (71ca2c1 red ~3 min, fixed d2bf500) and the doctrine
+  sentence + carrier pin landed the same day (d5f63f0); the T225
+  false-red class (an 80-iteration child death + a main-tree fence
+  expiry in the prior delta) closed with progress-reset fences and its
+  own validator's survivors swept within one more cycle (T229). The
+  loop's incident latency — sighting to filed row to landed doctrine —
+  is now routinely one cycle or less.
+- **Decision-record discipline is invisible infrastructure**: 1,003
+  records, +36 across 2 cycles, including the negative class (the
+  cycle-104 glm orchestrator's one malformed `decision_log` call met
+  T88's corrective error and self-repaired same-iteration — the
+  schema-friction count stays at the noise floor, §3).
+- **Estimate honesty is holding at dispatch**: the T209 gate had
+  nothing to catch this delta because all five rows were filed at or
+  under their true surface — the filing-time calibration (§5) is doing
+  the work the gate used to do mid-flight.
 
 ## 2. Incidents worth fixing
 
-### I1 — T223 serve-leg daemon leak: ~20 GB of orphaned judges (caught pre-merge, fixed)
-Evidence: cycle-101 Outcomes (merge 1231a89) — `serve_leg` ran inside
-command substitution, so its PID_LIST side effect died with the subshell
-and EVERY run leaked its model-loaded daemons (6/6 orphans, 2.0–3.4 GB
-RSS each; the orchestrator reaped ~20 GB accumulated before the fix-up).
-The kimi round-1 validator proved it black-box; the fix-up (86a6b06)
-swept the class: both start sites book pids in the parent shell,
-EXIT/INT/TERM traps reap, unknown-checkpoint routing fails closed,
-wait_healthy bails on early death. Root cause class: shell pid
-bookkeeping that dies in a subshell — the runner is a committed artifact
-(scripts/judge-parity.sh) that future eval-heavy rows will copy.
-Candidate fix: LANDED (86a6b06 + kimi round-2 PASS). No row. Watch-item:
-the T152 orphan reaper's three legs cover test/build processes and
-removed-worktree cwds — a leaked daemon from a LIVE worktree rides until
-worktree removal; acceptable (the reaper is a cycle-start net, not a
-mid-arc one).
+### I1 — Cycle-104 wrap gates died 4× on a cold default target dir (~20 min wall burned)
+Evidence: `.chug/events-20261004-233804.jsonl` (23:08, 23:17, 23:22,
+23:27 UTC) — four consecutive `timed out after 300s (process group
+killed)` in the wrap window, each showing `Compiling chug v0.17.1
+(/Users/jadams/workspace/chug)` or `Checking chug v0.17.1` as the last
+line: the glm orchestrator's TODO-edit guard-floor and gate runs went
+against the DEFAULT `target/` dir immediately after the v0.17.1 version
+bump (a manifest-only change makes every artifact stale), so each run
+died mid-compile at the 300s bash cap; the wrap recovered by degrees as
+partial compiles warmed the cache. Two discipline deviations compound
+here: the T57 ALWAYS rule (main gates run under `target-shared-main`)
+was not applied to the GUARD-FLOOR run, and the guard-floor invocation
+was additionally piped through `tail -3` with no `pipefail` — the T227
+shape recurring ONE cycle after its own doctrine landed (absorbed
+benignly: the timeout was self-announcing, no red guard was masked).
+Root cause: LOOP-SPEC step 5's TODO-edit guard sentence
+(`cargo test --test todo_consistency` "(seconds)") names no target dir,
+so the "(seconds)" assumption silently depends on whichever cache the
+invocation happens to hit — cold after every version bump by
+construction. Recurrence is structural (every tag creates a cold
+default target for the next wrap). Filed as **T231** (pri 4, doctrine,
+SOLO).
 
-### I2 — Goal-gate timeout on the loop's own check line (fix LANDED in-cycle, 7f94da2)
-Evidence: cycle-100's wrap goal gate rejected on a TIMEOUT, not a red
-test: the check line's plain `cargo test` (debug) against
-target-shared-main recompiled ~40 stale debug test binaries in 19m04s
-and blew the 1200s cap mid-daemon_lifecycle (everything that ran was
-green: 1216+2+1+4/5). The cycle-98 eval's I2 fixed the cold-TARGET leg
-(67e11fc); this was the cold-PROFILE leg on the same surface — the
-check line now carries the T82 runner verbatim (warm release nextest
-~36s) and nextest_gate_runner pins it as the 4th carrier. Two bites of
-the same class in four cycles; both fixed forward. No row. Lesson for
-spec authors (already doctrine): a check line without the shared-cache
-export + release-runner discipline is a landmine on any version bump.
+### I2 — t226-impl landed goal-accepted at EXACTLY 80/80 (near-miss, no defect)
+Evidence: digest entry for
+`.chug/events-t226-impl-20261004-191919.jsonl` (iterations 80/80,
+goal: accepted 1, 50m51s — inside the 50-minute wall by seconds, at
+the iteration ceiling exactly). A 343-line tests-only pin row consumed
+the entire child budget. No death, no resume — but zero margin: any
+one more tool call and this was a T63/T55 recovery. Root cause: none
+actionable — pin-sweep rows do dozens of RED-prove/revert cycles and
+the estimate (343 all-in) was inside the gate. Watch-item only, named
+honestly: the first exact-ceiling acceptance in the corpus; the I3
+census counts DEATHS, and this was not one. If the next delta shows a
+second exact-80 landing, the eval considers whether the pin-sweep row
+kind needs its own budget note in the child goal template. No row.
 
-### I3 — Child budget deaths at 60% of impl runs; the mix is now estimate-honesty, not size-cap
-Evidence (digest): t215 ×2 (iterations 80/80 → resume died minutes with
-the gate VERIFYING), t219-r1 (80/80 mid-flake-debug), t222 ×2 (80/80
-mid-premise-discovery, 80/80 post-commit), t223-r1 (80/80, doc
-unwritten), t223-fixup (50-min wall, 58/80), t213 (50-min, 65/80
-post-commit), t214 (50-min, 61/80 uncommitted). The T209 dispatch gate
-holds (it caught T220), but T219 (filed ~450 → landed 1,216) and T222
-(filed ~400 → landed 1,803) show the gate reads the ESTIMATE, and
-novel-infrastructure estimates undershoot 2.7–4.5× (§5's calibration).
-The deaths are absorbed (5–15 orchestrator iterations per finish) — the
-tax is real but bounded, and the recoveries are now routine. Candidate
-fix: NONE FILED — the calibration text is the standing remedy and the
-gate enforces the ceiling. MEASURE: if the next eval's census shows ≥2
-iteration-bound deaths on rows filed ≥300 all-in, the eval after
-considers a dispatch-time RE-ESTIMATE duty (the orchestrator re-derives
-the estimate from the spec's requirements list, not just re-reads the
-estimate line).
-
-### I4 — Contention false-reds: the delegate launch-test flake + T214's blind variable (→ T225)
-Evidence: (a) t219-impl run-1 died 80/80 mid-debug after **10 delegate
-launch bin-tests flaked** under concurrent loopd load — the child
-A/B-proved its diff not-causal (stash/re-run; the family passes at
-`--test-threads=1`; goal summary in
-`.chug/events-t219-impl-20261004-064230.jsonl`). A full 80-iteration
-child burned on a test-infrastructure false-red. (b) Cycle-101:
-`loopd_orphan_reaper::a_failing_driver_probe_means_no_sweep` expired its
-T214 load-scaled fence IDENTICALLY on main under ambient load 9.68,
-then passed at post-merge. Root cause: T214 scales by
-`clamp(loadavg_1m/cores, 1, 4)` and K7 has **18 cores** — 9.68 reads
-0.54/core → factor 1.0 → no scaling, while suite fan-out (T152 measured
-30.8s at 17-way vs 3.36s solo) stretches spawn walls ~9×. The per-core
-load variable is blind to the suite's own fan-out on many-core hosts,
-and the delegate bin-test fences (src/delegate/tests/, ~30 bare
-elapsed<15s/30s asserts over real stub children) never got any scaling.
-The principled fix: a fence whose child is making progress should trip
-on NO-progress, not on wall-clock — progress-reset liveness fences with
-the load-scaled wall as the outer backstop. Filed as **T225** (pri 2,
-robustness).
-
-### I5 — Piped gate chain swallowed a red todo_consistency; red main pushed (→ T227)
-Evidence: c06a555 went out with T220/T223 notes cells carrying literal
-`|` characters (rows split into 8 cells — the T37/T8 class); the guard
-was red and the orchestrator's chain reported the filter's exit 0
-(fixed forward 6365b50, root cause named in the commit; red live on
-origin ~3 min). The spec-`check:` pipe lint (T67→T164) covers spec
-check lines; the orchestrator's ad-hoc gate chains have no carrier.
-Blast radius tiny, recurrence count two (cycle-16's goal-gate death was
-the same notes-cell class through a different gate). Filed as **T227**
-(pri 4, doctrine, SOLO).
-
-### I6 — The cycle-98 eval filed T212 on a false indictment (→ T228)
-Evidence: specs/t212-delegate-drift-worktree-read.md's "CORRECTED
-PREMISE" section — the eval asserted the T197 drift WARNs were FALSE
-positives from secondhand Outcomes text; they were TRUE (the goal gate
-reads the spec ARG path, driver.rs:1171; branch re-keys never reached
-it). Round 1 (874c620) built the filing's premise, kimi FAILed it
-three ways, full sha256-identical revert, row re-scoped. Cost: one impl
-round (70/80) + one validation round (48/60) + the revert. The filing
-bar's "verify T1/T2/T4/T5 actually worked" clause covers fix-adjacency,
-not fresh indictments. Filed as **T228** (pri 3, doctrine, SOLO).
-
-### I7 — t215's validator died 60/60 with the verdict written (absorbed; watch-item)
-Evidence: `.chug/events-t215-validate-20261004-000130.jsonl` (60/60,
-abort "iteration budget exceeded", verdict file present — the
-verdict-file doctrine absorbed it; PASS d1791072243-18). The T209
-validator measure clause trips on UNANNOUNCED verdict deaths — this was
-announced-to-file, so not tripped; 1 death in the delta's 8 validator
-runs. Watch-item only: the validator's 9/9 mutant sweep on a 549-line
-test family is a big serial surface; if the next census shows ≥2
-validator deaths (any announcement state), the eval trims default
-mutation-leg counts per the clause.
+### I3 — The cycle-103 eval's measure clauses: both resolved NOT-tripped
+For the record, with numbers: (a) the I3 dispatch-time RE-ESTIMATE
+clause armed on "≥2 iteration-bound deaths on rows filed ≥300 all-in" —
+this delta: 0 deaths of any kind → NOT tripped, the T209 gate + filing
+calibration stand. (b) the T209 validator UNANNOUNCED-verdict clause —
+0 validator deaths in 5 runs this delta (all verdicts announced inside
+budget; t225-validate's one budget_low fire at remaining_iters=8
+finished 56/60 announced); the census now reads 1 death in the last 13
+validator runs, announced-to-file → NOT tripped, no mutation-leg trim.
 
 ## 3. Friction hot spots
 
-- **The recovery tax is the delta's dominant steady-state cost** — 9
-  child deaths in 15 impl-side runs, each costing 5–15 orchestrator
-  iterations plus re-review and (twice) a second validation round. All
-  absorbed, zero work lost, but it is why cycles run 3.5–5.5 h. The
-  mitigations are the T209 gate (working — T220) and §5's calibration
-  refinement; the residual is host load (I3/I4).
-- **Host contention profile changed interpretation**: K7 is 18 cores /
-  128 GB, and ambient load ~9.7 (fseventsd + EXO pegged) reads
-  0.54/core — QUIET to per-core scaling while the suite's own fan-out
-  does the damage. The T82 family-isolation tax (~2–5 min per gate) was
-  paid repeatedly in cycles 99/101 (T213's model_routing fixture break,
-  the cycle-101 fence flake). T225 is the filed fix.
-- **Trim fires are now routine telemetry** (cycle-98 kimi orchestrator
-  ×2, t219-impl ×1, t222-impl ×2, t223-impl ×1) — T77/T184 working as
-  designed. Counter-observation: **ctx-edit has ZERO fires across all
-  537 events files** — T192's LIVE_CTX/shrink-gate surface (landed
-  cycle 89) has never fired in production; trim engages first, every
-  time. Dormant ≠ broken (it costs nothing unfired), but if the next
-  eval still reads zero, file a trigger-calibration measurement row —
-  the surface's value claim is measured-by-telemetry per its own
-  doctrine.
-- **glm edit_file/schema fumbles flat** (~1–2 per fumble-prone child:
-  t215 "old found N times" ×1, t222 "old not found" ×1, t223-fixup
-  /tmp-confinement ×2) — T88/T94 correctives keep converting fumbles to
-  same-iteration self-repairs. The alias-acceptance rejection STANDS
-  (the cycle-98 re-weigh condition — rising counts — is not met;
-  negative triage re-recorded this eval).
-- **Orchestrator goal-gate rejections**: 3 in the delta (cycle-98
-  seg-eval ×2 on the cold-target class, cycle-100 ×1 → I2's fix) plus
-  cycle-101's mid-wrap "check command failed" (the c06a555 red the
-  piped chain later swallowed — I5). Post-7f94da2 the gate is warm
-  (~36 s nextest release); a rejection now costs a suite run, not a
-  compile.
+- **`decision_log` schema fumbles: 3 in the delta, all self-repaired.**
+  t225-impl ×2 (`options` missing; bad `outcome` choice string) and the
+  cycle-104 glm orchestrator ×1 (`choice` missing) — every one met
+  T88's corrective error and converted to a valid call same-iteration.
+  Count is at the historical noise floor; the corrective-error design
+  keeps absorbing it. No row (re-weigh condition: a rising trend across
+  TWO evals — not met).
+- **Trim fires are routine telemetry** (cycle-103 kimi orchestrator
+  ×2 at 1.4M+ input context; t225-impl ×1) — T77/T184 working as
+  designed. **ctx-edit fires: ZERO across all 549 events files** — the
+  cycle-103 eval's forward instruction TRIPS this eval: file the
+  trigger-calibration measurement row. Filed as **T230** (pri 3) — the
+  surface is dormant-by-INCENTIVE, not by defect (the nudge that names
+  LIVE_CTX as the remedy, `--ctx-warn-at-tokens`, defaults 0=off and
+  loopd never sets it; trim at 120k handles overflow silently), and the
+  row's job is to make the dormancy measured-or-ended rather than
+  re-checked every eval forever.
+- **T227-shape behavioral recurrence**: the cycle-104 orchestrator ran
+  the guard floor piped through `tail -3` one cycle after the unpiped
+  doctrine landed (I1). The pin constrains the TEXT; the behavior is
+  the model's. Count: 1 post-doctrine recurrence, absorbed benignly.
+  Watch: a second post-doctrine recurrence argues for moving the guard
+  floor's invocation into a script (mechanical carrier, no model
+  discretion) rather than more text.
+- **glm edit_file `old`-not-found fumbles: 2 in the delta** (cycle-103
+  kimi stream's TODO.md edit, cycle-104 glm's EVALUATION.md edit — both
+  orchestrator-side, both recovered by re-read). Flat trend. No row.
 
 ## 4. Capability gaps — ROADMAP PULL
 
 **Pull SKIPPED with written reason — the top unworked item's GO
-precondition is measured, quantified, and now corroborated by a second
-independent measurement.**
+precondition is measured, quantified, and the corpus accrual rate moved
+the date OUT, not in.**
 
 Top unworked item by tier order: **F13 phase 3** (confidence-gated
-first-pass routing: Laya decides ≥τ, else escalate to kimi). Two
-measurements say not-yet: (1) T208 (cycle 95): frozen-encoder probe
-TIES majority (79.3%), fine-tune wobbles 65.5–82.8%, no ≥95%-accuracy
-operating point at ≥50% coverage in any wobble state; GO precondition
-~3× the 858-record corpus plus held-out n≥60 per task. (2) T223 (cycle
-101, NEW this delta): the live holdout — the served laya-judge on the
-F13 time-ordered 42-record outcome panel — returned choice top-1 0.5714
-and noul AUROC **0.374, below coin-flip** (deep-OOD; docs/judge-parity.md
-records it honestly with SPEC-3 standing: no gating signal change).
-Corpus now: **967 records** (+64 in 5 cycles ≈ 13/cycle) vs the ~2,570
-precondition — ~120 cycles out at the observed accrual. Pulling phase 3
-now would wire a router TWO of its own measurements reject. The F13
-fine-tune (T223's named follow-up) inherits the same precondition — a
-42-record panel is not a fine-tune corpus. F15 phases-2+ and all
-chat-side phase-2 deferrals stand on their written reasons.
-
-**New find — APPENDED to FEATURES.md as F16, with a written NOT-YET.**
-The T222/T223 arc left exactly one resolvable contestant unserved:
-kev-0.8b sits on Qwen3.5-0.8B-Base (qwen3_5, 18 Gated DeltaNet + 6 full
-attention) and candle-transformers 0.11 has no qwen3_5. Serving it (a
-candle DeltaNet port or a second runtime leg behind the existing /judge
-wire — the landing pad is committed: kev-layout detection, provenance
-pins, the fail-closed runner) is a real capability gap, but the
-consumer is measured-absent: LAYA STAYS, the margin rule was vacuous
-with one contestant short, and the F13 precondition binds first. F16
-records the find, the blocker, and the pull trigger (precondition
-within ~20 cycles, or an operator ask). No other capability find: the
-delta's feature surface (delegate fleet, daemon judge + /sessions, MCP
-both directions, web tools, judge-parity runner) had zero
-capability-blocked moments in the corpus; the t222-impl's live HF API
-probing (web_fetch ×8) worked as designed.
+first-pass routing), gated by T208's measured precondition (~3× the
+858-record corpus plus held-out n≥60 per task ⇒ ~2,570 records) and
+corroborated-negative by T223's live holdout (AUROC 0.374 — below
+coin-flip). Corpus now: **1,003 records** (+36 in 2 cycles ≈ 18/cycle,
+vs +13/cycle at the cycle-103 eval — the rate rose but the remaining
+distance dominates): ~1,567 records short ⇒ **~85 cycles out** at the
+observed accrual (was ~120). Pulling phase 3 now would wire a router
+two of its own measurements reject; the honest lever is accrual time,
+and accrual is organic by design (the loop's real judgments, never
+synthetic inflation). **F16** (kev DeltaNet port): pull trigger (the
+F13-3 precondition within ~20 cycles, or an operator ask) NOT met —
+the consumer stays measured-absent; the T222 classified-refusal surface
+remains the honest answer. **F3 phase 2 re-weighed and STAYS deferred**:
+its deferral reason (cycle-47: "layad endpoint absent") CHANGED this
+era — T204/F15 landed the baked-in daemon — but the phase's Laya
+stop-hook consumer is a gating judgment and inherits the F13/T223
+measurement block wholesale (0.374 AUROC on loop decisions); the
+non-Laya half (Stop/GoalComplete hook events) duplicates T190's
+`.chug/notify.json` surface (goal-complete/abort/verdict fires, landed
+cycle 88/89) with no consumer the notify mechanism doesn't already
+serve. **F2 phase 2b, F5 phase 2, F7 phase 2** stand on their written
+reasons (chat-side surfaces, no loop consumer). No new capability find
+this delta: the work was all hardening, and no capability-blocked
+moment appears in either orchestrator stream.
 
 ## 5. Top 3 priorities
 
-1. **T225** (pri 2, robustness) — progress-reset liveness fences: the
-   delta's most expensive flake class (an 80-iteration child death +
-   a main-tree fence expiry + recurring gate-isolation tax), one
-   principled mechanism across both surfaces, RED-provable by
-   construction (the slow-progress fixture IS the flake reproduction).
-2. **T226** (pri 3, tests-only sweep) — the T217+T215 validators'
-   left-behind survivors; the T224 pattern (file forward, sweep the
-   family in one row) executed while both verdicts are fresh.
-3. **T228** (pri 3, doctrine, SOLO) — verify-the-indictment: the I6
-   defect class cost a full reverted round; the clause is one sentence
-   where the eval's filing bar already lives.
+1. **T230** (pri 3, measurement, SOLO — loopd.sh) — the ctx-edit
+   trigger-calibration row the cycle-103 eval pre-committed to: put the
+   `--ctx-warn-at-tokens` nudge live on the orchestrator launch (below
+   the 120k trim threshold so the remedy window exists), pin the argv,
+   and let the digest's ctx-edit line become a real measurement. Either
+   outcome closes the question: fires → T192's value claim gets its
+   first production data; zero fires WITH the nudge live → the surface
+   is recorded dormant-by-incentive and the per-eval re-check ends.
+2. **T231** (pri 4, doctrine, SOLO — LOOP-SPEC) — the guard-floor
+   target-dir clause: I1's 4×300s wrap timeouts are structural (every
+   version bump cold-caches the next wrap's guard runs); one clause +
+   one carrier pin leg.
+3. **(standing)** The F13 corpus accrual — no row, stated for
+   visibility: ~85 cycles to the phase-3 precondition at 18/cycle.
 
 **Estimate re-calibration (standing doctrine: text, never the
-threshold).** Delta actuals vs filing estimates: T224 ~120 → 209
-(1.7×); T221 ~122 → 122 (1.0×); T218 ~114 → 114 (1.0×); T216 ~96 → 93
-(1.0×); T217 ~195 → 195 (1.0×); T212 ~130 → 297 (2.3×); T214 ~200 →
-486 (2.4×); T213 ~200 → 614 (3.1×); T215 ~450 → 694 (1.5×);
-T219 ~450 → 1,216 (2.7×); T222 ~400 → 1,803 (4.5×); T223 ~120 → 666
-(5.6×). The distribution splits cleanly by ROW KIND: **pin/test-closure
-rows on existing surfaces land 1.0–1.7×** (T216/T217/T218/T221/T224)
-and **novel-infrastructure rows — a NEW registry, loader, or runner
-file carrying a mechanism — land 2.7–5.6×** (T219/T222/T223), with
-multi-surface doctrine+pin rows in between (2.3–3.1×). Filing guidance
-from this delta: a novel-mechanism row narrative-~150 should be filed
-at ~500 (the split ceiling) or split pre-emptively; pin-closure rows
-can trust ~1.5×. The ~500 ceiling and the T209 gate stand; this eval's
-four rows are filed at ≤~350 all-in.
+threshold).** Delta actuals vs filing estimates: T225 ~350 → 874
+(2.5× — novel-MECHANISM robustness row; just under the 2.7–5.6×
+novel-infra band it borders); T226 ~200 → 343 (1.7× — top of the
+pin-closure band); T228 ~50 → 133 (2.7×); T227 ~55 → 181 (3.3×);
+T229 ~60 → 182 (3.0×). The by-row-kind distribution from the cycle-103
+eval HOLDS, and gains a third named kind: **doctrine+pin carrier rows
+(one sentence/paragraph + one carrier pin leg) land ~3× their narrative
+estimate** — the exactly-once/window-anchor leg machinery outweighs the
+sentence (three instances: 2.7×/3.3×/3.0×). Filing guidance from this
+delta: a doctrine+pin row narrative-~50 should be filed at ~150–180;
+the pin-closure band (1.0–1.7×) and novel-infra band (2.7–5.6×) stand
+unchanged. This eval's two rows are filed at ~150 and ~120 all-in per
+the new kind.
 
 ## 6. README audit (usability)
 
-Cold-read pass (1,085 lines): reading order holds — Install →
-Quickstart → Runbooks signpost → chat → run → fork → plan → TUI →
-Tools → risk gate → hooks → permissions → MCP → Langfuse →
-self-hosting → loopd → Development. The delta's three features landed
-INTEGRATED: the /sessions registry (T219) is inside the risk-gate
-judge-daemon paragraph (lines 589–625, CHUG_JUDGE selector → registry
-→ weightless host → kev-layout classified refusal → judge-parity
-runner + verdict-doc link), and the Development layout brace carries
-kev_config,kev_model (line 1083, T95 guard green). (a) Reading order:
-sound. (b) Redundancy: the daemon's one cross-reference in the loopd
-section (line 1034, "serves the risk gate's /judge only") is a pointer,
-not a doubled claim; no drift found on the delegate/budget/sandbox
-surfaces. (c) Staleness: none found — T204/T219/T222/T223 surfaces are
-current; the loopd section's T81/T137/T152/T82/T142/T178 doctrine is
-all live. (d) Balance: the loopd section is the heaviest (~112 lines)
-and dense — every clause is load-bearing doctrine with no other home
-today; WATCH-ITEM: if it grows another ~30 lines next delta, the next
-eval files a runbook-extraction docs row (not now). (e) Quickstart
-truth: holds (unchanged surface). **No docs row filed.**
+Cold-read pass (1,085 lines; the delta landed ZERO README edits —
+correctly, nothing user-visible shipped): structure unchanged since the
+cycle-103 audit. (a) Reading order: sound (Install → Quickstart →
+Runbooks → chat → run → fork → plan → TUI → Tools → risk gate → hooks
+→ permissions → MCP → Langfuse → self-hosting → loopd → Development).
+(b) Redundancy: none new — the daemon paragraph's single
+cross-reference from the loopd section stays a pointer. (c) Staleness:
+none found — no version literals to drift; the Development layout brace
+carries the kev/live_ctx/testsupport modules (T95 guard green); the
+loopd section's doctrine (T81 routing, T137 build gate, T152 reaper,
+T178 bash-timeout) all matches the shipped loopd.sh. (d) Balance: the
+loopd section is UNCHANGED at ~112 lines (962–1073) — the cycle-103
+watch-item's growth condition (+~30 lines → runbook-extraction row)
+NOT met; watch-item stands. (e) Quickstart truth: holds (unchanged
+surface). **No docs row filed.**
 
 ## Handoff — recommended execution order
 
-Queue for the next cycles (priority order per LOOP-SPEC §2; all four
-specs ready, estimates ≤~350 all-in, T209-gate-clean at filing):
+Queue for the next cycles (priority order per LOOP-SPEC §2; both specs
+ready, estimates ≤~150 all-in, T209-gate-clean at filing; BOTH are
+doctrine-carrier rows → strictly serial SOLO arcs, kimi REQUIRED on
+both):
 
-1. **T225** (pri 2, robustness) — glm impl; testsupport.rs is NOT on
-   the step-4 core list but the ~350 estimate flips T189 lane input (b)
-   → kimi REQUIRED expected (the lane inputs computed from the diff
-   decide mechanically).
-2. **T226** (pri 3, tests-only sweep) — glm impl; lane-eligible only if
-   the landed diff stays ≤~150 AND req 2's needle stays tests-only; a
-   loopd.sh needle edit flips it to kimi REQUIRED. NOT disjoint with
-   T225 (tests/loopd_daemon_ensure.rs appears on both surfaces — T225
-   converts its fence, T226 adds a probe pin): run serially.
-3. **T228** (pri 3, doctrine, SOLO) — glm impl, kimi REQUIRED, runs
-   alone (META-META-SPEC carrier).
-4. **T227** (pri 4, doctrine, SOLO) — glm impl, kimi REQUIRED, runs
-   alone (LOOP-SPEC carrier). NOT T45-bundlable with T228 (pri 4 fails
-   bundling rule (d); different doctrine files anyway) — serial solos.
+1. **T230** (pri 3, measurement, SOLO — loopd.sh carrier) — glm impl,
+   kimi REQUIRED (loopd.sh is on the doctrine never-overlap list).
+   Runs alone.
+2. **T231** (pri 4, doctrine, SOLO — LOOP-SPEC carrier) — glm impl,
+   kimi REQUIRED (LOOP-SPEC edit stays FULL validation per step 4(a)).
+   Runs alone, AFTER T230 merges (both are SOLO; no overlap question
+   arises). NOT T45-bundlable with T230 (different doctrine files;
+   bundling rule (b) same-1–2-files fails).
 
 To SELF-SPEC (continuous improvement): none new. Big enough for
-META-SPEC fan-out: none new (the loop is the fan-out). Human-decision
-items: the laya HF hosting decision (operator-pending Monday 2026-10-05
-per runbooks/laya-hf-hosting.md — do-not-execute honored) and the F13
-phase-3 GO precondition (corpus 967 / ~2,570 — no human action, stated
-for visibility; F16's pull trigger rides the same precondition).
+META-SPEC fan-out: none new. Human-decision items: the laya HF hosting
+decision (operator-pending per runbooks/laya-hf-hosting.md —
+do-not-execute honored; the Monday 2026-10-05 date in the T205 row's
+interim posture is IMMINENT — the next eval re-checks whether the
+operator's decision landed) and the F13 phase-3 GO precondition (corpus
+1,003 / ~2,570 — no human action, stated for visibility; F16's pull
+trigger rides it).
 
 ## Outcomes (filled at cycle wrap — LOOP-SPEC Phase 3)
 
