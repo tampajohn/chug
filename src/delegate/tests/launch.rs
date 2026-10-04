@@ -86,9 +86,17 @@ pub(super) const TEST_COUNT: usize = 28;
             .parse()
             .expect("pid parses");
 
-        let deadline = Instant::now() + Duration::from_secs(5);
-        let mut seen = None;
-        while Instant::now() < deadline {
+        // T225: the bounded poll's fence is now PROGRESS-RESET — the child's
+        // events file IS the advancing surface (the stub writes run_start +
+        // iteration 1 into it). A slow spawn (the file not yet created) reads
+        // as PROGRESS (fail-safe) instead of burning the fence; 5s of NO
+        // advance trips; the load-scaled 4x backstop still bounds the total.
+        // (The SEMANTIC timing asserts elsewhere in this family — the
+        // wait_secs round-trip bounds — stay absolute; compliance notes in
+        // crate::testsupport.)
+        let events = child_dir.path().join(".chug/events.jsonl");
+        let mut deadline = crate::testsupport::ProgressDeadline::new(Duration::from_secs(5));
+        let status = loop {
             let s = dispatch(
                 &delegate_ctx(ctx_cwd.path()),
                 "delegate",
@@ -96,12 +104,20 @@ pub(super) const TEST_COUNT: usize = 28;
             );
             assert!(!s.is_error, "{}", s.content);
             if s.content.contains("last_iteration: 1") && s.content.contains("alive: true") {
-                seen = Some(s);
-                break;
+                break s;
+            }
+            deadline.observe(crate::testsupport::surface_fingerprint(&events));
+            if let Some(trip) = deadline.tripped() {
+                panic!(
+                    "stub never reached iteration 1 alive within the \
+                     progress-reset poll fence (T225: {trip}; backstop {:?}) \
+                     — last status: {}",
+                    deadline.backstop(),
+                    s.content
+                );
             }
             thread::sleep(Duration::from_millis(100));
-        }
-        let status = seen.expect("stub summary + liveness within 5s");
+        };
         assert!(status.content.contains("state: running"), "{}", status.content);
         assert!(status.content.contains("max_iters: 40"), "{}", status.content);
         assert!(
@@ -955,30 +971,42 @@ pub(super) const TEST_COUNT: usize = 28;
         // T158 (req 3): the deadline assert names the observed launch
         // outcome (isError payload, or the reported pid with no dump).
         let env_path = child_dir.path().join("env.txt");
-        let deadline = Instant::now() + Duration::from_secs(5);
+        // T225: the poll fence is now PROGRESS-RESET — env.txt IS the
+        // surface (the stub's env dump; `cbtd=` guards the tail so a
+        // partial write re-polls). A slow spawn (the file not yet created)
+        // reads as PROGRESS (fail-safe) instead of burning the fence; 5s of
+        // NO advance trips; the load-scaled 4x backstop still bounds the
+        // total. T158 (req 3): the fence panic still names the observed
+        // launch outcome (isError payload, or the reported pid with no
+        // dump).
+        let mut deadline = crate::testsupport::ProgressDeadline::new(Duration::from_secs(5));
         let dump = loop {
             if let Ok(text) = fs::read_to_string(&env_path)
                 && text.contains("cbtd=")
             {
                 break text;
             }
-            assert!(
-                Instant::now() < deadline,
-                "stub never wrote {} in 5s AND the launch outcome was: {}",
-                env_path.display(),
-                if launch.is_error {
-                    format!("isError: {}", launch.content)
-                } else {
-                    match launch
-                        .content
-                        .lines()
-                        .find_map(|l| l.strip_prefix("launched: pid "))
-                    {
-                        Some(pid) => format!("reported pid {pid} but no dump appeared"),
-                        None => format!("no pid line at all: {}", launch.content),
+            deadline.observe(crate::testsupport::surface_fingerprint(&env_path));
+            if let Some(trip) = deadline.tripped() {
+                panic!(
+                    "stub never wrote {} (T225 progress-reset fence: {trip}; \
+                     backstop {:?}) AND the launch outcome was: {}",
+                    env_path.display(),
+                    deadline.backstop(),
+                    if launch.is_error {
+                        format!("isError: {}", launch.content)
+                    } else {
+                        match launch
+                            .content
+                            .lines()
+                            .find_map(|l| l.strip_prefix("launched: pid "))
+                        {
+                            Some(pid) => format!("reported pid {pid} but no dump appeared"),
+                            None => format!("no pid line at all: {}", launch.content),
+                        }
                     }
-                }
-            );
+                );
+            }
             thread::sleep(Duration::from_millis(25));
         };
 
@@ -1075,19 +1103,27 @@ pub(super) const TEST_COUNT: usize = 28;
             .parse()
             .expect("pid parses");
         let env_path = child_dir.path().join("env.txt");
-        let deadline = Instant::now() + Duration::from_secs(5);
+        // T225: the poll fence is now PROGRESS-RESET — env.txt IS the
+        // surface; a slow spawn (the file not yet created) reads as PROGRESS
+        // (fail-safe), 5s of NO advance trips, the load-scaled 4x backstop
+        // still bounds the total.
+        let mut deadline = crate::testsupport::ProgressDeadline::new(Duration::from_secs(5));
         let dump = loop {
             if let Ok(text) = fs::read_to_string(&env_path)
                 && text.contains("probe=")
             {
                 break text;
             }
-            assert!(
-                Instant::now() < deadline,
-                "stub never wrote {} in 5s AND the launch outcome was: {}",
-                env_path.display(),
-                launch.content
-            );
+            deadline.observe(crate::testsupport::surface_fingerprint(&env_path));
+            if let Some(trip) = deadline.tripped() {
+                panic!(
+                    "stub never wrote {} (T225 progress-reset fence: {trip}; \
+                     backstop {:?}) AND the launch outcome was: {}",
+                    env_path.display(),
+                    deadline.backstop(),
+                    launch.content
+                );
+            }
             thread::sleep(Duration::from_millis(25));
         };
         kill_pid_group(pid);
@@ -1157,19 +1193,27 @@ pub(super) const TEST_COUNT: usize = 28;
             .parse()
             .expect("pid parses");
         let env_path = child_dir.path().join("env.txt");
-        let deadline = Instant::now() + Duration::from_secs(5);
+        // T225: the poll fence is now PROGRESS-RESET — env.txt IS the
+        // surface; a slow spawn (the file not yet created) reads as PROGRESS
+        // (fail-safe), 5s of NO advance trips, the load-scaled 4x backstop
+        // still bounds the total.
+        let mut deadline = crate::testsupport::ProgressDeadline::new(Duration::from_secs(5));
         let dump = loop {
             if let Ok(text) = fs::read_to_string(&env_path)
                 && text.contains("cbtd=")
             {
                 break text;
             }
-            assert!(
-                Instant::now() < deadline,
-                "stub never wrote {} in 5s AND the launch outcome was: {}",
-                env_path.display(),
-                launch.content
-            );
+            deadline.observe(crate::testsupport::surface_fingerprint(&env_path));
+            if let Some(trip) = deadline.tripped() {
+                panic!(
+                    "stub never wrote {} (T225 progress-reset fence: {trip}; \
+                     backstop {:?}) AND the launch outcome was: {}",
+                    env_path.display(),
+                    deadline.backstop(),
+                    launch.content
+                );
+            }
             thread::sleep(Duration::from_millis(25));
         };
         kill_pid_group(pid);

@@ -36,16 +36,19 @@ use std::io::Read;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use tempfile::TempDir;
 
-// T214: the load-scaled verdict fence (`load_scaled_deadline`) lives in the
-// ONE shared test-support module, joined by the T159 `#[path]`-include
-// pattern — the same declaration every adopting family compiles, never a
-// copy. This file carries no T151/T172 lock membership and gains none
-// (T214 req 5: the families' timing-lock membership is untouched); the
-// include exists so the 90s verdict fence routes through the shared helper.
+// T214/T225: the verdict fence lives in the ONE shared test-support module,
+// joined by the T159 `#[path]`-include pattern — the same declaration every
+// adopting family compiles, never a copy. This file carries no T151/T172
+// lock membership and gains none (T214 req 5: the families' timing-lock
+// membership is untouched); the include exists so the 90s verdict fence
+// routes through the shared helper — since T225 the progress-reset
+// `ProgressDeadline` (the fence trips on the supervisor log's OBSERVED
+// ADVANCE, not on wall clock), with T214's `load_scaled_deadline` surviving
+// as its outer backstop.
 #[path = "../src/testsupport.rs"]
 mod testsupport;
 
@@ -255,10 +258,14 @@ impl Sandbox {
 
     fn read_log(&self) -> String {
         let mut content = String::new();
-        if let Ok(mut f) = fs::File::open(self.root.join(".chug/loopd/loopd.log")) {
+        if let Ok(mut f) = fs::File::open(self.log_path()) {
             let _ = f.read_to_string(&mut content);
         }
         content
+    }
+
+    fn log_path(&self) -> PathBuf {
+        self.root.join(".chug/loopd/loopd.log")
     }
 
     fn read_stub_log(&self) -> String {
@@ -275,29 +282,37 @@ impl Sandbox {
     /// and return both logs. The panic text carries both logs — the
     /// T137-style forensic record.
     fn run_until(&self, child: &mut Child, needle: &str, min: usize) -> (String, String) {
-        // T214: the 90s BASE is unchanged (the zero-timeout-bump doctrine) —
-        // the fence's BASIS is now the host's measured load: base ×
-        // clamp(loadavg_1m/cores, 1.0, 4.0), fail-safe to exactly the base
-        // when the load seam fails. A quiet host sees byte-identical
-        // behavior; a gate-load-melted host gets up to 4× before the fence
-        // blows; a truly hung child still fails, fast.
-        let deadline = Instant::now() + testsupport::load_scaled_deadline(Duration::from_secs(90));
+        // T225: the 90s BASE is unchanged (the zero-timeout-bump doctrine) —
+        // the fence's BASIS is now the log's OBSERVED ADVANCE: it trips only
+        // after 90s of NO log growth (the surface this poll already reads
+        // every 100ms), with the load-scaled 4x backstop
+        // (`ProgressDeadline::BACKSTOP_FACTOR`) still failing a genuinely
+        // hung child. T214's per-core loadavg was blind to exactly the case
+        // this fixes (cycle-101: 18 cores, load 9.68 → factor 1.0 → NO
+        // scaling): under suite fan-out the log keeps growing — the child is
+        // making progress, just slowly — and every advance resets the fence.
+        // A log that cannot be READ at all reads as progress (fail-safe),
+        // never a false trip.
+        let log_path = self.log_path();
+        let mut deadline = testsupport::ProgressDeadline::new(Duration::from_secs(90));
         loop {
             let log = self.read_log();
+            deadline.observe(testsupport::surface_fingerprint(&log_path));
             if log.matches(needle).count() >= min {
                 let _ = child.kill();
                 let _ = child.wait();
                 return (log, self.read_stub_log());
             }
-            if Instant::now() > deadline {
+            if let Some(trip) = deadline.tripped() {
                 let _ = child.kill();
                 let _ = child.wait();
                 let stub_log = self.read_stub_log();
                 panic!(
                     "loopd never reached {needle}×{min} within the \
-                     load-scaled verdict fence (T214: base 90s × measured \
-                     load factor).\n\
-                     --- loopd.log ---\n{log}\n--- daemon-test.log ---\n{stub_log}"
+                     progress-reset verdict fence (T225: {trip}; backstop \
+                     {:?}).\n\
+                     --- loopd.log ---\n{log}\n--- daemon-test.log ---\n{stub_log}",
+                    deadline.backstop()
                 );
             }
             std::thread::sleep(Duration::from_millis(100));

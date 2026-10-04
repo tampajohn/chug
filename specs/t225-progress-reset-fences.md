@@ -1,6 +1,6 @@
 # T225 — progress-reset liveness fences for child-spawn test surfaces
 
-check: set -o pipefail; export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared; touch src/*.rs tests/*.rs; cargo test --bin chug && cargo test --test loopd_orphan_reaper --test loopd_spoof_guard --test loopd_daemon_ensure
+check: set -o pipefail; export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-validate-a; touch src/*.rs tests/*.rs; cargo test --bin chug && cargo test --test loopd_orphan_reaper --test loopd_spoof_guard --test loopd_daemon_ensure
 
 estimate: ~350 changed lines all-in (testsupport seam + pure legs + adoption across ~5 test surfaces + RED-proof fixtures — filed at the cycle-103 calibration for a multi-surface pin row)
 

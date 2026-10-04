@@ -80,7 +80,15 @@ pub(super) const TEST_COUNT: usize = 10;
         // Wait for the child to exit WITHOUT reaping it ourselves: poll the
         // seam until it reports dead — the reap inside the seam is what turns
         // the zombie into a reaped, truly-gone pid.
-        let deadline = Instant::now() + Duration::from_secs(10);
+        // T225: this fence stays ABSOLUTE (load-scaled, the T214 basis, base
+        // 10s unchanged): it has NO observable progress surface — the watched
+        // fact is the child's one-time exit→zombie→reap transition, a
+        // scheduler race with no advancing file, counter, or byte length to
+        // fingerprint (the seam's answer flips once, at the end) — so the
+        // req-2 no-surface rule keeps load_scaled_deadline instead of
+        // converting to a progress-reset fence.
+        let deadline =
+            Instant::now() + crate::testsupport::load_scaled_deadline(Duration::from_secs(10));
         let first = loop {
             match reap_and_alive(u64::from(pid)) {
                 Some(false) => break Some(false),
