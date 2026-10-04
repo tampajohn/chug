@@ -1,6 +1,6 @@
 # T227 — LOOP-SPEC: the TODO.md-edit gate must not swallow a red guard through a pipe (doctrine, SOLO)
 
-check: set -o pipefail; export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared; touch src/*.rs tests/*.rs; cargo test --test loop_spec_recovery --test todo_consistency
+check: set -o pipefail; export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-validate-a; touch src/*.rs tests/*.rs; cargo test --test loop_spec_recovery --test todo_consistency
 
 estimate: ~60 changed lines (one doctrine sentence + one carrier pin leg)
 
