@@ -55,6 +55,27 @@
 # BOOTSTRAPPED here (T99 req 4) — no hand-built releases block exists to wrap —
 # and malformed markers are warn + skip, best-effort, never a cycle failure.
 #
+# T241: the site gains a SECOND page — docs.html — fully machine-rendered (no
+# marker regions at all). Sources, and the only home of the curated docs
+# content (never the site repo): the README's `## Quickstart` section, which
+# LEADS the page, and every runbooks/*.md file — one section each, byte-sorted
+# (LC_ALL=C), runbooks/README.md (the corpus's own index) included like any
+# other file. The head/style base is index.html's own <style> block, verbatim,
+# so the two pages read as one site; a small ADDITIVE block covers the shapes
+# the corpus renders that the base does not style (prose sub-headings, list
+# bodies, the on-this-page index) — the base block itself is never modified.
+# The render is deterministic and byte-stable (req 3): the page carries no
+# clock, byte-identical inputs render byte-identical output, and an unchanged
+# page never commits. docs.html is ADD/OVERWRITE (git add docs.html; the T26
+# plain-push rule is unchanged) and is written in the SAME commit as
+# index.html when either changed (req 5). Fail-closed (T217 req 3 applied to
+# the docs corpus): no runbooks/ dir, no .md files in it, or no <style> base
+# -> docs.html is NOT written or touched and the sync continues; the nav
+# link + get-started pointer bootstrap (reqs 2+4: docs ⇄ home, one-line
+# pointer on the main page's Quickstart section) is likewise skipped — never
+# a link to a page that was not rendered. Each bootstrap is idempotent by its
+# own needle and commits once.
+#
 # Usage:
 #   scripts/site-sync.sh [--bootstrap] [SITE_DIR] [CHUG_ROOT]
 #     --bootstrap  skip the T217 input guard (first-ever run on a genuinely
@@ -693,6 +714,338 @@ bootstrap_release() { # T240 req 4: markers + section skeleton + nav anchor
   fi
   return 0
 }
+
+# --- T241: docs.html — the second page, fully machine-rendered ----------------
+# Sources, and the only home of the curated docs content (never the site
+# repo): the README's `## Quickstart` section (LEADS the page) and every
+# runbooks/*.md file — one section each, byte-sorted, runbooks/README.md (the
+# corpus's own index) included like any other file. The head/style base is
+# index.html's own <style> block, verbatim, so the two pages read as one
+# site. Deterministic and byte-stable (req 3): the page carries no clock, so
+# byte-identical inputs render byte-identical output and an unchanged page
+# never commits. docs.html is ADD/OVERWRITE (git add docs.html).
+DOCS_GH_BLOB="https://github.com/tampajohn/chug/blob/main/"
+DOCS_GH_TREE="https://github.com/tampajohn/chug/tree/main/runbooks"
+DOCS_HOME="https://chug.sh/"
+DOCS_STATE="skip"; DOCS_CHANGED=0; DOCS_NOTE="skipped"; DOCS_N=0; DOCS_QS=0
+DOCS_POINTER="  <p class=\"lede flush\">Full runbooks — quick task, spec'd feature, repo eval, loop ops, adversarial review — live on the <a href=\"https://chug.sh/docs.html\">docs page</a>, regenerated from the repo's runbooks/ at every sync.</p>"
+
+# readme_quickstart OUTFILE — the README's `## Quickstart` section body
+# (heading dropped; ends at the next heading OUTSIDE any fence — the
+# quickstart's bash block itself carries `#` comment lines). Empty output =
+# no section (the caller warns; the page ships without it, best-effort).
+readme_quickstart() { # outfile
+  [ -f "$CHUG/README.md" ] || return 0
+  awk '
+    !started && fence != 1 && /^## Quickstart[[:space:]]*$/ { started = 1; next }
+    started {
+      if ($0 ~ /^[[:space:]]*```/) fence = !fence
+      else if (fence != 1 && $0 ~ /^#{1,6}[[:space:]]/) exit
+      print
+    }
+  ' "$CHUG/README.md"
+}
+
+# docs_md FILE MODE HEADING-OFFSET REL-BASE — the markdown renderer, one
+# program, two modes. title: the first H1's inline-rendered text (for the
+# on-this-page index). body: the corpus subset, line-oriented and
+# deterministic — fenced code -> pre.code (HTML-escaped verbatim), ATX
+# headings -> h(level+OFFSET) clamped to 2..6 (a runbook's H1 becomes the
+# section's h2), flat lists -> ul/ol (indented lines continue the item, a
+# blank line closes the list), markdown tables -> pre.code verbatim (the
+# laya runbook's one table — zero information loss, zero new markup),
+# paragraphs soft-joined like markdown. Inline, per the T99 text rules:
+# HTML-escape FIRST, ~~strikethrough~~ markers stripped, backtick pairs
+# parked on sentinels then -> <code>, **bold** -> <b>, [text](url) links
+# with relative URLs rewritten onto the GitHub blob base (REL-BASE, e.g.
+# runbooks/) so nothing on the rendered page dangles.
+docs_md() { # file mode hoff relbase
+  awk -v mode="$2" -v hoff="$3" -v relbase="$4" -v ghref="$DOCS_GH_BLOB" '
+    function esc(s) { gsub(/&/, "\\&amp;", s); gsub(/</, "\\&lt;", s); gsub(/>/, "\\&gt;", s); return s }
+    function inline(s,   k, seg, j, out, b, m, p, txt, url, href) {
+      s = esc(s)
+      gsub(/~~/, "", s)
+      k = split(s, seg, "`")
+      if (k >= 3) {
+        out = seg[1]
+        for (j = 2; j + 1 <= k; j += 2) out = out "\001" seg[j] "\002" seg[j + 1]
+        if (k % 2 == 0) out = out "`" seg[k]
+        s = out
+      }
+      while (match(s, /\*\*[^*]+\*\*/)) {
+        b = substr(s, RSTART + 2, RLENGTH - 4)
+        s = substr(s, 1, RSTART - 1) "<b>" b "</b>" substr(s, RSTART + RLENGTH)
+      }
+      while (match(s, /\[[^]]+\]\([^)]+\)/)) {
+        m = substr(s, RSTART, RLENGTH)
+        p = index(m, "](")
+        txt = substr(m, 2, p - 2)
+        url = substr(m, p + 2); sub(/\)$/, "", url)
+        href = url
+        if (url !~ /^https?:\/\// && url !~ /^\// && url !~ /^#/) href = ghref relbase url
+        s = substr(s, 1, RSTART - 1) "<a href=\"" href "\">" txt "</a>" substr(s, RSTART + RLENGTH)
+      }
+      gsub(/\001/, "<code>", s); gsub(/\002/, "</code>", s)
+      return s
+    }
+    function flushpara() { if (para) { print "<p>" inline(ptxt) "</p>"; para = 0; ptxt = "" } }
+    function flushli()   { if (inli) { print "<li>" inline(li) "</li>"; inli = 0; li = "" } }
+    function closelist() { flushli(); if (inlist != "") { print (inlist == "ul" ? "</ul>" : "</ol>"); inlist = "" } }
+    function closeall()  { flushpara(); closelist() }
+    BEGIN { infence = 0; intable = 0; inlist = ""; para = 0; inli = 0; done = 0 }
+    mode == "title" {
+      if (!done && infence == 0 && $0 ~ /^#[[:space:]]/) {
+        t = $0; sub(/^#[[:space:]]+/, "", t); sub(/[[:space:]]+$/, "", t)
+        print inline(t); done = 1; exit
+      }
+      if ($0 ~ /^[[:space:]]*```/) infence = !infence
+      next
+    }
+    {
+      if ($0 ~ /^[[:space:]]*```/) {
+        closeall()
+        if (intable) { print "</pre>"; intable = 0 }
+        if (infence) { infence = 0; print "</pre>" } else { infence = 1; print "<pre class=\"code\">" }
+        next
+      }
+      if (infence) { print esc($0); next }
+      if ($0 ~ /^[[:space:]]*\|/) {
+        closeall()
+        if (!intable) { intable = 1; print "<pre class=\"code\">" }
+        print esc($0)
+        next
+      }
+      if (intable) { print "</pre>"; intable = 0 }
+      if ($0 ~ /^#{1,6}[[:space:]]/) {
+        closeall()
+        h = $0; n = 0
+        while (substr(h, 1, 1) == "#") { n++; h = substr(h, 2) }
+        sub(/^[[:space:]]+/, "", h); sub(/[[:space:]]+$/, "", h)
+        lvl = n + hoff; if (lvl > 6) lvl = 6; if (lvl < 2) lvl = 2
+        print "<h" lvl ">" inline(h) "</h" lvl ">"
+        next
+      }
+      if ($0 ~ /^[[:space:]]*[-*][[:space:]]+/) {
+        flushpara()
+        if (inlist != "ul") { closelist(); print "<ul>"; inlist = "ul" }
+        flushli()
+        li = $0; sub(/^[[:space:]]*[-*][[:space:]]+/, "", li); inli = 1
+        next
+      }
+      if ($0 ~ /^[[:space:]]*[0-9]+[.][[:space:]]+/) {
+        flushpara()
+        if (inlist != "ol") { closelist(); print "<ol>"; inlist = "ol" }
+        flushli()
+        li = $0; sub(/^[[:space:]]*[0-9]+[.][[:space:]]+/, "", li); inli = 1
+        next
+      }
+      if ($0 ~ /^[[:space:]]*$/) { closeall(); next }
+      t = $0
+      if (inli) { sub(/^[[:space:]]+/, "", t); li = li " " t; next }
+      sub(/^[[:space:]]+/, "", t)
+      if (para) { ptxt = ptxt " " t } else { para = 1; ptxt = t }
+      next
+    }
+    END {
+      if (mode != "title") {
+        if (intable) print "</pre>"
+        if (infence) print "</pre>"
+        closeall()
+      }
+    }
+  ' "$1"
+}
+
+# docs_generate — compose docs.html into $TMPD/docs-out. Sets DOCS_STATE
+# (ok|skip), DOCS_CHANGED (vs the site's existing page) and DOCS_NOTE (the
+# sync commit body + stdout). Fail-closed (T217 req 3 applied to the docs
+# corpus): no runbooks/ dir, no .md files in it, or no <style> block in
+# index.html -> nothing is written, the sync continues (req 5's
+# missing-runbooks leg).
+docs_generate() {
+  DOCS_STATE="skip"; DOCS_CHANGED=0; DOCS_NOTE="skipped"; DOCS_N=0; DOCS_QS=0
+  if [ ! -d "$CHUG/runbooks" ]; then
+    warn "no runbooks/ dir in the chug repo — docs.html not written, sync continues (fail-closed: the docs corpus is missing)"
+    DOCS_NOTE="skipped (no runbooks/)"
+    return 0
+  fi
+  awk '/<style>/{s=1} s{print} /<\/style>/{exit}' "$INDEX" > "$TMPD/docs-style" 2>/dev/null
+  if [ ! -s "$TMPD/docs-style" ]; then
+    warn "no <style> block in index.html — no shared style base, docs.html not written, sync continues"
+    DOCS_NOTE="skipped (no style base)"
+    return 0
+  fi
+  DOCS_FILES=$(find "$CHUG/runbooks" -maxdepth 1 -type f -name '*.md' 2>/dev/null | sort)
+  if [ -z "$DOCS_FILES" ]; then
+    warn "runbooks/ holds no .md files — docs.html not written, sync continues"
+    DOCS_NOTE="skipped (no runbooks)"
+    return 0
+  fi
+  : > "$TMPD/docs-qs"
+  if [ -f "$CHUG/README.md" ]; then readme_quickstart > "$TMPD/docs-qs"; fi
+  if [ -s "$TMPD/docs-qs" ]; then
+    DOCS_QS=1
+  else
+    warn "no '## Quickstart' section in README.md — docs.html ships without its quickstart section"
+  fi
+  : > "$TMPD/docs-index-li"; : > "$TMPD/docs-sections"
+  for f in $DOCS_FILES; do
+    if [ ! -r "$f" ]; then warn "runbook not readable: $f — skipped (fail-closed)"; continue; fi
+    b=$(basename "$f" .md)
+    slug=$(printf '%s' "$b" | tr '[:upper:]' '[:lower:]' | tr -c '[:alnum:]' '-')
+    title=$(docs_md "$f" title 1 "")
+    [ -n "$title" ] || title="$b"
+    printf '      <li><a href="#runbook-%s">%s</a></li>\n' "$slug" "$title" >> "$TMPD/docs-index-li"
+    {
+      printf '<section id="runbook-%s"><div class="wrap">\n' "$slug"
+      printf '  <p class="kicker"><span class="hash">##</span> runbook · %s.md</p>\n' "$b"
+      printf '  <div class="doctext">\n'
+      docs_md "$f" body 1 "runbooks/"
+      printf '  </div>\n</div></section>\n'
+    } >> "$TMPD/docs-sections"
+    DOCS_N=$((DOCS_N + 1))
+  done
+  if [ "$DOCS_N" -eq 0 ]; then
+    warn "no readable runbooks/*.md — docs.html not written, sync continues"
+    DOCS_NOTE="skipped (no runbooks)"
+    return 0
+  fi
+  {
+    printf '<!doctype html>\n<html lang="en">\n<head>\n'
+    printf '<meta charset="utf-8">\n'
+    printf '<meta name="viewport" content="width=device-width, initial-scale=1">\n'
+    printf '<title>chug — docs</title>\n'
+    printf '<meta name="description" content="How to use chug effectively — the quickstart and every runbook, machine-rendered from the repo README and runbooks/ at every sync.">\n'
+    printf '<link rel="canonical" href="https://chug.sh/docs.html">\n'
+    printf '<meta name="theme-color" content="#0d1117">\n'
+    printf '<link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">\n'
+    printf '<link rel="apple-touch-icon" href="/assets/apple-touch-icon.png">\n'
+    cat "$TMPD/docs-style"
+    cat <<'STYLE'
+<style>
+/* docs.html additions (T241) — the block above is index.html's own <style>,
+   verbatim, and is never modified here; these few rules cover only the shapes
+   the runbook corpus renders that the base does not style (prose
+   sub-headings, list bodies, the on-this-page index). */
+.doctext h3,.doctext h4{font-family:var(--mono);color:var(--text);line-height:1.4}
+.doctext h3{font-size:15px;margin:26px 0 8px}
+.doctext h4{font-size:13px;margin:20px 0 6px;color:var(--muted)}
+.doctext ul,.doctext ol{color:var(--muted);max-width:var(--measure);margin:0 0 14px;padding-left:22px}
+.doctext li{line-height:1.7;margin:0 0 6px}
+.doctext li b{color:var(--text)}
+.doctext p code,.doctext li code{font-size:.88em;color:var(--text);background:var(--bg2);border:1px solid var(--border);border-radius:4px;padding:0 4px}
+.doctext pre.code{margin:0 0 14px;max-width:var(--content)}
+.docs-index{margin:26px 0 0;max-width:var(--content)}
+.docs-index p{font-family:var(--mono);font-size:12px;letter-spacing:.16em;text-transform:uppercase;color:var(--accent);margin:0 0 10px}
+.docs-index ul{list-style:none;margin:0;padding:0;max-width:none}
+.docs-index li{margin:0 0 8px;line-height:1.6}
+.docs-index a{font-family:var(--mono);font-size:13.5px}
+</style>
+STYLE
+    printf '</head>\n<body>\n'
+    printf '<nav class="nav"><div class="wrap nav-in">\n'
+    printf '  <a class="brand" href="%s">chug<b>_</b></a>\n' "$DOCS_HOME"
+    printf '  <div class="nav-links">\n'
+    printf '    <a href="#quickstart">quickstart</a>\n'
+    printf '    <a href="%s">runbooks/</a>\n' "$DOCS_GH_TREE"
+    printf '  </div>\n'
+    printf '  <a class="gh" href="%s">home</a>\n' "$DOCS_HOME"
+    printf '</div></nav>\n'
+    printf '<header class="hero" id="docs"><div class="wrap">\n'
+    printf '  <p class="kicker"><span class="hash">##</span> docs · machine-rendered from the repo at every sync</p>\n'
+    printf '  <h1>chug docs</h1>\n'
+    printf '  <p class="promise">How to use chug effectively — the quickstart and every runbook on one page, never stale: rendered from README.md and runbooks/ by scripts/site-sync.sh at every wrap.</p>\n'
+    printf '  <div class="docs-index">\n'
+    printf '    <p>on this page</p>\n'
+    printf '    <ul>\n'
+    if [ "$DOCS_QS" -eq 1 ]; then
+      printf '      <li><a href="#quickstart">Quickstart — install, build, first run</a></li>\n'
+    fi
+    cat "$TMPD/docs-index-li"
+    printf '    </ul>\n  </div>\n</div></header>\n'
+    if [ "$DOCS_QS" -eq 1 ]; then
+      printf '<section id="quickstart"><div class="wrap">\n'
+      printf '  <p class="kicker"><span class="hash">##</span> 01 · quickstart</p>\n'
+      printf '  <h2>Quickstart</h2>\n'
+      printf "  <p class=\"lede\">The repo's own quickstart, verbatim from README.md — re-rendered at every sync.</p>\n"
+      printf '  <div class="doctext">\n'
+      docs_md "$TMPD/docs-qs" body 1 ""
+      printf '  </div>\n</div></section>\n'
+    fi
+    cat "$TMPD/docs-sections"
+    printf '<footer><div class="wrap">\n'
+    printf '  chug docs — regenerated from the repo README quickstart and runbooks/ at every sync; never hand-edited.<br>\n'
+    printf '  <a href="%s">home</a> · <a href="https://github.com/tampajohn/chug">source</a> · <a href="%s">README</a> · <a href="%s">runbooks/</a>\n' "$DOCS_HOME" "${DOCS_GH_BLOB}README.md" "$DOCS_GH_TREE"
+    printf '</div>\n</footer>\n'
+    printf '</body>\n</html>\n'
+  } > "$TMPD/docs-out" || { warn "docs.html compose failed — skipping"; return 0; }
+  DOCS_STATE="ok"
+  if [ ! -f "$SITE/docs.html" ] || ! cmp -s "$TMPD/docs-out" "$SITE/docs.html"; then DOCS_CHANGED=1; fi
+  if [ "$DOCS_QS" -eq 1 ]; then
+    DOCS_NOTE="rendered $DOCS_N runbooks + quickstart"
+  else
+    DOCS_NOTE="rendered $DOCS_N runbooks (no README quickstart)"
+  fi
+  return 0
+}
+
+# ensure_docs_nav — T241 reqs 2+4: index.html gains the docs.html link as the
+# LAST nav item (before the nav-links close) and the get-started section (the
+# main page's Quickstart) gains the ONE-LINE pointer to docs.html, inserted at
+# the section's end. Each idempotent by its OWN needle (the nav needle is
+# page-wide; the pointer needle is scoped to the get-started section, so the
+# nav link landing first never masks the pointer check). Both insertions in
+# one pass over the ORIGINAL line numbers; one bootstrap commit, the T240
+# pattern. Only called after docs_generate rendered a page — never a link to
+# a page that is not rendered (the fail-closed leg, req 5).
+ensure_docs_nav() {
+  local navhave navopen navclose indent gsopen gsclose gshave do_nav do_gs
+  navhave=$(grep -cF 'href="https://chug.sh/docs.html">docs</a>' "$INDEX" 2>/dev/null) || navhave=0
+  navopen=$(grep -nF '<div class="nav-links">' "$INDEX" 2>/dev/null | head -1 | cut -d: -f1)
+  navclose=""
+  if [ -n "$navopen" ]; then
+    navclose=$(tail -n +"$((navopen + 1))" "$INDEX" 2>/dev/null \
+      | grep -nE '^[[:space:]]*</div>[[:space:]]*$' | head -1 | cut -d: -f1)
+    [ -n "$navclose" ] && navclose=$((navopen + navclose))
+    indent=$(sed -n "$((navopen + 1))s/[^ ].*//p" "$INDEX" 2>/dev/null)
+  fi
+  do_nav=0
+  if [ "${navhave:-0}" -eq 0 ] && [ -n "$navclose" ]; then do_nav=1; fi
+  gsopen=$(grep -n '<section id="get-started"' "$INDEX" 2>/dev/null | head -1 | cut -d: -f1)
+  gsclose=""; gshave=0
+  if [ -n "$gsopen" ]; then
+    gsclose=$(tail -n +"$gsopen" "$INDEX" 2>/dev/null \
+      | grep -nE '^</div></section>[[:space:]]*$' | head -1 | cut -d: -f1)
+    [ -n "$gsclose" ] && gsclose=$((gsopen + gsclose - 1))
+    if [ -n "$gsclose" ]; then
+      gshave=$(sed -n "${gsopen},${gsclose}p" "$INDEX" 2>/dev/null | grep -cF 'chug.sh/docs.html') || gshave=0
+    fi
+  fi
+  do_gs=0
+  if [ "${gshave:-0}" -eq 0 ] && [ -n "$gsclose" ]; then do_gs=1; fi
+  if [ "$do_nav" -eq 0 ] && [ "$do_gs" -eq 0 ]; then return 0; fi
+  awk -v nc="$navclose" -v dn="$do_nav" -v gc="$gsclose" -v dg="$do_gs" \
+      -v indent="${indent:-    }" -v pointer="$DOCS_POINTER" '
+    function navlink(ind) { print ind "<a href=\"https://chug.sh/docs.html\">docs</a>" }
+    { if (dn == 1 && NR == nc) navlink(indent)
+      if (dg == 1 && NR == gc) print pointer
+      print }' "$INDEX" > "$TMPD/docs-nav" \
+    || { warn "docs nav bootstrap splice failed — skipping"; return 1; }
+  cat "$TMPD/docs-nav" > "$INDEX" \
+    || { warn "docs nav bootstrap page write failed — index.html may be truncated, NOT committing"; return 1; }
+  if ! git -C "$SITE" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    warn "$SITE is not a git work tree — docs nav edits written but not committed"
+    return 0
+  fi
+  git -C "$SITE" add index.html
+  if git -C "$SITE" commit -q -m "site: docs page nav bootstrap (T241)" \
+    -m "scripts/site-sync.sh (T241) reqs 2+4: index.html gains the docs.html link as the last nav item and the get-started section gains a one-line pointer to it — docs ⇄ home. docs.html itself is machine-rendered from runbooks/ + the README quickstart by this same sync; docs.html is never hand-edited."; then
+    echo "site-sync: bootstrapped docs nav link + get-started pointer ($(git -C "$SITE" rev-parse --short HEAD 2>/dev/null))"
+  else
+    warn "docs nav bootstrap commit failed (git identity?) — edits written but uncommitted"
+  fi
+  return 0
+}
 # --- compute the facts --------------------------------------------------------
 FACTS=$(todo_facts)
 
@@ -1094,6 +1447,13 @@ bootstrap_region TIMELINE tl || true
 bootstrap_region FEATURES grid || true
 bootstrap_release || true
 
+# --- T241: docs.html — the second page ----------------------------------------
+# The page is rendered FIRST; only a rendered page earns its nav link + the
+# get-started pointer (never a link to a page that is not rendered — the
+# fail-closed missing-runbooks leg, req 5).
+docs_generate
+if [ "$DOCS_STATE" = ok ]; then ensure_docs_nav || true; fi
+
 # region_ok NAME — the region is generatable iff exactly one BEGIN/END pair
 # exists, in order (malformed => warn + skip, best-effort, req 3)
 region_ok() { # name
@@ -1152,26 +1512,38 @@ awk -v blkfile="$TMP_BLOCK" '
   "^[[:space:]]*<!-- RELEASE:END -->[[:space:]]*\$" "$TMPD/rel-out" \
   || cp "$TMP_NEW3" "$TMP_NEW4"
 
-if cmp -s "$TMP_NEW4" "$INDEX"; then
+if cmp -s "$TMP_NEW4" "$INDEX" && [ "$DOCS_CHANGED" != 1 ]; then
   echo "site-sync: page unchanged — no commit"
   exit 0
 fi
-cat "$TMP_NEW4" > "$INDEX"   # in place: keeps the inode and the page's permissions
-
-echo "site-sync: rewrote the marked regions of $INDEX (items $DONE/$TOTAL, tests $TEST_N, cycles $CYC_N, last eval $EVAL_D)"
+if ! cmp -s "$TMP_NEW4" "$INDEX"; then
+  cat "$TMP_NEW4" > "$INDEX"   # in place: keeps the inode and the page's permissions
+  echo "site-sync: rewrote the marked regions of $INDEX (items $DONE/$TOTAL, tests $TEST_N, cycles $CYC_N, last eval $EVAL_D)"
+fi
+# T241 req 3: docs.html is ADD/OVERWRITE — written in the same sync, committed
+# in the same commit as index.html when either changed (req 5)
+if [ "$DOCS_CHANGED" = 1 ]; then
+  if cat "$TMPD/docs-out" > "$SITE/docs.html"; then
+    echo "site-sync: wrote $SITE/docs.html ($DOCS_NOTE)"
+  else
+    warn "docs.html write failed — not committing a stale render"
+    DOCS_CHANGED=0
+  fi
+fi
 
 # --- commit + push (req 2): best-effort, never force, rejection warns + exit 0
 if ! git -C "$SITE" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-  warn "$SITE is not a git work tree — page updated but not committed"
+  warn "$SITE is not a git work tree — pages updated but not committed"
   exit 0
 fi
-if [ -z "$(git -C "$SITE" status --porcelain -- index.html)" ]; then
-  echo "site-sync: index.html change not visible to git — nothing to commit"
+if [ -z "$(git -C "$SITE" status --porcelain -- index.html docs.html 2>/dev/null)" ]; then
+  echo "site-sync: page change not visible to git — nothing to commit"
   exit 0
 fi
 git -C "$SITE" add index.html
+if [ -f "$SITE/docs.html" ]; then git -C "$SITE" add docs.html; fi
 if ! git -C "$SITE" commit -q -m "site: stats sync $SYNC_DATE" \
-  -m "scripts/site-sync.sh (T98+T99), deterministic — items $DONE/$TOTAL (TODO.md), tests $TEST_N ($TEST_SRC${TEST_REF:+, $TEST_REF}), cycles $CYC_N ($CYC_SRC), last eval $EVAL_D; last-5 landed: $LANDED_REFS; timeline: $TL_STATE (cap $TL_CAP), features: $FT_STATE; release: ${RELEASE_TAG:-none}"; then
+  -m "scripts/site-sync.sh (T98+T99), deterministic — items $DONE/$TOTAL (TODO.md), tests $TEST_N ($TEST_SRC${TEST_REF:+, $TEST_REF}), cycles $CYC_N ($CYC_SRC), last eval $EVAL_D; last-5 landed: $LANDED_REFS; timeline: $TL_STATE (cap $TL_CAP), features: $FT_STATE; release: ${RELEASE_TAG:-none}; docs: $DOCS_NOTE"; then
   warn "commit failed (git identity?) — page updated but uncommitted"
   exit 0
 fi
