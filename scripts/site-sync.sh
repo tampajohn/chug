@@ -728,7 +728,7 @@ DOCS_GH_BLOB="https://github.com/tampajohn/chug/blob/main/"
 DOCS_GH_TREE="https://github.com/tampajohn/chug/tree/main/runbooks"
 DOCS_HOME="https://chug.sh/"
 DOCS_STATE="skip"; DOCS_CHANGED=0; DOCS_NOTE="skipped"; DOCS_N=0; DOCS_QS=0
-DOCS_POINTER="  <p class=\"lede flush\">Full runbooks — quick task, spec'd feature, repo eval, loop ops, adversarial review — live on the <a href=\"https://chug.sh/docs.html\">docs page</a>, regenerated from the repo's runbooks/ at every sync.</p>"
+DOCS_POINTER="  <p class=\"lede flush\">The full runbook corpus lives on the <a href=\"https://chug.sh/docs.html\">docs page</a>, regenerated from the repo's runbooks/ at every sync.</p>"  # finding 3: no hardcoded runbook enumeration — the pointer cannot drift from the corpus
 
 # readme_quickstart OUTFILE — the README's `## Quickstart` section body
 # (heading dropped; ends at the next heading OUTSIDE any fence — the
@@ -1541,7 +1541,7 @@ if [ -z "$(git -C "$SITE" status --porcelain -- index.html docs.html 2>/dev/null
   exit 0
 fi
 git -C "$SITE" add index.html
-if [ -f "$SITE/docs.html" ]; then git -C "$SITE" add docs.html; fi
+if [ "$DOCS_CHANGED" = 1 ]; then git -C "$SITE" add docs.html; fi  # T241 finding 1: stage docs.html only when THIS sync rendered it — a fail-closed leg never sweeps a stray file, a failed write never commits a partial
 if ! git -C "$SITE" commit -q -m "site: stats sync $SYNC_DATE" \
   -m "scripts/site-sync.sh (T98+T99), deterministic — items $DONE/$TOTAL (TODO.md), tests $TEST_N ($TEST_SRC${TEST_REF:+, $TEST_REF}), cycles $CYC_N ($CYC_SRC), last eval $EVAL_D; last-5 landed: $LANDED_REFS; timeline: $TL_STATE (cap $TL_CAP), features: $FT_STATE; release: ${RELEASE_TAG:-none}; docs: $DOCS_NOTE"; then
   warn "commit failed (git identity?) — page updated but uncommitted"

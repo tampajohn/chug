@@ -2147,6 +2147,10 @@ fn t241_docs_page_renders_runbooks_sorted_with_escaped_fences_and_nav() {
     let gs = html.find("<section id=\"get-started\"").expect("get-started section");
     let ptr = html.find("docs page</a>").expect("one-line pointer");
     assert!(ptr > gs, "the pointer lives inside the get-started section");
+    // finding 2 (validator M8): placement EARLY-but-inside was unpinned — bound the
+    // pointer above the section close too, not only below the section start
+    let gs_close = html[gs..].find("</section>").expect("get-started close") + gs;
+    assert!(ptr < gs_close, "the pointer sits ABOVE the get-started close (inside, not merely below the start)");
     // req 5: the sync commits BOTH files when either changed (one commit)
     assert_eq!(sync_commits(&f), 1);
     let nameonly = git(&f.site, &["show", "--name-only", "--format="], None);
@@ -2183,6 +2187,12 @@ fn t241_missing_runbooks_leaves_docs_untouched_and_sync_continues() {
     assert!(!html.contains("chug.sh/docs.html"), "never a link to a page that is not rendered");
     assert!(html.contains("<b>2/3</b>"), "stats still synced");
     assert_eq!(sync_commits(&f), 1, "the sync still lands once");
+    // finding 1 (validator M6): the stray docs.html must never be SWEPT into the
+    // sync commit — staging is guarded by DOCS_CHANGED (this sync rendered no
+    // page), not by the file's mere existence on disk
+    let nameonly = git(&f.site, &["show", "--name-only", "--format="], None);
+    let files = String::from_utf8_lossy(&nameonly.stdout);
+    assert!(!files.lines().any(|l| l.trim() == "docs.html"), "the stray docs.html is NOT swept into the fail-closed sync commit: {files}");
     // recovery: add the corpus -> the next sync renders the page + bootstraps the nav
     chug_fixture_t241_runbooks(&f.chug, true);
     let out2 = run_sync(&f, true);
