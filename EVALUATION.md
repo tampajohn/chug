@@ -1,251 +1,177 @@
-# EVALUATION — chug, assessed by chug-loop (2026-10-05, cycle 109)
+# EVALUATION — chug, assessed by chug-loop (2026-10-05, cycle 113)
 
-MANDATORY fresh eval — the freshness predicate failed at launch on the
-todo-rows half (queue DRAINED at the cycle-108 wrap: 0 `todo` rows;
-EVALUATION.md fresh same-day but the predicate is conjunctive), so
-loopd routed to kimi per T81 — correct for the NINTH consecutive
-routing decision. Delta corpus since the cycle-108 eval (a2ff207):
-the full cycle-108 arc — one orchestrator stream (kimi: 160i/4h2m
-goal-accepted, trim fires 0, ctx-edit events 3 = the T230 nudge's
-THIRD production fire with two rejected edits self-corrected inside
-the free turn), 5 child streams (t236-impl glm 2 segments: 80/80
-iteration-bound death mid-M3-mutant with +264/−4 uncommitted → ONE
-T63 resume accepted 32/80, ~1h4m total wall; t235-impl glm 53/80
-MINUTES-bound death at 50m20s with the work COMMITTED and spec gates
-verified → orchestrator-finish per T55/T150, no resume burned;
-t236-validate kimi 42i/29m PASS first round 6/6 mutants;
-t235-validate kimi 41i/24m PASS first round 8/8 mutants),
-`.chug/decisions.jsonl` 1,078 records (+21 in the delta — 9
-eval-triage + 2 recovery-routing + 2 validation-routing + 2
-validation-verdict + 6 outcome; zero zero-record cycles since the
-T23→T24 lesson), and the git record `a2ff207..05012d2` (9 commits:
-two full arcs + wrap notes + release v0.17.3). Digest FRESH per the
-mechanical check (567 files, 35,067 iterations, generated 11:32:02Z).
-Headline: **the cleanest delta in the recorded window — both
-cycle-108 filings landed the cycle they were filed with first-round
-validation PASSes and 14/14 mutants killed, zero new organic
-loopd_orphan_reaper fence reds post-T236 (n=3 loaded full suites),
-zero fix-up arcs, and the queue DRAINED for the 7th time in 8
-evals. This eval files ZERO rows: every candidate was weighed and
-sat below the filing bar with the arithmetic recorded (§2/§3), and
-the mandatory roadmap pull stands on its measured block (§4).**
+FRESH eval run AT the armed threshold trip — not at new work. The
+freshness predicate failed at launch on the todo-rows half (queue
+DRAINED since the cycle-108 wrap), loopd routed kimi per T81 — correct
+for the TWELFTH consecutive routing decision. The delta since the
+cycle-109 eval (886cb29) is the EMPTY CHAIN itself: cycles 110, 111,
+112 — three consecutive empty-delta dispositions — plus this cycle,
+which the cycle-111/112 Outcomes entries pre-armed as the trip: "ONE
+more empty disposition trips the ~4+ threshold re-filing a loopd pacing
+candidate." Rather than burn a FOURTH no-op disposition and defer the
+remedy to a real eval the self-sustaining chain would never produce,
+this cycle RUNS the eval now. Delta corpus: 3 kimi orchestrator streams
+(cycle 110: 15i / 20m41s / 144.2k in, 565.2k cache-read; cycle 111:
+22i / 16m23s / 142.7k in, 1M cache-read; cycle 112: 23i / 13m59s /
+143.1k in, 772.1k cache-read — all goal-accepted, zero trim, zero
+ctx-edit), `.chug/decisions.jsonl` 1,081 records (+3, all eval-routing
+dispositions), the git record `886cb29..6ed9d12` (4 commits,
+EVALUATION.md-only: 3 wrap-notes + 1 Outcomes compaction), and the
+digest FRESH (571 files, 35,179 iterations, generated 13:12:51Z —
+loopd regenerates pre-launch). Headline: **ONE row filed — T237, the
+loopd empty-cycle backoff. The chain's own arithmetic is the evidence:
+~143k input tokens and a cold-by-construction clippy re-pay per ~20-min
+no-op cycle, ~70 cycles/day sustained, with a self-sustaining
+pre-authorization that guarantees the cadence never self-corrects.
+Every other candidate stands on its cycle-109 rejection — the empty
+delta added zero new evidence for any of them.**
 
 ## 1. What chug does well
 
-- **Same-cycle file→land ×2 with first-round mutation proof —
-  the third consecutive eval cycle at equilibrium.** T235 and T236
-  went from filing to merged in one cycle (the 7th drain in 8
-  evals): two kimi validators PASS first round, 14/14 mutants
-  killed across the two rounds (6/6 on T236 incl. the bare-revert
-  and base-literal legs dying at BOTH pins; 8/8 on T235 incl. the
-  M0 pre-row RED discipline proof, anti-vacuity count corruption,
-  and window swap). Zero survivors, zero filed-forward findings.
-- **Budget-death absorption doctrine executed twice more, zero
-  work lost.** t236-impl died 80/80 iteration-bound mid-mutant
-  UNCOMMITTED → the ONE T63 resume accepted 32/80 (recovery-routing
-  d1791188011-10); t235-impl died minutes-bound at 53/80 COMMITTED
-  with spec gates verified → orchestrator-finish per T55/T150, no
-  resume burned (d1791196293-16). Two deaths, two textbook routings,
-  both logged, both landed-clean.
-- **The T230 occupancy nudge: third production fire, effective,
-  and the constraint surface is now self-teaching.** Cycle-108
-  orchestrator at the ~101k warn: two rejected ctx-edits inside the
-  FREE turn (reasons named the exact constraints — "pinned turn 0
-  was removed", "tool_result … would lose its tool_use"), the third
-  landed 446KB→115KB in 30 seconds of wall (07:41:49→07:42:19Z),
-  trim fires stayed 0. Three fires, three clean compactions; the
-  ~6-cycle verdict horizon is met next cycle.
-- **Post-T236 early efficacy signal.** The reaper fence fix has
-  now run 3 loaded full-suite gates (post-merge 1650/1650, t235
-  worktree + post-merge 1651/1651) with zero organic
-  loopd_orphan_reaper reds — the t236-validate stream's FAILED
-  sightings were the validator grepping HISTORICAL streams for the
-  census, verified by event context (iterations 11-12, grep-class
-  durations). Watch continues (§2 I2).
-- **Decision corpus hygiene holds**: +21 records with the complete
-  routing/verdict/outcome chains on both arcs.
+- **The empty-delta disposition doctrine absorbed THREE consecutive
+  no-op cycles with full arithmetic trails — and its own watch-keeping
+  fired the remedy on schedule.** Cycle-110's Outcomes entry wrote the
+  pre-authorization ("if the delta is still empty the same disposition
+  applies"), cycle-111 armed the ~4+ pacing threshold, cycle-112
+  counted to 3, and this cycle trips it exactly as written. The
+  self-governing loop noticed its own waste class and filed the fix —
+  this eval IS that mechanism working.
+- **T81 routing correct 12-for-12.** Every empty cycle fails the
+  predicate on the todo-rows half and routes kimi; every disposition is
+  logged (eval-routing d1791202400-1, d1791203856-1, d1791205020-1).
+  The mechanical switch, not model judgment, picked the expensive model
+  only for cycles that might evaluate.
+- **Bounded-cost no-ops, each fully closed.** Each disposition cycle:
+  15–23 iterations, one full gate run (clippy + nextest 1651/1651),
+  one wrap-notes commit, goal-accepted, zero wedges, zero red pushes.
+  The per-cycle burn is measured, not guessed (see §2 I1) — which is
+  what makes the pacing row's arithmetic exact.
+- **Digest freshness is now infrastructure, not diligence:** loopd
+  regenerates the digest pre-launch (13:12:51Z, one minute before this
+  run) — the Phase-1 corpus read starts warm every cycle.
+- **T230 occupancy-nudge verdict horizon REACHED and closed (§2 I2):**
+  3 production fires, 3 effective compactions, zero trim collisions —
+  the measurement row's req-5 question answers "surface lives."
 
 ## 2. Incidents worth fixing
 
-**NONE above the filing bar this delta.** Every candidate weighed
-below, arithmetic recorded (the eval-triage negative class — this
-is the cycle-108 filing standard applied to a clean delta):
+### I1 — loopd launch cadence durably exceeds the work-arrival rate (FILED as T237)
 
-### I1 — impl budget-death cadence continues (NO ACTION — absorbed-by-design, census updated)
-Two impl children died at budget this delta (t236 iteration-bound,
-t235 minutes-bound) — 4 deaths across the last 4 impl-bearing
-cycles (t230 minutes-committed, t233 iteration-resume, t236
-iteration-resume, t235 minutes-committed). ALL absorbed by doctrine
-with zero work lost and zero fix-up arcs; filing estimates were
-honest on both (T236 ~250→~290 = 1.2x, T235 ~80→~146 = 1.8x), so
-these are NOT the T209 size-runaway class the dispatch gate was
-built against — the T110/T209 resolution stands. Census state:
-minutes-death clause ARMED at 2 (t235's death was committed-complete
-— the absorbing precedent's exact case, not counted); iteration-bound
-deaths +1 (t236), each costing ONE designed resume. The measured
-cost of the class this delta: one resume spin-up (~32 iterations)
-plus one orchestrator-finish (~20 min) across a 4h2m cycle — under
-the cost of any conceivable fix. REJECTED; the census continues as
-a watch (trip condition: a death with work UNRECOVERABLE, or
-estimates blowing the band — the T209 runaway signature).
-- **Throughput data point**: t235-impl ran 53 iterations in 50.3
-  min = 1.05 iters/min — below the T173-observed 1.3–1.9 band —
-  because ~15 min (30% of its wall) burned on THREE 300s gate
-  timeouts (sharded full-suite runs under compile-storm load; the
-  shared_target_dir binary builds release chug in-test). Weighed a
-  child-gate-pacing row: the timeouts were the child's OWN
-  diligence beyond its check line (doctrine-pin shards are
-  seconds), it self-adapted by sharding binary-by-binary, and the
-  work landed complete. REJECTED — re-file if a child dies
-  UNCOMMITTED from timeout burn (the unabsorbed case).
+The only candidate above the bar this delta, and the delta IS the
+evidence. Four consecutive no-op cycles (110/111/112 + this one) at
+25/20/18-minute launch intervals. Measured per-cycle cost: ~143k input
+tokens (565k–1M cache-read), 14–21 min wall, and the cold-by-construction
+clippy leg (each cycle's own wrap-notes commit invalidates the
+build-script git-hash fingerprint, so every no-op re-pays a 4.5–8.5-min
+clippy build) + nextest ~40s. Sustained arithmetic: ~3 cycles/hour ≈
+70/day ≈ **10M input tokens/day of pure no-op burn**. The disposition
+doctrine absorbs each cycle's JUDGMENT cheaply, but nothing throttles
+the LAUNCH RATE — and the disposition pre-authorization ("the same
+disposition applies while the delta stays empty") makes the chain
+self-sustaining: absent intervention the ~20-min cadence runs forever,
+and the "next real eval" the cycle-112 watch deferred to would never
+spontaneously occur. Remedy filed: **T237** — loopd counts consecutive
+trailing wrap-notes commits carrying the `empty-delta disposition`
+token and scales the cycle-OK sleep exponentially (60s doubling to a
+1800s cap; the T137 LOOPD_SLEEP_OK test seam wins byte-identical when
+explicitly set; any work landing or real wrap resets the streak to
+zero). ~70 cycles/day → ~30/day at cap, with work-arrival pickup
+latency unchanged (a landing commit breaks the streak before the next
+sleep). Spec `specs/t237-loopd-empty-cycle-backoff.md`, pri 3, doctrine
+SOLO (loopd.sh + LOOP-SPEC token clause), kimi validation REQUIRED,
+estimate ~250.
 
 ### I2 — Watch-item resolutions and standing counts
-- **T236 fix-efficacy watch (NEW, inverts the I2 census).** The
-  pre-fix census closed at 4 sightings/4 cycles all transient
-  (the remedy's premise). Post-fix: 3 loaded full suites, zero
-  organic reaper reds (§1). The watch now counts post-fix reds —
-  expectation 0; ONE organic fence-trip red re-opens the family.
-- **Validator silent-exit watch: STAYS 1.** Both validators exited
-  announced (goal accepted, verdicts harvested). No row.
-- **Sweep-the-family recurrence: STAYS 1.** T235's validator ran
-  the cross-pin regression sweep (T57 window-offset load-bearing,
-  T195 unaffected) — the convention practiced.
-- **Occupancy nudge (T230): 3rd fire effective** (§1) — the
-  standing digest read (ctx-edit events per stream) reaches its
-  ~6-cycle verdict horizon next eval.
-- **Laya HF hosting: the PENDING 2026-10-05 date is TODAY.**
-  runbooks/laya-hf-hosting.md's operator checklist ("do NOT
-  execute early") is date-reached as of this eval; no operator
-  decision is repo-visible (no runbook commits since afec3ca, no
-  org/token artifacts). The checklist is the OPERATOR's to
-  execute — the loop's posture is unchanged (never executes it);
-  carried to the next eval.
-- **T234 outcome-latch: unexercised, no regression.** Zero
-  goal-gate rejections in the delta's child streams, so the new
-  wake-set never fired and never stale-latched — the cycle-106 DX
-  note stays closed.
+
+- **T230 occupancy-nudge verdict: CLOSED, surface lives.** The
+  cycle-109 eval set the horizon ("met next cycle"): 3 production fires
+  across cycles 106/107/108, 3 effective free-turn compactions (latest
+  446KB→115KB in 30s wall), trim fires 0 at every crossing, and the
+  constraint surface self-teaching (rejected edits named the exact
+  rules). Per T230's req 5, fires > 0 with the nudge live closes the
+  question — the surface stays; the per-eval re-check ENDS here.
+- **T236 fix-efficacy census: n=6, zero organic reds.** The three
+  disposition cycles each ran a full release nextest (1651/1651 ×3) —
+  child-unloaded gates, so the loaded-suite count stands at 3 and the
+  total at 6. Expectation holds; ONE organic fence-trip red re-opens
+  the family.
+- **F13-3 roadmap pull: SKIPPED, 5th consecutive (§4).**
+- **Standing watches unchanged (empty delta, no new evidence):**
+  minutes-death census ARMED at 2; validator silent-exit at 1;
+  edit_file stale-anchor re-file trigger >6/cycle (0 this delta);
+  BSD-sed >2/cycle (0); Laya HF hosting operator decision —
+  PENDING 2026-10-05 date is TODAY, still no repo-visible operator
+  action, carried.
 
 ## 3. Friction hot spots
 
-- **Orchestrator edit_file stale-anchor fumbles ×4 (EVALUATION.md
-  ×2, TODO.md ×2) — WEIGHED AND REJECTED.** All four are
-  post-compaction anchor staleness (the cycle-108 stream compacted
-  twice; anchors read pre-compaction drifted). Cost ~1 iteration
-  each, self-recovered on re-read; the tool error already names
-  the file. Rate watch: cycle-107 eval counted 1, this delta 4 —
-  under the ~2/cycle noise bar amortized (4 in one 160-iteration
-  eval+2-arc cycle ≈ 1 per 40 iterations of bookkeeping-heavy
-  work). REJECTED with the arithmetic; re-file if a cycle burns
-  >6 on the class.
-- **BSD sed error class: ZERO fires this delta** — the T181
-  description warning's generation-time suppression held through
-  an eval+2-arc cycle. The cycle-108 rejection's re-file trigger
-  (>2/cycle) is unmet by the widest margin yet; the rejection
-  stands (recorded again for the negative class).
-- **Noise floor, absorbed**: 1× `git add` of a .chug harvest path
-  refused by .gitignore (harvest is on-disk by design,
-  self-corrected); 1× `grep -rln PENDING .` recursion killed at
-  300s (target-shared* trees — model self-corrected with
-  exclusions); 2× jq quoting fumbles on raw-stream drill-down
-  (legitimate per the digest doctrine — incident drill, not ETL);
-  1× `sysctl: command not found` (PATH minimalism, self-routed);
-  1× malformed shell `fi` (self-corrected); t236-impl 5 tool
-  fumbles (heredoc paren, edit_file mismatch, decision_log
-  missing-field, /tmp path refusal — all self-recovered).
-- **Trim fires 0 orchestrator / 1 t236-impl (glm, 496k@80 context)
-  — the T77 trimmer doing its designed job on the long two-segment
-  arc; ctx-edit events 3 = one nudge fire (§1).**
+**Zero new.** The three disposition streams' failed-tool classes are
+absorbed gate mechanics: 1× bounded-gate timeout (cycle 110), 3×
+clippy-tail readouts (cycle 112's cold-by-construction leg across two
+bounded windows) — all inside the designed gate windows, all green on
+completion. The cycle-109 rejections (orchestrator edit_file
+stale-anchor rate, BSD-sed class, child-gate-pacing) stand unmodified
+— an empty delta cannot move a rate.
 
 ## 4. Capability gaps — ROADMAP PULL
 
-**Pull SKIPPED with written reason — the fourth consecutive eval;
-the top unworked item's GO precondition is unchanged-measured and
-the corpus accrual continues organically.**
-
-Top unworked item by tier order: **F13 phase 3** (confidence-gated
-first-pass routing), gated by T208's measured precondition (~2,570
-records) and corroborated-negative by T223's live holdout (AUROC
-0.374). Corpus now: **1,078 records** (+21 in one cycle, at the top
-of the observed 13–21/cycle band) ⇒ ~1,492 short ⇒ **~71–78 cycles
-out** at the observed accrual rate. The precondition moved one
-cycle closer; the block stands. **F16** (kev DeltaNet port): pull
-trigger (F13-3 GO precondition within ~20 cycles, or an operator
-ask) NOT met. **F3 phase 2** stands on its written reason (the
-Laya stop-hook consumer inherits the 0.374 block; the non-Laya
-half duplicates T190's notify surface). Every other roadmap row is
-landed or deferred with a written measured reason (F2-2b/F5-2/F7-2
-chat-only surfaces with no loop consumer; F6-2 structurally barred
-by the driver lock; F8-2/F9/F10-3b/F11-later/F12-2/F15-2 no
-consumer; F14 summarization measured-deferred against the existing
-T77 trim + T184/T192 telemetry). **New capability finds: NONE** —
-the delta's six streams show no capability-blocked moment (27
-delegate calls across the orchestrator, all tooling sufficient;
-both impl arcs' friction was budget/load classes in EXISTING
-surfaces, not missing capability).
+**Pull SKIPPED with written reason — the fifth consecutive eval.**
+Corpus now **1,081 records** (+3 eval-routing dispositions across the
+empty chain) vs T208's ~2,570 GO precondition ⇒ **~70–77 cycles out**
+at the observed 13–21/cycle band (the empty chain accrues at the floor,
+3/cycle). F16's trigger (within ~20 cycles, or operator ask) NOT met.
+F3-2 stands on its written reason. **New capability finds: NONE** —
+three streams of bookkeeping-only tool calls; the one capability-shaped
+moment in the delta (the disposition cycles' need to not exist) is a
+pacing gap, filed as T237, not a tool gap.
 
 ## 5. Top 3 priorities
 
-1. **(standing, no row)** The F13 corpus accrual — 1,078 / ~2,570;
-   ~71–78 cycles at the observed 19–21/cycle rate. The distillation
-   payoff's only live dependency.
-2. **(watch, no row)** The T236 fix-efficacy census — post-fix
-   organic reaper reds, expectation 0, n=3 and counting. ONE
-   sighting re-opens the family (I2).
-3. **(human)** The laya HF hosting operator decision — the
-   runbook's PENDING 2026-10-05 date is TODAY; the checklist is
-   the operator's to execute, the loop never touches it (I2).
+1. **T237 (the only queued row) — work it THIS cycle.** Doctrine SOLO
+   (loopd.sh + LOOP-SPEC), kimi validation REQUIRED, est ~250. The
+   cycle that filed it has the wall budget (launched 13:13 UTC, ~360-min
+   ceiling); deferring would hand a glm routine cycle a doctrine row
+   while the empty chain keeps burning.
+2. **(standing, no row)** The F13 corpus accrual — 1,081 / ~2,570.
+3. **(human)** The laya HF hosting operator decision — date reached,
+   carried (I2).
 
-**Estimate re-calibration (standing doctrine: text, never the
-threshold).** Delta actuals vs filing estimates: T236 ~250 → ~290
-all-in (**1.2x** — the seam-pre-existing kind lands ~1x; T232's
-1.2x confirmed), T235 ~80 → ~146 all-in (**1.8x** — the
-doctrine+pin band 0.4–3.3x holds). Two more data points inside
-their bands; no band revision.
+**Estimate re-calibration:** no new actuals (empty delta). Bands stand:
+seam-pre-existing ~1.2x; doctrine+pin 0.4–3.3x. T237's ~250 filing rides
+the doctrine+pin band.
 
 ## 6. README audit (usability)
 
-Delta-aware pass: the git record `a2ff207..05012d2` carries ZERO
-README edits (verified — the delta's 8 non-lock files are
-LOOP-SPEC, TODO, EVALUATION, 2 specs, 2 test files) — correct,
-because nothing user-visible landed (test fences + loop-internal
-doctrine). (a) Reading order: sound, verified against the live
-section map (Install → Quickstart → Runbooks → chat → run → fork →
-plan → TUI → Tools → risk gate → hooks → permissions → MCP →
-Langfuse → self-hosting → loopd → Development; 1,101 lines,
-unchanged). (b) Redundancy: none new (no edits → no new copies).
-(c) Staleness: the T235-pinned clippy form and the T236 fence
-seam are loop-internal (LOOP-SPEC/tests surfaces), not README
-claims — spot-checked the loopd section and Tools section against
-the delta, nothing superseded. (d) Balance: loopd section ~121
-lines, the extraction-row watch condition NOT met; watch stands.
-(e) Quickstart truth: untouched surface, holds (install/quickstart
-commands re-read against the current Cargo.toml v0.17.3).
-**No docs row filed.**
+Delta-aware pass: the git record `886cb29..6ed9d12` is
+EVALUATION.md-only — zero README edits, correct (nothing user-visible
+landed; the disposition mechanics are loop-internal). The T237 row
+carries its own README clause (req 6: the backoff documented where
+LOOPD_SLEEP_OK is) — no separate docs row. Section map, redundancy,
+staleness, balance, quickstart all stand per the cycle-109 audit (zero
+delta to any carrier).
 
 ## Handoff — recommended execution order
 
-Queue state: **EMPTY (0 rows filed — §2's arithmetic).** The next
-cycle is therefore a MANDATORY fresh-eval cycle again (the
-freshness predicate fails on the todo-rows half; loopd routes kimi
-per T81). This is the equilibrium the last four evals have held:
-eval → file 0–2 → land same cycle → drain → eval; the marginal
-cost of the empty-queue eval is one corpus read per cycle against
-the drift risk of skipping it.
+Queue state: **1 row (T237, spec ready).** This cycle works it
+immediately per §5 — the arc order is trivial (one row). If T237
+lands, the queue drains again and the next cycle routes kimi on the
+predicate — but with the backoff live, the empty chain self-throttles:
+cycle N+1 would sleep 120s, N+2 240s, … capped 1800s. If T237 somehow
+does NOT land this cycle (budget death), the row's notes cell carries
+the recipe and the next cycle (glm routine — queue non-empty + eval
+fresh same-day) picks it up.
 
-To SELF-SPEC (continuous improvement): none new. Big enough for
-META-SPEC fan-out: none new. Human-decision items: (1) the laya HF
-hosting operator checklist — the `PENDING 2026-10-05` date is
-TODAY; the checklist is the operator's to execute, no repo-visible
-decision yet, the loop never executes it; (2) the F13 phase-3 GO
-precondition (corpus 1,078 / ~2,570 — no human action, stated for
-visibility; F16's pull trigger rides it).
+To SELF-SPEC: none new. META-SPEC fan-out: none new. Human-decision
+items: (1) laya HF hosting operator checklist — date reached, the
+loop's posture unchanged (never executes); (2) F13-3 GO precondition —
+visibility only.
 
-Watch list handed to the next eval: T236 fix-efficacy census (I2);
-minutes-death census ARMED at 2 + iteration-bound resume count;
-validator silent-exit watch at 1; T230 nudge verdict horizon (met
-next cycle — 3 fires/3 effective, digest ctx-edit line is the
-read); edit_file stale-anchor rate (>6/cycle re-files); BSD-sed
-re-file trigger (>2/cycle, currently 0).
+Watch list handed to the next eval: T236 fix-efficacy census (n=6);
+T237 backoff efficacy — the FIRST post-landing empty chain should show
+the stretched cadence in launch timestamps and the `cycle-OK sleep`
+log line in the loopd log (verdict: one eval read); minutes-death
+census ARMED at 2; validator silent-exit at 1; edit_file stale-anchor
+>6/cycle; BSD-sed >2/cycle.
 
 ## Outcomes (filled at cycle wrap — LOOP-SPEC Phase 3)
 
