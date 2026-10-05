@@ -1983,7 +1983,7 @@ mod tests {
         // panicking or exhausting anything. The pre-T233 shape panics on
         // the first Ok and cannot pass this leg.
         let pair = UnixStream::pair().expect("socketpair for the scripted success");
-        let mut steps: Vec<std::io::Result<UnixStream>> =
+        let steps: Vec<std::io::Result<UnixStream>> =
             vec![Ok(pair.0), Err(refused())];
         let mut steps = steps.into_iter();
         let artifact = confirm_transient_success(

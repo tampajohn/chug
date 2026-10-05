@@ -509,7 +509,10 @@ a git worktree). Three actions:
 - **`status`** — reports the child's liveness (when you pass the `pid`), a
   summary of its `.chug/events.jsonl` — the child's latest run segment
   (state, `last_iteration` + `max_iters`, budget-low / goal / abort flags
-  with the abort reason) — and the tail of its console log — instant
+  with the abort reason; a verdict-bearing stream also renders
+  `goal_accepted_seen:` / `goal_rejected_seen:` adjacent to `goal_seen:`
+  when set — the any-goal `goal_seen` latch itself is unchanged) — and the
+  tail of its console log — instant
   polling never blocks. Optionally pass `wait_secs` (status-only;
   0/absent = instant, max 600) to collapse each idle wait window into one
   blocking status call: it returns early when the child's iteration
@@ -518,7 +521,11 @@ a git worktree). Three actions:
   wakes it), else at the deadline, and names the actual elapsed seconds on
   a `waited:` line; adding `terminal: true` (status-only, default false,
   requires `wait_secs > 0`) narrows the wake set to the terminal facts —
-  the goal or abort verdict, liveness alive→dead, or events-file creation
+  an ACCEPTED goal verdict or an abort, a NEW goal-gate rejection since
+  the wait began (a rejection already present at entry is stale news and
+  never wakes — the rejected child keeps running, so relatching it would
+  collapse every later terminal wait into instant polling), liveness
+  alive→dead, or events-file creation
   — so a working child never wakes the wait on iteration advances (one
   orchestrator iteration per child run, not per child iteration), while
   telemetry still renders at the deadline

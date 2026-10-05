@@ -256,6 +256,8 @@ human action, stated for visibility; F16's pull trigger rides it).
 ### Cycle 107 (2026-10-05, ~05:35 UTC–) — MANDATORY fresh-eval cycle (kimi; predicate failed on both halves: queue DRAINED at the cycle-106 wrap + EVALUATION.md 2026-10-04 stale at the 2026-10-05 launch)
 
 - **T234 (pri 3, DX) — LANDED 794d837** (merge of loop-t234: impl 3078634 + two dispatch re-keys). delegate status goal latch outcome-resolved: `DelegateSummary` gains `goal_accepted_seen`/`goal_rejected_seen` (additive on the any-goal `goal_seen` latch; missing/unparseable outcome fails safe to pre-T234 behavior; rejected-then-accepted latches both); T58 segment reset clears the new flags; terminal wake set is now `accepted || abort || (rejected && !entry.rejected) || events-creation` — a rejection at entry is stale news and never relatches (the cycle-106 wrap DX note closed); render emits the two flags only when set adjacent to `goal_seen:`; tools.rs schema text names the new wake set with a negative assertion on the old phrasing. Kimi PASS (d1791182800-14): 6/6 reqs, 7/7 mutants killed (4 spec-named + 3 validator-added: render-drop / schema-token-drop / six-field-set revert), parallel T79 legs cap-3, mcp_serve byte-compat verified unmodified, 1645/1645 nextest release. Environmental note for the flake census: `loopd_orphan_reaper` timing-fence red under full-suite load (pre-existing, zero causal path to the diff — watch). Est ~150 → actual 468 gross (3.1x — wait_terminal pin family spread).
+
+Cycle-107 wrap notes: both filed rows landed the cycle they were filed (queue DRAINED — fifth drain in six evals). The 2-impl overlap (T161 ii) ran clean: disjoint slots, zero cross-talk, T234 first-run accepted (77/80, 25 min); T233 burned ONE T63 resume (80/80 uncommitted mid-arc → resume accepted 14/80 — the doctrine's designed path; iteration-bound not minutes-bound, so the cycle-105 minutes census stays 2). Both validators PASS first round (11/11 mutants killed across the two rounds; pattern-iv second-validator slot worked — validate-a/validate-b + mut-b<k> leg keying, no contention). Validators caught nothing to fix (two spec-accepted residual observations on T233; one pre-existing loopd_orphan_reaper load-flake note from T234's validator handed to the next eval's census). Calibration: T233 est ~200 → 603 gross (3.0x), T234 est ~150 → 468 gross (3.1x) — the test-pin family kind joins the doctrine+pin carrier at ~3x (filing estimates stay the dispatch gate; both held the ~500 ceiling at dispatch on the estimate). Occupancy nudge fired on the orchestrator mid-cycle (100k warn; free-turn compaction 403,765→34,337 B — second production fire, effective again). Release check: 2 items since v0.17.2 < 3, no FEATURES check-off → NO TAG. Books: 19 decision records; both worktrees harvested (4 event segments + 2 verdicts + 2 validator ledgers) then removed with pids verified dead-or-defunct both directions; final gates 1648/1648 nextest release at HEAD. ONE post-merge red caught at wrap: clippy `--all-targets -D warnings` flagged a `mut` in T233's new test code that BOTH the impl child and the validator missed — the spec check line runs `cargo clippy --bin chug` (no cfg(test) compilation) while the LOOP-SPEC child goal demands `--all-targets`; nextest compiles tests but does not lint. Clippy-form gap between the check line and the goal text is a filing candidate for the next eval; orchestrator fix 1 keyword, verified green.
 - **T233 (pri 2, tests-only) — LANDED ac7f21a** (ff-merge of loop-t233: impl 68d7b14 + validate-b re-key). Socket-teardown gate flakes, both remedies per spec: (a) daemon `stale_socket_connects_refused`'s Ok arm is now a bounded re-verify (test-local `confirm_transient_success`, new 40x25ms=1s window riding the unchanged backoff cadence — success-then-REFUSED = teardown artifact recorded + poll continues; sustained success = panic naming BOTH classes); (b) mcp_http dead_port retry budget pure seam `dead_port_retry_budget_from_factor` (base 3 unchanged, T214 clamp [1.0,4.0] → 3..=12, NaN/0 fail-safe to base) riding testsupport's PUB `load_scaled_deadline` — no testsupport.rs edits, drivers two-arg caller-compatible. 3 new pins; sweep of 9 adjacent socket legs named in the commit. Kimi PASS (d1791183055-15): 5/5 reqs verified, 4/4 mutants died at predicted sites (serial legs w/ declared overlap judgment), 1235/1235 check + 1640/1640 nextest release. 2 residual observations spec-accepted (scale wiring host-load-observable only; outer-arm artifact path organic-only). Impl needed ONE T63 resume (died 80/80 uncommitted mid-arc → resume accepted 14/80, recovery-routing d1791181008-11). Est ~200 → actual 603 gross (3x — pin-family spread; the dispatch gate reads the estimate, which held).
 
 ### Cycle 106 (2026-10-05, ~03:26 UTC–) — MANDATORY fresh-eval cycle (kimi; predicate failed on both halves: queue DRAINED at the cycle-105 wrap + EVALUATION.md 2026-10-04 stale at the 2026-10-05 launch)
@@ -336,98 +338,7 @@ worktree; the goal gate reads the FILE per iteration, so the validator's
 check legs ran validate-a regardless. Queue EMPTY after flip — next cycle
 is a mandatory fresh eval.
 
-### Cycle 101 (2026-10-04, ~09:09 UTC–) — routine freshness-skip cycle (glm; predicate held: EVALUATION mtime 08:33 UTC = launch day [the cycle-100 wrap commit 2810ed9] + T220/T222/T223 todo) — queue: T222 → T223
-
-**WRAP (T220/T222/T223 landed; T224 filed, stays `todo` — wall budget, spec
-ready; v0.17.0 tagged+pushed with final gates green at HEAD: 4 items since
-v0.16.2 ≥ 3, minor for the two features). Books: both worktrees harvested
-(9 t222 artifacts, 9 t223 artifacts incl. 4 event segments + both verdicts)
-then removed with every hosted pid verified gone-or-defunct; all routing/
-verdict/outcome records landed (18 this cycle) incl. the T152-pattern
-correction for the phantom-id outcome subject; one process-hygiene incident
-closed (the round-1 validator's + impl's leaked judge daemons, ~20 GB RSS,
-reaped by the orchestrator before the fix-up); one bookkeeping incident
-closed (the orchestrator's gate chain lacked pipefail and pushed a red
-todo_consistency — the T8 `max|dp|` notes-cell pipes — fixed forward in
-6365b50 with the root cause named in the commit). Handoff: T224 spec ready
-(tests-only, pri 3); the kev DeltaNet candle port is the named first blocker
-for any real two-contestant bake-off (out of scope, needs its own eval
-filing if pulled); the F13 fine-tune is the named follow-up to the holdout
-AUROC 0.374 finding.
-
-- **T222 LANDED (merge cdf2e06, landed-clean)** — the kev-0.8b loader + judge-parity
-  harness (T220's code half), and the row's real product is its second premise
-  defect: the CONFIRMED contestant `jaredpalmer/kev-0.8b@bf75a6a8` sits on
-  `Qwen/Qwen3.5-0.8B-Base@dc7cdfe2` — model_type `qwen3_5`, 18 Gated DeltaNet
-  (linear attention) + 6 full attention layers, LoRA r16/α32 over
-  attention+MLP+DeltaNet projections — and candle-transformers 0.11 (max on
-  crates.io) has NO qwen3_5 model, so the 0.8B contestant is in the spec's OWN
-  "DeltaNet, candle-blocked" out-of-scope category. The impl child refused to
-  substitute candle's dense qwen3 (a different model served under the same name
-  would be a SPEC-3 violation) and delivered the honest surface instead:
-  `src/kev_config.rs` (ungated: both revision pins, PEFT LoRA parse refusing
-  rslora/DoRA/fan_in_fan_out, base-arch classification DeltaNet-vs-plain-qwen3-
-  vs-unknown-never-guessed, provenance base-pin verification — 6 plain-gate unit
-  pins), `src/kev_model.rs` (daemon-gated: kev-layout detection incl. cache-first
-  offline hub fallback, small-files-first inspect, classified refusal BEFORE any
-  big download), `daemon.rs` real_backend kev-routing (clients fail open, zero
-  gating change), `judge_pack` parameterization (model label + `act_probability:
-  Option` — kev omits the rl_agent ext, never fabricated; the laya goldens stay
-  byte-green), and `tests/kev_loader.rs` (the harness: choice top-1, score MAE,
-  noul AUROC via midranks, mean |p_diff|, option-order flip rate over committed
-  fixtures + fixture-shape/determinism/both-orderings/wire-shape pins + a
-  daemon-gated live leg that skips-not-fails offline and re-verifies both
-  revision pins when live). Impl glm run-1 died 80/80 mid-premise-discovery (T63
-  resume), run-2 died 80/80 POST-COMMIT (2ddeca3) → orchestrator-finish (T55/T150
-  precedent): the `readme_layout` pin caught the two new modules missing from
-  README's layout line (880fb8a). T189 lane failed on size (1801 lines) → kimi
-  REQUIRED (d1791109733-4): VERDICT PASS (d1791112723-5) — gates re-run green
-  incl. daemon-feature nextest 1602/1602; the premise deviation independently
-  verified against the LIVE HF API; 2/2 executed mutants killed (m1
-  classify-arm, m2 base-pin); 7 findings — 3 predicted-survivor pin gaps (m8
-  daemon kev-routing Dir arm, m9 AUROC tie-handling, m12 corpus refusal legs)
-  filed forward as T224; T223 (the bake-off run) inherits the DeltaNet port as
-  its first blocker. Bookkeeping incident: the merge commit message first cited
-  a phantom verdict id (d1791109733-5 — the record landed as d1791112723-5);
-  fixed by amend pre-push + the T152-pattern correction record in
-  `.chug/decisions.jsonl` (d1791112737-8).
-
-- **T223 + T220 LANDED (merge 1231a89, landed-clean after a FAIL→fix-up→PASS
-  arc)** — the bake-off RUN + verdict doc closes the operator's T220 filing
-  (both halves now in): `scripts/judge-parity.sh` is the fail-closed idempotent
-  runner (T200 export → 211 closed-set labels; the F13 time-ordered last-20%
-  tail = 42-record holdout; the 8 INDEX-keyed stop-judge goldens; one release
-  daemon per revision-pinned checkpoint over the real /judge wire, canonical +
-  option-flipped orderings, the T222 metric set per class), and
-  `docs/judge-parity.md` records the honest one-contestant partial verdict:
-  **LAYA STAYS** (the margin rule is vacuous with one contestant short — kev-0.8b
-  candle-blocked per T222's premise defect #2, verdict-2.0 id still HTTP 401
-  re-probed live, LocalLLaMA anchor not local/skipped) with REAL numbers —
-  goldens parity max|dp| 0.00e+00 / 0 violations / top-1 8/8 / MAE 0.0001
-  (verified 3 runs — the served laya IS the recorded laya); holdout n=42 choice
-  top-1 0.5714, noul AUROC 0.374 (below coin-flip: deep-OOD, no gating signal,
-  SPEC-3 stands — the F13 fine-tune is the named follow-up); option-order flips
-  5/9 goldens + 17/42 holdout (the kev-card caveat holds for laya too; the
-  runner measures both orderings by construction). Arc: glm run-1 died 80/80
-  (runner built + validated by hand, doc unwritten) → T63 resume goal-accepted
-  14/80 (1ef6482); kimi round-1 VERDICT FAIL (d1791123300-14) — MAJOR: the
-  serve legs leaked their model-loaded daemons EVERY run (serve_leg ran inside
-  command substitution so its PID_LIST side effect died with the subshell; the
-  validator proved 6/6 orphans at 2.0–3.4 GB RSS and the orchestrator reaped
-  ~20 GB of accumulated orphans before the fix) + 4 nits; the fix-up (86a6b06)
-  swept the CLASS — both daemon starts now book their pid in the parent shell,
-  cleanup+traps reap on EXIT/INT/TERM (130/143), manifest routing refuses
-  unknown checkpoints fail-closed, wait_healthy bails on early daemon death,
-  the tie-rule comment corrected — verified by orchestrator e2e (exit-1
-  fail-closed, metrics byte-identical, ZERO daemons post-exit) and a proper
-  trap test (an initial "leak" reading was the orchestrator's own test error —
-  `$!` of a `cd && cmd &` compound is the wrapper subshell, not the script);
-  kimi round-2 narrowed reval (d1791122288-13) VERDICT PASS (d1791123300-15).
-  Environmental note recorded: the T214 load-scaled fence test
-  (`a_failing_driver_probe_means_no_sweep`) expired its fence IDENTICALLY on
-  main under ambient load 9.68 (fseventsd + EXO pegged since July) mid-cycle,
-  then passed at post-merge — host-load flake family (T151/T172 lineage), not
-  branch-attributable (the branch diff is script+doc only).
+### Cycle 101 (2026-10-04) — glm routine freshness-skip cycle; 3 landed (T220 verdict-2.0 premise + T222/T223 F13 holdout bake-off — AUROC 0.374 finding named the fine-tune follow-up) + T224 filed specs-ready; v0.17.0 tagged (4 items since v0.16.2, minor for two features); two incidents closed in-cycle (leaked judge daemons ~20 GB reaped; red todo_consistency pushed on a non-pipefail gate chain — T8 pipe lesson, fixed 6365b50); full narrative in git (row-flip commits + TODO done rows).
 
 ### Cycle 100 (2026-10-04) — glm routine freshness-skip cycle; 2 landed (T219 0516e05 kimi PASS, T221 c85f6ba the T219-validator findings bug closed in-pass) + T220 split into T222/T223 deferred specs-ready; one T63 resume burned (t219 run-1 80/80 mid-debug, A/B-proved not-causal); the T197/T212 re-key discipline self-caught its own omission mid-flight (ef19737); no tag (2 < 3 since v0.16.2); full narrative in git (row-flip commits + TODO done rows).
 
