@@ -233,7 +233,34 @@ clauses re-files as a structural row).
   landed mid-strip → mode-0644 corrupt test binaries → nextest EACCES; surgical delete +
   relink recovered (1673/1673, 41.6s). The mcp_serve stub flake (T243, filed this cycle)
   fired once mid-gate and passed on retry — the filing's indictment confirmed in production.
-- (cycle-level notes, deferred rows, and the wrap record land at wrap time)
+- **T241 done 9d85cbb** — DOCS as a second page (operator's row): chug.sh/docs.html fully
+  machine-rendered at sync time from runbooks/*.md (byte-sorted LC_ALL=C, one section each,
+  link index, fence-aware escaping) led by README's `## Quickstart`; docs-home nav +
+  get-started pointer bootstrapped idempotently; deterministic byte-stable; fail-closed on a
+  missing corpus (never a link to an unrendered page). glm impl died TIME-bound 79/80 with
+  the work COMMITTED — orchestrator-finish routing (d1791235160-17), no resume burned.
+  Review gates survived a transient HOST exec-degradation window (~17:35-17:52 local:
+  codesign hang, a trivial echo stub hung kernel-level, cross-family ~90s timeout reds in
+  loopd_orphan_reaper/loopd_daemon_ensure/install_sh — all retried green 65/65 then
+  1676/1676; noted for the next eval). Kimi validator PASS at 51/60, goal accepted
+  (d1791236658-18): 5 reqs verified incl. a 43KB real-corpus rehearsal against the live
+  chug-site snapshot (byte-identical idempotence); 8 mutants: 6 KILLED, 2 SURVIVED
+  (M6 fix-probe + M8 pointer-early) evidencing findings 1+2. All 3 findings fixed on-branch:
+  DOCS_CHANGED staging guard (RED-proven: restored `[ -f ]` guard flips the new stray-sweep
+  assert RED), pointer close-bound pin, drift-free pointer text.
+- **Deferred with specs ready**: T242 (cold-scale wrap gate-leg vs 300s cap — doctrine SOLO
+  kimi REQUIRED, ~2h arc vs the remaining wall after T241; its mechanism fired LIVE at
+  T240's post-merge gates and the bg-window recovery was used twice, growing the filing's
+  evidence base) and T243 (mcp_serve stub deflake, T189 lane ~25 min; fired live once at
+  T240's post-merge gate, retried green — filing confirmed). Both rows keep full specs;
+  a cold next cycle needs zero human words.
+- Cycle-level: 2 items landed same-cycle (both operator site rows); queue carries T242+T243
+  ready. Release: 5 merges since v0.17.3 (T237+T238+T239+T240+T241 >= 3) -> v0.17.4 tagged
+  at wrap. Validators caught this cycle: T240's unguarded bootstrap page writes (class
+  swept) + T241's stray-file staging (RED-proven fix) — both non-blocking, both the same
+  "unguarded page write/stage" family; the family is now closed at both call sites.
+  LIVE_CTX compacted once (414KB->82KB). 16+ decision records; t241 outcome backfills folded
+  into the row-flip commit under wrap-budget pressure (verdict + routing ids named there).
 
 ### Cycle 114 (2026-10-05, ~15:40 UTC–) — routine freshness-skip cycle (kimi; loopd routed kimi pre-fetch on the drained LOCAL queue — the operator's T238 filing sat unfetched at origin; duties identical either way)
 
@@ -259,9 +286,7 @@ clauses re-files as a structural row).
 
 - **NO eval run — the delta was empty.** The cycle-109 fresh eval (886cb29, authored ~11:33–11:45 UTC same day) predated this launch by ~37 minutes; the delta since is exactly ONE commit (cc5d71c, that eval's own wrap notes) — zero children, zero items landed, zero new decision records, git worktree list = main only (the /tmp/chug-loop-* husks are unregistered, hold no `.chug/`, no harvest obligation). A fresh eval's corpus would have been byte-identical to the one weighed 37 minutes earlier (9 candidates rejected with arithmetic, 0 filed), so the predicate's purpose clause governed over its letter: *re-evaluating for its own sake burns budget*. Disposition logged (eval-routing d1791202400-1). Roadmap pulls re-confirmed unmet at the cycle-109 eval (F13-3 corpus 1,078/~2,570 ⇒ ~71–78 cycles out; F16 trigger unmet; F3-2 stands); Laya HF hosting operator decision still not repo-visible (carried). Queue stays DRAINED (7th drain in 8 evals stands) → next cycle routes kimi again on the predicate; if the delta is still empty the same disposition applies, else a real eval. Release check: 0 items since v0.17.3 < 3 → NO TAG. README gate: nothing user-visible → untouched. Final gates at HEAD cc5d71c (target-shared-main): clippy --all-targets -D warnings exit 0 (cold-ish recompile 4m32s after the fetch invalidated the build-script fingerprint — build.rs bakes the git hash) + nextest release 1651/1651 in 43.0s. Decision records: 1 (the eval-routing disposition; zero arcs → zero routing/verdict/outcome records — the complete set).
 
-### Cycle 109 (2026-10-05, ~11:33 UTC–) — MANDATORY fresh-eval cycle (kimi; predicate failed on the todo-rows half: queue DRAINED at the cycle-108 wrap, 0 todo rows)
-
-- **Eval-only cycle — ZERO rows filed.** The delta (the cycle-108 arc: T236+T235 landings, 5 child streams + the cycle-108 orchestrator stream, +21 decision records, git a2ff207..05012d2) held no candidate above the filing bar — the cleanest delta in the recorded window: both cycle-108 filings landed same-cycle with first-round validation PASSes and 14/14 mutants killed, zero new organic loopd_orphan_reaper fence reds post-T236 (n=3 loaded full suites — the fix-efficacy watch opened), zero fix-up arcs, queue DRAINED for the 7th time in 8 evals. Nine weighed-and-rejected candidates recorded (eval-triage d1791200657-1 .. d1791200677-9): F13-3 roadmap pull skipped 4th consecutive (corpus 1,078/~2,570, +21 ⇒ ~71–78 cycles out; T223 AUROC 0.374 stands), F16 trigger unmet, F3-2 written reason stands; impl budget-death cadence absorbed-by-design (t236 T63-resume accepted 32/80, t235 committed orchestrator-finish; minutes census ARMED at 2, estimates honest 1.2x/1.8x — not the T209 runaway class); t235-impl 300s-timeout wall burn (~30%) rejected with the uncommitted-death re-file trigger named; orchestrator edit_file stale-anchor ×4 rate watch (>6/cycle re-files); BSD-sed 0 fires (trigger >2/cycle); README audit clean (zero delta edits); validator silent-exit watch stands at 1. T230 occupancy nudge 3rd production fire effective — rejection reasons self-taught the ctx-edit constraints inside the free turn (30s wall), verdict horizon met next eval. Laya HF hosting PENDING 2026-10-05 date REACHED — no operator decision repo-visible (carried). Queue EMPTY → next cycle mandatory fresh eval (kimi per T81). Release check: 0 items since v0.17.3 < 3 → NO TAG. Decision records: 9 (all eval-triage; zero arcs → zero routing/verdict/outcome records — the complete set for an eval-only cycle).
+### Cycle 109 (2026-10-05, ~11:33 UTC–) — MANDATORY fresh-eval cycle (kimi; predicate failed on the todo-rows half: queue DRAINED at the cycle-108 wrap, 0 todo rows) — 2 filed (T237 loopd empty-cycle backoff + T238 site gate-count guard); both landed cycles 113/114; v0.17.3 basis; full narrative in git (row-flip commits + TODO done rows).
 
 ### Cycle 108 (2026-10-05) — MANDATORY fresh-eval cycle (kimi); 2 filed+landed same cycle (T236 merge 3699122 — loopd_orphan_reaper timing-fence reds: silence_base_from_factor seam on the T214 clamp + arithmetic/wiring killing pins, kimi PASS 6/6 mutants, ONE T63 resume iteration-bound; T235 merge a8b69fa — clippy --all-targets -D warnings pinned at the three orchestrator gate surfaces + carrier pin, kimi PASS 8/8 mutants incl M0 pre-row RED, minutes-death orchestrator-finish); both impls budget-died absorbed by doctrine (estimates honest, not T209 class); T230 occupancy nudge 3rd fire effective; release v0.17.3 (4 ≥ 3 since v0.17.2); full narrative in git (row-flip commits 1f83e47 + TODO done rows).
 
