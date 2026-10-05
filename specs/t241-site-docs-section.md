@@ -1,6 +1,6 @@
 # T241 — DOCS as a second page (chug.sh/docs.html): runbooks rendered into their own page
 
-check: cargo test --test site_sync
+check: export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared; touch src/*.rs tests/*.rs; cargo test --test site_sync
 
 estimate: ~260 lines (region generator + markdown render + nav + pins)
 
