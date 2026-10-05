@@ -1,6 +1,6 @@
 # T230 — ctx-edit trigger calibration: put the `--ctx-warn-at-tokens` nudge live on the loopd orchestrator launch (measurement row)
 
-check: set -o pipefail; export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared; touch src/*.rs tests/*.rs; cargo test --test loopd_model_routing --test readme_layout --test todo_consistency
+check: set -o pipefail; export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-validate-a; touch src/*.rs tests/*.rs; cargo test --test loopd_model_routing --test readme_layout --test todo_consistency
 
 estimate: ~150 changed lines all-in (doctrine+pin carrier row — the
 cycle-105 calibration: narrative ~50 lands ~3x with the pin leg
