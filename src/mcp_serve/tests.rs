@@ -1064,6 +1064,48 @@
         }
     }
 
+    /// Poll (deadline-bounded) for a stub-written file's EXISTENCE — the
+    /// T243 per-file poll, sibling of [`wait_for_stub_dump`] and REQUIRED
+    /// for files the stub creates EMPTY (`: > .chug/events.jsonl`): the
+    /// dump helper waits for CONTENT, which an empty touch never satisfies.
+    /// The stub's writes are ASYNC relative to the launch's return (launch
+    /// returns at spawn), so an assert on a stub-written file must be
+    /// preceded either by a poll on THAT file or by a poll on a file the
+    /// stub provably wrote EARLIER (its own write order — the T237
+    /// validator's round-1 fail-fast was exactly the missing poll on the
+    /// events touch that follows the polled argv dump: under full-suite
+    /// load the inter-line gap opened and the point-assert fired early; a
+    /// green run cannot prove the gap away, the poll closes it by
+    /// construction). On a miss the panic names the OBSERVED launch
+    /// outcome — the T158 req-3 pattern. No deadline change (10s stays).
+    #[cfg(unix)]
+    fn wait_for_stub_file(path: &Path, launch_text: &str, launch_is_error: Option<bool>) {
+        use std::time::{Duration, Instant};
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            if path.is_file() {
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "stub never created {} in 10s AND the launch outcome was: {}",
+                path.display(),
+                if launch_is_error == Some(true) {
+                    format!("isError: {launch_text}")
+                } else {
+                    match launch_text
+                        .lines()
+                        .find_map(|l| l.strip_prefix("launched: pid "))
+                    {
+                        Some(pid) => format!("reported pid {pid} but the file never appeared"),
+                        None => format!("no pid line at all: {launch_text}"),
+                    }
+                }
+            );
+            std::thread::sleep(Duration::from_millis(25));
+        }
+    }
+
     /// The stub-spawn leg: `CHUG_DELEGATE_BIN` pointed at a tiny shell stub
     /// (the T126 idiom — written in the test's tempdir, records its argv and
     /// cwd, sleeps as a fake child) that the launch seam substitutes for the
@@ -1071,7 +1113,11 @@
     /// the boundary budgets (200/240) reaching the argv verbatim, and that
     /// the returned pid/log/events name real paths. The stub is killed at
     /// leg end. The goal carries spaces and double quotes — the delegate
-    /// argv mechanism delivers it byte-exact with no quoting code.
+    /// argv mechanism delivers it byte-exact with no quoting code. T243:
+    /// every stub-written-file assert rides the poll discipline — a per-file
+    /// poll on THAT file (argv, events) or a poll on a file the stub writes
+    /// LATER (cwd.txt, ordered before the argv dump); the stub's write order
+    /// is behavior under test and stays untouched.
     #[cfg(unix)]
     #[test]
     fn chug_launch_stub_spawn_pins_exact_argv_cwd_and_return_paths() {
@@ -1157,10 +1203,19 @@
         ];
         assert_eq!(argv, expected, "exact child argv");
         // The child ran IN the target cwd: `pwd -P` names it, and its
-        // relative events touch landed in that cwd's .chug/.
+        // relative events touch landed in that cwd's .chug/. cwd.txt is
+        // SAFE to read without its own poll: the stub writes it BEFORE the
+        // argv.txt this leg already polled (T243 req 3 — a file written
+        // before the polled file is ordered-safe; argv.txt is published
+        // atomically, so the argv poll proves cwd.txt complete). The
+        // events touch is written AFTER argv.txt, so it gets its OWN
+        // per-file poll — the T237 validator's round-1 fail-fast was this
+        // point-assert winning the race against the stub's inter-line gap
+        // under full-suite load.
         let cwd_txt = fs::read_to_string(target.path().join("cwd.txt")).expect("cwd.txt");
         let expected_cwd = fs::canonicalize(target.path()).unwrap();
         assert_eq!(cwd_txt.trim(), expected_cwd.to_str().unwrap(), "child cwd");
+        wait_for_stub_file(&events_path, &text, is_error);
         assert!(events_path.is_file(), "events file created by the stub: {text}");
         // Reap/kill the stub at leg end (its own process group), then
         // restore the seam.
