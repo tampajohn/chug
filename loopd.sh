@@ -118,6 +118,71 @@ route() {
   fi
 }
 
+# T237 — empty-cycle backoff. The launch cadence had durably exceeded the
+# work-arrival rate: with the queue drained, every cycle wrapped with an
+# empty delta, and the flat 60s cycle-OK sleep kept the no-op cadence at
+# ~20 minutes (~10M input tokens/day of pure burn, measured cycles
+# 110–113). The signal is already in the git record,
+# machine-greppable: each empty-delta wrap's commit subject carries the
+# literal token the awk needle below matches (LOOP-SPEC Phase 3 makes
+# the token load-bearing doctrine — a disposition wrap whose subject
+# lost it would silently read as a reset and defeat the pacing). The
+# walk counts consecutive empty-delta wraps newest-first, SKIPS pure
+# bookkeeping (`eval:` commits that are not wrap notes — Outcomes
+# compaction and the like) without stopping, and stops at anything else:
+# a real wrap (an `eval:` wrap-notes subject without the token) or any
+# landed work (a non-`eval:` subject). POSIX awk only (the BSD-sed/awk
+# doctrine — no GNU-isms), and a non-git cwd, a missing git, or an empty
+# log degrades to 0, never an error under set -e/pipefail (the rc is
+# latched, the T142 house style).
+empty_wrap_streak() { # consecutive empty-delta wrap commits, newest-first
+  local subjects rc=0
+  subjects=$(git log --format=%s -30 2>/dev/null) || rc=$?
+  if [ "$rc" -ne 0 ] || [ -z "$subjects" ]; then
+    echo 0
+    return 0
+  fi
+  printf '%s\n' "$subjects" | awk '
+    /^eval:/ {
+      if (index($0, "empty-delta disposition") > 0) { n++; next }
+      if (index($0, "wrap notes") > 0) { exit } # a real wrap: reset
+      next                                      # eval bookkeeping: skip
+    }
+    { exit }                                    # landed work: reset
+    END { print n + 0 }
+  '
+}
+
+# T237 — the cycle-OK sleep. The T137 test seam wins first and
+# byte-identically: LOOPD_SLEEP_OK set non-empty is echoed verbatim (four
+# behavioral legs pin `LOOPD_SLEEP_OK=1`; explicit-set-wins). Otherwise
+# the sleep scales with the empty-delta streak — 60s doubled once per
+# consecutive empty wrap, capped at LOOPD_EMPTY_SLEEP_CAP (default 1800):
+# 60 → 120 → 240 → 480 → 960 → 1800, so the fourth consecutive no-op
+# cycle parks ~16 minutes and the cadence floor becomes one launch per
+# 30 minutes; any real work resets the streak to 0 and the sleep to 60.
+# The FAIL path is untouched (LOOPD_SLEEP_FAIL stays 300 flat). A
+# POSIX-safe doubling loop, no GNU-isms; a non-numeric cap degrades to
+# the base (the comparisons fail closed inside the loop guard, never a
+# set -e death — condition contexts are exempt).
+ok_sleep_seconds() {
+  if [ -n "${LOOPD_SLEEP_OK:-}" ]; then
+    echo "$LOOPD_SLEEP_OK"
+    return 0
+  fi
+  local streak cap s
+  streak=$(empty_wrap_streak)
+  cap="${LOOPD_EMPTY_SLEEP_CAP:-1800}"
+  s=60
+  while [ "$s" -lt "$cap" ] && [ "$streak" -gt 0 ]; do
+    s=$((s * 2))
+    streak=$((streak - 1))
+    if [ "$s" -gt "$cap" ]; then s=$cap; fi
+  done
+  if [ "$s" -gt "$cap" ]; then s=$cap; fi
+  echo "$s"
+}
+
 case "${1:-run}" in
   stop)
     touch "$STOP"
@@ -130,6 +195,15 @@ case "${1:-run}" in
     # probe and the test surface for the freshness predicate
     # (tests/loopd_model_routing.rs runs this mode against fixtures).
     route TODO.md EVALUATION.md
+    exit 0
+    ;;
+  sleep-ok)
+    # T237: print "<seconds> <streak>" — the cycle-OK sleep that WOULD
+    # follow a successful cycle now, sleeping nothing (the `routing`
+    # probe pattern: the operator's and the tests' behavioral surface
+    # for the empty-delta backoff; tests/loopd_empty_backoff.rs runs
+    # this mode against fixture git repos).
+    echo "$(ok_sleep_seconds) $(empty_wrap_streak)"
     exit 0
     ;;
   status)
@@ -159,7 +233,7 @@ case "${1:-run}" in
     exit 0
     ;;
   run) ;;
-  *) echo "usage: loopd.sh [run|stop|status|routing]" >&2; exit 2 ;;
+  *) echo "usage: loopd.sh [run|stop|status|routing] [sleep-ok]" >&2; exit 2 ;;
 esac
 
 # T50: same-pid pass. `exec` preserves the pid, so a re-exec'd self finds its
@@ -561,9 +635,15 @@ while [ ! -f "$STOP" ]; do
     scripts/site-sync.sh >> "$LOG" 2>&1 \
       || echo "$(ts) site-sync: nonzero exit (best-effort, ignored)" >> "$LOG"
     fails=0
-    # T137: LOOPD_SLEEP_OK is a test seam (the CHUG_ROUTINE_TODAY pattern) —
-    # production default 60, unchanged.
-    sleep "${LOOPD_SLEEP_OK:-60}"
+    # T237 — the cycle-OK sleep scales with consecutive empty-delta wraps
+    # (ok_sleep_seconds above): 60s doubling to the LOOPD_EMPTY_SLEEP_CAP
+    # ceiling, the T137 LOOPD_SLEEP_OK seam still pinning any fixed
+    # cadence byte-identically. The `cycle OK:` line above stays
+    # byte-identical (site-sync and log greps read it); this ONE line
+    # names the pacing decision next to it.
+    ok_secs=$(ok_sleep_seconds)
+    echo "$(ts) cycle-OK sleep ${ok_secs}s (empty streak $(empty_wrap_streak), cap ${LOOPD_EMPTY_SLEEP_CAP:-1800})" >> "$LOG"
+    sleep "$ok_secs"
   else
     fails=$((fails + 1))
     echo "$(ts) cycle ended WITHOUT goal complete (consecutive failures: $fails)" >> "$LOG"

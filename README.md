@@ -989,6 +989,14 @@ validates glm), auto-push per item. Two env knobs: `LOOP_ORCH_MODEL` (default
 kimi-k3) and `LOOP_ROUTINE_MODEL` (default glm-5-3-flash) — setting
 `LOOP_ROUTINE_MODEL=anthropic-system.ai.kimi-k3` restores single-model
 operation.
+Between cycles the success sleep scales with consecutive empty-delta
+dispositions (T237): every wrap whose delta stayed empty doubles the
+previously flat 60-second cycle-OK sleep — 60s → 120 → 240 → 480 → 960 →
+a 1800s (30-minute) cap — and any landed work resets the streak, so a
+drained queue no longer burns no-op cycles at a one-minute cadence.
+`LOOPD_SLEEP_OK` still pins a fixed cadence when set, `LOOPD_EMPTY_SLEEP_CAP`
+retunes the ceiling, and `./loopd.sh sleep-ok` prints the seconds and
+streak the next successful cycle would sleep.
 loopd also exports `CHUG_BASH_TIMEOUT=300` for the whole loop fleet (T178):
 the orchestrator and every delegate child (children inherit the
 orchestrator's env) get a 300s bash-tool cap instead of the 120s default, so
