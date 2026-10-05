@@ -1547,15 +1547,64 @@ pub(crate) mod tests {
     /// acquire-probe-connect sequence with a fresh [`dead_port`] handout up
     /// to this many attempts before the exhaustion panic. Spec-pinned at 3.
     /// (Distinct from `DEAD_PORT_ATTEMPTS`, the acquisition probe's own
-    /// bind+probe bound.)
+    /// bind+probe bound.) T233: this is the factor-1 BASE of the load-scaled
+    /// organic-invalidation attempt budget ([`dead_port_retry_budget`]) —
+    /// unchanged as the base value, and the budget's floor.
     const DEAD_PORT_RETRY_ATTEMPTS: usize = 3;
+
+    // ---------- T233: load-scaled organic-invalidation attempt budget ----------
+
+    /// The PURE budget seam (T233 req 2): the T214 load factor → the
+    /// organic-invalidation attempt budget both dead_port retry drivers run
+    /// under. Base [`DEAD_PORT_RETRY_ATTEMPTS`] (3) is the factor-1 value —
+    /// UNCHANGED — scaled by the T214 clamp [1.0, 4.0]: 3..=12 attempts,
+    /// hard-capped (never unbounded, and a pathological host still fails in
+    /// bounded time naming the budget it exhausted). Mid-band factors round
+    /// to the nearest whole attempt (half away from zero); a factor below
+    /// the band clamps UP (a retry bound only ever stretches) and a
+    /// degenerate factor (NaN poisons the clamp; the usize cast saturates
+    /// NaN/0 to 0) fails SAFE to the base — exactly today's behavior.
+    ///
+    /// The factor arrives PRE-COMPUTED (see [`dead_port_retry_budget`]):
+    /// the seam is pure so the scaled arithmetic is pinnable without host
+    /// state — factor 4.0 → 12, factor 1.0 (the failed-reads value) → 3 —
+    /// and so this row's RED-proofs can mutate it in place.
+    fn dead_port_retry_budget_from_factor(factor: f64) -> usize {
+        let factor = factor.clamp(1.0, 4.0);
+        let scaled = (factor * DEAD_PORT_RETRY_ATTEMPTS as f64).round() as usize;
+        // Belt to the suspenders: the clamp floor already guarantees a
+        // factor ≥ 1.0; this floor makes the never-below-base invariant
+        // local to the seam rather than an assumption about the clamp.
+        scaled.max(DEAD_PORT_RETRY_ATTEMPTS)
+    }
+
+    /// The LIVE budget the drivers ride (T233 req 2): the factor through
+    /// testsupport's pub T214 seam — `load_scaled_deadline` composes EXACTLY
+    /// the scaling this row scales by (`scale_factor(read_loadavg_1m(),
+    /// cores)` with the [1.0, 4.0] clamp, the composition the loopd fences
+    /// already ride), REUSED not reimplemented (testsupport.rs is out of
+    /// this row's scope; `scale_factor`/`read_loadavg_1m` are
+    /// module-private there). ANY seam failure (no sysctl, unreadable
+    /// /proc, unparsable text, no core count) fail-safes INSIDE it to the
+    /// base passed through byte-identically — so a failed read arrives here
+    /// as factor EXACTLY 1.0 and the budget is the base: exactly today's
+    /// behavior (pinned on testsupport's side by
+    /// `t214_seam_failures_fail_safe_to_the_exact_base`). The 1-second base
+    /// makes the fence's duration the factor itself (1s × factor, read back
+    /// with nanosecond fidelity — immaterial at attempt-count granularity).
+    fn dead_port_retry_budget() -> usize {
+        dead_port_retry_budget_from_factor(
+            crate::testsupport::load_scaled_deadline(Duration::from_secs(1)).as_secs_f64(),
+        )
+    }
 
     /// T151 fix-up: HOW a dead-port attempt was invalidated. Both classes
     /// are RETRYABLE — the retry drivers re-run the whole
-    /// acquire-probe-connect sequence, bounded by the same
-    /// `DEAD_PORT_RETRY_ATTEMPTS` — with per-class exhaustion wording so a
-    /// bounded flake signature stays distinguishable from a real regression
-    /// (which panics inside the classifier, un-retried, byte-distinct).
+    /// acquire-probe-connect sequence, bounded by the same T233 budget
+    /// ([`dead_port_retry_budget`], base `DEAD_PORT_RETRY_ATTEMPTS`) — with
+    /// per-class exhaustion wording so a bounded flake signature stays
+    /// distinguishable from a real regression (which panics inside the
+    /// classifier, un-retried, byte-distinct).
     /// Constructed ONLY for invalidated attempts; ordinary test failures and
     /// genuine regressions panic directly inside the attempt closure, so a
     /// real regression is never retried into a flake-shaped message. (T59's
@@ -1658,8 +1707,9 @@ pub(crate) mod tests {
     ///   handshake) → first-succeeds-then-refuses →
     ///   [`Invalidation::TeardownArtifact`] (NEW): the backlog completed the
     ///   first connect during teardown — NOT a regression and NOT theft;
-    ///   retried like theft, bounded by the same `DEAD_PORT_RETRY_ATTEMPTS`,
-    ///   with its own distinct exhaustion wording;
+    ///   retried like theft, bounded by the same T233 budget
+    ///   ([`dead_port_retry_budget`]), with its own distinct exhaustion
+    ///   wording;
     /// - confirmation connect REFUSES and NO connect success was observed →
     ///   the code under test failed against a genuinely-dead port (nothing
     ///   succeeded, so no load artifact explains the outcome) → REAL
@@ -1701,32 +1751,50 @@ pub(crate) mod tests {
         }
     }
 
-    /// Retry-on-invalidation driver (T59; T151 fix-up widens the classes).
-    /// Acquires a handout via `acquire` (production callers pass
-    /// [`dead_port`]) and runs `attempt` against it; `attempt` returns
-    /// `Err(Invalidation)` ONLY for a detected invalidation (via
-    /// [`check_dead_port`] or [`invalidation_or_regression`]). Each
-    /// invalidation retries the WHOLE sequence with a fresh handout —
-    /// immediately, with no sleep or wait (T31 doctrine: mechanism, not
-    /// timeouts) — bounded by `DEAD_PORT_RETRY_ATTEMPTS`. Exhaustion panics
-    /// naming the attempt count and the PER-CLASS mechanism (theft vs the
-    /// T151 fix-up's teardown-backlog artifact, worded distinctly); a real
-    /// regression never reaches either message (it panics inside the
-    /// classifier first). `acquire` is the unit seam: the T59 test scripts
-    /// a REAL live listener as the handout so the retry path is exercised
-    /// deterministically, not by racing.
+    /// Retry-on-invalidation driver (T59; T151 fix-up widens the classes;
+    /// T233 re-bases the bound on measured load). The two-arg form — the
+    /// shape every existing caller uses — runs the LIVE load-scaled budget
+    /// ([`dead_port_retry_budget`]): base 3 on a quiet host or any seam
+    /// failure (byte-identical to the pre-T233 bound), up to 12 on a
+    /// melting one. The scripted unit pins drive
+    /// [`dead_port_retry_with_budget`] with the pure seam's factor-1 value
+    /// so their exhaustion-at-base assertions hold BY CONSTRUCTION, never
+    /// by the luck of a quiet host.
     fn dead_port_retry_with<T>(
+        acquire: impl Fn() -> u16,
+        attempt: impl FnMut(u16) -> Result<T, Invalidation>,
+    ) -> T {
+        dead_port_retry_with_budget(dead_port_retry_budget(), acquire, attempt)
+    }
+
+    /// The budget-explicit form behind [`dead_port_retry_with`] (T233):
+    /// `budget` is the organic-invalidation attempt count this run is
+    /// bounded by (see [`dead_port_retry_budget_from_factor`]). Acquires a
+    /// handout via `acquire` (production callers pass [`dead_port`]) and
+    /// runs `attempt` against it; `attempt` returns `Err(Invalidation)`
+    /// ONLY for a detected invalidation (via [`check_dead_port`] or
+    /// [`invalidation_or_regression`]). Each invalidation retries the WHOLE
+    /// sequence with a fresh handout — immediately, with no sleep or wait
+    /// (T31 doctrine: mechanism, not timeouts) — bounded by `budget`.
+    /// Exhaustion panics naming the budget it exhausted and the PER-CLASS
+    /// mechanism (theft vs the T151 fix-up's teardown-backlog artifact,
+    /// worded distinctly); a real regression never reaches either message
+    /// (it panics inside the classifier first). `acquire` is the unit seam:
+    /// the T59 test scripts a REAL live listener as the handout so the
+    /// retry path is exercised deterministically, not by racing.
+    fn dead_port_retry_with_budget<T>(
+        budget: usize,
         acquire: impl Fn() -> u16,
         mut attempt: impl FnMut(u16) -> Result<T, Invalidation>,
     ) -> T {
         let mut last: Option<Invalidation> = None;
-        for attempt_no in 1..=DEAD_PORT_RETRY_ATTEMPTS {
+        for attempt_no in 1..=budget {
             let port = acquire();
             match attempt(port) {
                 Ok(value) => return value,
                 Err(invalid) => {
                     eprintln!(
-                        "dead_port_retry: attempt {attempt_no}/{DEAD_PORT_RETRY_ATTEMPTS} \
+                        "dead_port_retry: attempt {attempt_no}/{budget} \
                          hit {} ({}); retrying with a fresh dead_port handout",
                         invalid.class_name(),
                         invalid.detail()
@@ -1737,21 +1805,21 @@ pub(crate) mod tests {
         }
         match last {
             Some(Invalidation::Theft { detail }) => panic!(
-                "dead_port_retry: port-theft persisted across all {DEAD_PORT_RETRY_ATTEMPTS} \
+                "dead_port_retry: port-theft persisted across all {budget} \
                  attempts (mechanism: another test's listener or the OS ephemeral allocator \
                  claimed the supposedly-dead handout between verify and connect — T31 residual \
                  race, retried per T59); last theft: {detail}"
             ),
             Some(Invalidation::TeardownArtifact { detail }) => panic!(
                 "dead_port_retry: listener-teardown backlog artifact persisted across all \
-                 {DEAD_PORT_RETRY_ATTEMPTS} attempts (mechanism: on macOS a connect to a \
+                 {budget} attempts (mechanism: on macOS a connect to a \
                  just-closed listener can complete from the kernel's pending-accept backlog, \
                  then the confirmation connect refused once the backlog drained — no listener \
                  existed, so neither port-theft nor a code regression — T151 fix-up, retried \
                  per T59's bound); last artifact: {detail}"
             ),
             None => panic!(
-                "dead_port_retry: exhausted {DEAD_PORT_RETRY_ATTEMPTS} attempts with no \
+                "dead_port_retry: exhausted {budget} attempts with no \
                  recorded invalidation (unreachable: every non-Ok attempt records one)"
             ),
         }
@@ -1767,9 +1835,19 @@ pub(crate) mod tests {
     /// (acquire-verify) leg; this leg carries the identical theft window —
     /// between `drop(stub)` and the dead-probe connect a parallel test or
     /// the OS ephemeral allocator can claim the just-freed port, the probe
-    /// reads LIVE, the gate false-reds.
-    ///
-    /// ONE attempt = bind via `bind` + live-probe + drop + dead-probe. The
+    /// reads LIVE, the gate false-reds. T233: the two-arg form — the shape
+    /// every existing caller uses — runs the LIVE load-scaled budget
+    /// ([`dead_port_retry_budget`]); the scripted unit pins drive
+    /// [`dead_port_probe_retry_with_budget`] with the pure seam's factor-1
+    /// value so exhaustion-at-base holds BY CONSTRUCTION.
+    fn dead_port_probe_retry_with(bind: impl Fn() -> TcpListener) {
+        dead_port_probe_retry_with_budget(dead_port_retry_budget(), bind)
+    }
+
+    /// The budget-explicit form behind [`dead_port_probe_retry_with`]
+    /// (T233): `budget` is the organic-invalidation attempt count this run
+    /// is bounded by. ONE attempt = bind via `bind` + live-probe + drop +
+    /// dead-probe. The
     /// live leg has NO theft window (we hold the listener throughout), so a
     /// live-port-reads-dead failure panics directly — that is a real probe
     /// regression, never retried (T151 fix-up: the live-direction read is
@@ -1788,14 +1866,17 @@ pub(crate) mod tests {
     /// retried the same way, distinctly worded; no connect success observed
     /// and the confirm refuses → the drop released the port yet the probe
     /// read live → real probe bug, panicked immediately, un-retried, never
-    /// masked into green by a retry. Bounded by `DEAD_PORT_RETRY_ATTEMPTS`
-    /// (reused — no new const); exhaustion panics naming the attempts and
-    /// the per-class mechanism. The `bind` seam is the unit seam: the T66
-    /// pin scripts a port that is genuinely live across the drop window so
-    /// the theft branch is exercised deterministically, not by racing.
-    fn dead_port_probe_retry_with(bind: impl Fn() -> TcpListener) {
+    /// masked into green by a retry. Bounded by `budget` (T233's
+    /// load-scaled organic-invalidation attempt budget — base
+    /// [`DEAD_PORT_RETRY_ATTEMPTS`] on a quiet host or any seam failure,
+    /// ≤12 on a melting one); exhaustion panics naming the budget it
+    /// exhausted and the per-class mechanism. The `bind` seam is the unit
+    /// seam: the T66 pin scripts a port that is genuinely live across the
+    /// drop window so the theft branch is exercised deterministically, not
+    /// by racing.
+    fn dead_port_probe_retry_with_budget(budget: usize, bind: impl Fn() -> TcpListener) {
         let mut last: Option<Invalidation> = None;
-        for attempt_no in 1..=DEAD_PORT_RETRY_ATTEMPTS {
+        for attempt_no in 1..=budget {
             let listener = bind();
             let port = listener.local_addr().unwrap().port();
             assert!(
@@ -1841,7 +1922,7 @@ pub(crate) mod tests {
             };
             let invalid = invalidation_or_regression(port, observed.0, observed.1);
             eprintln!(
-                "dead_port_probe_retry: attempt {attempt_no}/{DEAD_PORT_RETRY_ATTEMPTS} hit \
+                "dead_port_probe_retry: attempt {attempt_no}/{budget} hit \
                  {} ({}); retrying with a freshly bound stub",
                 invalid.class_name(),
                 invalid.detail()
@@ -1851,20 +1932,20 @@ pub(crate) mod tests {
         match last {
             Some(Invalidation::Theft { detail }) => panic!(
                 "dead_port_probe_retry: port-theft persisted across all \
-                 {DEAD_PORT_RETRY_ATTEMPTS} attempts (mechanism: another test's listener or the \
+                 {budget} attempts (mechanism: another test's listener or the \
                  OS ephemeral allocator claimed the just-freed port between the stub drop and the \
                  dead-probe connect — T31 residual race, retried per T66); last theft: {detail}"
             ),
             Some(Invalidation::TeardownArtifact { detail }) => panic!(
                 "dead_port_probe_retry: listener-teardown backlog artifact persisted across all \
-                 {DEAD_PORT_RETRY_ATTEMPTS} attempts (mechanism: on macOS a connect to a \
+                 {budget} attempts (mechanism: on macOS a connect to a \
                  just-closed listener can complete from the kernel's pending-accept backlog, \
                  then the confirmation connect refused once the backlog drained — no listener \
                  existed, so neither port-theft nor a code regression — T151 fix-up, retried \
                  per T66's bound); last artifact: {detail}"
             ),
             None => panic!(
-                "dead_port_probe_retry: exhausted {DEAD_PORT_RETRY_ATTEMPTS} attempts with no \
+                "dead_port_probe_retry: exhausted {budget} attempts with no \
                  recorded invalidation (unreachable: every non-Ok attempt records one)"
             ),
         }
@@ -2927,7 +3008,11 @@ pub(crate) mod tests {
         let thief_port = thief.local_addr().unwrap().port();
         let script = RefCell::new(vec![thief_port]);
         let attempts = Cell::new(0usize);
-        let got = dead_port_retry_with(
+        let got = dead_port_retry_with_budget(
+            // T233: the scripted pins drive the pure seam's factor-1 path
+            // (the failed-reads value = the base) so the retry-once shape
+            // holds BY CONSTRUCTION, never by the luck of a quiet host.
+            dead_port_retry_budget_from_factor(1.0),
             || {
                 attempts.set(attempts.get() + 1);
                 script.borrow_mut().pop().unwrap_or_else(dead_port)
@@ -2965,7 +3050,11 @@ pub(crate) mod tests {
         let thief_port = thief.local_addr().unwrap().port();
         let attempts = Cell::new(0usize);
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            dead_port_retry_with(
+            dead_port_retry_with_budget(
+                // T233: the factor-1 path — BY CONSTRUCTION the base, so
+                // the exhaustion-at-base assertions below stay byte-exact
+                // regardless of host load.
+                dead_port_retry_budget_from_factor(1.0),
                 || {
                     attempts.set(attempts.get() + 1);
                     thief_port
@@ -3018,17 +3107,23 @@ pub(crate) mod tests {
 
         let bind_calls = Cell::new(0usize);
         let thief_handle = RefCell::new(None::<TcpListener>);
-        dead_port_probe_retry_with(|| {
-            bind_calls.set(bind_calls.get() + 1);
-            let listener = bind_stub().0;
-            if bind_calls.get() == 1 {
-                // Keep attempt 1's port live across the drop window: a
-                // real, open listener handle (try_clone dups the socket;
-                // dropping the stub leaves this one holding the port).
-                *thief_handle.borrow_mut() = Some(listener.try_clone().unwrap());
-            }
-            listener
-        });
+        dead_port_probe_retry_with_budget(
+            // T233: the scripted pins drive the pure seam's factor-1 path
+            // (the failed-reads value = the base) so the retry-once shape
+            // holds BY CONSTRUCTION, never by the luck of a quiet host.
+            dead_port_retry_budget_from_factor(1.0),
+            || {
+                bind_calls.set(bind_calls.get() + 1);
+                let listener = bind_stub().0;
+                if bind_calls.get() == 1 {
+                    // Keep attempt 1's port live across the drop window: a
+                    // real, open listener handle (try_clone dups the socket;
+                    // dropping the stub leaves this one holding the port).
+                    *thief_handle.borrow_mut() = Some(listener.try_clone().unwrap());
+                }
+                listener
+            },
+        );
         drop(thief_handle);
         assert_eq!(
             bind_calls.get(),
@@ -3052,12 +3147,18 @@ pub(crate) mod tests {
         let bind_calls = Cell::new(0usize);
         let thief_handle = RefCell::new(None::<TcpListener>);
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            dead_port_probe_retry_with(|| {
-                bind_calls.set(bind_calls.get() + 1);
-                let listener = bind_stub().0;
-                *thief_handle.borrow_mut() = Some(listener.try_clone().unwrap());
-                listener
-            });
+            dead_port_probe_retry_with_budget(
+                // T233: the factor-1 path — BY CONSTRUCTION the base, so
+                // the exhaustion-at-base assertions below stay byte-exact
+                // regardless of host load.
+                dead_port_retry_budget_from_factor(1.0),
+                || {
+                    bind_calls.set(bind_calls.get() + 1);
+                    let listener = bind_stub().0;
+                    *thief_handle.borrow_mut() = Some(listener.try_clone().unwrap());
+                    listener
+                },
+            );
         }));
         let err = result.expect_err("theft on every attempt must exhaust and panic");
         let msg = err
@@ -3205,7 +3306,11 @@ pub(crate) mod tests {
 
         let attempts = Cell::new(0usize);
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            dead_port_retry_with(
+            dead_port_retry_with_budget(
+                // T233: the factor-1 path — BY CONSTRUCTION the base, so
+                // the exhaustion-at-base assertions below stay byte-exact
+                // regardless of host load.
+                dead_port_retry_budget_from_factor(1.0),
                 || {
                     attempts.set(attempts.get() + 1);
                     dead_port()
@@ -3241,6 +3346,185 @@ pub(crate) mod tests {
             attempts.get(),
             DEAD_PORT_RETRY_ATTEMPTS,
             "bounded: exactly the cap, never an unbounded storm"
+        );
+    }
+
+    // ---------- T233: load-scaled organic-invalidation attempt budget ----------
+
+    /// The T233 budget seam's scaled arithmetic, pinned WITHOUT host state
+    /// (the seam is pure by construction — the factor arrives pre-computed).
+    /// The two legs the spec names: the upper clamp (factor 4.0 — a melting
+    /// host) scales the base to exactly 12, hard-capped; the factor-1 path —
+    /// which IS the failed-reads path, since testsupport's T214 seam
+    /// fail-safes ANY read failure (no sysctl, unreadable /proc, unparsable
+    /// text, no core count) to the base passed through byte-identically —
+    /// is exactly the base 3 (today's behavior). Plus the mid-band rounding
+    /// leg and the degenerate-input fail-safe legs.
+    #[test]
+    fn dead_port_retry_budget_pins_the_scaled_arithmetic() {
+        // The upper clamp: factor 4.0 → 12. Hard-capped — a pathological
+        // host gets at most 4× the base, never an unbounded storm.
+        assert_eq!(
+            dead_port_retry_budget_from_factor(4.0),
+            12,
+            "the upper clamp must scale the base 3 → exactly 12 attempts"
+        );
+        // Above the band: clamps DOWN to the upper clamp's 12.
+        assert_eq!(
+            dead_port_retry_budget_from_factor(100.0),
+            12,
+            "a raw ratio above the band must clamp to 4.0 → 12, never unbounded"
+        );
+        // The factor-1 path = the failed-reads path (testsupport's seam
+        // fail-safes any read failure to the base passed through
+        // byte-identically, factor EXACTLY 1.0 — pinned on testsupport's
+        // side by t214_seam_failures_fail_safe_to_the_exact_base): the
+        // budget is the unchanged base 3.
+        assert_eq!(
+            dead_port_retry_budget_from_factor(1.0),
+            3,
+            "the factor-1/failed-reads path must be the unchanged base (today's behavior)"
+        );
+        // Below the band: clamps UP — a retry bound only ever stretches.
+        assert_eq!(
+            dead_port_retry_budget_from_factor(0.0),
+            3,
+            "a below-band factor must clamp up to 1.0 → the base"
+        );
+        // Mid-band rounding: 3 × 1.5 = 4.5 → 5 (half away from zero) —
+        // whole attempts, no fractional budgets.
+        assert_eq!(
+            dead_port_retry_budget_from_factor(1.5),
+            5,
+            "a mid-band factor must round to the nearest whole attempt"
+        );
+        // Exactly 2× capacity → exactly 2× the base.
+        assert_eq!(
+            dead_port_retry_budget_from_factor(2.0),
+            6,
+            "factor 2.0 must scale the base 3 → 6"
+        );
+        // Degenerate inputs fail SAFE to the base (T214 doctrine): NaN
+        // poisons the clamp and the usize cast saturates it to 0; the
+        // floor restores the base.
+        assert_eq!(
+            dead_port_retry_budget_from_factor(f64::NAN),
+            3,
+            "a NaN factor must fail safe to the base, never poison the budget"
+        );
+        // The hard-cap invariant across the whole band: every factor maps
+        // into [3, 12] — never below the base, never above 4× it.
+        for factor in [1.0, 1.1, 4.0f64 / 3.0, 1.7, 2.5, 3.0, 3.9, 4.0] {
+            let budget = dead_port_retry_budget_from_factor(factor);
+            assert!(
+                (DEAD_PORT_RETRY_ATTEMPTS..=12).contains(&budget),
+                "factor {factor} → budget {budget} outside [{DEAD_PORT_RETRY_ATTEMPTS}, 12]"
+            );
+        }
+        // The LIVE wrapper: the real read through testsupport's pub T214
+        // seam must land in the same band (whatever this host's load is),
+        // and never panic on a seam failure (the fail-safe is inside).
+        let live = dead_port_retry_budget();
+        assert!(
+            (DEAD_PORT_RETRY_ATTEMPTS..=12).contains(&live),
+            "the live budget {live} outside [{DEAD_PORT_RETRY_ATTEMPTS}, 12]"
+        );
+    }
+
+    /// The exhaustion wording is parameterized over the BUDGET the run
+    /// actually exhausted (not hardcoded to the base const), for BOTH
+    /// classes, distinctly worded — so a scaled-budget exhaustion red names
+    /// the budget it exhausted. Budget 7 (3 × factor ≈ 2.33 — a deliberately
+    /// non-base, non-clamp interpolated value) with every attempt
+    /// invalidating: the panic names "7 attempts", the theft class names
+    /// its mechanism, the artifact class names its own, and neither
+    /// masquerades as the other.
+    #[test]
+    fn dead_port_retry_scaled_budget_exhaustion_names_the_scaled_count() {
+        // T151: hold the shared timing domain across the whole body (first
+        // acquisition — see crate::testsupport's lock-order rule). The dead-port family is a named T151 sighting class (probe timing).
+        let _timing = crate::testsupport::timing_guard();
+
+        // Theft class at a scaled budget: a real live thief handout every
+        // time — the exhaustion panic names 7 attempts + the theft
+        // mechanism.
+        let thief = TcpListener::bind("127.0.0.1:0").unwrap();
+        let thief_port = thief.local_addr().unwrap().port();
+        let attempts = Cell::new(0usize);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            dead_port_retry_with_budget(
+                7,
+                || {
+                    attempts.set(attempts.get() + 1);
+                    thief_port
+                },
+                |port| check_dead_port(port).map(|_| port),
+            );
+        }));
+        let err = result.expect_err("theft on every attempt must exhaust and panic");
+        let theft_msg = err
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| err.downcast_ref::<&'static str>().copied())
+            .expect("panic payload is a string")
+            .to_string();
+        assert!(
+            theft_msg.contains("7 attempts"),
+            "a scaled-budget exhaustion must name the budget it exhausted: {theft_msg}"
+        );
+        assert!(
+            theft_msg.contains("theft") && theft_msg.contains("T31"),
+            "the scaled theft exhaustion must keep the theft mechanism: {theft_msg}"
+        );
+        assert_eq!(
+            attempts.get(),
+            7,
+            "bounded: exactly the scaled budget, never an unbounded storm"
+        );
+
+        // Artifact class at the same scaled budget: the DISTINCT wording,
+        // naming 7 attempts + the teardown mechanism, never "port-theft
+        // persisted".
+        let attempts = Cell::new(0usize);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            dead_port_retry_with_budget(
+                7,
+                || {
+                    attempts.set(attempts.get() + 1);
+                    dead_port()
+                },
+                |port| -> Result<(), Invalidation> {
+                    Err(Invalidation::TeardownArtifact {
+                        detail: format!(
+                            "scripted teardown artifact on port {port} (pin: scaled wording)"
+                        ),
+                    })
+                },
+            );
+        }));
+        let err = result.expect_err("artifact on every attempt must exhaust and panic");
+        let artifact_msg = err
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| err.downcast_ref::<&'static str>().copied())
+            .expect("panic payload is a string");
+        assert!(
+            artifact_msg.contains("7 attempts"),
+            "a scaled-budget artifact exhaustion must name the budget it exhausted: \
+             {artifact_msg}"
+        );
+        assert!(
+            artifact_msg.contains("backlog artifact") && artifact_msg.contains("pending-accept"),
+            "the scaled artifact exhaustion must keep the teardown mechanism: {artifact_msg}"
+        );
+        assert!(
+            !artifact_msg.contains("port-theft persisted"),
+            "artifact exhaustion wording must stay distinct from the theft class: {artifact_msg}"
+        );
+        assert_eq!(
+            attempts.get(),
+            7,
+            "bounded: exactly the scaled budget, never an unbounded storm"
         );
     }
 

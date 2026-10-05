@@ -1551,6 +1551,17 @@ mod tests {
     const STALE_CLASSIFY_DEADLINE: Duration = Duration::from_secs(10);
     /// Poll cadence for the bounded classification.
     const STALE_CLASSIFY_BACKOFF: Duration = Duration::from_millis(25);
+    /// Confirmation window for a transient connect SUCCESS (T233): how long
+    /// one success must SUSTAIN before it names a genuine listener. Rides
+    /// the existing backoff scale — exactly 40 classification-backoff steps
+    /// (1s at today's 25ms cadence), so the two constants move together and
+    /// no unscaled wait is introduced; no existing constant's value changes.
+    /// A macOS teardown artifact (one connect completing from a just-closed
+    /// listener's pending-accept backlog, then refusing once it drains)
+    /// re-verifies REFUSED inside this window; a real rogue listener keeps
+    /// answering across it and is panicked on fast (~1s, not the deadline).
+    const STALE_CLASSIFY_CONFIRM_WINDOW: Duration =
+        Duration::from_millis(STALE_CLASSIFY_BACKOFF.as_millis() as u64 * 40);
 
     /// A backend that answers /judge with a canned payload — the protocol
     /// contract test's server half (no weights, no network).
@@ -1797,6 +1808,22 @@ mod tests {
     /// the close-vs-connect teardown burst reproduced in the scratch
     /// bind/drop/connect racer). ECONNREFUSED must EVENTUALLY be the
     /// classification; on timeout the last observed error names itself.
+    ///
+    /// T233: a transient connect SUCCESS is a NON-VERDICT too, not an
+    /// instant red. The organic sighting (the t232-VALIDATE goal gate,
+    /// failed 1231/1 — "connect to the dead socket SUCCEEDED" — then green
+    /// 5/5 isolated and 1232/1232 on the identical-bytes re-run, same
+    /// binary hash, diff-untouched module) is the teardown shape the racer
+    /// above names: on macOS a connect to a just-closed listener can
+    /// complete from the kernel's pending-accept backlog, then refuses once
+    /// the backlog drains (T151 proved the kernel shape for TCP in
+    /// mcp_http's `Invalidation::TeardownArtifact`). So the Ok arm no
+    /// longer panics on the spot: it re-verifies within
+    /// [`STALE_CLASSIFY_CONFIRM_WINDOW`] via
+    /// [`confirm_transient_success`] — success-then-REFUSED = teardown
+    /// artifact (recorded, keep polling to the deadline); success SUSTAINED
+    /// across the window = a genuine listener answers — panic naming BOTH
+    /// classes, so a real rogue listener still dies, fast.
     #[cfg(unix)]
     #[test]
     fn stale_socket_connects_refused() {
@@ -1822,7 +1849,41 @@ mod tests {
                     );
                     std::thread::sleep(STALE_CLASSIFY_BACKOFF);
                 }
-                Ok(_) => panic!("connect to the dead socket SUCCEEDED — something is listening"),
+                // T233: ONE success is a non-verdict (macOS pending-accept
+                // backlog completion during teardown) — re-verify inside a
+                // short confirmation window instead of panicking. Same
+                // shape as the error arms: bounded, backoff-paced, and the
+                // outer deadline still governs the total.
+                Ok(_) => {
+                    if confirm_transient_success(
+                        || UnixStream::connect(&sock),
+                        STALE_CLASSIFY_CONFIRM_WINDOW,
+                    ) {
+                        eprintln!(
+                            "stale_socket: transient connect success on {} re-verified REFUSED \
+                             within {STALE_CLASSIFY_CONFIRM_WINDOW:?} — listener-teardown \
+                             backlog artifact (macOS pending-accept completion), not a \
+                             listener; continuing the poll",
+                            sock.display()
+                        );
+                    } else {
+                        eprintln!(
+                            "stale_socket: connect-success confirmation unresolved within \
+                             {STALE_CLASSIFY_CONFIRM_WINDOW:?} (ambiguous transients only) — \
+                             falling back to the outer poll"
+                        );
+                    }
+                    // Bounded by the OUTER deadline no matter how the
+                    // confirmation resolved: a path that keeps handing out
+                    // successes re-arms the window, so check the deadline
+                    // here too, naming the shape.
+                    assert!(
+                        Instant::now() < deadline,
+                        "the dead socket never settled to ECONNREFUSED within \
+                         {STALE_CLASSIFY_DEADLINE:?} (transient connect successes kept \
+                         re-arming the confirmation window)"
+                    );
+                }
             }
         }
         // The shipping classifier agrees on BOTH sides of the line: a dead
@@ -1835,6 +1896,142 @@ mod tests {
             "ENOENT (no socket file) must not classify as refused"
         );
         assert!(uds_request(&sock, "GET", "/healthz", None).is_err());
+    }
+
+    /// T233: the bounded re-verify behind
+    /// [`stale_socket_connects_refused`]'s Ok arm — the transient-SUCCESS
+    /// classification, same shape as the error arms (bounded, backoff-paced
+    /// on [`STALE_CLASSIFY_BACKOFF`], window-parameterized so the pins run
+    /// fast while the real leg rides [`STALE_CLASSIFY_CONFIRM_WINDOW`]).
+    ///
+    /// Decision table (T151's "first-succeeds-then-refuses = artifact;
+    /// sustained-live = genuine listener" rule, ported to the UDS path):
+    /// - a re-verify connect REFUSES inside the window → the first success
+    ///   completed from a just-closed listener's pending-accept backlog (a
+    ///   teardown artifact, NOT a listener) → `Ok(true)` — recorded by the
+    ///   caller and the outer poll continues to the deadline;
+    /// - a connect SUCCEEDS at/after the window → the success is SUSTAINED
+    ///   → a GENUINE listener answers → panic naming BOTH classes (a real
+    ///   rogue listener still dies, fast — ~1 window, not the deadline);
+    /// - only ambiguous errors (EMFILE/ENOENT-class) through the window →
+    ///   `Ok(false)` — unresolved, a NON-VERDICT: the caller falls back to
+    ///   the outer poll (no new red leg — ambiguity is exactly what the
+    ///   error arms retry).
+    #[cfg(unix)]
+    fn confirm_transient_success(
+        mut connect: impl FnMut() -> std::io::Result<std::os::unix::net::UnixStream>,
+        window: Duration,
+    ) -> bool {
+        let confirm_deadline = Instant::now() + window;
+        loop {
+            match connect() {
+                // Success-then-REFUSED: the backlog drained — teardown
+                // artifact, not a listener. A non-verdict, recorded.
+                Err(e) if e.raw_os_error() == Some(libc::ECONNREFUSED) => return true,
+                // Sustained success: at/after the window a listener is
+                // STILL answering. Panic naming BOTH classes so a future
+                // red self-diagnoses (what a sustained listener means vs
+                // what a transient backlog artifact was).
+                Ok(_) => {
+                    assert!(
+                        Instant::now() < confirm_deadline,
+                        "connect to the dead socket KEPT SUCCEEDING for {window:?} — a GENUINE \
+                         listener is answering (a real rogue listener/daemon holding the stale \
+                         path: this must stay RED), not the transient teardown artifact the \
+                         first success suggested — that artifact re-verifies REFUSED inside \
+                         the window (on macOS one connect can complete from a just-closed \
+                         listener's pending-accept backlog, then refuses once it drains)"
+                    );
+                    std::thread::sleep(STALE_CLASSIFY_BACKOFF);
+                }
+                // Ambiguous (EMFILE/ENOENT-class): a non-verdict — poll
+                // inside the window only; expiry on ambiguity falls back to
+                // the outer poll rather than reding here.
+                Err(_) => {
+                    if Instant::now() >= confirm_deadline {
+                        return false;
+                    }
+                    std::thread::sleep(STALE_CLASSIFY_BACKOFF);
+                }
+            }
+        }
+    }
+
+    /// T233: the transient-success re-verify's decision table, scripted
+    /// deterministically (the REAL macOS race is microsecond-scale and
+    /// cannot be staged deterministically — same filing bar as T151's
+    /// classification pin, which scripts the classifier's inputs for the
+    /// same reason). The connect seam is scripted; the confirm mechanics
+    /// (window, backoff pacing, the success-panics-sustained rule) run for
+    /// real. Non-vacuousness: the pre-T233 shape — instant panic on the
+    /// first Ok — dies on leg 1; a masked-listener mutant (artifact-tolerant
+    /// forever) dies on leg 2.
+    #[cfg(unix)]
+    #[test]
+    fn stale_socket_transient_success_confirmation_pins() {
+        use std::os::unix::net::UnixStream;
+
+        // 50ms window: two backoff steps at the 25ms cadence — fast pins
+        // with the real confirm mechanics (the REAL leg rides
+        // STALE_CLASSIFY_CONFIRM_WINDOW = 40 backoff steps).
+        let window = Duration::from_millis(50);
+        let refused = || std::io::Error::from_raw_os_error(libc::ECONNREFUSED);
+        let transient = || std::io::Error::from_raw_os_error(libc::EMFILE);
+
+        // Leg 1 (THE FIX): one scripted success, then ECONNREFUSED — the
+        // teardown artifact — resolves as artifact (keep polling) without
+        // panicking or exhausting anything. The pre-T233 shape panics on
+        // the first Ok and cannot pass this leg.
+        let pair = UnixStream::pair().expect("socketpair for the scripted success");
+        let mut steps: Vec<std::io::Result<UnixStream>> =
+            vec![Ok(pair.0), Err(refused())];
+        let mut steps = steps.into_iter();
+        let artifact = confirm_transient_success(
+            || {
+                steps
+                    .next()
+                    .unwrap_or_else(|| Err(refused()))
+            },
+            window,
+        );
+        assert!(
+            artifact,
+            "success-then-refused must classify the teardown artifact (record + keep polling), \
+             not red and not exhaust"
+        );
+
+        // Leg 2 (NON-VACUOUSNESS): success SUSTAINED across the window — a
+        // genuine listener answers — must panic, naming BOTH classes (what
+        // a sustained listener means vs what a transient backlog artifact
+        // was), so the artifact tolerance can never mask a real listener
+        // into green.
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            confirm_transient_success(
+                || UnixStream::pair().map(|(s, _)| s),
+                window,
+            )
+        }));
+        let err = result.expect_err("a sustained listener must fail the leg, not pass green");
+        let msg = err
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| err.downcast_ref::<&'static str>().copied())
+            .expect("panic payload is a string");
+        assert!(
+            msg.contains("GENUINE listener") && msg.contains("pending-accept backlog"),
+            "the sustained panic must name BOTH classes (genuine listener vs teardown \
+             artifact) so a future red is self-diagnosing: {msg}"
+        );
+
+        // Leg 3 (no new red leg): ambiguous transients only, through the
+        // window — unresolved, a NON-VERDICT: the caller falls back to the
+        // outer poll (where the error arms keep retrying). Ambiguity must
+        // not red through the confirmation.
+        let unresolved = confirm_transient_success(|| Err(transient()), window);
+        assert!(
+            !unresolved,
+            "ambiguity-only confirmation must fall back to the outer poll, not classify"
+        );
     }
 
     /// The permanent-failure latch: an ensure that cannot even spawn (no
