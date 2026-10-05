@@ -1986,3 +1986,252 @@ fn t240_malformed_release_markers_are_best_effort_skip() {
     assert!(html2.contains("<b>2/3</b>"), "stats still synced");
     assert_eq!(sync_commits(&f), 1, "the sync still lands once");
 }
+
+// --- T241 — docs.html: the second page, fully machine-rendered ---------------
+//
+// scripts/site-sync.sh renders a SECOND site page — docs.html — with no
+// marker regions at all: the README's `## Quickstart` section leads, then one
+// section per runbooks/*.md file (byte-sorted, runbooks/README.md included),
+// each rendered from the file's content at sync time (fences -> pre.code,
+// headings shifted h2/h3/h4, flat lists, tables verbatim; inline per the T99
+// text rules). Same head/style base as index.html; docs ⇄ home nav; an index
+// of links at the top. Fail-closed: missing runbooks/ -> docs.html untouched,
+// the sync continues. Byte-identical inputs render byte-identical output.
+
+/// The chug half with the docs corpus: README (a `## Quickstart` section whose
+/// `#`-comment fence lines must not end the extraction and whose `## Next`
+/// section must not leak) plus a deliberately unsorted runbooks/ — including
+/// the corpus's own README.md index and a fence carrying HTML-special bytes
+/// (the escaping pin). Byte sort: README.md < alpha.md < zeta.md.
+fn chug_fixture_t241_runbooks(dir: &Path, allow_empty_commit: bool) {
+    let rb = dir.join("runbooks");
+    std::fs::create_dir_all(&rb).unwrap();
+    std::fs::write(
+        dir.join("README.md"),
+        concat!(
+            "# chug\n\nIntro line.\n\n## Quickstart\n\n```bash\ncargo build\n",
+            "cargo install --path .\n# a comment line inside the fence\n```\n\n",
+            "Run `chug run --spec SPEC.md --goal \"Build X\"` — the `check:` line ",
+            "gates completion.\n\n## Next\n\nAnother section — must not leak into ",
+            "the docs quickstart.\n"
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        rb.join("README.md"),
+        "# Runbooks\n\n- one small chore → [quick-task.md](quick-task.md)\n",
+    )
+    .unwrap();
+    std::fs::write(
+        rb.join("zeta.md"),
+        concat!(
+            "# Runbook: zeta last\n\n**Use when** testing sort order. ",
+            "**Arc: ~5 minutes.**\n\n## Run it\n\n```bash\nchug run --goal \"zeta\"\n```\n"
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        rb.join("alpha.md"),
+        concat!(
+            "# Runbook: alpha first\n\n**Use when** testing sort order.\n\n",
+            "## Run it\n\n```bash\necho \"<b>&</b> <x>\"\n```\n"
+        ),
+    )
+    .unwrap();
+    // the subject deliberately avoids the landed-item `t<N>:` shape so the
+    // corpus commit never perturbs the facts the sync computes
+    // allow_empty: the recovery leg re-adds an identical corpus over one that
+    // was deleted, so there may be nothing to stage — the commit is fixture realism
+    commit(dir, "docs: runbooks corpus + README quickstart", None, "2026-09-22", allow_empty_commit);
+}
+
+fn chug_fixture_t241(dir: &Path) {
+    chug_fixture(dir);
+    chug_fixture_t241_runbooks(dir, false);
+}
+
+/// The site half with the shapes the T241 bootstrap needs: a nav-links div, a
+/// get-started section, a <style> block (the shared style base), and the stale
+/// STATS region.
+fn site_fixture_t241(dir: &Path) -> String {
+    std::fs::write(
+        dir.join("index.html"),
+        concat!(
+            "<html><head>\n<style>\n:root{--wrap:1060px}\n</style>\n</head><body>\n",
+            "<nav class=\"nav\"><div class=\"wrap nav-in\">\n",
+            "  <a class=\"brand\" href=\"#hero\">chug<b>_</b></a>\n",
+            "  <div class=\"nav-links\">\n",
+            "    <a href=\"#how-it-works\">how it works</a>\n",
+            "    <a href=\"#get-started\">get started</a>\n",
+            "  </div>\n",
+            "  <a class=\"gh\" href=\"https://github.com/tampajohn/chug\">github</a>\n",
+            "</div></nav>\n",
+            "<header class=\"hero\" id=\"hero\"><div class=\"wrap\"><h1>chug</h1></div></header>\n",
+            "<section id=\"get-started\"><div class=\"wrap\">\n",
+            "  <p class=\"kicker\">get started</p>\n",
+            "  <h2>Clone, build, chug</h2>\n",
+            "  <div class=\"steps\">\n",
+            "    <div class=\"step\">\n",
+            "      <h3>1 · INSTALL</h3>\n",
+            "      <pre class=\"code\">curl -fsSL https://chug.sh/install.sh | sh</pre>\n",
+            "    </div>\n",
+            "  </div>\n",
+            "</div></section>\n",
+            "<section id=\"stats\" class=\"live-stats\"><div class=\"wrap\">\n",
+            "  <p class=\"kicker\">live stats</p>\n",
+            "<!-- STATS:BEGIN -->\n<div class=\"stats\"><b>stale</b></div>\n",
+            "<!-- STATS:END -->\n</div></section>\n",
+            "</body></html>\n"
+        ),
+    )
+    .unwrap();
+    commit(dir, "initial page", None, "2026-09-18", false)
+}
+
+fn fixture_t241() -> Fixture {
+    let keep = tempfile::tempdir().unwrap();
+    let chug = keep.path().join("chug");
+    let site = keep.path().join("site");
+    std::fs::create_dir_all(&chug).unwrap();
+    std::fs::create_dir_all(&site).unwrap();
+    git(&chug, &["-c", "init.defaultBranch=main", "init", "-q"], None);
+    git(&site, &["-c", "init.defaultBranch=main", "init", "-q"], None);
+    chug_fixture_t241(&chug);
+    site_fixture_t241(&site);
+    Fixture { _keep: keep, chug, site }
+}
+
+fn docs(f: &Fixture) -> String {
+    std::fs::read_to_string(f.site.join("docs.html")).expect("read docs.html")
+}
+
+#[test]
+fn t241_docs_page_renders_runbooks_sorted_with_escaped_fences_and_nav() {
+    let f = fixture_t241();
+    let out = run_sync(&f, true);
+    assert!(out.status.success(), "sync failed: {:?}", out.status.code());
+    let docs_before = docs(&f);
+    // quickstart leads, sourced from README's Quickstart section only
+    let qs = docs_before.find("<section id=\"quickstart\"").expect("quickstart section present");
+    let r_readme = docs_before.find("<section id=\"runbook-readme\"").expect("runbooks index file rendered");
+    let r_alpha = docs_before.find("<section id=\"runbook-alpha\"").expect("alpha rendered");
+    let r_zeta = docs_before.find("<section id=\"runbook-zeta\"").expect("zeta rendered");
+    assert!(qs < r_readme && r_readme < r_alpha && r_alpha < r_zeta, "quickstart leads, runbooks byte-sorted");
+    assert!(docs_before[..r_readme].contains("cargo install --path ."), "README quickstart rendered");
+    assert!(docs_before[..r_readme].contains("# a comment line inside the fence"), "fence content verbatim");
+    assert!(!docs_before.contains("Another section"), "the next README section must not leak");
+    // code fences render as the page's code style, HTML-escaped (req 1)
+    assert!(docs_before.contains("echo \"&lt;b&gt;&amp;&lt;/b&gt; &lt;x&gt;\""), "fence bytes escaped");
+    assert!(!docs_before.contains("echo \"<b>"), "raw fence bytes must not render");
+    assert_eq!(count(&docs_before, "<pre class=\"code\">"), 3, "quickstart + 2 runbook fences");
+    // headings shift: the runbook H1 is the section h2, its H2s are h3
+    assert!(docs_before.contains("<h2>Runbook: alpha first</h2>"));
+    assert!(docs_before.contains("<h3>Run it</h3>"));
+    assert!(docs_before.contains("<b>Use when</b>"), "bold emphasis per the T99 text rules");
+    // the runbooks index file renders with its relative link rewritten (no dangling href)
+    assert!(
+        docs_before.contains("href=\"https://github.com/tampajohn/chug/blob/main/runbooks/quick-task.md\""),
+        "relative links rewritten onto the GitHub blob base"
+    );
+    // index of links at the top (before the first content section)
+    let idx = docs_before.find("href=\"#runbook-alpha\"").expect("index entry");
+    assert!(idx < qs, "the link index sits at the top of the page");
+    assert!(docs_before.contains("href=\"#runbook-zeta\""));
+    // same head/style base as index.html, verbatim
+    assert!(docs_before.contains(":root{--wrap:1060px}"), "index.html's <style> block carried over");
+    // docs ⇄ home
+    assert!(count(&docs_before, "href=\"https://chug.sh/\"") >= 3, "brand, home button, footer");
+    // index.html: the nav link and the one-line get-started pointer (reqs 2+4)
+    let html = page(&f);
+    assert!(html.contains("<a href=\"https://chug.sh/docs.html\">docs</a>"), "nav gains the docs link");
+    let gs = html.find("<section id=\"get-started\"").expect("get-started section");
+    let ptr = html.find("docs page</a>").expect("one-line pointer");
+    assert!(ptr > gs, "the pointer lives inside the get-started section");
+    // finding 2 (validator M8): placement EARLY-but-inside was unpinned — bound the
+    // pointer above the section close too, not only below the section start
+    let gs_close = html[gs..].find("</section>").expect("get-started close") + gs;
+    assert!(ptr < gs_close, "the pointer sits ABOVE the get-started close (inside, not merely below the start)");
+    // req 5: the sync commits BOTH files when either changed (one commit)
+    assert_eq!(sync_commits(&f), 1);
+    let nameonly = git(&f.site, &["show", "--name-only", "--format="], None);
+    let files = String::from_utf8_lossy(&nameonly.stdout);
+    assert!(files.lines().any(|l| l.trim() == "index.html"), "index.html in the sync commit: {files}");
+    assert!(files.lines().any(|l| l.trim() == "docs.html"), "docs.html in the same commit: {files}");
+    let st = git(&f.site, &["status", "--porcelain"], None);
+    assert!(String::from_utf8_lossy(&st.stdout).trim().is_empty(), "clean tree: both files committed");
+    // idempotence (req 3): byte-identical re-render, no second commit, no dup links
+    let out2 = run_sync(&f, true);
+    assert!(out2.status.success());
+    assert!(String::from_utf8_lossy(&out2.stdout).contains("unchanged"), "no-op run says so");
+    assert_eq!(docs(&f), docs_before, "docs.html byte-identical");
+    assert_eq!(page(&f), html, "index.html byte-identical");
+    assert_eq!(sync_commits(&f), 1, "no second commit");
+    assert_eq!(count(&page(&f), "chug.sh/docs.html"), 2, "nav link + pointer, exactly once each");
+}
+
+#[test]
+fn t241_missing_runbooks_leaves_docs_untouched_and_sync_continues() {
+    let f = fixture_t241();
+    std::fs::remove_dir_all(f.chug.join("runbooks")).unwrap();
+    std::fs::write(f.site.join("docs.html"), "<html>sentinel-docs</html>\n").unwrap();
+    let out = run_sync(&f, true);
+    assert!(out.status.success(), "the sync continues: {:?}", out.status.code());
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("runbooks"), "warn names the missing corpus: {err}");
+    assert_eq!(
+        std::fs::read(f.site.join("docs.html")).unwrap(),
+        b"<html>sentinel-docs</html>\n".to_vec(),
+        "docs.html untouched (fail-closed)"
+    );
+    let html = page(&f);
+    assert!(!html.contains("chug.sh/docs.html"), "never a link to a page that is not rendered");
+    assert!(html.contains("<b>2/3</b>"), "stats still synced");
+    assert_eq!(sync_commits(&f), 1, "the sync still lands once");
+    // finding 1 (validator M6): the stray docs.html must never be SWEPT into the
+    // sync commit — staging is guarded by DOCS_CHANGED (this sync rendered no
+    // page), not by the file's mere existence on disk
+    let nameonly = git(&f.site, &["show", "--name-only", "--format="], None);
+    let files = String::from_utf8_lossy(&nameonly.stdout);
+    assert!(!files.lines().any(|l| l.trim() == "docs.html"), "the stray docs.html is NOT swept into the fail-closed sync commit: {files}");
+    // recovery: add the corpus -> the next sync renders the page + bootstraps the nav
+    chug_fixture_t241_runbooks(&f.chug, true);
+    let out2 = run_sync(&f, true);
+    assert!(out2.status.success());
+    let docs2 = docs(&f);
+    assert!(docs2.contains("<section id=\"runbook-alpha\""), "docs.html rendered once the corpus exists");
+    assert!(docs2.contains("<section id=\"quickstart\""), "README quickstart rendered");
+    let html2 = page(&f);
+    assert!(html2.contains("<a href=\"https://chug.sh/docs.html\">docs</a>"), "nav link lands with the page");
+    assert_eq!(sync_commits(&f), 2, "the recovery sync lands");
+}
+
+#[test]
+fn t241_runbook_edit_updates_docs_and_commits_both_files() {
+    let f = fixture_t241();
+    assert!(run_sync(&f, true).status.success());
+    let subjects_before = all_commit_subjects(&f).len();
+    let docs_before = docs(&f);
+    std::fs::write(
+        f.chug.join("runbooks/alpha.md"),
+        concat!(
+            "# Runbook: alpha first\n\n**Edited.** A new line of body.\n\n",
+            "## Run it\n\n```bash\necho hi\n```\n"
+        ),
+    )
+    .unwrap();
+    let out = run_sync(&f, true);
+    assert!(out.status.success());
+    let docs_after = docs(&f);
+    assert_ne!(docs_before, docs_after, "the runbook edit re-renders docs.html");
+    assert!(docs_after.contains("<b>Edited.</b>"), "the edit is on the page");
+    assert_eq!(all_commit_subjects(&f).len(), subjects_before + 1, "one commit for the docs change");
+    let st = git(&f.site, &["status", "--porcelain"], None);
+    assert!(String::from_utf8_lossy(&st.stdout).trim().is_empty(), "BOTH files committed — clean tree");
+    let nameonly = git(&f.site, &["show", "--name-only", "--format="], None);
+    let files = String::from_utf8_lossy(&nameonly.stdout);
+    assert!(files.lines().any(|l| l.trim() == "docs.html"), "the docs change is in the commit: {files}");
+    let out2 = run_sync(&f, true);
+    assert!(out2.status.success());
+    assert_eq!(docs(&f), docs_after, "no further churn");
+    assert_eq!(sync_commits(&f), 2, "still exactly two sync commits");
+}
