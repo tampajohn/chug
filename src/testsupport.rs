@@ -871,100 +871,200 @@ fn t225_surface_fingerprint_moves_on_advance_and_reads_none_when_unreadable() {
     assert_ne!(a, b, "an advance must move the fingerprint");
 }
 
-/// Req 4(a) — the stalled fixture: a child double whose surface EXISTS and
-/// never advances trips the fence in ~base, via the SILENCE reason, well
-/// before the backstop. (A surface that never APPEARS at all is the other
-/// fail-safe leg above: it reads as progress and the backstop catches it.)
+/// Req 4(a) — the stalled fixture, SYNTHETIC-CLOCK driven (T232): a child
+/// double whose surface EXISTS and never advances trips the fence at the
+/// silence base, via the SILENCE reason, nowhere near the backstop. The
+/// fence is driven by injected instants (t0 + k·step) through the
+/// `observe_at`/`tripped_at` seams — zero sleeps, zero `thread::sleep`, and
+/// the one `Instant::now` below is the t0 ANCHOR whose value no assertion
+/// reads — so host load cannot dilate a silence window the way the
+/// real-clock shape flaked under the t230-impl compile storm (three
+/// cycle-105 reds). Both directions are asserted at synthetic precision:
+/// `< base` is live (the no-trip half the real-clock smoke below
+/// deliberately does NOT own), `≥ base` is Stalled. (A surface that never
+/// APPEARS at all is the other fail-safe leg above: it reads as progress
+/// and the backstop catches it.)
 #[test]
 fn t225_stalled_surface_double_trips_in_about_base() {
-    let _timing = timing_guard();
     let dir = tempfile::tempdir().expect("tempdir");
     let surf = dir.path().join("surface.log");
     std::fs::write(&surf, b"the double wrote once and hung\n").expect("seed the stalled surface");
 
     let base = Duration::from_millis(500);
-    let mut pd = ProgressDeadline::new(base);
-    let started = Instant::now();
-    loop {
-        pd.observe(surface_fingerprint(&surf));
-        if let Some(trip) = pd.tripped() {
-            let elapsed = started.elapsed();
-            assert!(
-                matches!(trip, ProgressTrip::Stalled { .. }),
-                "a never-advancing surface must trip the SILENCE fence, not \
-                 the backstop: {trip}"
-            );
-            assert!(elapsed >= base, "tripped before its base: {elapsed:?}");
-            assert!(
-                elapsed < base * 3,
-                "the stall trip must land at ~base, nowhere near the \
-                 backstop: {elapsed:?}"
-            );
-            return;
+    let step = base / 2;
+    let backstop = load_scaled_deadline(base) * ProgressDeadline::BACKSTOP_FACTOR;
+    // ANCHOR ONLY — every assertion below is a pure function of t0 + k·step.
+    let t0 = Instant::now();
+    // The double wrote once: one readable fingerprint, then silence.
+    let fp = surface_fingerprint(&surf).expect("the seeded surface is readable");
+
+    let mut pd = ProgressDeadline::armed(t0, base, backstop);
+    pd.observe_at(Some(fp), t0);
+    // Half a base of silence: LIVE — the fence must not trip early.
+    assert_eq!(
+        pd.tripped_at(t0 + step),
+        None,
+        "half a base of silence must still be live: the fence trips at the \
+         base, not before"
+    );
+    // A full base of silence: Stalled — the SILENCE reason, carrying the
+    // measured windows, at ~base and nowhere near the backstop.
+    match pd.tripped_at(t0 + base) {
+        Some(ProgressTrip::Stalled {
+            silent_for,
+            base: trip_base,
+        }) => {
+            assert_eq!(silent_for, base, "the trip carries the measured silence");
+            assert_eq!(trip_base, base, "the trip carries the fence's base");
         }
-        std::thread::sleep(Duration::from_millis(25));
+        other => panic!(
+            "a never-advancing surface must trip the SILENCE fence at the \
+             base, not {other:?}"
+        ),
     }
+    // The backstop (≥ 4x base by construction) is out of the picture — and
+    // stays there: past the base the reason STAYS Stalled (silence
+    // precedence), because Backstop can never win for a surface that never
+    // advances.
+    assert!(
+        backstop >= base * ProgressDeadline::BACKSTOP_FACTOR,
+        "the synthetic backstop must be the load-scaled base × the named \
+         factor: {backstop:?}"
+    );
+    assert!(matches!(
+        pd.tripped_at(t0 + base * 2),
+        Some(ProgressTrip::Stalled { .. })
+    ));
 }
 
-/// Req 4(b) — the slow-progress fixture (THE flake reproduction): a double
-/// that advances every base/6 for 3x base PASSES the progress-reset fence.
-/// Under the pre-T225 absolute fence shape (deadline = start + base) this
-/// exact loop FAILS at `base` while the double is still advancing — the
+/// Req 4(b) — the slow-progress fixture (THE flake reproduction),
+/// SYNTHETIC-CLOCK driven (T232): a double that advances every base/6 — as
+/// injected instants (t0 + k·step), never sleeps — keeps the fence answering
+/// `None` at EVERY step: through 3x base (the old absolute fence's deadline,
+/// where the cycle-101 flake shape died) and on out to the backstop. Under
+/// the pre-T225 absolute fence shape (deadline = start + base) this exact
+/// schedule FAILS at `base` while the double is still advancing — the
 /// demonstrated RED (old-shape scratch run recorded in the t225 notes); the
 /// non-vacuousness asserts pin that this leg really outlives the old fence,
-/// so the pass is discrimination, not slack. A Backstop trip under extreme
-/// host load is the OUTER fence working, not a silence trip: the leg ends
-/// early, still having outlived the old fence by 2x (the backstop is ≥ 4x
-/// base by construction, so an early break is impossible).
+/// so the pass is discrimination, not slack. The terminating trip must be
+/// the BACKSTOP (the outer fence doing its job against a forever-advancing
+/// double) and NEVER Stalled: an advance every step keeps resetting the
+/// silence clock, so only the absolute outer fence can fire. Host load
+/// stretches nothing here — the whole schedule is synthetic, which is the
+/// fix for the three cycle-105 reds this leg took under the t230-impl
+/// compile storm (an ~8x process slowdown tripped `Stalled` mid-advance on
+/// the real clock).
 #[test]
 fn t225_slow_progress_surface_double_outlives_the_absolute_fence() {
-    let _timing = timing_guard();
     let dir = tempfile::tempdir().expect("tempdir");
     let surf = dir.path().join("surface.log");
     std::fs::write(&surf, b"").expect("seed the surface");
 
     let base = Duration::from_millis(600);
-    let advance_every = Duration::from_millis(100); // base/6 — well inside the silence base
-    let mut pd = ProgressDeadline::new(base);
-    let started = Instant::now();
+    let step = base / 6; // 100ms — well inside the silence base
+    let backstop = load_scaled_deadline(base) * ProgressDeadline::BACKSTOP_FACTOR;
+    // ANCHOR ONLY — every assertion below is a pure function of t0 + k·step.
+    let t0 = Instant::now();
+    let mut pd = ProgressDeadline::armed(t0, base, backstop);
+    use std::io::Write as _;
     let mut advances = 0u32;
-    while started.elapsed() < base * 3 {
-        // The double advances: one appended line (len + mtime both move).
-        use std::io::Write as _;
+    let terminating = loop {
+        advances += 1;
+        // The double advances: one appended line (len always moves, so the
+        // fingerprint moves even when two appends land in one mtime tick).
         let mut f = std::fs::OpenOptions::new()
             .append(true)
             .create(true)
             .open(&surf)
             .expect("append to the double's surface");
         writeln!(f, "advance {advances}").expect("write the advance");
-        advances += 1;
-
-        pd.observe(surface_fingerprint(&surf));
-        match pd.tripped() {
+        let now = t0 + step * advances;
+        pd.observe_at(surface_fingerprint(&surf), now);
+        match pd.tripped_at(now) {
             None => {}
-            // The outer fence, not the silence fence — the leg's claim
-            // already held (it broke at ≥ 4x base, 2x past the old fence).
-            Some(ProgressTrip::Backstop { .. }) => break,
+            // The outer fence, not the silence fence — the only trip a
+            // forever-advancing double can earn.
+            Some(trip @ ProgressTrip::Backstop { .. }) => break trip,
             Some(trip @ ProgressTrip::Stalled { .. }) => panic!(
                 "the progress-reset fence must stay live while the double \
                  advances (advance #{advances}) — this is the cycle-101 \
                  flake shape the old absolute fence blew: {trip}"
             ),
         }
-        std::thread::sleep(advance_every);
-    }
-    let total = started.elapsed();
-    // Non-vacuousness: the loop REALLY outlived the pre-T225 absolute fence
-    // (`base`) by 2x — under the old shape this leg dies at `base` mid-run.
+    };
+    let (total, trip_backstop) = match terminating {
+        ProgressTrip::Backstop { elapsed, backstop } => (elapsed, backstop),
+        other => panic!(
+            "the advance loop can only exit on the Backstop trip: {other:?}"
+        ),
+    };
+    // Non-vacuousness: the schedule REALLY outlived the pre-T225 absolute
+    // fence (`base`) by 3x — under the old shape this leg dies at `base`
+    // mid-run — and the surface actually advanced at base/6 the whole way.
     assert!(
-        total >= base * 2,
+        total >= base * 3,
         "the double must outlive the old absolute fence for this leg to \
          discriminate: total {total:?} vs base {base:?}"
     );
     assert!(
-        advances >= 3,
-        "the surface must have actually advanced: {advances} advances"
+        advances >= 18,
+        "the surface must have actually advanced at base/6 through 3x base: \
+         {advances} advances"
     );
+    assert_eq!(
+        trip_backstop, backstop,
+        "the trip carries the fence's backstop"
+    );
+}
+
+/// Req 2 (T232) — the ONE real-clock smoke leg, LOAD-ROBUST DIRECTION ONLY,
+/// through the REAL wrappers: `ProgressDeadline::new` + `observe` +
+/// `tripped` (the `Instant::now()`-passing one-liners), never the `_at`
+/// seams — the smoke exists to prove the wrappers wire the synthetic-tested
+/// computation to a live clock. Its only assertions: a genuinely stalled
+/// surface trips `Stalled` (never the backstop — silence precedence holds
+/// for a never-advancing surface), within a wall-clock budget of
+/// `load_scaled_deadline(base) * BACKSTOP_FACTOR` (≥ 4x base by
+/// construction — generous however the host loads). It asserts NO sub-scaled
+/// no-trip window — no "did not trip before X" — because a real-clock
+/// silence window is exactly the load-fragile half T232 removes: under a
+/// compile storm the process's own poll loop dilates and a sub-scaled bound
+/// trips on host noise, not on regression. No-trip precision is owned by the
+/// synthetic legs above
+/// ([`t225_stalled_surface_double_trips_in_about_base`],
+/// [`t225_slow_progress_surface_double_outlives_the_absolute_fence`]),
+/// whose injected instants load cannot stretch.
+#[test]
+fn t225_smoke_stalled_surface_trips_within_the_load_scaled_backstop() {
+    let _timing = timing_guard();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let surf = dir.path().join("surface.log");
+    std::fs::write(&surf, b"the double wrote once and hung\n").expect("seed the stalled surface");
+
+    let base = Duration::from_millis(500);
+    let budget = load_scaled_deadline(base) * ProgressDeadline::BACKSTOP_FACTOR;
+    let mut pd = ProgressDeadline::new(base);
+    let started = Instant::now();
+    loop {
+        pd.observe(surface_fingerprint(&surf));
+        if let Some(trip) = pd.tripped() {
+            assert!(
+                matches!(trip, ProgressTrip::Stalled { .. }),
+                "a never-advancing surface must trip the SILENCE fence, not \
+                 the backstop: {trip}"
+            );
+            return;
+        }
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed < budget,
+            "the stalled surface never tripped within the load-scaled \
+             backstop budget {budget:?} — the real wrappers have decoupled \
+             from the fence computation, or the fence stopped tripping: \
+             elapsed {elapsed:?}"
+        );
+        std::thread::sleep(Duration::from_millis(25));
+    }
 }
 
 /// T225 req 5 — the adoption grep pin EXTENDED to every converted surface:
