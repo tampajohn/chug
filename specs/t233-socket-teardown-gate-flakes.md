@@ -1,6 +1,6 @@
 # T233 — Socket-teardown gate flakes: daemon UDS transient-success leg + mcp_http probe-retry exhaustion (tests-only, robustness)
 
-check: set -o pipefail; export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared; touch src/*.rs tests/*.rs; cargo test --bin chug
+check: set -o pipefail; export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-validate-b; touch src/*.rs tests/*.rs; cargo test --bin chug
 
 estimate: ~200 changed lines all-in (pin-closure row kind whose
 remedy seams PRE-EXIST — T151 tri-state + T214 scale — so the
