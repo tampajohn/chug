@@ -1,6 +1,6 @@
 # T231 — LOOP-SPEC step 5's TODO-edit guard floor names the T57 main-dedicated target dir (doctrine, SOLO)
 
-check: set -o pipefail; export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared; touch src/*.rs tests/*.rs; cargo test --test loop_spec_recovery --test todo_consistency
+check: set -o pipefail; export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-validate-a; touch src/*.rs tests/*.rs; cargo test --test loop_spec_recovery --test todo_consistency
 
 estimate: ~120 changed lines all-in (doctrine+pin carrier row — the
 cycle-105 calibration: narrative ~40 lands ~3x with the window-anchor
