@@ -651,11 +651,12 @@ pub(crate) fn delegate_launch(input: &Value) -> anyhow::Result<ToolResult> {
 /// blocks until the first significant change (T68 — iteration advance or
 /// verdict/budget-low flag; `last_event` churn never wakes), a liveness
 /// flip, or the deadline. With `terminal: true` AND `wait_secs > 0` (T89)
-/// the same long-poll narrows its wake set to the terminal facts — the
-/// goal/abort verdict, a liveness flip to dead, events-file creation, or
-/// the deadline — never iteration advances or budget-low flags; the
-/// default (`terminal` absent/false) keeps the pre-T89 semantics exactly
-/// (pinned by test).
+/// the same long-poll narrows its wake set to the terminal facts — an
+/// ACCEPTED goal verdict, an abort, a NEW rejection since the wait began
+/// (T234: a rejection already present at entry is stale news and never
+/// wakes), a liveness flip to dead, events-file creation, or the deadline
+/// — never iteration advances or budget-low flags; the default (`terminal`
+/// absent/false) keeps the pre-T89 semantics exactly (pinned by test).
 fn delegate_status(input: &Value) -> anyhow::Result<ToolResult> {
     // Parse the knobs before any I/O so a bad value errors instantly even
     // when `cwd` is also bad.
@@ -667,7 +668,7 @@ fn delegate_status(input: &Value) -> anyhow::Result<ToolResult> {
     // never silent degradation into the instant leg).
     if terminal && wait_secs.unwrap_or(0) == 0 {
         bail!(
-            "delegate: `terminal: true` needs `wait_secs > 0` — a terminal instant poll is a contradiction; the terminal wait blocks until the goal/abort verdict, a liveness flip to dead, events-file creation, or this wait_secs deadline (max {DELEGATE_WAIT_MAX_SECS})"
+            "delegate: `terminal: true` needs `wait_secs > 0` — a terminal instant poll is a contradiction; the terminal wait blocks until an accepted goal verdict, an abort, a NEW rejection since the wait began, a liveness flip to dead, events-file creation, or this wait_secs deadline (max {DELEGATE_WAIT_MAX_SECS})"
         );
     }
     let cwd = delegate_cwd(input)?;
@@ -770,7 +771,8 @@ pub(crate) fn read_events(events_path: &Path) -> (DelegateSummary, Option<String
 /// T29 + T68 + T89: the bounded long-poll. Block until the FIRST of:
 /// (a) the child's events-derived state changes SIGNIFICANTLY vs. the
 ///     snapshot at entry — the default (pre-T89, significant) wake set is
-///     `max_iters`, `last_iteration`, `budget_low_seen`, `goal_seen`,
+///     `max_iters`, `last_iteration`, `budget_low_seen`, `goal_seen` (plus
+///     its T234 outcome resolution `goal_accepted_seen`/`goal_rejected_seen`),
 ///     `abort_seen`, `abort_reason` ([`DelegateSummary::significant_ne`]) —
 ///     or the events file's creation when it was missing at entry (the
 ///     launch→build window is exactly this state). `last_event_type`/
@@ -784,17 +786,26 @@ pub(crate) fn read_events(events_path: &Path) -> (DelegateSummary, Option<String
 /// (c) the deadline elapses (`wait_secs`, already hard-capped at 600).
 ///
 /// T89 `terminal` mode narrows the (a) wake set to the terminal facts —
-/// `goal_seen`/`abort_seen` present in the current read, plus events-file
-/// creation — so an actively-working child does NOT wake the wait on every
-/// iteration advance or budget-low flip (loop-level economics: one
-/// orchestrator iteration per child RUN, not per child iteration). The
+/// an ACCEPTED goal verdict (`goal_accepted_seen`) or an abort
+/// (`abort_seen`) present in the current read, a NEW goal-gate rejection
+/// since the wait began, plus events-file creation — so an
+/// actively-working child does NOT wake the wait on every iteration
+/// advance or budget-low flip (loop-level economics: one orchestrator
+/// iteration per child RUN, not per child iteration). The accepted/abort
 /// verdict flags are PRESENCE-based, not transition-based: a fact already
 /// observable at entry is returned immediately (the re-attach case — the
 /// wait has nothing left to wait for); in the normal launch→wait flow both
 /// flags are false at entry, so this coincides with the spec's "flips true"
-/// wording. The T58 segment reset keeps the flags describing the LATEST
-/// segment, so a resumed child re-arms them truthfully. Liveness and
-/// file-creation stay transition-based (entry snapshot).
+/// wording. T234: the REJECTION verdict is deliberately NOT
+/// presence-based — a `goal` line with `outcome:"rejected"` leaves the
+/// driver RUNNING, so a rejection already present at entry is stale news
+/// (the gate spoke before the wait began; the orchestrator already had its
+/// chance to steer) and must never relatch: it wakes exactly ONCE, when it
+/// lands mid-wait, and because the waking payload becomes the next call's
+/// entry, subsequent terminal waits over the same stream block normally.
+/// The T58 segment reset keeps the flags describing the LATEST segment, so
+/// a resumed child re-arms them truthfully. Liveness and file-creation
+/// stay transition-based (entry snapshot).
 ///
 /// Never aborts the run (spec req 5): every internal error leg degrades to
 /// the instant-style answer instead of hanging or erroring — a mid-wait read
@@ -869,15 +880,21 @@ fn delegate_status_wait(
         // file appearing when it was missing at entry. A diff confined to
         // `last_event_type`/`last_event_ts` (per-tool-call churn) must NOT
         // wake — it would fire at the first poll tick nearly every time.
-        // T89: terminal mode narrows this to the terminal facts — the
-        // goal/abort verdict flags (presence semantics, see the fn doc) and
-        // events-file creation; iteration advances, `budget_low_seen` flips,
-        // and `max_iters` appearance are progress telemetry that never wake
-        // a terminal wait. The wake cause is carried by the rendered flags
-        // themselves (`goal_seen: true` …) — no new render lines.
+        // T89 + T234: terminal mode narrows this to the terminal facts —
+        // an ACCEPTED goal verdict or an abort (presence semantics, see the
+        // fn doc), a NEW goal-gate rejection since the wait began (a
+        // rejection present AT ENTRY is stale news and never wakes — the
+        // rejected driver keeps running, so relatching it would collapse
+        // every later terminal long-poll into instant polling), and
+        // events-file creation; iteration advances, `budget_low_seen`
+        // flips, and `max_iters` appearance are progress telemetry that
+        // never wake a terminal wait. The wake cause is carried by the
+        // rendered flags themselves (`goal_seen: true` …) — no new render
+        // lines.
         let state_changed = if terminal {
-            now_summary.goal_seen
+            now_summary.goal_accepted_seen
                 || now_summary.abort_seen
+                || (now_summary.goal_rejected_seen && !entry_summary.goal_rejected_seen)
                 || (now_existed && !entry_existed)
         } else {
             now_summary.significant_ne(&entry_summary) || (now_existed && !entry_existed)
@@ -933,12 +950,16 @@ pub(crate) fn summarize_events(lines: &[&str]) -> DelegateSummary {
                 // segment-scoped, so reset them here: the summary must
                 // describe the LATEST segment (a pre-resume abort must not
                 // keep a healthy resumed child reporting `aborted`, the
-                // cycle-18 bite). `max_iters` and `last_iteration` deliberately
+                // cycle-18 bite; T234: the same for a pre-resume goal-gate
+                // rejection — the outcome flags reset with their parent
+                // latch). `max_iters` and `last_iteration` deliberately
                 // keep their last-seen values (the latter until the new
                 // segment writes its first iteration) — they are stream-scope
                 // observations, not verdicts.
                 s.budget_low_seen = false;
                 s.goal_seen = false;
+                s.goal_accepted_seen = false;
+                s.goal_rejected_seen = false;
                 s.abort_seen = false;
                 s.abort_reason = None;
                 if let Some(max) = obj.get("max_iters").and_then(Value::as_u64) {
@@ -951,7 +972,23 @@ pub(crate) fn summarize_events(lines: &[&str]) -> DelegateSummary {
                 }
             }
             "budget_low" => s.budget_low_seen = true,
-            "goal" => s.goal_seen = true,
+            "goal" => {
+                s.goal_seen = true;
+                // T234: resolve the goal line's `outcome` into the additive
+                // seen-flags — the collect-side parse
+                // ([`summarize_collect`]) already distinguished verdicts;
+                // the status path was the only outcome-blind one.
+                // `goal_seen` keeps its any-goal latch (the mcp_serve
+                // consumers' LIVENESS-FIRST contract and `state()` are
+                // pinned compat), and a missing or unparseable `outcome`
+                // sets `goal_seen` only (fail-safe to the pre-T234
+                // behavior).
+                match obj.get("outcome").and_then(Value::as_str) {
+                    Some("accepted") => s.goal_accepted_seen = true,
+                    Some("rejected") => s.goal_rejected_seen = true,
+                    _ => {}
+                }
+            }
             "abort" => {
                 s.abort_seen = true;
                 if let Some(reason) = obj.get("reason").and_then(Value::as_str) {
@@ -980,6 +1017,13 @@ pub(crate) struct DelegateSummary {
     pub(crate) last_event_ts: Option<String>,
     pub(crate) budget_low_seen: bool,
     pub(crate) goal_seen: bool,
+    /// T234: the goal line's `outcome` was SEEN in the segment — an
+    /// `outcome:"accepted"` / `outcome:"rejected"` line. Additive latches
+    /// (a segment rejected and later accepted reports both); a missing or
+    /// unparseable `outcome` leaves both false while `goal_seen` still
+    /// latches (fail-safe to the pre-T234 behavior).
+    pub(crate) goal_accepted_seen: bool,
+    pub(crate) goal_rejected_seen: bool,
     pub(crate) abort_seen: bool,
     /// `reason` of the abort line, when present.
     pub(crate) abort_reason: Option<String>,
@@ -988,7 +1032,11 @@ pub(crate) struct DelegateSummary {
 impl DelegateSummary {
     /// `starting` = nothing read yet (child may not have written anything);
     /// `running` = events seen, no verdict; `done`/`aborted` = the stream
-    /// ended in a goal or an abort.
+    /// ended in a goal or an abort. T234: the "done" latch stays ANY-goal —
+    /// including a mid-run `outcome:"rejected"`, after which the driver
+    /// keeps running — byte-compatible by design; the mcp_serve consumers'
+    /// LIVENESS-FIRST contract is pinned against exactly that latch (T157),
+    /// so the verdict RESOLUTION lives only in the flags above, never here.
     pub(crate) fn state(&self) -> &'static str {
         if self.abort_seen {
             "aborted"
@@ -1003,7 +1051,10 @@ impl DelegateSummary {
 
     /// T68: whether the SIGNIFICANT fields differ from `other` — the wake set
     /// of the `status` long-poll: `max_iters`, `last_iteration`,
-    /// `budget_low_seen`, `goal_seen`, `abort_seen`, `abort_reason`.
+    /// `budget_low_seen`, `goal_seen`, `goal_accepted_seen`,
+    /// `goal_rejected_seen`, `abort_seen`, `abort_reason` (T234: the two
+    /// goal-outcome flags join the original six — a rejection flip is
+    /// significant telemetry in the non-terminal mode too).
     /// Deliberately EXCLUDES `last_event_type`/`last_event_ts`: an active
     /// child appends a `tool_result` event every 2–10 s, so the pre-T68
     /// any-field wake fired at the first poll tick almost every time
@@ -1015,6 +1066,8 @@ impl DelegateSummary {
             || self.last_iteration != other.last_iteration
             || self.budget_low_seen != other.budget_low_seen
             || self.goal_seen != other.goal_seen
+            || self.goal_accepted_seen != other.goal_accepted_seen
+            || self.goal_rejected_seen != other.goal_rejected_seen
             || self.abort_seen != other.abort_seen
             || self.abort_reason != other.abort_reason
     }
@@ -1165,9 +1218,20 @@ fn render_status(
         (None, _) => out.push_str("\nlast_event: none"),
     }
     out.push_str(&format!(
-        "\nbudget_low_seen: {}\ngoal_seen: {}\nabort_seen: {}",
-        summary.budget_low_seen, summary.goal_seen, summary.abort_seen
+        "\nbudget_low_seen: {}\ngoal_seen: {}",
+        summary.budget_low_seen, summary.goal_seen
     ));
+    // T234: the verdict resolution — rendered only when set (the
+    // abort_reason convention), adjacent to the `goal_seen:` line it
+    // resolves, so a poller can distinguish "gate spoke: REJECTED, child
+    // still running" from "accepted, done" without reading the raw stream.
+    if summary.goal_accepted_seen {
+        out.push_str("\ngoal_accepted_seen: true");
+    }
+    if summary.goal_rejected_seen {
+        out.push_str("\ngoal_rejected_seen: true");
+    }
+    out.push_str(&format!("\nabort_seen: {}", summary.abort_seen));
     if let Some(reason) = &summary.abort_reason {
         out.push_str(&format!("\nabort_reason: {reason}"));
     }
@@ -1190,7 +1254,8 @@ fn render_status(
 /// What `collect` can say about a child's event stream: a SEPARATE
 /// collect-side parse of the same bounded tail the `status` summary reads.
 /// T68 constraint: nothing here enters [`DelegateSummary`] or its pinned
-/// six-field `significant_ne` wake set — the `status` render and long-poll
+/// eight-field `significant_ne` wake set (six fields through T233; T234
+/// added the two goal-outcome flags) — the `status` render and long-poll
 /// wake behavior stay byte-identical.
 ///
 /// T128: `pub(crate)` (fields too, the T124 `DelegateSummary` precedent) so

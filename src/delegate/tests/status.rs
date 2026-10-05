@@ -4,7 +4,7 @@
 // T109 req 4 count-pin anchor (see mod.rs's pin): this family's
 // #[test] fn count — a dropped `mod status;` line fails the pin's
 // reference to this const to compile.
-pub(super) const TEST_COUNT: usize = 10;
+pub(super) const TEST_COUNT: usize = 11;
     use super::*; // the shared harness (delegate::tests) + delegate's own imports
 
     #[test]
@@ -252,3 +252,72 @@ pub(super) const TEST_COUNT: usize = 10;
         assert!(result.content.contains("last_iteration: 7"), "{}", result.content);
     }
 
+
+    /// T234 req 4: the status render resolves the goal verdict —
+    /// `goal_accepted_seen: true` / `goal_rejected_seen: true` lines appear
+    /// only when the corresponding flag is set (absent when false, the
+    /// existing flag-render convention), placed adjacent to the `goal_seen:`
+    /// line, so a polling orchestrator can distinguish "gate spoke:
+    /// REJECTED, child still running" from "accepted, done" without reading
+    /// the raw stream.
+    #[test]
+    fn delegate_status_renders_resolved_goal_verdict_flags() {
+        // Rejected stream: the resolution line renders; the accepted line
+        // does not.
+        let tmp = tempfile::tempdir().unwrap();
+        write_events_fixture(
+            tmp.path(),
+            &[
+                T29_RUN_START,
+                "{\"type\":\"goal\",\"ts\":\"t2\",\"outcome\":\"rejected\",\"reason\":\"check failed\"}",
+            ],
+        );
+        let result = dispatch(
+            &delegate_ctx(tmp.path()),
+            "delegate",
+            &json!({"action": "status", "cwd": tmp.path()}),
+        );
+        assert!(!result.is_error, "{}", result.content);
+        assert!(result.content.contains("goal_seen: true"), "{}", result.content);
+        assert!(result.content.contains("goal_rejected_seen: true"), "{}", result.content);
+        assert!(!result.content.contains("goal_accepted_seen"), "{}", result.content);
+        // Adjacent placement: goal_seen renders before the resolution lines,
+        // which render before abort_seen (the pre-existing lines keep their
+        // relative order).
+        let goal_at = result.content.find("goal_seen:").unwrap();
+        let rejected_at = result.content.find("goal_rejected_seen:").unwrap();
+        let abort_at = result.content.find("abort_seen:").unwrap();
+        assert!(goal_at < rejected_at && rejected_at < abort_at, "{}", result.content);
+
+        // Accepted stream: the accepted line renders; the rejected one does
+        // not.
+        let tmp2 = tempfile::tempdir().unwrap();
+        write_events_fixture(
+            tmp2.path(),
+            &[
+                T29_RUN_START,
+                "{\"type\":\"goal\",\"ts\":\"t2\",\"outcome\":\"accepted\",\"summary\":\"VERDICT PASS\"}",
+            ],
+        );
+        let result2 = dispatch(
+            &delegate_ctx(tmp2.path()),
+            "delegate",
+            &json!({"action": "status", "cwd": tmp2.path()}),
+        );
+        assert!(!result2.is_error, "{}", result2.content);
+        assert!(result2.content.contains("goal_accepted_seen: true"), "{}", result2.content);
+        assert!(!result2.content.contains("goal_rejected_seen"), "{}", result2.content);
+
+        // A verdict-free stream renders neither resolution line (the
+        // instant-leg payload stays byte-identical, pinned in wait.rs).
+        let tmp3 = tempfile::tempdir().unwrap();
+        write_events_fixture(tmp3.path(), &[T29_RUN_START, T29_ITERATION]);
+        let result3 = dispatch(
+            &delegate_ctx(tmp3.path()),
+            "delegate",
+            &json!({"action": "status", "cwd": tmp3.path()}),
+        );
+        assert!(!result3.is_error, "{}", result3.content);
+        assert!(!result3.content.contains("goal_accepted_seen"), "{}", result3.content);
+        assert!(!result3.content.contains("goal_rejected_seen"), "{}", result3.content);
+    }
