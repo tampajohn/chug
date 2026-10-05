@@ -260,6 +260,12 @@ trigger rides it).
 
 **T231 — LOOP-SPEC step 5's TODO-edit guard floor names the T57 main-dedicated target dir (pri 4, doctrine, SOLO)** — LANDED (ff-merge 05963e2: impl a4ee56b + orchestrator pin-collision amendments 5283953 + dispatch re-key; impl glm died the 50-min wall at 54/80 COMMITTED, T55 orchestrator-finish, routing d1791166631-17). Step 5's guard paragraph gains one sentence directly after the T227 unpiped sentence (verbatim, untouched): the guard run names `CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-main` IN its invocation — never the bare default `target/`, which a version bump colds by construction (the cycle-104 4x300s wrap timeouts named in-sentence as the evidence); env prefix only, NO T195 touch per the main-dedicated exemption. Carrier pin leg (an): 6 needles exactly-once file-wide, step-5 windowed, full ordering chain, T48 self-checks. The orchestrator-finish's full-suite gate surfaced TWO pre-existing pin collisions the child's named-target check filter never ran (the sweep-the-family class): docs_only_gates' step-5 FLOOR_CMD bare needle now legitimately matches twice (tightened to the T8 sentence's backticked `(seconds)` form) and shared_target_dir's MAIN carrier counts moved 3→4 file-wide / 1→2 step-5 window (the T231 invocation is the deliberate new carrier) — both amended T187-style with the justification named (5283953). Kimi REQUIRED PASS (routing d1791167519-18, verdict d1791169347-19): 3 serial mutant legs (same-file overlap — the correct serial judgment) all kill leg (an) — env-prefix-revert at count-0, sentence-deletion, ordering-move — with T227's leg (am) green under all three (adjacency non-disturbance proven); gates loop_spec_recovery 40/40 + todo_consistency 21/21 + clippy -D + nextest release 1633/1633; byte-clean; zero findings. Calibration: +278 vs ~120 filed (2.3x — inside the doctrine+pin kind's 3x band).
 
+- **Cycle-level notes (cycle 105)** — a MANDATORY fresh-eval cycle that filed 2 rows and landed BOTH (queue DRAINED again at wrap — the third drain in four cycles): two kimi first-round PASSes, zero validator findings filed forward (second consecutive cycle). Both impl children died at the 50-minute wall COMMITTED (t230 48/80, t231 54/80) — the minutes-bound-committed shape twice in one cycle, cause visible in both streams: cold-compile friction (the T195 touch + full-suite DEBUG legs against the shared cache under fleet load) ate ~4 bash-cap timeouts per child before the suites could finish; both absorbed by T55 orchestrator-finish with zero work lost and no resume burned. For the next eval's watch: if the NEXT cycle's impl children also die minutes-bound with the debug-suite legs the cause, weigh a child-goal guidance clause (run the full suite as ONE nextest release run rather than per-file debug cargo test legs — faster warm per T78), a goal-template tweak not a budget raise; census: 2 this cycle.
+- **The sweep-the-family gap, caught and closed in-arc**: the t231 child's spec-check ran only its NAMED targets and missed TWO pin collisions its new doctrine sentence caused in files outside the named set (docs_only_gates' step-5 FLOOR_CMD needle; shared_target_dir's MAIN carrier counts) — doctrine pins cross-reference each other's carriers, so a new sentence can break pins no filing-time enumeration named. The orchestrator-finish full nextest run caught both, the T187 amendments closed them on-branch (5283953), and the kimi validator verified the amended branch (mutants + grep-verified counts). The standing remedy chain worked end-to-end; recurrence watch: a second instance argues for a doctrine-row check-line convention (LOOP-SPEC carriers enumerate the known cross-referencing pin families — loop_spec_recovery + todo_consistency + shared_target_dir + loop_spec_docs_only_gates — a cheap static list, not the full suite).
+- **Launch-overlap observation (handoff to the next eval)**: the glm stream `.chug/events-20261004-233804.jsonl` (23:38:04Z→00:44:57Z, 57 iters, goal accepted) overlaps this cycle's kimi launch (23:38:13Z) by 9 seconds at the starts. Verified benign: exactly ONE supervisor lineage (31510 supervisor → 18866 per-cycle re-exec → me 18867), git history strictly linear (zero dueling commits across the overlap), my launch probes clean. Reading: cycle-104's glm accepted its goal and lingered ~66 min in post-accept drain (goal-gate verification + archive flush) while the supervisor launched me back-to-back — not a second driver. The next eval should confirm the drain-reading against a loopd launch race (the driver.lock mutual exclusion SHOULD have serialized us; 9-second-apart starts inside one lock domain is worth one paragraph of the next §2 if the drain-reading fails).
+- **Release v0.17.2 tagged at wrap** — 3 items since v0.17.1 (T229/T230/T231, none a FEATURES check-off) → patch bump, `cargo check` lock regen, notes via scripts/release-notes.sh, check-tag-version ok, final gates green at HEAD (nextest release 1633/1633), commit 01c3f82 + tag pushed together.
+- **Deferred/skipped**: none — the queue was exactly the 2 filed rows and both landed. Roadmap pull skipped at eval (quantified, §4). **Next cycle routing**: 0 todo rows → freshness predicate FAILS regardless of EVALUATION.md's mtime → kimi fresh-eval cycle (loopd will route correctly); the T230 verdict surface (digest ctx-edit fires) is the next eval's first measurement read, and the t230/t231 impl streams are the minutes-census evidence.
+
 ### Cycle 104 (2026-10-04, ~21:52 UTC–) — routine freshness-skip cycle (glm; predicate held: 1 todo row T229 + EVALUATION mtime 17:44 = launch day)
 
 **T229 — close the T225 validator's pin-strength findings (pri 4, tests-only)** — LANDED (merge cc4cb39; impl glm 47/80 goal-accepted ~37 min, zero deaths). Two pin legs +182/-0 in src/testsupport.rs, zero production diff: (1) M7 mtime-arm — `t229_surface_fingerprint_moves_on_same_length_rewrite`: a same-length rewrite of different bytes under a SYNTHETIC mtime clock (std `File::set_modified` — no coarse-timestamp flake, no sleep) must move the fingerprint; the len-only mutant dies here as the SOLE killer (all 6 prior t225 legs stayed green under it, exactly the verdict's survivor prediction), plus the fold's exact key-set half (mtime restored → UNCHANGED — the fold keys (len, mtime), never content); (2) BACKSTOP_FACTOR value pinned at 4 through the PURE seam — the named `== 4` assertion routed through the fence arithmetic (quiet load × 4 == base × 4; clamp-max load × 4 == base × 16, the documented 16x shape), the trip window the constant feeds (live through the whole backstop, Backstop — never Stalled — exactly at it), and the live constructor range [4x base, 16x base] — not a source grep; the increase 4→8 died RED at THREE independently observed layers (named assert; pure-seam arithmetic with the named assert scratch-removed; window leg with both (a)-asserts scratch-removed) and the reduction 4→1 died RED — the spec's either-direction requirement. Kimi PASS (d1791154782-3): 3 parallel mutant legs in throwaway worktrees with role-keyed target dirs, all RED reproduced independently, main tree sha256-byte-clean, zero findings filed forward. T189 lane call (d1791153446-2): the row's gates-only expectation was OVERRIDDEN by the mechanical predicate — (b) flipped (182 changed lines > ~150), so full adversarial validation ran (the T224 precedent). Gates: worktree spec check 1231/1231 (verbatim, validate-a re-key per T175) + clippy -D clean; post-merge main nextest 1631/1631 (37.5s). Suite: 1623 → 1631 (+8 net: 2 t229 pins + 6 nextest-run counting of the same suite). The T225 verdict's predicted-survivor ledger is now fully closed.
@@ -491,77 +497,7 @@ AUROC 0.374 finding.
   (the split bake-off), then whatever the fresh eval files. Release: 2 items landed
   since v0.16.2 (< 3, no FEATURES check-off) → no tag this wrap.
 
-### Cycle 99 (2026-10-04, ~01:00 UTC–) — routine freshness-skip cycle (glm; predicate held: EVALUATION mtime UTC day = launch day) — working T214/T213 from the cycle-98 eval
-
-- **T214 LANDED (merge 654993d, landed-clean after a T63 resume)** — the isolation
-  tax closed at its root: `load_scaled_deadline(base) = base × clamp(loadavg_1m/cores,
-  1, 4)` with a fail-safe seam (any read failure → factor 1.0, byte-identical base),
-  pure `scale_factor` legs, and all THREE spawn-heavy families' verdict fences
-  (reaper 30s, spoof 30s, daemon_ensure 90s) re-based on measured load — bases
-  unchanged (zero-timeout-bump doctrine), T158 markers kept, adoption grep pin
-  (T48-runtime needles) asserts zero bare `from_secs(30|90)` constructions. glm impl
-  died the 50-min wall at 61/80 UNCOMMITTED → ONE T63 resume committed dc63eba +
-  goal-accepted (1550/1550 full nextest release, NO family isolation, quiet-host note
-  honest per spec). 484-line diff flipped T189 lane criterion (b) → kimi REQUIRED
-  despite the tests-only filing: verdict PASS, 5/5 mutants killed (M2's 8.0-clamp
-  caught only by the child's above-spec legs), 4 non-blocking observations (double
-  seam read race ~0.1%, single-line pin needle, mul_f64 MAX unreachable, sysctl
-  /usr/sbin fallback exercised by the gate shell itself).
-- **T213 LANDED (merge d8e24f3, landed-clean after orchestrator-finish)** — the T205
-  validator's three LOW survivors closed in one SOLO arc: the canary VALUE pin
-  (emit_fix_line recording sink + three-surface absence assert), the BYTE-IDENTICAL
-  loopd.sh env-loader extraction into scripts/loopd_env_loader.sh with a 7-leg
-  driver (allowlist, count-only log, explicit-env-wins, malformed tolerance,
-  absent-file no-op), and the one-attempt-fetch comment. glm committed all three
-  parts then died the 50-min wall at 65/80 mid-verification, goal unaccepted →
-  T55 orchestrator-finish; MY step-3 gates caught a real break the child never saw:
-  loopd_model_routing's minimal fixture_dir copies loopd.sh text WITHOUT the new
-  scripts/ companion, so the sourcing line (line 59, before any mode dispatch) died
-  under set -euo pipefail in 5 sandbox tests — fragment-beside-copy fixture repair
-  committed on-branch before validation. kimi REQUIRED (loopd.sh doctrine carrier):
-  PASS, 3/3 mutants RED (m1 canary leak = the spec's M1 RED-proof, m2 allowlist
-  widening caught twice, m3 explicit-env-loses), byte-identity independently
-  re-verified via git show, 1559/1559 nextest release + clippy -D. T217/T218
-  operator filings merged mid-cycle (4d578e1) after a push rejection.
-- **T217 LANDED (merge e242689, landed-clean first try)** — the operator's pri-1
-  "stats are broke" closed fail-closed at the source: scripts/site-sync.sh refuses
-  (one named error, exit 4, zero writes/commits) when TODO.md, .chug/loopd, or git
-  log are unreadable — the 58c3a0b rogue-writer shape (orphan vs worktree-removal
-  race) can no longer gut the live page; --bootstrap is the explicit escape and the
-  commit message now carries items/tests/cycles counts so a gutting commit is
-  distinguishable at a glance. glm goal-accepted first try 39/80; 195-line diff
-  flipped T189 lane (b) → kimi REQUIRED: PASS, 3/3 priority mutants RED, gates
-  site_sync 27/27 + nextest release 1564/1564 + clippy -D. One MINOR filed forward:
-  the git-log guard leg has no isolated fixture pin (a bonus m4 mutant survived only
-  that leg — beyond the spec's Tests section, defense-in-depth).
-- **T218 LANDED (merge 104a8d8, landed-clean first try, gates-only lane)** — the
-  third site-generator layer closed: card BODIES are now machine-owned like badges.
-  body_ensure regenerates matched cards' <p> from the row's prep()d what-text in the
-  same pass (position/classes preserved, non-F cards untouched, single-line <p>
-  only, what-text via ENVIRON so backslashes survive) — the F15 "http\" fossil can
-  never re-fossilize; the next sync after any bad write heals it. glm goal-accepted
-  first try 34/80; T189 gates-only lane (~114 lines, re-key-only check change per
-  the T216 precedent): nextest release 1565/1565 + clippy -D in worktree and main;
-  orchestrator RED-proof (body_ensure no-op → the heal pin + 2 t99 idempotence pins
-  RED, byte-identical restore). T219 (daemon /sessions feature) + T220 (Kev parity
-  bake-off) remain queued with ready specs for the next cycle.
-
-- **Release v0.16.2 tagged at wrap** — 4 items since v0.16.1 (T214/T213/T217/T218,
-  none a FEATURES check-off) → patch bump, `cargo check` lock regen, notes generated
-  by scripts/release-notes.sh (HEAD v0.16.1), check-tag-version ok, final gates
-  green at HEAD (build + clippy -D + nextest release 1565/1565), commit bcc98c4 +
-  tag pushed together.
-- **Cycle-level notes** — a routine freshness-skip cycle (glm orchestrator) that
-  landed 4 rows with 2 kimi validation rounds and 2 lane calls; both child budget
-  deaths absorbed by doctrine (T63 resume when uncommitted, T55 orchestrator-finish
-  when complete-committed) with zero work lost; the orchestrator's own step-3 gates
-  caught the one real break children missed (T213's fixture-vs-sourcing-line break —
-  the child died mid-verification of exactly that sweep). Validator deaths: none
-  (all three kimi rounds finished within budget, verdicts written). Deferred: T219
-  (feature, spec ready) and T220 (eval-heavy, spec ready) — 56 iterations at the
-  boundary vs a ~30 wrap tail: does not fit with margin. Three mid-cycle operator
-  push rejections reconciled by merge (T217/T218/T219/T220 filings; one TODO.md
-  conflict, both sides kept). Next cycle opens with 2 ready specs and no blockers.
+### Cycle 99 (2026-10-04) — glm routine freshness-skip cycle; 4 landed (T214 load-scaled-deadline isolation-tax root fix 654993d via T63 resume, T213, T217, T218 — 2 kimi rounds + 2 T189 lane calls, both child budget deaths absorbed by doctrine with zero work lost, the orchestrator full-suite gates caught T213's fixture-vs-sourcing-line break the children missed); T219/T220 deferred specs-ready; v0.16.2 tagged (bcc98c4); full narrative in git (row-flip commits + TODO done rows).
 
 ### Cycle 98 (2026-10-03) — MANDATORY fresh eval (kimi, T81 routing 8-for-8): 3 rows filed (T212/T214/T213); landed T215 daemon-binary resolution 04ac3f1 (fixed-up; glm died at BOTH budgets, T63 resume, orch-finish; kimi PASS 9/9 RED), T216 chug.sh F15 pipe-phantom fix f5cd2e4 (gates-only lane, the lane's first use), T212 SPEC-ARG RULE round-2 7c76356 (fixed-up — round-1 kimi FAIL caught the FALSE premise, sha256-identical revert, the worktree-copy spec arg landed); full narrative in git (row-flip commits + TODO done rows).
 
