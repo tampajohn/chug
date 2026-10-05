@@ -678,7 +678,8 @@ bootstrap_release() { # T240 req 4: markers + section skeleton + nav anchor
       print "</div></section>"
     }
     { print }' "$INDEX" > "$TMPD/boot-rel"
-  cat "$TMPD/boot-rel" > "$INDEX"
+  cat "$TMPD/boot-rel" > "$INDEX" \
+    || { warn "RELEASE bootstrap page write failed — index.html may be truncated, NOT committing"; return 1; }
   if ! git -C "$SITE" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     warn "$SITE is not a git work tree — RELEASE markers written but not committed"
     return 0
@@ -1067,7 +1068,8 @@ bootstrap_region() { # NAME CLASS-ATTR
   fi
   insert_markers "$INDEX" "$TMPD/boot" $(($1 + 1)) $(($2 - 1)) "<!-- ${nm}:BEGIN -->" "<!-- ${nm}:END -->" \
     || { warn "${nm} bootstrap failed — skipping the region"; return 1; }
-  cat "$TMPD/boot" > "$INDEX"
+  cat "$TMPD/boot" > "$INDEX" \
+    || { warn "${nm} bootstrap page write failed — index.html may be truncated, NOT committing"; return 1; }
   if ! git -C "$SITE" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     warn "$SITE is not a git work tree — ${nm} markers written but not committed"
     return 0
