@@ -42,6 +42,19 @@
 # (impossible in loop context — TODO.md always exists there) must pass the
 # explicit --bootstrap flag.
 #
+# T240: the page also carries a RELEASE band — <!-- RELEASE:BEGIN/END --> inside
+# a <section id="releases"> immediately before the stats section — regenerated
+# from the LOCAL checkout's tags at sync time (req 2: wrap pushes tags before
+# syncing, so a release wrap reflects the just-cut release). One card (version,
+# tag date, GitHub release link) plus the top 3-5 release-note bullets from the
+# tag's message, each under the T99 text rules (emphasis stripped, 160-byte
+# word-truncated, HTML-escaped, backticks -> <code>). Fail-closed (T217 req 3):
+# no stable v* tag -> the region is regenerated EMPTY and the sync continues —
+# a pre-v0.1 repo is legal, and a missing tag must never render a fallback
+# version with real data's authority. Markers + section + nav anchor are
+# BOOTSTRAPPED here (T99 req 4) — no hand-built releases block exists to wrap —
+# and malformed markers are warn + skip, best-effort, never a cycle failure.
+#
 # Usage:
 #   scripts/site-sync.sh [--bootstrap] [SITE_DIR] [CHUG_ROOT]
 #     --bootstrap  skip the T217 input guard (first-ever run on a genuinely
@@ -552,6 +565,134 @@ features_generate() { # regionfile outfile
   rm -f "$rowstmp" "$rows" "$openrows"
 }
 
+# --- T240: RELEASE region — the latest release, always current ----------------
+# Facts are the LOCAL checkout's tags at sync time (req 2): the newest STABLE
+# v* tag by tag creation date (`git tag --sort=-creatordate`; pre-release
+# channels — v0.18.0-rc1 — are out of scope), its tag date, and the top 3-5
+# release-note bullets from the tag's message (%(contents) is the annotated
+# tag's message — release notes are generated from semantic commits per the
+# wrap doctrine — or the tagged commit's for a lightweight tag). Each bullet
+# under the T99 text rules: markdown emphasis stripped, word-truncated at 160
+# bytes (never splits a multibyte char), HTML-escaped, backtick pairs ->
+# <code>. NO cat-file audit is needed (T99 req 5 analog): the tag comes from
+# `git tag -l` of this same repo, so it exists by construction.
+REL_BULLET_CAP=160                          # T99 what-text cap, per bullet
+REL_BULLET_MAX=5                            # "top 3-5" — render at most five
+REL_RELEASES_URL="https://github.com/tampajohn/chug/releases/tag"
+RELEASE_TAG=""; RELEASE_DATE=""; RELEASE_BULLETS=""
+
+release_facts() { # -> RELEASE_TAG / RELEASE_DATE / RELEASE_BULLETS (empty = no stable v* tag)
+  local tag
+  tag=$(git --no-pager -C "$CHUG" tag --sort=-creatordate --list 'v*' 2>/dev/null \
+    | awk '/^v[0-9]+\.[0-9]+\.[0-9]+$/ { print; exit }')
+  [ -n "$tag" ] || return 0                 # fail-closed (req 3): no tag -> nothing
+  RELEASE_TAG="$tag"
+  RELEASE_DATE=$(git --no-pager -C "$CHUG" for-each-ref "refs/tags/$tag" \
+    --format='%(creatordate:short)' 2>/dev/null)
+  RELEASE_BULLETS=$(git --no-pager -C "$CHUG" for-each-ref "refs/tags/$tag" \
+    --format='%(contents)' 2>/dev/null | awk -v cap="$REL_BULLET_CAP" -v max="$REL_BULLET_MAX" '
+    /^[[:space:]]*-[[:space:]]/ {
+      if (n >= max) exit
+      s = $0
+      sub(/^[[:space:]]*-[[:space:]]+/, "", s)
+      gsub(/~~/, "", s); gsub(/\*\*/, "", s)  # T99 strip_md: emphasis is markup, not text
+      gsub(/^[ \t]+|[ \t]+$/, "", s)
+      m = split(s, w, " "); out = ""; kept = 0
+      for (i = 1; i <= m; i++) {
+        cand = (out == "") ? w[i] : out " " w[i]
+        if (length(cand) > cap) break          # byte cap, word-truncated — never splits a multibyte char
+        out = cand; kept = i
+      }
+      if (kept < m) out = out "…"
+      gsub(/&/, "\\&amp;", out); gsub(/</, "\\&lt;", out); gsub(/>/, "\\&gt;", out)
+      k = split(out, seg, "`")                 # backtick pairs -> <code>…</code> (T99)
+      if (k >= 3) {
+        rebuilt = seg[1]
+        for (j = 2; j + 1 <= k; j += 2) rebuilt = rebuilt "<code>" seg[j] "</code>" seg[j + 1]
+        if (k % 2 == 0) rebuilt = rebuilt "`" seg[k]
+        out = rebuilt
+      }
+      if (out == "") next
+      n++
+      print out
+    }')
+}
+
+release_generate() { # outfile — empty for a tag-less repo (req 3: writes nothing)
+  local out="$1" b
+  {
+    if [ -n "$RELEASE_TAG" ]; then
+      # the site's own panel class — a full-width .stat card, no new CSS
+      printf '<div class="stat"><b>%s</b><span>latest release — tagged %s · <a href="%s/%s">notes on GitHub</a></span></div>\n' \
+        "$RELEASE_TAG" "$RELEASE_DATE" "$REL_RELEASES_URL" "$RELEASE_TAG"
+      if [ -n "$RELEASE_BULLETS" ]; then
+        printf '<ul>\n'
+        printf '%s\n' "$RELEASE_BULLETS" | while IFS= read -r b; do
+          [ -n "$b" ] || continue
+          printf '  <li>%s</li>\n' "$b"
+        done
+        printf '</ul>\n'
+      fi
+    fi
+  } > "$out"
+}
+
+bootstrap_release() { # T240 req 4: markers + section skeleton + nav anchor
+  local nb ne nl sl indent kick
+  nb=$(grep -cE "^[[:space:]]*<!-- RELEASE:BEGIN -->[[:space:]]*\$" "$INDEX" 2>/dev/null) || nb=0
+  ne=$(grep -cE "^[[:space:]]*<!-- RELEASE:END -->[[:space:]]*\$" "$INDEX" 2>/dev/null) || ne=0
+  if [ "$nb" -eq 1 ] && [ "$ne" -eq 1 ]; then return 0; fi
+  if [ "$nb" -ne 0 ] || [ "$ne" -ne 0 ]; then
+    warn "index.html has malformed RELEASE markers (found $nb/$ne, expected 0 or 1/1) — skipping the RELEASE region"
+    return 1
+  fi
+  # no hand-built releases block exists to wrap (T99's wrap-the-existing-block
+  # leg has no analog here): the section skeleton is machine-owned from birth
+  if grep -q '<section id="releases"' "$INDEX"; then
+    warn "a releases section exists in index.html without RELEASE markers — wrap its region with the markers by hand, skipping the RELEASE region"
+    return 1
+  fi
+  nl=$(grep -n 'href="#stats">stats</a>' "$INDEX" 2>/dev/null | head -1 | cut -d: -f1)
+  if [ -z "$nl" ]; then
+    warn "no <a href=\"#stats\">stats</a> nav link in index.html — cannot place the releases anchor, skipping the RELEASE region"
+    return 1
+  fi
+  sl=$(grep -nE '^<section id="stats"' "$INDEX" 2>/dev/null | head -1 | cut -d: -f1)
+  if [ -z "$sl" ]; then
+    warn "no <section id=\"stats\"> in index.html — cannot bootstrap the RELEASE region"
+    return 1
+  fi
+  indent=$(sed -n "${nl}s/[^ ].*//p" "$INDEX")
+  kick="latest release · synced from the repo's v* tags by scripts/site-sync.sh"
+  # both insertions in ONE pass over the ORIGINAL line numbers: the nav anchor
+  # rides directly before the stats link (the nav mirrors the section order,
+  # req 4) and the section skeleton immediately before the stats section, so
+  # the region sits between the hero and STATS (req 1)
+  awk -v nl="$nl" -v sl="$sl" -v indent="$indent" -v kick="$kick" '
+    NR == nl { print indent "<a href=\"#releases\">releases</a>" }
+    NR == sl {
+      print "<section id=\"releases\" class=\"live-stats\"><div class=\"wrap\">"
+      print "  <p class=\"kicker\"><span class=\"hash\">##</span> " kick "</p>"
+      print "<!-- RELEASE:BEGIN -->"
+      print "<!-- RELEASE:END -->"
+      print "</div></section>"
+    }
+    { print }' "$INDEX" > "$TMPD/boot-rel"
+  cat "$TMPD/boot-rel" > "$INDEX" \
+    || { warn "RELEASE bootstrap page write failed — index.html may be truncated, NOT committing"; return 1; }
+  if ! git -C "$SITE" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    warn "$SITE is not a git work tree — RELEASE markers written but not committed"
+    return 0
+  fi
+  git -C "$SITE" add index.html
+  if git -C "$SITE" commit -q -m "site: RELEASE region markers bootstrap (T240)" \
+    -m "scripts/site-sync.sh (T240) req 1+4: <section id=\"releases\"> inserted immediately before the stats section (the region sits between the hero and STATS) with its markers, plus the releases nav anchor directly before the stats link — the nav mirrors the section order. The region is empty until the next sync fills it."; then
+    echo "site-sync: bootstrapped RELEASE markers + nav anchor ($(git -C "$SITE" rev-parse --short HEAD 2>/dev/null))"
+  else
+    warn "RELEASE bootstrap commit failed (git identity?) — markers written but uncommitted"
+  fi
+  return 0
+}
 # --- compute the facts --------------------------------------------------------
 FACTS=$(todo_facts)
 
@@ -567,6 +708,7 @@ CYC_N="${CYCLES%%$'\t'*}"; CYC_SRC="${CYCLES#*$'\t'}"
 EVAL_D=$(eval_date); [ -n "$EVAL_D" ] || EVAL_D="n/a"
 LANDED=$(last_landed)                    # ID \t ref \t date \t title lines
 LANDED_REFS=$(printf '%s\n' "$LANDED" | awk -F'\t' 'NF >= 3 { printf "%s ", $2 }')
+release_facts                            # T240: RELEASE_TAG/DATE/BULLETS ("" = no stable v* tag)
 
 # --- T99 req 1+5: timeline entries from TODO.md done rows --------------------
 # One entry per done row whose notes cite a commit that EXISTS in the chug repo
@@ -863,12 +1005,14 @@ commit_time() { # ref
   git --no-pager -C "$CHUG" show -s --format=%ct "$1" 2>/dev/null
 }
 
+
 TMPD="$(mktemp -d "${TMPDIR:-/tmp}/site-sync.XXXXXXXX")" || exit 0
 trap 'rm -rf "$TMPD"' EXIT
 TMP_BLOCK="$TMPD/stats-block"             # T98 stats region, regenerated
 TMP_NEW="$TMPD/splice-stats"              # spliced after each region, in turn
 TMP_NEW2="$TMPD/splice-timeline"
 TMP_NEW3="$TMPD/splice-features"
+TMP_NEW4="$TMPD/splice-release"
 TMP_CARD="$TMPD/card"                     # current card chunk (features walk)
 TMP_TLITEM="$TMPD/tlitem"                 # current tl-item chunk (timeline walk)
 {
@@ -924,7 +1068,8 @@ bootstrap_region() { # NAME CLASS-ATTR
   fi
   insert_markers "$INDEX" "$TMPD/boot" $(($1 + 1)) $(($2 - 1)) "<!-- ${nm}:BEGIN -->" "<!-- ${nm}:END -->" \
     || { warn "${nm} bootstrap failed — skipping the region"; return 1; }
-  cat "$TMPD/boot" > "$INDEX"
+  cat "$TMPD/boot" > "$INDEX" \
+    || { warn "${nm} bootstrap page write failed — index.html may be truncated, NOT committing"; return 1; }
   if ! git -C "$SITE" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     warn "$SITE is not a git work tree — ${nm} markers written but not committed"
     return 0
@@ -947,6 +1092,7 @@ region_extract() { # src out name
 
 bootstrap_region TIMELINE tl || true
 bootstrap_region FEATURES grid || true
+bootstrap_release || true
 
 # region_ok NAME — the region is generatable iff exactly one BEGIN/END pair
 # exists, in order (malformed => warn + skip, best-effort, req 3)
@@ -974,6 +1120,12 @@ if region_ok FEATURES; then
 else
   warn "no well-formed FEATURES markers in index.html — feature grid not updated"
 fi
+REL_STATE=skip
+if region_ok RELEASE; then
+  release_generate "$TMPD/rel-out" && REL_STATE=ok
+else
+  warn "no well-formed RELEASE markers in index.html — release not updated"
+fi
 
 # --- splice: replace ONLY each marked region, in turn -------------------------
 awk -v blkfile="$TMP_BLOCK" '
@@ -995,12 +1147,16 @@ awk -v blkfile="$TMP_BLOCK" '
   "^[[:space:]]*<!-- FEATURES:BEGIN -->[[:space:]]*\$" \
   "^[[:space:]]*<!-- FEATURES:END -->[[:space:]]*\$" "$TMPD/ft-out" \
   || cp "$TMP_NEW2" "$TMP_NEW3"
+[ "$REL_STATE" = ok ] && splice_region "$TMP_NEW3" "$TMP_NEW4" \
+  "^[[:space:]]*<!-- RELEASE:BEGIN -->[[:space:]]*\$" \
+  "^[[:space:]]*<!-- RELEASE:END -->[[:space:]]*\$" "$TMPD/rel-out" \
+  || cp "$TMP_NEW3" "$TMP_NEW4"
 
-if cmp -s "$TMP_NEW3" "$INDEX"; then
+if cmp -s "$TMP_NEW4" "$INDEX"; then
   echo "site-sync: page unchanged — no commit"
   exit 0
 fi
-cat "$TMP_NEW3" > "$INDEX"   # in place: keeps the inode and the page's permissions
+cat "$TMP_NEW4" > "$INDEX"   # in place: keeps the inode and the page's permissions
 
 echo "site-sync: rewrote the marked regions of $INDEX (items $DONE/$TOTAL, tests $TEST_N, cycles $CYC_N, last eval $EVAL_D)"
 
@@ -1015,7 +1171,7 @@ if [ -z "$(git -C "$SITE" status --porcelain -- index.html)" ]; then
 fi
 git -C "$SITE" add index.html
 if ! git -C "$SITE" commit -q -m "site: stats sync $SYNC_DATE" \
-  -m "scripts/site-sync.sh (T98+T99), deterministic — items $DONE/$TOTAL (TODO.md), tests $TEST_N ($TEST_SRC${TEST_REF:+, $TEST_REF}), cycles $CYC_N ($CYC_SRC), last eval $EVAL_D; last-5 landed: $LANDED_REFS; timeline: $TL_STATE (cap $TL_CAP), features: $FT_STATE"; then
+  -m "scripts/site-sync.sh (T98+T99), deterministic — items $DONE/$TOTAL (TODO.md), tests $TEST_N ($TEST_SRC${TEST_REF:+, $TEST_REF}), cycles $CYC_N ($CYC_SRC), last eval $EVAL_D; last-5 landed: $LANDED_REFS; timeline: $TL_STATE (cap $TL_CAP), features: $FT_STATE; release: ${RELEASE_TAG:-none}"; then
   warn "commit failed (git identity?) — page updated but uncommitted"
   exit 0
 fi
