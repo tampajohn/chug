@@ -1,6 +1,6 @@
 # T234 — delegate status goal latch is outcome-blind: terminal wake-set stale-latches on a goal-gate REJECTION
 
-check: set -o pipefail; export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-impl-a; touch src/*.rs tests/*.rs; cargo test --bin chug; cargo test --test mcp_serve
+check: set -o pipefail; export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-validate-a; touch src/*.rs tests/*.rs; cargo test --bin chug; cargo test --test mcp_serve
 
 estimate: ~150 changed lines all-in (delegate-row kind — summarize +
 wake-set + render + schema text + ~6 test legs; the T124-era
