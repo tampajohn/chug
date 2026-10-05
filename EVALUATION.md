@@ -248,17 +248,37 @@ clauses re-files as a structural row).
   (M6 fix-probe + M8 pointer-early) evidencing findings 1+2. All 3 findings fixed on-branch:
   DOCS_CHANGED staging guard (RED-proven: restored `[ -f ]` guard flips the new stray-sweep
   assert RED), pointer close-bound pin, drift-free pointer text.
+- **T243 done 1d705d9** — the mcp_serve stub deflake (filed this cycle, fired live once): the
+  T237 validator's load race is closed BY CONSTRUCTION, not by a green run. New
+  `wait_for_stub_file` sibling (10s existence poll — existence-based because the stub
+  creates events.jsonl EMPTY via `: >`, which the content-based dump helper can never
+  satisfy; T158 req-3 outcome panic names the observed launch on a miss); the stub is
+  UNCHANGED (its write order is behavior under test); `cwd.txt` stays read-without-poll,
+  justified ordered-safe (written BEFORE the polled argv.txt, atomically published). Family
+  sweep over src/mcp_serve/tests.rs + tests/mcp_serve.rs (cycle-33 doctrine): the named test
+  was the ONLY poll-one-stub-file→point-assert-another instance; every other stub/fixture
+  file assert converted-or-justified in the commit message. Tests-only +57/−2, no production
+  code, no new deps. T189 gates-only lane (d1791242958-1: 59 lines, tests file only, no
+  surface, no check:-line change — spec already targeted target-shared, no re-key needed);
+  worktree gates 1676/1676 nextest release + clippy --all-targets -D warnings zero warnings.
+  WATCH ITEM adjudicated (child decision d1791242672-1): the FIRST post-fix full
+  `cargo test --bin chug` failed 1/1243 (63.55s vs ~37s typical; name lost through a tail
+  pipe) with no repro across 5 consecutive full runs + 7 module runs — the repo's documented
+  host-load deadline-stretch class (T151/T172), not the named race (which is closed by
+  construction: every assert on a stub-written file now has a poll on that same file or on a
+  file the stub provably wrote earlier). Ledger lesson for the next eval: unpiped test
+  output retains the failing test's name — the T237/c06a555 rule applies to ad-hoc gates too.
 - **Deferred with specs ready**: T242 (cold-scale wrap gate-leg vs 300s cap — doctrine SOLO
-  kimi REQUIRED, ~2h arc vs the remaining wall after T241; its mechanism fired LIVE at
-  T240's post-merge gates and the bg-window recovery was used twice, growing the filing's
-  evidence base) and T243 (mcp_serve stub deflake, T189 lane ~25 min; fired live once at
-  T240's post-merge gate, retried green — filing confirmed). Both rows keep full specs;
-  a cold next cycle needs zero human words.
-- Cycle-level: 2 items landed same-cycle (both operator site rows); queue carries T242+T243
-  ready. Release: 5 merges since v0.17.3 (T237+T238+T239+T240+T241 >= 3) -> v0.17.4 tagged
-  at wrap. Validators caught this cycle: T240's unguarded bootstrap page writes (class
-  swept) + T241's stray-file staging (RED-proven fix) — both non-blocking, both the same
-  "unguarded page write/stage" family; the family is now closed at both call sites.
+  kimi REQUIRED, ~2h arc; its mechanism fired LIVE at T240's post-merge gates and at THIS
+  cycle's post-merge + wrap gates — the bg-window recovery pattern was used again, growing
+  the filing's evidence base to three same-day uses). The row keeps its full spec; a cold
+  next cycle needs zero human words.
+- Cycle-level: 3 items landed (T240+T241 operator site rows + T243 the filed deflake);
+  queue carries T242 ready. Release: 6 merges since v0.17.3 (T237+T238+T239+T240+T241+T243
+  >= 3) -> v0.17.4 tagged at wrap. Validators caught this cycle: T240's unguarded bootstrap
+  page writes (class swept) + T241's stray-file staging (RED-proven fix) — both
+  non-blocking, both the same "unguarded page write/stage" family; the family is now closed
+  at both call sites.
   LIVE_CTX compacted once (414KB->82KB). 16+ decision records; t241 outcome backfills folded
   into the row-flip commit under wrap-budget pressure (verdict + routing ids named there).
 
