@@ -218,6 +218,23 @@ clauses re-files as a structural row).
 
 ## Outcomes (filled at cycle wrap — LOOP-SPEC Phase 3)
 
+### Cycle 115 (2026-10-05, ~18:27 UTC–) — fresh-eval cycle (kimi; queue DRAINED at launch → loopd routed kimi per T81, 13-for-13)
+
+- **T240 done bb67a6f** — RELEASE region on chug.sh (operator's row): scripts/site-sync.sh
+  regenerates a `<!-- RELEASE:BEGIN/END -->` band between the hero and STATS from the LOCAL
+  checkout's newest stable v* tag (creatordate; rc channels filtered) — tag, date, GitHub
+  release link, top 3-5 note bullets under the T99 text rules; fail-closed zero-tag; markers +
+  section + nav anchor bootstrapped. glm impl died 80/80 UNCOMMITTED in doc-polish thrash →
+  ONE T63 resume → goal accepted in 9 iters (d1791227661-11). Kimi validator died 60/60 with
+  the verdict WRITTEN — verdict-file doctrine absorbed it (T209; no resume burned): PASS,
+  5 reqs verified, 9/9 mutants KILLED, 0 survivors (d1791231983-13). One non-blocking finding
+  (unguarded `cat > $INDEX` bootstrap page write) fixed on-branch + the family swept (both
+  bootstrap instances). Post-merge gates hit the T242 mechanism LIVE: the alarm-280 SIGKILL
+  landed mid-strip → mode-0644 corrupt test binaries → nextest EACCES; surgical delete +
+  relink recovered (1673/1673, 41.6s). The mcp_serve stub flake (T243, filed this cycle)
+  fired once mid-gate and passed on retry — the filing's indictment confirmed in production.
+- (cycle-level notes, deferred rows, and the wrap record land at wrap time)
+
 ### Cycle 114 (2026-10-05, ~15:40 UTC–) — routine freshness-skip cycle (kimi; loopd routed kimi pre-fetch on the drained LOCAL queue — the operator's T238 filing sat unfetched at origin; duties identical either way)
 
 - **T238 — site-sync stats gate-count scraper reads only FULL-suite counts** (pri 3, bug; spec `specs/t238-site-stats-gate-count-guard.md`) — LANDED same cycle, merge `f4f3293` (impl `90900bc` + re-keys `c802fbd`/`2b88558`). The operator's "the site seems out of date" (d8b7547, filed mid-cycle-113): the scraper took ab93f94's mid-run census "nextest 113/1402" as the newest full-suite gate count — chug.sh showed "113 tests green" against a ~1500-test suite. Remedy as filed: `test_count` accepts only provably-full-suite counts — (a) N/N EQUAL operands ≥ GATE_FLOOR=500 (one runner word allowed: "nextest release 1664/1664"), or (b) an ADJACENT full-suite label ("full suite 40 unit" — adjacency load-bearing: ab93f94's own subject says "full-suite load" around the subset census, so a whole-message label check re-publishes the bug) — else walks older commits within AND across messages; fail-all prints the honest n/a, never a subset. The shared fixture's t4 moved 55/55 → 555/555 (below-floor equal-operand counts can no longer win). Cycle shape: reconcile-first per the cycle-113 hard-rule handoff (rebase 03d2ccd onto d8b7547, zero conflict surface, push) → freshness predicate re-checked POST-reconcile (T238 todo + eval same-day ⇒ skip Phase 1, eval-routing d1791215067-1) → glm impl pid 98194 goal-accepted 38/80 first try, zero budget deaths, ~40 min wall → orchestrator gates green (nextest release 1667/1667 worktree target-shared + clippy --all-targets -D warnings zero warnings). T189 lane call (d1791217716-2): (b) flips at 208 changed lines > ~150 (T232's exact-208 and T229's 182 precedents bind), (d) conservative-flipped on the doctrine re-key payload per T234 → FULL adversarial. Kimi VERDICT PASS first round (d1791219729-3, validator pid 9929, 38/60, ~33 min): all 3 reqs verified with live-repo walks BOTH directions (pre-fix 113 @ ab93f94 reproduced; post-fix 1633 @ 5283953; req-1's "last known-good" tail adjudicated satisfied by the walk-back, n/a only when nothing qualifies — the honest reading); 6 mutants parallel T79 (own worktrees + role-keyed mut dirs, cap 3): mut-eq/mut-floor/mut-legb CAUGHT by the intended pins; 3 survivors — mut-runner (runner-word leg unpinned), mut-loop1 (in-message accept-after-reject unpinned, LOAD-BEARING at HEAD: 90900bc's own message quotes the fixture censuses), mut-floor100 (floor exact value unpinned) — all adjudicated weak-test with honest degradation (older full count, never a subset), filed forward as T239 with per-mutant killing fixtures. Post-merge gates main under target-shared-main: 1667/1667 nextest release + clippy zero warnings. Suite: 1664 → 1667 (+3 T238 pins). Calibration: ~100 est → 208 all-in ≈ 2.1x, inside the band.
