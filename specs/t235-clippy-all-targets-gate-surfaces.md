@@ -1,6 +1,6 @@
 # T235 — pin `cargo clippy --all-targets -- -D warnings` at the orchestrator gate surfaces (LOOP-SPEC doctrine + carrier pin)
 
-check: set -o pipefail; export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared; touch src/*.rs tests/*.rs; cargo test --test loop_spec_recovery
+check: set -o pipefail; export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-validate-a; touch src/*.rs tests/*.rs; cargo test --test loop_spec_recovery
 
 ## Repo context
 

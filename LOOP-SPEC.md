@@ -307,7 +307,11 @@ simultaneously past gates — T194 amends T161's 2-child cap):
    predicate is `command -v cargo-nextest`: when it succeeds run
    `touch src/*.rs tests/*.rs; CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared perl -e 'alarm 280; exec @ARGV' cargo nextest run --release`,
    else the same touch guard + bounded cap around the fallback
-   `touch src/*.rs tests/*.rs; CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared perl -e 'alarm 280; exec @ARGV' cargo test --release -- --test-threads=4` —
+   `touch src/*.rs tests/*.rs; CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared perl -e 'alarm 280; exec @ARGV' cargo test --release -- --test-threads=4`;
+   the clippy leg runs beside the suite, not through it —
+   `cargo clippy --all-targets -- -D warnings`, zero warnings not exit-0
+   clippy (the T176 semantics — nextest compiles cfg(test) code but never
+   LINTS it, so a narrower clippy form lets test-only warnings through) —
    the T47 env prefix keeps the gate on the shared warm cache; bash tool
    calls don't share env, so the step-1 export doesn't persist between
    calls; the T195 `touch` prefix rebinds the shared dir's artifacts to
@@ -537,7 +541,9 @@ simultaneously past gates — T194 amends T161's 2-child cap):
    `cargo nextest` is on PATH, else
    `cargo test --release -- --test-threads=4` under the bounded cap (step
    3's templates: `alarm 280` below the `CHUG_BASH_TIMEOUT=300` bash cap) —
-   same tradeoff as step 3, and the dir is warm after its first release build.
+   same tradeoff as step 3, the clippy leg runs the exact form step 3 runs
+   (`cargo clippy --all-targets -- -D warnings`, zero warnings not exit-0
+   clippy — the T176 semantics), and the dir is warm after its first release build.
    Docs-only rounds (step 3's classification — every changed file ends
    `.md`) shrink the post-merge gate the same way: the guard floor
    replaces the full suite here too, and the main-dedicated-dir rule
@@ -769,7 +775,10 @@ alike) has been harvested.
   remaining (eval commits, Outcomes) → `goal_complete` with the cycle
   summary. Final gates run in main under the T57 main-dedicated cache:
   `CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-main`, the
-  same ALWAYS rule as step 5's post-merge re-run. Never force-push; a
+  same ALWAYS rule as step 5's post-merge re-run. The clippy leg is the
+  exact form — `cargo clippy --all-targets -- -D warnings`, zero warnings
+  not exit-0 clippy (the T176 semantics — nextest compiles cfg(test) code
+  but never lints it). Never force-push; a
   rejected push means the remote moved — stop
   and note it, don't reconcile mid-cycle.
 - **Tag at wrap (T100 — operator override 2026-09-28, reversing the earlier

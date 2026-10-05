@@ -2284,6 +2284,137 @@ fn goal_template_clippy_bar_denies_warnings() {
     }
 }
 
+// ---- T235 — the orchestrator gate surfaces pin the exact clippy form ----
+//
+// The cycle-107 wrap's final gates ran `cargo clippy --all-targets -- -D
+// warnings` in main and went RED on an unused-`mut` in T233's NEW cfg(test)
+// code (src/daemon.rs's test module; the 1-keyword fix landed at 61b0f5e) —
+// and BOTH the t233 impl child AND its kimi validator had passed the same
+// code. The escape path, verified at cycle-108 eval time (I1): spec check
+// lines carry no clippy leg at all (the goal gate never lints), nextest
+// compiles cfg(test) code but never LINTS it, the impl goal's short-form
+// sentence is "clippy `-D warnings`" (a child can — and the t233 child did
+// — run a narrower form that never compiles cfg(test) code), and the
+// orchestrator's OWN gate surfaces named clippy with NO pinned form —
+// whether cfg(test) got linted pre-merge was orchestrator discretion, not
+// doctrine. T235 pins the exact form at all three gate surfaces: step 3's
+// review gates (the systematic PRE-merge catch, the row's point), step 5's
+// post-merge re-run (backstop), and Phase 3's final gates (the catch that
+// fired in cycle 107, now guaranteed rather than chosen). The check-line
+// surface is deliberately UNCHANGED — spec check lines stay test-only (the
+// goal gate's job is test-green; lint is these gates' job) — and the impl
+// goal template is untouched (T176's prose already demands the form).
+
+/// The exact clippy form every orchestrator gate surface must name. Must
+/// occur EXACTLY once inside EACH of the three gate windows and exactly
+/// FOUR times in LOOP-SPEC.md overall — the three gate surfaces plus the
+/// T176 prose paragraph's pre-existing mention in step 2's window.
+const CLIPPY_ALL_TARGETS_FORM: &str = "cargo clippy --all-targets -- -D warnings";
+
+/// Phase 3's final-gates bullet anchor — the form must sit after it inside
+/// the Phase-3 window (the bullet is where the cycle-107 catch fired).
+const FINAL_GATES_BULLET: &str = "Final gates green in main";
+
+/// (aa) T235 — the three orchestrator gate surfaces each name the exact
+/// clippy form, and the file-wide count matches so a fourth-surface
+/// mention OR a silent removal both go red. Each surface is located by its
+/// existing stable anchors (the pin style this file already uses): step
+/// 3's review paragraph (window `3. **Review.**` .. `4. **`), step 5's
+/// post-merge gate text (window `5. **` .. `6. **`), and Phase 3's
+/// final-gates bullet (window `## Phase 3 — Wrap` .. `## Hard rules`, the
+/// form AFTER the bullet anchor). Revert any surface's amendment and its
+/// window find (or the count) goes red; add an unpinned fourth mention and
+/// the count-4 leg fires; remove the T176 prose mention and the count
+/// drops to 3.
+#[test]
+fn orchestrator_gate_surfaces_pin_the_exact_clippy_form() {
+    // Needle self-check (T48 idiom): a mangled needle must not let this
+    // pin pass silently.
+    assert_eq!(
+        CLIPPY_ALL_TARGETS_FORM, "cargo clippy --all-targets -- -D warnings",
+        "the needle must be the exact --all-targets form verbatim"
+    );
+
+    let spec = loop_spec();
+
+    // The file-wide count: three gate surfaces + the pre-existing T176
+    // prose mention = 4. A fourth unpinned surface (count 5) and a silent
+    // removal from any surface (count 3, or a window find below dying)
+    // both go red.
+    assert_eq!(
+        spec.matches(CLIPPY_ALL_TARGETS_FORM).count(),
+        4,
+        "LOOP-SPEC must carry the exact clippy form exactly four times — \
+         the three orchestrator gate surfaces (step 3 review, step 5 \
+         post-merge, Phase 3 final gates) plus the T176 prose paragraph's \
+         pre-existing mention; more means an unpinned fourth surface \
+         appeared, fewer means one was removed"
+    );
+
+    // Surface (a): step 3's review-gate paragraph — the systematic
+    // PRE-merge catch.
+    let s3 = spec
+        .find(STEP3_HEADING)
+        .expect("step-3 heading (`3. **Review.**`) present");
+    let s3_end = s3
+        + spec[s3..]
+            .find(STEP4_HEADING_LOOSE)
+            .expect("step-4 heading present after step 3's");
+    assert_eq!(
+        spec[s3..s3_end].matches(CLIPPY_ALL_TARGETS_FORM).count(),
+        1,
+        "step 3's review-gate paragraph must name the exact clippy form \
+         exactly once — zero means the pre-merge catch was reverted, more \
+         than one means the statement drifted or was duplicated"
+    );
+
+    // Surface (b): step 5's post-merge re-run — the backstop.
+    let s5 = spec
+        .find(STEP5_HEADING_LOOSE)
+        .expect("step-5 heading (`5. **`) present");
+    let s5_end = s5
+        + spec[s5..]
+            .find(STEP6_HEADING_LOOSE)
+            .expect("step-6 heading present after step 5's");
+    assert_eq!(
+        spec[s5..s5_end].matches(CLIPPY_ALL_TARGETS_FORM).count(),
+        1,
+        "step 5's post-merge gate text must name the exact clippy form \
+         exactly once — zero means the backstop was reverted, more than \
+         one means the statement drifted or was duplicated"
+    );
+
+    // Surface (c): Phase 3's final-gates bullet — the catch that fired in
+    // cycle 107, now guaranteed rather than chosen. The form must sit
+    // AFTER the bullet anchor (the final-gates sentence itself, not some
+    // other Phase-3 paragraph).
+    let p3 = spec.find(PHASE3_HEADING).expect("Phase-3 heading present");
+    let p3_end = p3
+        + spec[p3..]
+            .find(HARD_RULES_HEADING)
+            .expect("Hard-rules heading present after Phase 3's");
+    let window = &spec[p3..p3_end];
+    let bullet = window
+        .find(FINAL_GATES_BULLET)
+        .expect("Phase-3 window must carry the final-gates bullet anchor");
+    let form_in_p3 = window[bullet..]
+        .find(CLIPPY_ALL_TARGETS_FORM)
+        .unwrap_or_else(|| {
+            panic!(
+                "Phase 3's final-gates bullet must name the exact clippy \
+                 form after the bullet anchor — the cycle-107 catch is no \
+                 longer orchestrator discretion"
+            )
+        });
+    assert_eq!(
+        window.matches(CLIPPY_ALL_TARGETS_FORM).count(),
+        1,
+        "Phase 3 must carry the exact clippy form exactly once (at the \
+         final-gates bullet, {form_in_p3} bytes after its anchor) — more \
+         than one means an unpinned Phase-3 mention drifted in"
+    );
+}
+
 // ---- T186 — step 5: harvest ALL events segments + the live-child removal precondition ----
 //
 // Two cycle-84 incidents, one root (see the module docs for the full
