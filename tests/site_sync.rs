@@ -1762,3 +1762,227 @@ fn t239_mid_size_equal_operand_subset_below_the_floor_loses() {
     assert!(card.contains(&full), "the card cites the full-count commit: {card}");
     assert!(!card.contains(&mid), "the card must not cite the mid-size subset commit: {card}");
 }
+
+// --- T240 — RELEASE region: the latest release, always current ----------------
+
+/// The site half with the live page's shape: nav (with the stats link), hero,
+/// and a stats section carrying its markers — and NO releases section yet, so
+/// the T240 bootstrap leg (markers + section skeleton + nav anchor) is what
+/// runs. Returns the pre-run page.
+fn site_fixture_t240(dir: &Path) -> String {
+    let page = concat!(
+        "<html><body>\n",
+        "<nav class=\"nav\"><div class=\"wrap nav-in\">\n",
+        "  <a class=\"brand\" href=\"#hero\">chug<b>_</b></a>\n",
+        "  <div class=\"nav-links\">\n",
+        "    <a href=\"#how-it-works\">how it works</a>\n",
+        "    <a href=\"#stats\">stats</a>\n",
+        "    <a href=\"#features\">features</a>\n",
+        "  </div>\n",
+        "</div></nav>\n",
+        "<header class=\"hero\" id=\"hero\"><div class=\"wrap\"><h1>chug</h1></div></header>\n",
+        "<section id=\"how-it-works\"><div class=\"wrap\"><p>the loop is code, not conversation</p></div></section>\n",
+        "<section id=\"stats\" class=\"live-stats\"><div class=\"wrap\">\n",
+        "  <p class=\"kicker\">live stats</p>\n",
+        "<!-- STATS:BEGIN -->\n<div class=\"stats\"><b>stale</b></div>\n<!-- STATS:END -->\n",
+        "</div></section>\n",
+        "<p>sentinel-after</p>\n",
+        "</body></html>\n"
+    );
+    std::fs::write(dir.join("index.html"), page).unwrap();
+    commit(dir, "initial page", None, "2026-09-18", false);
+    page.to_string()
+}
+
+/// An annotated tag at a pinned date — the tag object's creatordate (the
+/// release date the region renders) is the tagger date, i.e. GIT_COMMITTER_DATE.
+fn git_tag(dir: &Path, name: &str, msg: &str, date: &str) {
+    git(dir, &["tag", "-a", name, "-m", msg], Some(date));
+}
+
+/// The chug fixture half with tags: the base fixture (T217-readable inputs, no
+/// tags) plus an older release, the newer release carrying six bullets (one
+/// past the cap, one over the 160-byte limit, one with emphasis + backticked
+/// refs + an HTML-special char), and a NEWER pre-release that must be skipped
+/// (pre-release channels are out of scope, T240).
+fn chug_fixture_t240(dir: &Path) {
+    chug_fixture(dir);
+    git_tag(dir, "v0.1.0", "- older release one\n- older release two", "2026-09-20");
+    git_tag(
+        dir,
+        "v0.2.0",
+        concat!(
+            "- **delegate collect** — structured child result with `goal_complete` summary & refs (`a1b2c3d`)\n",
+            "- this bullet is deliberately long so that the one hundred and sixty byte cap forces the ",
+            "word-boundary ellipsis of the T99 text rules and its tail beyond the cap must never render anywhere\n",
+            "- plain bullet three\n",
+            "- bullet four\n",
+            "- bullet five\n",
+            "- bullet six must not render past the cap"
+        ),
+        "2026-09-25",
+    );
+    git_tag(dir, "v0.3.0-rc1", "- pre-release must not render", "2026-09-26");
+}
+
+fn fixture_t240(tagged: bool) -> Fixture {
+    let keep = tempfile::tempdir().unwrap();
+    let chug = keep.path().join("chug");
+    let site = keep.path().join("site");
+    std::fs::create_dir_all(&chug).unwrap();
+    std::fs::create_dir_all(&site).unwrap();
+    git(&chug, &["-c", "init.defaultBranch=main", "init", "-q"], None);
+    git(&site, &["-c", "init.defaultBranch=main", "init", "-q"], None);
+    if tagged {
+        chug_fixture_t240(&chug);
+    } else {
+        chug_fixture(&chug);
+    }
+    site_fixture_t240(&site);
+    Fixture { _keep: keep, chug, site }
+}
+
+/// Req 1+2+4: a fixture with two stable tags (and a newer pre-release) renders
+/// the NEWEST STABLE tag of the LOCAL checkout — version, tag date, GitHub
+/// link, and the top 3-5 release-note bullets under the T99 text rules (top
+/// bullet emphasis-stripped, backticked refs -> <code>, & escaped; the
+/// over-160-byte bullet word-truncated with its tail gone; the 6th bullet past the
+/// cap never rendered). The section is bootstrapped between the hero and the
+/// stats section, and the nav gains the releases anchor directly before the
+/// stats link — all in one bootstrap commit, byte-identical and commit-free on
+/// the second run.
+#[test]
+fn t240_two_tags_render_the_newest_stable_tag_with_date_and_capped_bullets() {
+    let f = fixture_t240(true);
+    let out = run_sync(&f, true);
+    assert!(out.status.success(), "run 1: {:?}", String::from_utf8_lossy(&out.stderr));
+    let html = page(&f);
+    // bootstrap: exactly one marker pair; the section sits between the hero
+    // and the stats section (req 1); the nav anchor rides directly before the
+    // stats link (req 4 — the nav mirrors the section order)
+    assert_eq!(count(&html, "<!-- RELEASE:BEGIN -->"), 1);
+    assert_eq!(count(&html, "<!-- RELEASE:END -->"), 1);
+    let hero = html.find("id=\"hero\"").expect("hero present");
+    let rel_sec = html.find("<section id=\"releases\"").expect("releases section bootstrapped");
+    let stats_sec = html.find("<section id=\"stats\"").expect("stats section present");
+    assert!(hero < rel_sec && rel_sec < stats_sec, "the release section sits between the hero and STATS:\n{html}");
+    let nav = html.find("href=\"#releases\">releases</a>").expect("nav anchor present");
+    let nav_stats = html.find("href=\"#stats\">stats</a>").expect("stats nav link present");
+    assert!(nav < nav_stats, "the releases anchor must precede the stats link:\n{html}");
+    // req 2: the newest STABLE v* tag of the local checkout — never the older
+    // tag, never the newer pre-release channel (out of scope)
+    let rel = region(&html, "RELEASE");
+    assert!(rel.contains("<b>v0.2.0</b>"), "the newest stable tag renders:\n{rel}");
+    assert!(!html.contains("v0.1.0"), "the older tag must not render:\n{html}");
+    assert!(!html.contains("v0.3.0-rc1"), "pre-release channels are out of scope:\n{html}");
+    assert!(rel.contains("tagged 2026-09-25"), "the tag's own date renders:\n{rel}");
+    assert!(!rel.contains("2026-09-20"), "the OLDER tag's date must not render:\n{rel}");
+    assert!(
+        rel.contains("releases/tag/v0.2.0"),
+        "the release link targets the GitHub release page:\n{rel}"
+    );
+    // the top 3-5 bullets: capped at five, order preserved, T99 text rules
+    assert_eq!(count(&rel, "<li>"), 5, "top 3-5: the 6th bullet must not render:\n{rel}");
+    assert!(!rel.contains("bullet six"), "the past-cap bullet is gone:\n{rel}");
+    assert!(
+        rel.contains("<li>delegate collect — structured child result with <code>goal_complete</code> summary &amp; refs (<code>a1b2c3d</code>)</li>"),
+        "top bullet: emphasis stripped, backticks -> <code>, & HTML-escaped:\n{rel}"
+    );
+    assert!(!rel.contains("**"), "markdown emphasis must never render:\n{rel}");
+    assert!(rel.contains("…"), "the >160-byte bullet truncates at the cap:\n{rel}");
+    assert!(!rel.contains("must never render anywhere"), "the truncated tail is gone:\n{rel}");
+    let i1 = rel.find("delegate collect").unwrap();
+    let i2 = rel.find("deliberately long").unwrap();
+    let i3 = rel.find("plain bullet three").unwrap();
+    let i4 = rel.find("bullet four").unwrap();
+    let i5 = rel.find("bullet five").unwrap();
+    assert!(i1 < i2 && i2 < i3 && i3 < i4 && i4 < i5, "bullet order is the tag message's:\n{rel}");
+    // the bootstrap is its own commit; the sync commit records the release
+    let subjects = all_commit_subjects(&f);
+    assert!(
+        subjects.iter().any(|s| s.contains("site: RELEASE region markers bootstrap (T240)")),
+        "bootstrap commit missing: {subjects:?}"
+    );
+    assert_eq!(sync_commits(&f), 1, "one sync commit for the filled region");
+    let log = git(&f.site, &["log", "-1", "--format=%B"], None);
+    assert!(
+        String::from_utf8_lossy(&log.stdout).contains("release: v0.2.0"),
+        "the sync commit records the rendered release:\n{}",
+        String::from_utf8_lossy(&log.stdout)
+    );
+    // idempotence: unchanged inputs stay byte-identical, no further commits
+    let before = page(&f);
+    let n = all_commit_subjects(&f).len();
+    let out2 = run_sync(&f, true);
+    assert!(out2.status.success());
+    assert_eq!(page(&f), before, "second run must be byte-identical (req 3 idempotence)");
+    assert_eq!(all_commit_subjects(&f).len(), n, "no commit when unchanged");
+}
+
+/// Req 3+5: a repo with NO v* tags (pre-v0.1 repos are legal) writes an EMPTY
+/// region and does not error — no fallback version is ever rendered with real
+/// data's authority (the T217 doctrine applied to the release facts) — and the
+/// sync CONTINUES: the stats region still syncs and the commit records the
+/// empty release.
+#[test]
+fn t240_zero_tags_writes_an_empty_region_and_does_not_error() {
+    let f = fixture_t240(false);
+    let out = run_sync(&f, true);
+    assert!(
+        out.status.success(),
+        "no tags must not error: {:?}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let html = page(&f);
+    assert_eq!(count(&html, "<!-- RELEASE:BEGIN -->"), 1);
+    assert_eq!(count(&html, "<!-- RELEASE:END -->"), 1);
+    assert!(
+        region(&html, "RELEASE").trim().is_empty(),
+        "no tags -> the region writes nothing:\n{:?}",
+        region(&html, "RELEASE")
+    );
+    // the bootstrap still landed (section + markers + nav anchor) ...
+    assert!(html.contains("<section id=\"releases\""), "section bootstrapped:\n{html}");
+    assert!(html.contains("href=\"#releases\">releases</a>"), "nav anchor bootstrapped:\n{html}");
+    let subjects = all_commit_subjects(&f);
+    assert!(
+        subjects.iter().any(|s| s.contains("site: RELEASE region markers bootstrap (T240)")),
+        "bootstrap commit missing: {subjects:?}"
+    );
+    // ... and the sync CONTINUES: the stats region synced, the release recorded empty
+    assert!(html.contains("<b>2/3</b>"), "stats still synced (the sync continues, req 3):\n{html}");
+    assert_eq!(sync_commits(&f), 1);
+    let log = git(&f.site, &["log", "-1", "--format=%B"], None);
+    assert!(
+        String::from_utf8_lossy(&log.stdout).contains("release: none"),
+        "the sync commit records the empty release:\n{}",
+        String::from_utf8_lossy(&log.stdout)
+    );
+}
+
+/// The marker-pair contract (T99) holds for RELEASE too: malformed markers are
+/// warn + skip, best-effort, never a cycle failure — the page is left
+/// untouched around them and the stats sync still lands.
+#[test]
+fn t240_malformed_release_markers_are_best_effort_skip() {
+    let f = fixture_t240(true);
+    let html = page(&f);
+    // a stray BEGIN with no END: malformed (1/0)
+    std::fs::write(
+        f.site.join("index.html"),
+        html.replace("<section id=\"stats\"", "<!-- RELEASE:BEGIN -->\n<section id=\"stats\""),
+    )
+    .unwrap();
+    commit(&f.site, "operator: stray marker", None, "2026-09-26", false);
+    let out = run_sync(&f, true);
+    assert!(out.status.success(), "malformed RELEASE markers must not fail: {:?}", out.status.code());
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("malformed RELEASE markers"), "warn names the fault: {err}");
+    assert!(err.contains("skipping"), "best-effort skip: {err}");
+    let html2 = page(&f);
+    assert_eq!(count(&html2, "<!-- RELEASE:BEGIN -->"), 1, "the stray marker stays (untouched)");
+    assert_eq!(count(&html2, "<!-- RELEASE:END -->"), 0);
+    assert_eq!(count(&html2, "<section id=\"releases\""), 0, "no section bootstrapped");
+    assert!(html2.contains("<b>2/3</b>"), "stats still synced");
+    assert_eq!(sync_commits(&f), 1, "the sync still lands once");
+}
