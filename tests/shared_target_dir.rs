@@ -613,17 +613,23 @@ fn gitignore_ignores_the_t57_main_dedicated_dir() {
 fn loop_spec_post_merge_gates_name_the_main_dedicated_dir() {
     let spec = read("LOOP-SPEC.md");
     // (4b) Strictly stronger than "named at least once": the full env
-    // prefix occurs EXACTLY three times — step 5's post-merge re-run,
-    // Phase 3's final gates, and the spec's own `check:` line (the goal
+    // prefix occurs EXACTLY four times — step 5's post-merge re-run,
+    // Phase 3's final gates, the spec's own `check:` line (the goal
     // gate; added 67e11fc — the gate env scrubs CARGO_TARGET_DIR by
     // design, so the shared cache must ride inside the check line
-    // itself). Dropping any carrier (or duplicating one) fails.
+    // itself), and T231's step-5 TODO-edit guard-floor invocation
+    // (cycle 105 — the deliberate fourth carrier: the guard run names
+    // the main-dedicated dir IN its invocation, the cycle-104 4x300s
+    // cold-default-target evidence; the T187 pattern — the pin follows
+    // the deliberately re-keyed carrier with the justification named).
+    // Dropping any carrier (or duplicating one) fails.
     count_eq(
         &spec,
         MAIN,
-        3,
+        4,
         "LOOP-SPEC target-shared-main env-prefix carriers: step-5 post-merge \
-         re-run + Phase-3 final gates + the goal-gate check: line (T57)",
+         re-run + Phase-3 final gates + the goal-gate check: line + T231's \
+         step-5 guard-floor invocation (T57)",
     );
     // The post-merge gate instruction itself names the dir: everything
     // between `re-run gates in main` and the row-flip clause carries the
@@ -718,14 +724,23 @@ fn loop_spec_step5_window_carries_the_always_form_exactly_once() {
             .find("6. **Budget check")
             .expect("LOOP-SPEC step-6 heading (`6. **Budget check`) (T64)");
     let window = &spec[start..end];
-    // (1) The main-gates dir occurs EXACTLY once in step 5 — its other
-    //     spec-wide carrier (Phase 3's final gates) sits outside the window
-    //     and is counted by the T57 spec-wide pin above.
+    // (1) The main-gates dir occurs EXACTLY twice in step 5 — the
+    //     ALWAYS-form rule sentence AND T231's TODO-edit guard-floor
+    //     invocation (cycle 105, the deliberate second in-window carrier;
+    //     the T187 pattern — the pin follows the deliberately re-keyed
+    //     carrier with the justification named). Its other spec-wide
+    //     carriers (Phase 3's final gates, the goal-gate check: line) sit
+    //     outside the window and are counted by the T57 spec-wide pin
+    //     above. The T231 carrier does NOT carry the ALWAYS-form phrase,
+    //     so assertion (2) below is unaffected, and its prefix is
+    //     followed by `cargo test`, not the ALWAYS adjacency, so (3) is
+    //     unaffected too.
     count_eq(
         window,
         MAIN,
-        1,
-        "LOOP-SPEC step-5 window target-shared-main carrier (T64)",
+        2,
+        "LOOP-SPEC step-5 window target-shared-main carriers (T64; second \
+         is T231's guard-floor invocation)",
     );
     // (2) The ALWAYS-form rule language occurs EXACTLY once in the window,
     //     in its exact wording — the mechanism sentence's `ALWAYS main

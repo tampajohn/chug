@@ -64,6 +64,17 @@ const FULL_GATES_ARROW: &str = "\u{2192} full gates";
 /// every TODO.md edit), so the whole-file count is 2 — one per window.
 const FLOOR: &str = "gates shrink to the guard floor";
 const FLOOR_CMD: &str = "cargo test --test todo_consistency";
+/// The step-5 T8 guard run's own sentence form, backticked with its
+/// "(seconds)" tail — T231 (cycle 105) deliberately added a SECOND
+/// occurrence of the bare FLOOR_CMD substring to step 5 (the
+/// env-prefixed full invocation naming the T57 main-dedicated dir), so
+/// the step-5 assertion below tightens to the pre-existing sentence's
+/// exact form: the T231 sentence's invocation is followed by "never the
+/// bare default", not "(seconds)", and the new T231 pin leg (an) in
+/// loop_spec_recovery.rs pins the env-prefixed form separately (the
+/// T187 pattern: the pin follows the deliberately re-keyed carrier with
+/// the justification named).
+const FLOOR_CMD_T8: &str = "`cargo test --test todo_consistency` (seconds)";
 const SKIP: &str = "skipped at review AND post-merge";
 
 /// (f) The validator escape clause (T67 class): validators retain the right
@@ -215,7 +226,10 @@ fn predicate_is_mechanical_and_file_extension_exact() {
 /// floor) and the pre-existing T8 occurrence stays exactly once inside
 /// step 5's window (the guard run after every TODO.md edit) — window-scoped
 /// so neither leg's deletion goes unnoticed while a third occurrence
-/// elsewhere cannot break the pin.
+/// elsewhere cannot break the pin. T231 (cycle 105) amended the step-5
+/// needle to the T8 sentence's own backticked "(seconds)" form: T231's
+/// sentence deliberately adds a second bare-FLOOR_CMD occurrence to step
+/// 5 (the env-prefixed T57 invocation), pinned by its own leg (an).
 #[test]
 fn reduced_gate_set_names_the_guard_floor_and_skip_scope() {
     assert!(
@@ -245,10 +259,12 @@ fn reduced_gate_set_names_the_guard_floor_and_skip_scope() {
          `cargo test --test todo_consistency` exactly once"
     );
     assert_eq!(
-        step5.matches(FLOOR_CMD).count(),
+        step5.matches(FLOOR_CMD_T8).count(),
         1,
         "step 5's pre-existing T8 guard run (`cargo test --test \
-         todo_consistency` after every TODO.md edit) must stay intact"
+         todo_consistency` (seconds) after every TODO.md edit) must stay \
+         intact — T231's env-prefixed invocation is a deliberate second \
+         form, pinned separately (leg (an), loop_spec_recovery.rs)"
     );
 }
 
