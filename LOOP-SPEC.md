@@ -572,6 +572,16 @@ simultaneously past gates — T194 amends T161's 2-child cap):
    green on a red guard (the c06a555 lesson) — and the same rule binds
    ANY ad-hoc gate chain the orchestrator pipes through
    tail/head/grep.
+   The guard run names the T57 main-dedicated dir IN its invocation —
+   `CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-main cargo test --test todo_consistency` —
+   never the bare default `target/`: a version bump colds that dir by
+   construction (a manifest-only change stales every artifact in it),
+   and the cycle-104 wrap paid it four consecutive 300s guard/gate
+   timeouts (`Compiling chug v0.17.1` killed mid-compile four times,
+   ~20 wrap minutes burned) — the main-dedicated dir is warm across
+   cycles, which is what makes the (seconds) above true, and the guard
+   needs the env prefix only, NO T195 touch (the main-dedicated
+   exemption: every builder in that dir is a main checkout).
    When editing repo files with `sed` or other in-place bash edits
    (bookkeeping, harvest, gates scripting), grep-verify the intended
    needle in the same command line or the immediately following one —

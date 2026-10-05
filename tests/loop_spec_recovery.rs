@@ -3669,3 +3669,226 @@ fn todo_edit_gate_unpiped_needles_exactly_once_inside_step_5() {
          ({filter_list})"
     );
 }
+
+// ---- T231 — the TODO-edit guard floor must name the T57 main-dedicated target dir ----
+//
+// The guard sentence ran `cargo test --test todo_consistency` with NO
+// target dir, and its "(seconds)" silently assumed whichever cache the
+// invocation hit — the DEFAULT `target/` is cold for the whole crate
+// after EVERY version bump by construction (a manifest-only change
+// stales every artifact), and the cycle-104 wrap paid the measured
+// cost: four consecutive guard/gate runs died `timed out after 300s
+// (process group killed)` with `Compiling chug v0.17.1` as the last
+// line (23:08, 23:17, 23:22, 23:27 UTC) — ~20 minutes of wrap wall
+// burned on cold-compile timeouts right after the v0.17.1 bump,
+// recovered only as partial compiles warmed the cache. The T57 ALWAYS
+// rule already governs the post-merge and final gates; the TODO-edit
+// guard floor was the one main-tree cargo run the rule's text did not
+// reach (its sentence sat two paragraphs away, and the guard's own
+// "(seconds)" framing read as exempt-from-cargo-discipline). Step 5's
+// guard paragraph now names the main-dedicated dir IN the invocation;
+// this leg pins it in the T227 pattern: every needle exactly-once
+// file-wide, inside step 5's window (the T120 loose-heading anchors),
+// AFTER the T227 unpiped sentence's closing filter-list anchor and
+// BEFORE the sed bookkeeping paragraph — the amendment is ADJACENT to
+// the T227 sentence (it amends the TARGET-DIR shape of the invocation,
+// never the pipe discipline, which stays verbatim). Reverting the env
+// prefix drops the invocation needle to 0 (which also breaks any
+// line-wise grep of it); deleting the whole guard sentence drops every
+// needle to 0 / window-miss — the leg goes red either way; a duplicate
+// statement or a rewrap across a line break goes red the same way.
+
+/// The amended invocation needle — the T57 main-dedicated dir prefix +
+/// the guard's test selection, contiguous as written (single line, per
+/// the file's long-inline-command precedent at the T82 runner
+/// templates). Must occur EXACTLY once in LOOP-SPEC.md.
+const GUARD_TARGET_DIR_NEEDLE: &str =
+    "CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-main cargo test --test todo_consistency";
+
+/// The never-the-bare-default needle — the guard builds in the
+/// main-dedicated dir, not the cold-by-construction default, contiguous
+/// as written. Must occur EXACTLY once in LOOP-SPEC.md.
+const GUARD_NEVER_DEFAULT_NEEDLE: &str = "never the bare default `target/`";
+
+/// The why needle — the mechanism that colds the default dir on every
+/// version bump, contiguous as written. Must occur EXACTLY once in
+/// LOOP-SPEC.md.
+const GUARD_COLD_BY_CONSTRUCTION_NEEDLE: &str = "a version bump colds that dir by";
+
+/// The evidence needle — the cycle-104 wrap's four 300s guard/gate
+/// timeouts, contiguous as written. Must occur EXACTLY once in
+/// LOOP-SPEC.md.
+const GUARD_CYCLE104_EVIDENCE_NEEDLE: &str = "four consecutive 300s guard/gate";
+
+/// The (seconds) tie-back needle — the shared dir's warmth is what
+/// makes the gate sentence's "(seconds)" claim true, contiguous as
+/// written. Must occur EXACTLY once in LOOP-SPEC.md.
+const GUARD_SECONDS_TIEBACK_NEEDLE: &str = "makes the (seconds) above true";
+
+/// The exemption needle — the guard needs the env prefix only, NO
+/// T195 touch (the main-dedicated exemption), contiguous as written.
+/// Must occur EXACTLY once in LOOP-SPEC.md.
+const GUARD_NO_TOUCH_NEEDLE: &str = "needs the env prefix only, NO T195 touch";
+
+/// (an) T231 — the guard floor's main-dedicated-dir sentence occurs
+/// EXACTLY once (each needle), inside step 5's window (the T64/T120
+/// loose-heading scope), AFTER the T227 unpiped sentence it extends
+/// (its closing filter-list anchor) and BEFORE the sed bookkeeping
+/// paragraph — the same TODO.md-edit guard paragraph, not a disjoint
+/// section. Revert the env prefix from the sentence and the invocation
+/// needle goes red at count 0; delete the whole guard sentence and
+/// every needle goes red / window-misses (the RED-proof is not vacuous:
+/// six needles, an exactly-once sweep, and a window+ordering chain all
+/// load-bearing); a duplicate statement of any needle goes red at count
+/// 2; a rewrap across a line break goes red the same way; moving the
+/// sentence out of step 5, before the T227 sentence it extends, or into
+/// the sed paragraph dies on the window/ordering asserts.
+#[test]
+fn todo_edit_guard_floor_targets_main_dedicated_dir_inside_step_5() {
+    // Needle self-checks (T48 idiom): a mangled needle must not let this
+    // pin pass silently.
+    assert!(
+        GUARD_TARGET_DIR_NEEDLE
+            .starts_with("CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-main")
+            && GUARD_TARGET_DIR_NEEDLE.ends_with("cargo test --test todo_consistency"),
+        "the invocation needle must carry the T57 env prefix + the guard's \
+         test selection verbatim (contiguous as written)"
+    );
+    assert!(
+        GUARD_NEVER_DEFAULT_NEEDLE.starts_with("never the bare default")
+            && GUARD_NEVER_DEFAULT_NEEDLE.ends_with("`target/`"),
+        "the never-default needle must carry the not-the-default-dir \
+         commitment verbatim"
+    );
+    assert!(
+        GUARD_COLD_BY_CONSTRUCTION_NEEDLE.starts_with("a version bump")
+            && GUARD_COLD_BY_CONSTRUCTION_NEEDLE.ends_with("colds that dir by"),
+        "the why needle must carry the cold-by-construction mechanism \
+         verbatim"
+    );
+    assert!(
+        GUARD_CYCLE104_EVIDENCE_NEEDLE.starts_with("four consecutive")
+            && GUARD_CYCLE104_EVIDENCE_NEEDLE.ends_with("300s guard/gate"),
+        "the evidence needle must carry the cycle-104 4x300s timeouts \
+         verbatim"
+    );
+    assert!(
+        GUARD_SECONDS_TIEBACK_NEEDLE.starts_with("makes the (seconds)")
+            && GUARD_SECONDS_TIEBACK_NEEDLE.ends_with("above true"),
+        "the tie-back needle must carry the (seconds)-warmth claim verbatim"
+    );
+    assert!(
+        GUARD_NO_TOUCH_NEEDLE.starts_with("needs the env prefix")
+            && GUARD_NO_TOUCH_NEEDLE.ends_with("NO T195 touch"),
+        "the exemption needle must carry the env-prefix-only-no-touch \
+         language verbatim (capital NO, per the clause's wrapping)"
+    );
+    let spec = loop_spec();
+    for (needle, what) in [
+        (
+            GUARD_TARGET_DIR_NEEDLE,
+            "the env-prefixed todo_consistency guard invocation",
+        ),
+        (
+            GUARD_NEVER_DEFAULT_NEEDLE,
+            "the never-the-bare-default commitment",
+        ),
+        (
+            GUARD_COLD_BY_CONSTRUCTION_NEEDLE,
+            "the version-bump-colds-the-default mechanism",
+        ),
+        (
+            GUARD_CYCLE104_EVIDENCE_NEEDLE,
+            "the cycle-104 4x300s timeout evidence",
+        ),
+        (
+            GUARD_SECONDS_TIEBACK_NEEDLE,
+            "the (seconds)-warmth tie-back",
+        ),
+        (
+            GUARD_NO_TOUCH_NEEDLE,
+            "the env-prefix-only-no-touch exemption",
+        ),
+    ] {
+        assert_eq!(
+            spec.matches(needle).count(),
+            1,
+            "LOOP-SPEC must state {what} exactly once — zero means the \
+             guard-floor target-dir sentence was deleted (or a needle \
+             was rewrapped across a line break), more than one means it \
+             is stated twice"
+        );
+    }
+    let start = spec
+        .find(STEP5_HEADING_LOOSE)
+        .expect("step-5 heading (`5. **`) present");
+    let end = start
+        + spec[start..]
+            .find(STEP6_HEADING_LOOSE)
+            .expect("step-6 heading present after step 5's");
+    let window = &spec[start..end];
+    let gate = window.find(GATE_SENTENCE_NEEDLE).expect(
+        "step-5's window must carry the gate sentence \
+         (`cargo test --test todo_consistency` (seconds)) the target-dir \
+         rule qualifies",
+    );
+    let unpiped = window.find(GATE_UNPIPED_NEEDLE).expect(
+        "step-5's window must carry the T227 unpiped-gate sentence \
+         (the adjacent doctrine this row amends beside, never instead)",
+    );
+    let filter_list = window.find(FILTER_LIST_NEEDLE).expect(
+        "step-5's window must carry the T227 sentence's closing \
+         tail/head/grep filter list (the anchor region the new sentence \
+         sits after)",
+    );
+    let invocation = window.find(GUARD_TARGET_DIR_NEEDLE).unwrap_or_else(|| {
+        panic!(
+            "step-5's window must carry {GUARD_TARGET_DIR_NEEDLE:?} — the \
+             guard-floor target-dir sentence was deleted, its env prefix \
+             reverted, or it moved out of step 5's TODO.md-edit paragraph"
+        )
+    });
+    let never_default = window.find(GUARD_NEVER_DEFAULT_NEEDLE).expect(
+        "step-5's window must carry the never-the-bare-default commitment \
+         (rewrapped across a line break?)",
+    );
+    let cold = window.find(GUARD_COLD_BY_CONSTRUCTION_NEEDLE).expect(
+        "step-5's window must carry the cold-by-construction mechanism \
+         (rewrapped across a line break?)",
+    );
+    let evidence = window.find(GUARD_CYCLE104_EVIDENCE_NEEDLE).expect(
+        "step-5's window must carry the cycle-104 timeout evidence \
+         (rewrapped across a line break?)",
+    );
+    let seconds = window.find(GUARD_SECONDS_TIEBACK_NEEDLE).expect(
+        "step-5's window must carry the (seconds)-warmth tie-back \
+         (rewrapped across a line break?)",
+    );
+    let no_touch = window.find(GUARD_NO_TOUCH_NEEDLE).expect(
+        "step-5's window must carry the env-prefix-only-no-touch \
+         exemption (rewrapped across a line break?)",
+    );
+    let sed = window.find(SED_PARAGRAPH_NEEDLE).expect(
+        "step-5's window must carry the sed bookkeeping paragraph \
+         (the region's closer)",
+    );
+    assert!(
+        gate < unpiped
+            && unpiped < filter_list
+            && filter_list < invocation
+            && invocation < never_default
+            && never_default < cold
+            && cold < evidence
+            && evidence < seconds
+            && seconds < no_touch
+            && no_touch < sed,
+        "the target-dir sentence must sit INSIDE step 5's TODO.md-edit \
+         guard paragraph — AFTER the T227 unpiped sentence it extends \
+         (gate {gate}, commitment {unpiped}, filter list {filter_list}) \
+         and BEFORE the sed bookkeeping paragraph ({sed}), in the \
+         sentence's own order: invocation ({invocation}), never-default \
+         ({never_default}), cold mechanism ({cold}), cycle-104 evidence \
+         ({evidence}), (seconds) tie-back ({seconds}), no-touch \
+         exemption ({no_touch})"
+    );
+}
