@@ -1645,3 +1645,120 @@ fn t238_no_full_suite_count_anywhere_prints_na_not_a_subset() {
         String::from_utf8_lossy(&log.stdout)
     );
 }
+
+// --- T239 — the three surviving-mutant legs, each pinned by its own fixture ---
+//
+// T238's kimi validator (cycle 114) mutation-tested the guard and found three
+// SURVIVORS — green tests that do not kill real mutants on load-bearing legs.
+// All three degrade honestly (an older full count, never a subset), so they
+// were non-blocking; these pins make each one kill its mutant.
+
+/// T239 pin 1 (mut-runner: the runner-word grammar leg removed): the wrap
+/// gate's stable shape since the T82 switch carries ONE runner word between
+/// the token and the count — "nextest release 1664/1664". Dropping the
+/// optional runner-word group from the grammar makes this newest commit
+/// unmatchable; the walk then degrades to the older t4 count and the card
+/// silently shows a stale full count. The pin holds the shape up: the
+/// release count is accepted and cited, the older count never renders.
+#[test]
+fn t239_runner_word_release_count_is_accepted_and_cited() {
+    let f = fixture();
+    let release = commit(
+        &f.chug,
+        "chore: wrap gate on the release build",
+        Some("gates green: nextest release 1664/1664 + clippy -D warnings"),
+        "2026-09-24",
+        true,
+    );
+    let out = run_sync(&f, true);
+    assert!(out.status.success(), "sync: {:?}", String::from_utf8_lossy(&out.stderr));
+    let html = page(&f);
+    assert!(
+        html.contains("<b>1664</b><span>tests green at the newest full-suite gate count in a commit message"),
+        "the one-runner-word release count must be accepted:\n{html}"
+    );
+    assert!(!html.contains("<b>555</b>"), "an older count must lose to the newest:\n{html}");
+    let at = html.find("tests green at the newest full-suite").expect("tests card");
+    let card = &html[at.saturating_sub(60)..(at + 160).min(html.len())];
+    assert!(card.contains(&release), "the card cites the release-count commit: {card}");
+}
+
+/// T239 pin 2 (mut-loop1: the within-message walk stops after the first
+/// pair): the continuation past a REJECTED pair is load-bearing — production
+/// messages quote fixture censuses alongside the real count in one message
+/// (the live 90900bc shape: "nextest 113/1402" quoted in the same commit
+/// message as the real wrap-gate count). Stopping after the first pair
+/// discards the qualifying pair later in the SAME message and walks back to
+/// an older commit's count instead. The pin holds the shape up: the walk
+/// accepts the qualifying pair from the same message, never 113, never a
+/// walk-back.
+#[test]
+fn t239_walk_continues_past_a_rejected_pair_within_one_message() {
+    let f = fixture();
+    let mixed = commit(
+        &f.chug,
+        "chore: item lands with the census in the tail",
+        Some(
+            "landed: nextest 113/1402 mid-run census; \
+             wrap gate nextest 1664/1664 + clippy -D warnings",
+        ),
+        "2026-09-24",
+        true,
+    );
+    let out = run_sync(&f, true);
+    assert!(out.status.success(), "sync: {:?}", String::from_utf8_lossy(&out.stderr));
+    let html = page(&f);
+    assert!(
+        html.contains("<b>1664</b><span>tests green at the newest full-suite gate count in a commit message"),
+        "the qualifying pair later in the SAME message must be accepted:\n{html}"
+    );
+    assert!(
+        !html.contains("<b>113</b>"),
+        "the rejected census pair in front of it must never render:\n{html}"
+    );
+    assert!(!html.contains("<b>555</b>"), "no walk-back to an older commit's count:\n{html}");
+    let at = html.find("tests green at the newest full-suite").expect("tests card");
+    let card = &html[at.saturating_sub(60)..(at + 160).min(html.len())];
+    assert!(card.contains(&mixed), "the card cites the mixed-message commit: {card}");
+}
+
+/// T239 pin 3 (mut-floor100: GATE_FLOOR lowered): the floor's exact value is
+/// load-bearing. The known package subsets are pinned far below it (22/22,
+/// 5/5 — a lowered floor of 100 would still reject them); the unpinned gap is
+/// a MID-SIZE equal-operand subset like "nextest 113/113", which any floor
+/// at or below 113 would admit. The pin holds the gap up: a below-floor
+/// equal-operand mid-size count loses to an older full count and the card
+/// never shows 113.
+#[test]
+fn t239_mid_size_equal_operand_subset_below_the_floor_loses() {
+    let f = fixture();
+    let full = commit(
+        &f.chug,
+        "merge: the pinned suite lands",
+        Some("gates green: nextest 1496/1496 + clippy -D warnings"),
+        "2026-09-22",
+        true,
+    );
+    let mid = commit(
+        &f.chug,
+        "chore: mid-size package census",
+        Some("census: nextest 113/113 so far"),
+        "2026-09-23",
+        true,
+    );
+    let out = run_sync(&f, true);
+    assert!(out.status.success(), "sync: {:?}", String::from_utf8_lossy(&out.stderr));
+    let html = page(&f);
+    assert!(
+        html.contains("<b>1496</b><span>tests green at the newest full-suite gate count in a commit message"),
+        "the mid-size subset must lose to the older full count:\n{html}"
+    );
+    assert!(
+        !html.contains("<b>113</b>"),
+        "the below-floor subset 113/113 must never render:\n{html}"
+    );
+    let at = html.find("tests green at the newest full-suite").expect("tests card");
+    let card = &html[at.saturating_sub(60)..(at + 160).min(html.len())];
+    assert!(card.contains(&full), "the card cites the full-count commit: {card}");
+    assert!(!card.contains(&mid), "the card must not cite the mid-size subset commit: {card}");
+}
