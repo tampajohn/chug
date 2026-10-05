@@ -1,177 +1,220 @@
-# EVALUATION — chug, assessed by chug-loop (2026-10-05, cycle 113)
+# EVALUATION — chug, assessed by chug-loop (2026-10-05, cycle 115)
 
-FRESH eval run AT the armed threshold trip — not at new work. The
-freshness predicate failed at launch on the todo-rows half (queue
-DRAINED since the cycle-108 wrap), loopd routed kimi per T81 — correct
-for the TWELFTH consecutive routing decision. The delta since the
-cycle-109 eval (886cb29) is the EMPTY CHAIN itself: cycles 110, 111,
-112 — three consecutive empty-delta dispositions — plus this cycle,
-which the cycle-111/112 Outcomes entries pre-armed as the trip: "ONE
-more empty disposition trips the ~4+ threshold re-filing a loopd pacing
-candidate." Rather than burn a FOURTH no-op disposition and defer the
-remedy to a real eval the self-sustaining chain would never produce,
-this cycle RUNS the eval now. Delta corpus: 3 kimi orchestrator streams
-(cycle 110: 15i / 20m41s / 144.2k in, 565.2k cache-read; cycle 111:
-22i / 16m23s / 142.7k in, 1M cache-read; cycle 112: 23i / 13m59s /
-143.1k in, 772.1k cache-read — all goal-accepted, zero trim, zero
-ctx-edit), `.chug/decisions.jsonl` 1,081 records (+3, all eval-routing
-dispositions), the git record `886cb29..6ed9d12` (4 commits,
-EVALUATION.md-only: 3 wrap-notes + 1 Outcomes compaction), and the
-digest FRESH (571 files, 35,179 iterations, generated 13:12:51Z —
-loopd regenerates pre-launch). Headline: **ONE row filed — T237, the
-loopd empty-cycle backoff. The chain's own arithmetic is the evidence:
-~143k input tokens and a cold-by-construction clippy re-pay per ~20-min
-no-op cycle, ~70 cycles/day sustained, with a self-sustaining
-pre-authorization that guarantees the cadence never self-corrects.
-Every other candidate stands on its cycle-109 rejection — the empty
-delta added zero new evidence for any of them.**
+FRESH eval on a WORKED delta — the freshness predicate failed at launch on
+the todo-rows half (queue DRAINED at the cycle-114 wrap), loopd routed kimi
+per T81 — correct for the THIRTEENTH consecutive routing decision. Delta
+since the cycle-113 eval (2209df7): TWO orchestrator streams (cycle 113:
+kimi, 90i / 2h21m / 669.8k in, 7.9M cache-read, goal-accepted; cycle 114:
+kimi, 90i / 2h40m / 615k in, 7M cache-read, goal-accepted — launched kimi
+on the pre-reconcile queue state after cycle 113's rejected push, predicate
+re-derived post-reconcile, the T81 launch-time rule working as written),
+FIVE child streams (t237-impl glm 57/80 54m; t237-validate kimi 48/60 33m;
+t238-impl glm 38/80 37m; t238-validate kimi 38/60 33m; t239-impl glm 29/80
+18m — ALL goal-accepted, ZERO budget deaths, ZERO T63 resumes),
+`.chug/decisions.jsonl` 1,081 → 1,107 (+26), the git record
+`2209df7..5fe57fe` (T237+T238+T239 landed, 3 items since v0.17.3, no tag),
+and the digest FRESH (578 files, 35,569 iterations, generated 18:25:56Z).
+RECONCILE NOTE: the eval commit's first push was REJECTED on the operator's
+b2da9a9 (14:35 local — filing TWO site rows as T240/T241: the chug.sh
+RELEASE region and the DOCS page). The rebase resolved the TODO.md collision
+with operator id precedence: THEIR rows keep T240/T241, this eval's filings
+renumber to **T242** (cold-scale gate-leg doctrine) and **T243** (mcp_serve
+deflake); all references below use the post-reconcile ids.
+Headline: **TWO rows filed by this eval — T242 (the cold-scale wrap
+gate-leg vs the
+300s bash cap: FIVE 300s kills across cycles 113–114, mechanism CONFIRMED
+in build.rs's `.git/HEAD` watch) and T243 (the mcp_serve stub events.jsonl
+deflake — the T237 validator's filed-forward observation, indictment
+verified against the code) — joining the operator's TWO pri-3 site rows
+(T240 RELEASE region, T241 DOCS page) for a 4-row queue, features
+first-class per doctrine. The delta is otherwise clean: three items
+landed with two first-round PASSes and one by-the-book T189 lane, zero
+fix-up arcs, queue drained twice.**
 
 ## 1. What chug does well
 
-- **The empty-delta disposition doctrine absorbed THREE consecutive
-  no-op cycles with full arithmetic trails — and its own watch-keeping
-  fired the remedy on schedule.** Cycle-110's Outcomes entry wrote the
-  pre-authorization ("if the delta is still empty the same disposition
-  applies"), cycle-111 armed the ~4+ pacing threshold, cycle-112
-  counted to 3, and this cycle trips it exactly as written. The
-  self-governing loop noticed its own waste class and filed the fix —
-  this eval IS that mechanism working.
-- **T81 routing correct 12-for-12.** Every empty cycle fails the
-  predicate on the todo-rows half and routes kimi; every disposition is
-  logged (eval-routing d1791202400-1, d1791203856-1, d1791205020-1).
-  The mechanical switch, not model judgment, picked the expensive model
-  only for cycles that might evaluate.
-- **Bounded-cost no-ops, each fully closed.** Each disposition cycle:
-  15–23 iterations, one full gate run (clippy + nextest 1651/1651),
-  one wrap-notes commit, goal-accepted, zero wedges, zero red pushes.
-  The per-cycle burn is measured, not guessed (see §2 I1) — which is
-  what makes the pacing row's arithmetic exact.
-- **Digest freshness is now infrastructure, not diligence:** loopd
-  regenerates the digest pre-launch (13:12:51Z, one minute before this
-  run) — the Phase-1 corpus read starts warm every cycle.
-- **T230 occupancy-nudge verdict horizon REACHED and closed (§2 I2):**
-  3 production fires, 3 effective compactions, zero trim collisions —
-  the measurement row's req-5 question answers "surface lives."
+- **Three items landed in two cycles with zero fix-up arcs and zero budget
+  deaths.** T237 (doctrine SOLO, kimi PASS round 1 — 6 mutants, 5 RED + 1
+  predicted-benign survivor), T238 (kimi PASS round 1 — 3 mutants caught,
+  3 weak-test survivors), T239 (T189 gates-only lane — all four inputs
+  computed from the diff, three orchestrator RED-proofs each flipping
+  exactly its own pin, no kimi child). The T189 lane executed exactly as
+  designed: it skipped the validator child, never the gates.
+- **The validator → file-forward → same-cycle-close pipeline ran end to
+  end.** T238's kimi round named its three survivors' killing fixtures;
+  the orchestrator filed T239 with spec at the row flip and landed it ~50
+  minutes later. Nothing survivor-shaped rotted in a notes cell.
+- **The push-rejected hard rule + reconcile-first handoff executed exactly
+  as prescribed.** Cycle 113's wrap push was rejected on the operator's
+  d8b7547; the cycle stopped without reconciling; cycle 114 rebased
+  cleanly, re-derived its routing call post-reconcile, and worked the
+  operator's row first. Zero conflict surface, zero lost work.
+- **The T237 backoff is live and its probe answers correctly in
+  production:** `./loopd.sh sleep-ok` → `60 0` at this eval — the
+  cycle-114 real wrap reset the streak per design (§2 I3 keeps the
+  efficacy watch open for the first EMPTY chain).
+- **Child-budget health:** 5/5 children goal-accepted inside the 80/50 and
+  60/50 budgets (29–57 iters, 18–54 min) — the post-T209/T173 envelope
+  holds; the minutes-death census stays ARMED at 2, untripped.
 
 ## 2. Incidents worth fixing
 
-### I1 — loopd launch cadence durably exceeds the work-arrival rate (FILED as T237)
+### I1 — the wrap's cold-scale clippy leg keeps dying under the 300s bash cap (FILED as T242)
 
-The only candidate above the bar this delta, and the delta IS the
-evidence. Four consecutive no-op cycles (110/111/112 + this one) at
-25/20/18-minute launch intervals. Measured per-cycle cost: ~143k input
-tokens (565k–1M cache-read), 14–21 min wall, and the cold-by-construction
-clippy leg (each cycle's own wrap-notes commit invalidates the
-build-script git-hash fingerprint, so every no-op re-pays a 4.5–8.5-min
-clippy build) + nextest ~40s. Sustained arithmetic: ~3 cycles/hour ≈
-70/day ≈ **10M input tokens/day of pure no-op burn**. The disposition
-doctrine absorbs each cycle's JUDGMENT cheaply, but nothing throttles
-the LAUNCH RATE — and the disposition pre-authorization ("the same
-disposition applies while the delta stays empty") makes the chain
-self-sustaining: absent intervention the ~20-min cadence runs forever,
-and the "next real eval" the cycle-112 watch deferred to would never
-spontaneously occur. Remedy filed: **T237** — loopd counts consecutive
-trailing wrap-notes commits carrying the `empty-delta disposition`
-token and scales the cycle-OK sleep exponentially (60s doubling to a
-1800s cap; the T137 LOOPD_SLEEP_OK test seam wins byte-identical when
-explicitly set; any work landing or real wrap resets the streak to
-zero). ~70 cycles/day → ~30/day at cap, with work-arrival pickup
-latency unchanged (a landing commit breaks the streak before the next
-sleep). Spec `specs/t237-loopd-empty-cycle-backoff.md`, pri 3, doctrine
-SOLO (loopd.sh + LOOP-SPEC token clause), kimi validation REQUIRED,
-estimate ~250.
+Five 300s kills across two cycles, ~25 min of orchestrator wall burned:
 
-### I2 — Watch-item resolutions and standing counts
+- cycle 113: `Compiling chug v0.17.3` killed at 300s (15:04:01Z) and a
+  second 300s kill (15:25:23Z) before converging via an unbounded bg
+  window (15m27s).
+- cycle 114: a nextest+bg-clippy-poll chain killed at 300s (17:50:09Z —
+  the suite itself went 1670/1670 in 43s; the inline poll outlived the
+  cap), then `Compiling` killed (18:07:02Z), then `Checking` killed
+  (18:12:23Z), before converging.
 
-- **T230 occupancy-nudge verdict: CLOSED, surface lives.** The
-  cycle-109 eval set the horizon ("met next cycle"): 3 production fires
-  across cycles 106/107/108, 3 effective free-turn compactions (latest
-  446KB→115KB in 30s wall), trim fires 0 at every crossing, and the
-  constraint surface self-teaching (rejected edits named the exact
-  rules). Per T230's req 5, fires > 0 with the nudge live closes the
-  question — the surface stays; the per-eval re-check ENDS here.
-- **T236 fix-efficacy census: n=6, zero organic reds.** The three
-  disposition cycles each ran a full release nextest (1651/1651 ×3) —
-  child-unloaded gates, so the loaded-suite count stands at 3 and the
-  total at 6. Expectation holds; ONE organic fence-trip red re-opens
-  the family.
-- **F13-3 roadmap pull: SKIPPED, 5th consecutive (§4).**
-- **Standing watches unchanged (empty delta, no new evidence):**
-  minutes-death census ARMED at 2; validator silent-exit at 1;
-  edit_file stale-anchor re-file trigger >6/cycle (0 this delta);
-  BSD-sed >2/cycle (0); Laya HF hosting operator decision —
-  PENDING 2026-10-05 date is TODAY, still no repo-visible operator
-  action, carried.
+Mechanism CONFIRMED, not hypothesis: `build.rs` watches `.git/HEAD` and
+the loose ref it points at (the T11 banner-hash feature) — EVERY main
+commit, md-only wrap-notes included, invalidates the chug-crate
+fingerprint in `target-shared-main`, so the first cargo leg after any wrap
+commit re-lints the whole crate: 4.5–15+ min under host load (8m19s cycle
+112, 15m27s cycle 113, 2m01s warm-rerun cycle 114). The class is
+structural and permanent: every wrap commits → every post-wrap gate pays
+it. Cycles 110–113 absorbed it with an ad-hoc background window carried in
+wrap notes; cycles 113+114 reached for inline first and burned the kills.
+LOOP-SPEC's gate templates carry the T178 `alarm 280` inner bound —
+correct for per-command wedges, wrong for a leg that cannot fit ANY inline
+bound when cold. Remedy filed: **T242** — write the cold-scale gate-leg
+rule into LOOP-SPEC at both target-shared-main gate surfaces (the first
+cargo leg after a main commit runs as a bounded BACKGROUND window, polled
+across iterations, never inline; inline only when a same-HEAD leg already
+ran this cycle). Pri 3, doctrine SOLO, kimi REQUIRED, est ~60.
+
+Weighed and REJECTED: narrowing build.rs's rerun scope (the mechanical
+alternative) — a md-only-stale banner hash would weaken the T11
+provenance signal the operator's site and the single-driver probe read.
+The doctrine mitigation preserves the honesty surface.
+
+### I2 — mcp_serve stub-spawn test point-asserts events.jsonl (FILED as T243)
+
+The T237 validator's round-1 nextest run fail-fast'd at 1265/1664 on
+`chug_launch_stub_spawn_pins_exact_argv_cwd_and_return_paths`
+(src/mcp_serve/tests.rs:1077) and correctly adjudicated it NOT a T237
+regression: the stub writes argv.txt BEFORE touching .chug/events.jsonl;
+the test polls argv.txt (10s deadline) then point-asserts events.jsonl
+(~line 1164). Under full-suite load the inter-line gap opens and the
+assert fires early; 5/5 green in isolation; 1664/1664 on the no-fail-fast
+rerun. Indictment VERIFIED against the code this eval (stub write order +
+assert order read directly, src/mcp_serve/tests.rs:1095-1164). A flake
+that reds a VALIDATOR's gate mid-round costs a full suite rerun and risks
+mis-adjudication. Remedy: per-file deadline-bounded polls + the
+sweep-the-family pass over both mcp_serve test files. Pri 4, tests-only
+(src/mcp_serve/tests.rs is NOT on the step-4 core list — T189
+lane-eligible), est ~25.
+
+### I3 — Watch-item resolutions and standing counts
+
+- **T237 backoff efficacy: PARTIAL, watch open.** The probe is live
+  (`sleep-ok` → `60 0`, correct on the real git log — the cycle-114 real
+  wrap stops the streak walk per design). The first post-landing EMPTY
+  chain has not begun (cycle 114 worked the operator's row; this cycle
+  evaluates) — the cadence-stretch leg is unobserved. Verdict horizon:
+  one empty chain.
+- **T236 fix-efficacy census: n=11, zero organic reds.** Five loaded full
+  suites since the cycle-113 eval (t237-val 1664/1664, t238-val 1667/1667,
+  t239 gates 1670/1670, two wrap gate runs) — zero orphan-reaper fence
+  trips. Expectation holds.
+- **F13-3 roadmap pull: SKIPPED, 6th consecutive (§4).**
+- **Cycle-114 bookkeeping fumbles: below bar.** `git add` of the T239
+  spec attempted before its write (pathspec ×2 — add-before-create
+  ordering, self-corrected next iteration) + one edit_file stale-anchor
+  on EVALUATION.md (self-corrected). The stale-anchor rate watch (re-file
+  >6/cycle) reads 1. No row.
+- **Standing watches unchanged:** minutes-death census ARMED at 2 (5/5
+  children accepted inside budgets this delta); validator silent-exit at
+  1; BSD-sed >2/cycle (0); Laya HF hosting operator decision — the
+  2026-10-05 date has PASSED with no repo-visible action; carried, the
+  loop's posture unchanged (never executes).
 
 ## 3. Friction hot spots
 
-**Zero new.** The three disposition streams' failed-tool classes are
-absorbed gate mechanics: 1× bounded-gate timeout (cycle 110), 3×
-clippy-tail readouts (cycle 112's cold-by-construction leg across two
-bounded windows) — all inside the designed gate windows, all green on
-completion. The cycle-109 rejections (orchestrator edit_file
-stale-anchor rate, BSD-sed class, child-gate-pacing) stand unmodified
-— an empty delta cannot move a rate.
+**One new, filed (I1/T242).** The cycle-109 rejections stand unmodified
+(edit_file stale-anchor 1 this delta, BSD-sed 0, child-gate-pacing
+absorbed). The pathspec ordering fumble (I3) is a one-fire self-corrected
+class — watch, no doctrine.
 
 ## 4. Capability gaps — ROADMAP PULL
 
-**Pull SKIPPED with written reason — the fifth consecutive eval.**
-Corpus now **1,081 records** (+3 eval-routing dispositions across the
-empty chain) vs T208's ~2,570 GO precondition ⇒ **~70–77 cycles out**
-at the observed 13–21/cycle band (the empty chain accrues at the floor,
-3/cycle). F16's trigger (within ~20 cycles, or operator ask) NOT met.
-F3-2 stands on its written reason. **New capability finds: NONE** —
-three streams of bookkeeping-only tool calls; the one capability-shaped
-moment in the delta (the disposition cycles' need to not exist) is a
-pacing gap, filed as T237, not a tool gap.
+**Pull SKIPPED with written reason — the sixth consecutive eval.** Corpus
+now **1,107 records** (+26 across two worked cycles — the ~13/cycle
+worked-cycle band) vs T208's ~2,570 GO precondition ⇒ **~55–70 cycles
+out**. F16 PARKED by the operator (d8b7547 — the un-park precondition is
+the F13 distilled-judge landing). F3-2 stands on its written reason.
+**New capability finds: NONE** — the delta's only capability-shaped
+moment (a gate leg that cannot run inline) is an orchestration-doctrine
+gap, filed T242, not a tool gap.
 
 ## 5. Top 3 priorities
 
-1. **T237 (the only queued row) — work it THIS cycle.** Doctrine SOLO
-   (loopd.sh + LOOP-SPEC), kimi validation REQUIRED, est ~250. The
-   cycle that filed it has the wall budget (launched 13:13 UTC, ~360-min
-   ceiling); deferring would hand a glm routine cycle a doctrine row
-   while the empty chain keeps burning.
-2. **(standing, no row)** The F13 corpus accrual — 1,081 / ~2,570.
-3. **(human)** The laya HF hosting operator decision — date reached,
-   carried (I2).
+1. **T240 (operator) — work FIRST** (pri 3, feature: chug.sh RELEASE
+   region). Features are first-class at equal pri (LOOP-SPEC §2), and the
+   operator is watching the site.
+2. **T241 (operator) — serial after T240** (pri 3, feature: chug.sh DOCS
+   page). Same site-generator surface as T240 → the disjointness gate
+   bars overlap; serial merges in queue order.
+3. **T242 — after the site rows** (pri 3, doctrine SOLO, kimi REQUIRED,
+   est ~60). The cold-gate class burns 0–25 min at every wrap until
+   written down — but a doctrine row runs ALONE, so scheduling it last
+   keeps the pipeline free for the feature rows. **T243** (pri 4,
+   tests-only T189 lane, est ~25) tails the queue; if the wall cuts it,
+   its row + spec carry the full recipe.
 
-**Estimate re-calibration:** no new actuals (empty delta). Bands stand:
-seam-pre-existing ~1.2x; doctrine+pin 0.4–3.3x. T237's ~250 filing rides
-the doctrine+pin band.
+**Estimate re-calibration:** T237 est ~250 → 536 actual (2.1x); T238 est
+~100 → 208 (2.1x); T239 est ~60 → 119 (2.0x) — all inside the
+doctrine+pin 0.4–3.3x band; all three landed first-try inside child
+budgets. T237's 536 actual sits above the ~500 dispatch ceiling POST HOC,
+but the ceiling reads the filing estimate (~250, honest) and the band
+absorbed the density — no threshold edit, no split was owed.
 
 ## 6. README audit (usability)
 
-Delta-aware pass: the git record `886cb29..6ed9d12` is
-EVALUATION.md-only — zero README edits, correct (nothing user-visible
-landed; the disposition mechanics are loop-internal). The T237 row
-carries its own README clause (req 6: the backoff documented where
-LOOPD_SLEEP_OK is) — no separate docs row. Section map, redundancy,
-staleness, balance, quickstart all stand per the cycle-109 audit (zero
-delta to any carrier).
+Delta-aware pass: README edits since the cycle-113 eval are the operator's
+F16 park (d8b7547 — grid card dropped, Parked section added) and T237's
+integrated backoff clause (cycle 113). (a) Reading order stands: Install →
+Quickstart → Runbooks → chat → run → fork → plan → TUI → Tools → policy
+surfaces → MCP → observability → self-hosting → continuous mode →
+development — newcomer-ordered. (b) Redundancy: none drifting; the
+continuous-mode section carries the T178/T230/T237 clauses as adjacent
+integrated prose. (c) Staleness: none spotted — the F16 park REMOVED a
+misleading queued chip (a correctness improvement). (d) Balance:
+continuous mode is the densest prose section and accretes one clause per
+loopd row — a structural-split candidate (runbook vs mechanics) if it
+accretes 2–3 more; below the row bar today. (e) Quickstart truth: the
+documented probes verified live (`./loopd.sh sleep-ok` → `60 0`; the
+routing probe matches `./loopd.sh routing`). No docs row filed.
 
 ## Handoff — recommended execution order
 
-Queue state: **1 row (T237, spec ready).** This cycle works it
-immediately per §5 — the arc order is trivial (one row). If T237
-lands, the queue drains again and the next cycle routes kimi on the
-predicate — but with the backoff live, the empty chain self-throttles:
-cycle N+1 would sleep 120s, N+2 240s, … capped 1800s. If T237 somehow
-does NOT land this cycle (budget death), the row's notes cell carries
-the recipe and the next cycle (glm routine — queue non-empty + eval
-fresh same-day) picks it up.
+Queue state: **4 rows — T240 + T241 (operator, pri 3, site features, specs
+ready), T242 (pri 3, doctrine SOLO, spec ready), T243 (pri 4, tests-only
+T189 lane, spec ready).** Arc order (§5): T240 → T241 serial (shared
+site-generator surface bars overlap), then T242 ALONE (doctrine), then
+T243. The wall fits ~3 arcs comfortably; T243 is the natural deferral
+with its recipe on the row. Validator routing: the site rows touch the
+site-sync generator — NOT the step-4 core list — so their lane call is
+computed from each diff per T189 (a >150-line or new-surface diff flips
+to FULL kimi); T242 is doctrine ⇒ kimi REQUIRED by rule; T243 expects
+the lane.
 
 To SELF-SPEC: none new. META-SPEC fan-out: none new. Human-decision
-items: (1) laya HF hosting operator checklist — date reached, the
-loop's posture unchanged (never executes); (2) F13-3 GO precondition —
-visibility only.
+items: (1) laya HF hosting operator checklist — date passed, carried;
+(2) F13-3 GO precondition — visibility only.
 
-Watch list handed to the next eval: T236 fix-efficacy census (n=6);
-T237 backoff efficacy — the FIRST post-landing empty chain should show
-the stretched cadence in launch timestamps and the `cycle-OK sleep`
-log line in the loopd log (verdict: one eval read); minutes-death
-census ARMED at 2; validator silent-exit at 1; edit_file stale-anchor
->6/cycle; BSD-sed >2/cycle.
+Watch list handed to the next eval: T237 backoff efficacy (first empty
+chain — cadence stretch in launch timestamps + the `cycle-OK sleep Ns
+(empty streak N, cap N)` loopd log line; verdict horizon one chain); T236
+fix-efficacy census (n=11); minutes-death census ARMED at 2; validator
+silent-exit at 1; edit_file stale-anchor >6/cycle (1 this delta); BSD-sed
+>2/cycle (0); continuous-mode README density (accretion watch — 2–3 more
+clauses re-files as a structural row).
 
 ## Outcomes (filled at cycle wrap — LOOP-SPEC Phase 3)
 
