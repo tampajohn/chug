@@ -1,6 +1,6 @@
 # T237 — loopd empty-cycle backoff: scale the cycle-OK sleep on consecutive empty-delta dispositions (doctrine, SOLO — loopd.sh)
 
-check: set -o pipefail; export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared; touch src/*.rs tests/*.rs; cargo test --test loopd_empty_backoff --test readme_layout --test todo_consistency
+check: set -o pipefail; export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-validate-a; touch src/*.rs tests/*.rs; cargo test --test loopd_empty_backoff --test readme_layout --test todo_consistency
 
 estimate: ~250 changed lines all-in (doctrine+pin carrier row — loopd.sh
 ~55 with comments, the new test file ~170, LOOP-SPEC clause ~8, README
