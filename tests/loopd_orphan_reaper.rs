@@ -67,7 +67,10 @@ use tempfile::TempDir;
 // FIRST acquisition in the body, held across spawn → assertion → cleanup.
 // The lock's scope is the process (nextest runs each test in its own
 // process and is unaffected, per T151's doctrine); the victim this protects
-// is `cargo test` at default parallelism — the goal-gate form.
+// is `cargo test` at default parallelism — the goal-gate form. T236: the
+// fence's SILENCE base rides the T214 scale seam too (base 30s unchanged,
+// multiplicative through `silence_base()`, byte-identical at factor 1.0) —
+// see the seam's banner above `Sandbox`.
 #[path = "../src/testsupport.rs"]
 mod testsupport;
 
@@ -365,6 +368,71 @@ fn copy_scripts_dir(src: &Path, dst: &Path) {
     }
 }
 
+// ---------- T236: the sweep-wait fence's silence base rides the T214 scale seam ----------
+//
+// The census-red legs (cycle-108 eval, verified per the T228 bar) all ride
+// ONE fence: `wait_for_any`'s `ProgressDeadline`. T225 re-based the fence's
+// TRIP on the log's observed advance, but its SILENCE base stayed a BARE
+// 30s wall-clock constant — the T214 seam feeds only the OUTER backstop —
+// so under 17-way nextest fan-out plus compile storms, where both the
+// supervisor's log writes and this test's own poll loop starve, a bare
+// 30s no-advance window false-trips at ~31–33s (a_failing_driver_probe_
+// means_no_sweep 31.851s/31.723s; the_cwd_leg_identifies_an_orphan_
+// through_loopd 32.740s/63.806s; the_reaper_terms_an_orphan_through_loopd_
+// before_the_build 33.259s — every one green on re-run). T236 re-bases the
+// silence window on measured load, the same way T214 re-based the absolute
+// fences and T233 re-based the dead-port attempt budget: multiplicative
+// through the seam, base literal byte-identical, factor 1.0 (a quiet host
+// AND every failed seam read) passes the base through byte-for-byte.
+
+/// The PURE silence-base seam (T236 req 2, the T233
+/// `dead_port_retry_budget_from_factor` shape): the T214 load factor → the
+/// `wait_for_any` verdict fence's SILENCE base. The 30s base is the
+/// factor-1 value — BYTE-UNCHANGED (the zero-timeout-bump doctrine: scale
+/// is multiplicative through the seam, never an edited literal) — scaled
+/// by the T214 clamp [1.0, 4.0]: 30s..=120s of no-observed-advance before
+/// the fence trips. Below the band clamps UP (a liveness base only ever
+/// stretches, never shrinks); above the band clamps DOWN to 4x
+/// (hard-capped, never unbounded); a degenerate factor (NaN poisons
+/// `clamp` and would panic `mul_f64`) fails SAFE to the base — exactly
+/// today's behavior. The factor arrives PRE-COMPUTED so the scaled
+/// arithmetic is pinnable without host state (and so this row's
+/// RED-proofs can mutate it in place).
+fn silence_base_from_factor(factor: f64) -> Duration {
+    let base = Duration::from_secs(30);
+    if !factor.is_finite() {
+        return base;
+    }
+    let factor = factor.clamp(1.0, 4.0);
+    if factor == 1.0 {
+        // The quiet-host path is BYTE-IDENTICAL to the pre-T236 fence: the
+        // base passes through with no float round-trip at all (the
+        // testsupport `scaled_deadline` shape).
+        return base;
+    }
+    base.mul_f64(factor)
+}
+
+/// The LIVE silence base the fence rides (T236 req 2): the factor through
+/// testsupport's pub T214 seam — `load_scaled_deadline(1s).as_secs_f64()`
+/// composes EXACTLY `scale_factor(read_loadavg_1m(), cores)` with the
+/// [1.0, 4.0] clamp, the composition the fence's backstop already rides —
+/// REUSED not reimplemented (testsupport.rs untouched; `scale_factor`/
+/// `read_loadavg_1m` are module-private there). ANY seam failure (no
+/// sysctl, unreadable /proc, unparsable text, no core count) fail-safes
+/// INSIDE it to the base passed through byte-identically — so a failed
+/// read arrives here as factor EXACTLY 1.0 and the silence base is the
+/// unchanged 30s: exactly the pre-T236 behavior (pinned on testsupport's
+/// side by `t214_seam_failures_fail_safe_to_the_exact_base`). The
+/// 1-second base makes the fence's duration the factor itself (30s ×
+/// factor, read back with nanosecond fidelity — immaterial at fence
+/// granularity).
+fn silence_base() -> Duration {
+    silence_base_from_factor(
+        testsupport::load_scaled_deadline(Duration::from_secs(1)).as_secs_f64(),
+    )
+}
+
 /// The full-supervisor harness (the tests/loopd_stale_binary.rs pattern):
 /// the REAL loopd.sh + scripts/, the ps stub on PATH, a green stub build,
 /// and the reaper's rows injected via env.
@@ -441,8 +509,8 @@ impl Sandbox {
     fn wait_for_any(&self, child: &mut Child, needles: &[&str]) -> String {
         // T225: the 30s BASE is unchanged (the zero-timeout-bump doctrine) —
         // the fence's BASIS is now the log's OBSERVED ADVANCE: it trips only
-        // after 30s of NO log growth (the surface this poll already reads
-        // every 100ms), with the load-scaled 4x backstop
+        // after the silence base of NO log growth (the surface this poll
+        // already reads every 100ms), with the load-scaled 4x backstop
         // (`ProgressDeadline::BACKSTOP_FACTOR`) still failing a genuinely
         // hung child. T214's per-core loadavg was blind to exactly the case
         // this fixes (cycle-101: 18 cores, load 9.68 → factor 1.0 → NO
@@ -452,8 +520,24 @@ impl Sandbox {
         // never a false trip. The 8s settle cap below stays absolute: it is
         // a QUIESCENCE bound — it waits for the log to STOP growing, so
         // resetting it on progress would defeat its purpose.
+        //
+        // T236: the SILENCE base itself now rides the T214 scale seam too —
+        // `silence_base()` = 30s × clamp(loadavg_1m/cores, 1.0, 4.0) — while
+        // the 30s base literal stays BYTE-IDENTICAL (scale is multiplicative
+        // through the seam, never an edited literal). T225's progress-reset
+        // basis is unchanged (every observed advance resets the fence); what
+        // T236 re-bases is the no-advance WINDOW: T225 left it a bare 30s
+        // constant, and under 17-way nextest fan-out plus compile storms
+        // both the supervisor's log writes and this test's own poll loop
+        // starve, so the bare window false-trips at ~31–33s (the census-red
+        // signature: probe-no-sweep 31.85s/31.72s, cwd-leg 32.74s/63.81s,
+        // terms-orphan 33.26s — every one green on re-run) while the child
+        // is alive and merely slow. A quiet host (and any failed seam read)
+        // sees factor 1.0 → byte-identical 30s; a melting host stretches to
+        // the 4x clamp (120s) before the fence blows; a genuinely hung child
+        // still fails (the load-scaled backstop behind it).
         let log_path = self.log_path();
-        let mut deadline = testsupport::ProgressDeadline::new(Duration::from_secs(30));
+        let mut deadline = testsupport::ProgressDeadline::new(silence_base());
         loop {
             let content = self.read_log();
             deadline.observe(testsupport::surface_fingerprint(&log_path));
@@ -1616,4 +1700,180 @@ fn pin_through_loopd_tests_hold_the_t172_cross_binary_load_lock() {
              real-loopd set — the family membership regressed"
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// T236 killing pins (the T229 pin-strength bar): each mutant that reverts
+// the remedy dies RED on a named pin, and the committed tree is the
+// un-mutated one. The fence class is `wait_for_any`'s ProgressDeadline —
+// the ONE shared fence of the three through-loopd census-red legs
+// (a_failing_driver_probe_means_no_sweep, the_cwd_leg_identifies_an_orphan_
+// through_loopd, the_reaper_terms_an_orphan_through_loopd_before_the_build),
+// so one seam + one wiring pin kill the class, not three copies of it.
+// ---------------------------------------------------------------------------
+
+/// T236 req 2 — the scaled-arithmetic pin, WITHOUT host state (the seam is
+/// pure by construction — the factor arrives pre-computed; the T233
+/// `dead_port_retry_budget_pins_the_scaled_arithmetic` shape). Legs: the
+/// factor-1 path — which IS the failed-reads path, since testsupport's T214
+/// seam fail-safes ANY read failure (no sysctl, unreadable /proc, unparsable
+/// text, no core count) to the base passed through byte-identically — is
+/// exactly the unchanged 30s base (the req-4 byte-stability pin: at factor
+/// 1.0 the fence is byte-identical to the pre-T236 fence, so every scripted
+/// assertion is scale-invariant); the upper clamp (factor 4.0 — a melting
+/// host) scales the base to exactly 120s, hard-capped; above-band clamps
+/// down; below-band clamps up (a liveness base only ever stretches, never
+/// shrinks); mid-band factors scale linearly; degenerate inputs (NaN, ±inf)
+/// fail safe to the base instead of panicking the Duration construction;
+/// and every in-band factor maps into [30s, 120s]. Plus the LIVE wrapper:
+/// the real read through testsupport's pub T214 seam lands in the same band
+/// on any host.
+#[test]
+fn t236_silence_base_seam_pins_the_scaled_arithmetic() {
+    // Byte-stability (req 4): factor 1.0 — exactly what a quiet host AND
+    // every failed seam read produce — is the UNCHANGED 30s base.
+    assert_eq!(
+        silence_base_from_factor(1.0),
+        Duration::from_secs(30),
+        "the factor-1/failed-reads path must be the unchanged 30s base \
+         (byte-identical to the pre-T236 fence)"
+    );
+    // The upper clamp: factor 4.0 → 120s. Hard-capped — a pathological
+    // host gets at most 4x the base, never an unbounded window.
+    assert_eq!(
+        silence_base_from_factor(4.0),
+        Duration::from_secs(120),
+        "the upper clamp must scale the 30s base to exactly 120s"
+    );
+    // Above the band: clamps DOWN to the upper clamp's 120s.
+    assert_eq!(
+        silence_base_from_factor(100.0),
+        Duration::from_secs(120),
+        "a raw ratio above the band must clamp to 4.0 → 120s, never unbounded"
+    );
+    // Below the band: clamps UP — a liveness base only ever stretches.
+    assert_eq!(
+        silence_base_from_factor(0.0),
+        Duration::from_secs(30),
+        "a below-band factor must clamp up to 1.0 → the base, never shrink"
+    );
+    // Mid-band: linear in the measured ratio.
+    assert_eq!(
+        silence_base_from_factor(1.5),
+        Duration::from_secs(45),
+        "a mid-band factor must scale the base linearly (30s × 1.5 = 45s)"
+    );
+    assert_eq!(
+        silence_base_from_factor(2.0),
+        Duration::from_secs(60),
+        "factor 2.0 must scale the 30s base to 60s"
+    );
+    // Degenerate inputs fail SAFE to the base (T214 doctrine): a NaN
+    // poisons `clamp` and would panic `mul_f64` — it must never reach
+    // either; ±inf is not a measured load.
+    assert_eq!(
+        silence_base_from_factor(f64::NAN),
+        Duration::from_secs(30),
+        "a NaN factor must fail safe to the base, never poison the fence"
+    );
+    assert_eq!(
+        silence_base_from_factor(f64::INFINITY),
+        Duration::from_secs(30),
+        "+inf must fail safe to the base, never poison the fence"
+    );
+    // The whole band maps into [30s, 120s]: never below the base, never
+    // above 4x it.
+    for factor in [1.0, 1.1, 4.0f64 / 3.0, 1.7, 2.5, 3.0, 3.9, 4.0] {
+        let scaled = silence_base_from_factor(factor);
+        assert!(
+            scaled >= Duration::from_secs(30) && scaled <= Duration::from_secs(120),
+            "factor {factor} → silence base {scaled:?} outside [30s, 120s]"
+        );
+    }
+    // The LIVE wrapper: the real read through testsupport's pub T214 seam
+    // must land in the same band (whatever this host's load is), and never
+    // panic on a seam failure (the fail-safe is inside testsupport's seam).
+    let live = silence_base();
+    assert!(
+        live >= Duration::from_secs(30) && live <= Duration::from_secs(120),
+        "the live silence base {live:?} outside [30s, 120s]"
+    );
+}
+
+/// T236 req 2 — the WIRING pin (the killing test, the T214/T225
+/// adoption-pin shape): `wait_for_any`'s verdict fence must construct its
+/// silence base through the scale seam, and the BARE 30s construction (the
+/// pre-T236 fence, the census-red class) must be gone from the fence body.
+/// Reverting the wiring is RED here by construction even while every
+/// behavioral test stays green (the T229 bar — a bare constant on a loaded
+/// host false-trips only under load, which a quiet worktree never sees).
+/// Byte-stability (req 4) half: the 8s settle cap stays a BARE absolute —
+/// the T225 quiescence bound (it waits for the log to STOP growing;
+/// resetting it on progress would defeat its purpose) — its PRESENCE pinned
+/// byte-for-byte so a T236 follow-up cannot quietly scale it either; and
+/// the seam's own base literal stays the unchanged 30s (an edited literal
+/// is the zero-timeout-bump violation even if the clamp math still passes).
+/// Non-comment code lines only (a comment naming the base is
+/// documentation, not a fence — the T214 pin's rule); the scanned bodies
+/// are SLICED (fn-start to the next fn), so this pin's own needle text —
+/// which mentions the banned construction as a string — can never
+/// self-match.
+#[test]
+fn t236_wait_for_any_fence_routes_its_silence_base_through_the_scale_seam() {
+    let src = fs::read_to_string(repo_root().join("tests/loopd_orphan_reaper.rs"))
+        .expect("read own source (cargo runs test binaries with cwd = package root)");
+
+    // The wait_for_any body, non-comment lines only.
+    let at_fn = src
+        .find("fn wait_for_any")
+        .expect("the sweep-wait fence lives in wait_for_any");
+    let at_next = src[at_fn..]
+        .find("\n    fn cycle_logs")
+        .map(|i| at_fn + i)
+        .unwrap_or(src.len());
+    let body = src[at_fn..at_next]
+        .lines()
+        .filter(|line| !line.trim_start().starts_with("//"))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    // The fence rides the seam (the T236 wiring).
+    assert!(
+        body.contains("ProgressDeadline::new(silence_base())"),
+        "wait_for_any's verdict fence no longer constructs its silence base \
+         through the T236 scale seam — the census-red fence class is back on \
+         a bare wall-clock constant"
+    );
+    // The M1 revert mutant (the pre-T236 bare construction) is RED here.
+    assert!(
+        !body.contains("ProgressDeadline::new(Duration::from_secs(30))"),
+        "wait_for_any still constructs a BARE 30s silence base — the fence \
+         must ride the T214 scale seam (T236 req 2; the zero-timeout-bump \
+         doctrine keeps the BASE, not the bare constant)"
+    );
+    // Byte-stability (req 4): the 8s settle cap stays a bare absolute.
+    assert!(
+        body.contains("Instant::now() + Duration::from_secs(8)"),
+        "the 8s settle cap went missing or was re-based — it is a \
+         QUIESCENCE bound (it waits for the log to STOP growing), stays a \
+         bare absolute, and its literal must stay byte-identical"
+    );
+
+    // The seam itself keeps the unchanged 30s base literal (the arithmetic
+    // pin holds the VALUES through the seam's factor legs; this holds the
+    // LITERAL — the seam body is sliced to itself so this pin's own text
+    // cannot self-match).
+    let seam_at = src
+        .find("fn silence_base_from_factor")
+        .expect("the T236 pure seam exists");
+    let live_at = src[seam_at..]
+        .find("fn silence_base()")
+        .map(|i| seam_at + i)
+        .unwrap_or(src.len());
+    let seam_body = &src[seam_at..live_at];
+    assert!(
+        seam_body.contains("Duration::from_secs(30)"),
+        "the T236 seam's base literal was edited — the 30s base stays \
+         BYTE-IDENTICAL; scale is multiplicative through the seam only"
+    );
 }
