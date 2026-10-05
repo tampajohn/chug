@@ -769,6 +769,16 @@ alike) has been harvested.
   refs, one-line verdict`) — the full narrative lives in git (row-flip
   commits + TODO done rows carry the refs), so compaction drops nothing
   that isn't one `git log` away.
+- **Empty-delta wrap subjects carry the token (T237).** An empty-delta
+  disposition's wrap-notes commit subject MUST carry the literal token
+  `empty-delta disposition` — load-bearing doctrine, not convention:
+  `loopd.sh`'s cycle-OK backoff (T237) walks `git log` subjects for
+  exactly this token to scale the success sleep (60s doubling per
+  consecutive empty wrap, capped at 30 minutes), so a disposition wrap
+  whose subject drops the token silently resets the streak and defeats
+  the pacing. The walk skips pure bookkeeping (`eval:` commits that are
+  not wrap notes — Outcomes compaction and the like) and stops at any
+  real wrap or landed work; keep the token verbatim.
 - Final gates green in main (build + clippy + step 5's T82 gate runner —
   `cargo nextest run --release` when `cargo nextest` is on PATH, else
   `cargo test --release`) → push anything
