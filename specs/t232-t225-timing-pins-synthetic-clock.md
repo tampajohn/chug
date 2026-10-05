@@ -1,6 +1,6 @@
 # T232 — T225's real-clock timing pins flake under host load: synthetic-clock conversion (tests-only, robustness)
 
-check: set -o pipefail; export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared; touch src/*.rs tests/*.rs; cargo test --bin chug
+check: set -o pipefail; export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-validate-a; touch src/*.rs tests/*.rs; cargo test --bin chug
 
 estimate: ~180 changed lines all-in (pin-closure row kind — the
 cycle-103..105 calibration band for pin sweeps is 1.7–3.0x the
