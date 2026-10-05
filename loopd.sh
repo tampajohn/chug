@@ -509,10 +509,27 @@ while [ ! -f "$STOP" ]; do
   # iterations is harmless: it only affects chug bash-tool calls, never the
   # supervisor's own ./target build.
   export CHUG_BASH_TIMEOUT=300
+  # T230 — the orchestrator launch carries the 100k context-occupancy nudge
+  # (`--ctx-warn-at-tokens`, the T192/LIVE_CTX surface). This is a
+  # MEASUREMENT, not an assertion of value: the one-shot notice has never
+  # fired in production (0 ctx-edit fires across all 549 events files in
+  # the cycle-103 eval corpus) because nothing in the loop fleet ever set
+  # the flag — the default is 0 = off (src/driver.rs), so trim
+  # (TRIM_ABOVE_TOKENS = 120_000, src/trim.rs) silently collapsed every
+  # overflow before any model was told it could compact its own context
+  # for a free turn. 100_000 sits ~20k tokens BELOW trim's 120_000, so the
+  # remedy window (one free edit-only turn) PRECEDES the automatic
+  # collapse: the model either acts, or trim proceeds exactly as before —
+  # zero behavior change below 100k, zero when the nudge is ignored. The
+  # verdict lands in the digest's per-file `ctx-edit fires:` line
+  # (scripts/eval-digest.sh), which the next evals read; ORCHESTRATOR
+  # launch only — delegate children keep their own launch (their context
+  # curves and free-turn economics differ; extending is verdict-dependent,
+  # not this row).
   chug_rc=0
   chug_out="$(CARGO_TARGET_DIR="$ROOT/target-shared" ./target/release/chug run --spec LOOP-SPEC.md \
     --goal "Run the full self-improvement cycle per LOOP-SPEC: evaluate or skip per the freshness rule, work the queue (features are first-class per the amended doctrine — close capability gaps, not only harden), adversarial validation for core-logic items, you own all bookkeeping, push after each item lands green + remainder at wrap. Your wrap IS the next cycle's input — leave TODO.md, EVALUATION.md and specs/ such that a cold next cycle needs zero human words." \
-    --model "$orch_model" --max-iters 200 --max-minutes 360 \
+    --model "$orch_model" --max-iters 200 --max-minutes 360 --ctx-warn-at-tokens 100000 \
     2>> "$cycle_log")" || chug_rc=$?
   printf '%s\n' "$chug_out" >> "$cycle_log"
   if [ "$chug_rc" -eq 0 ]; then

@@ -72,9 +72,15 @@ const ROUTE_CALL: &str = "routing=\"$(route TODO.md EVALUATION.md)\"";
 /// 160→200 (cycle-61 died 160/160 post-wrap, pre-goal_complete). T198
 /// raised minutes 240→360 (the fleet outgrew the wall: cycle-85–90 walls
 /// 3h23m–4h01m, cap hit once at cycle 88; 360 = p95 × 1.5; iterations
-/// stay 200).
-const INVOCATION_MODEL: &str =
-    "--model \"$orch_model\" --max-iters 200 --max-minutes 360";
+/// stay 200). T230 re-keyed the carrier once more: the orchestrator
+/// launch now ALSO carries the 100k occupancy nudge
+/// (`--ctx-warn-at-tokens`, T192) — a measurement row, not a behavior
+/// assertion (the LIVE_CTX surface had 0 production fires because
+/// nothing ever set the flag); the pin follows the deliberately re-keyed
+/// carrier (the T187 pattern), and the exactly-once leg in
+/// `loopd_launches_the_ctx_warn_nudge_exactly_once` guards a duplicate
+/// flag, which would silently re-latch the one-shot notice.
+const INVOCATION_MODEL: &str = "--model \"$orch_model\" --max-iters 200 --max-minutes 360 --ctx-warn-at-tokens 100000";
 /// The loopd.log routing line: every model change is explained in the log
 /// (the T50 re-exec-log rule).
 const ROUTING_LOG: &str = "routing: todo_rows=";
@@ -161,6 +167,30 @@ fn loopd_launches_the_routed_model_not_a_hardcoded_one() {
         route_call < invocation,
         "the per-cycle routing must be computed before the chug launch it \
          governs (T81)"
+    );
+}
+
+/// T230 — the orchestrator launch carries the 100k occupancy nudge
+/// EXACTLY ONCE in loopd.sh. The notice is a one-shot latch
+/// (`ctx_warned`, src/driver.rs:1136) and argv holds the flag once, so a
+/// duplicated flag would not error — the later value would silently win
+/// and the measurement row's semantics would be re-keyed by accident.
+/// The INVOCATION_MODEL pin above already proves the flag's adjacency to
+/// the launch carrier (one contiguous needle), but it would PASS a
+/// second flag with a different value; THIS leg counts the bare
+/// space-form needle (` --ctx-warn-at-tokens ` — the comment's backticked
+/// mention does not match), so a duplicate with ANY value — same or
+/// different — counts 2 and dies. RED-proofs: removing the flag from the
+/// launch line kills the INVOCATION_MODEL pin; duplicating it kills this
+/// count_eq.
+#[test]
+fn loopd_launches_the_ctx_warn_nudge_exactly_once() {
+    let loopd = read("loopd.sh");
+    count_eq(
+        &loopd,
+        " --ctx-warn-at-tokens ",
+        1,
+        "the 100k occupancy nudge on the orchestrator launch (T230)",
     );
 }
 

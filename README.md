@@ -987,7 +987,16 @@ the orchestrator and every delegate child (children inherit the
 orchestrator's env) get a 300s bash-tool cap instead of the 120s default, so
 cold-cache gates and builds stop dying mid-run (`timed out after Ns`) and
 buying a retry; an explicit `--bash-timeout` flag overrides the env, and
-non-loop (interactive/chat) use keeps the 120s default.
+non-loop (interactive/chat) use keeps the 120s default. The orchestrator's
+launch line also carries `--ctx-warn-at-tokens 100000` (T230): the 100k
+one-shot occupancy notice (T192) fires ~20k tokens below trim's 120_000
+collapse, so LIVE_CTX compaction gets a pre-trim remedy window (a free
+edit-only turn) instead of trim silently handling every overflow before any
+model knows the surface exists — a measurement row, not a behavior
+assertion (the surface had 0 production fires while the flag defaulted
+off), and the digest's per-file `ctx-edit fires:` line is where the verdict
+lands; delegate children keep their own launch until the verdict says
+otherwise.
 The supervisor builds the release binary (`cargo build --release`) before
 each cycle and the loop runs on it — and since the T137 build gate, a
 FAILED build aborts the cycle instead of relaunching the previous
