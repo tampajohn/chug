@@ -4,7 +4,7 @@
 // T109 req 4 count-pin anchor (see mod.rs's pin): this family's
 // #[test] fn count — a dropped `mod summary;` line fails the pin's
 // reference to this const to compile.
-pub(super) const TEST_COUNT: usize = 13;
+pub(super) const TEST_COUNT: usize = 18;
     use super::*; // the shared harness (delegate::tests) + delegate's own imports
 
     #[test]
@@ -281,13 +281,14 @@ pub(super) const TEST_COUNT: usize = 13;
         assert_eq!(s.last_event_ts.as_deref(), Some("t1"));
     }
 
-    /// T68: `significant_ne` is EXACTLY the six-field wake set. A diff
+    /// T68: `significant_ne` is EXACTLY the eight-field wake set (T234: the
+    /// two goal-outcome flags joined the original six). A diff
     /// confined to `last_event_type`/`last_event_ts` (the per-tool-call
     /// churn an active child emits every 2–10 s) is NOT significant; a diff
-    /// in each of the six significant fields IS. Pinned field-by-field so a
+    /// in each of the eight significant fields IS. Pinned field-by-field so a
     /// field cannot silently migrate between the wake set and the churn set.
     #[test]
-    fn delegate_summary_significant_ne_is_exactly_the_six_field_wake_set() {
+    fn delegate_summary_significant_ne_is_exactly_the_eight_field_wake_set() {
         let base = DelegateSummary {
             max_iters: Some(50),
             last_iteration: Some(7),
@@ -295,6 +296,8 @@ pub(super) const TEST_COUNT: usize = 13;
             last_event_ts: Some("t1".to_string()),
             budget_low_seen: true,
             goal_seen: false,
+            goal_accepted_seen: false,
+            goal_rejected_seen: false,
             abort_seen: false,
             abort_reason: Some("iteration budget exceeded".to_string()),
         };
@@ -315,6 +318,8 @@ pub(super) const TEST_COUNT: usize = 13;
             DelegateSummary { last_iteration: Some(8), ..base.clone() },
             DelegateSummary { budget_low_seen: false, ..base.clone() },
             DelegateSummary { goal_seen: true, ..base.clone() },
+            DelegateSummary { goal_accepted_seen: true, ..base.clone() },
+            DelegateSummary { goal_rejected_seen: true, ..base.clone() },
             DelegateSummary { abort_seen: true, ..base.clone() },
             DelegateSummary { abort_reason: None, ..base.clone() },
         ];
@@ -326,3 +331,103 @@ pub(super) const TEST_COUNT: usize = 13;
         }
     }
 
+
+    // ---- T234: the goal verdict resolution (outcome-aware latches) ----
+
+    /// T234 req 1: a goal line with `outcome:"rejected"` latches
+    /// `goal_rejected_seen` — while `goal_seen` keeps its any-goal latch and
+    /// `state()` stays byte-compatible (`done` on any goal line, the T157
+    /// pinned mcp_serve compat): a rejected-only stream reads exactly as
+    /// pre-T234 except for the new resolution flags.
+    #[test]
+    fn delegate_summary_rejected_goal_latches_rejected_flag_and_keeps_goal_seen() {
+        let lines = [
+            "{\"type\":\"run_start\",\"ts\":\"t0\",\"max_iters\":40}",
+            "{\"type\":\"iteration\",\"ts\":\"t1\",\"n\":5}",
+            "{\"type\":\"goal\",\"ts\":\"t2\",\"outcome\":\"rejected\",\"reason\":\"check failed\"}",
+        ];
+        let s = summarize_events(&lines);
+        assert!(s.goal_seen, "goal_seen keeps its any-goal latch (pinned compat)");
+        assert!(s.goal_rejected_seen, "the rejection must resolve into its flag");
+        assert!(!s.goal_accepted_seen);
+        assert_eq!(
+            s.state(),
+            "done",
+            "state() stays byte-compatible: any goal line latches done"
+        );
+        assert_eq!(s.last_event_type.as_deref(), Some("goal"));
+    }
+
+    /// T234 req 1: an accepted goal line latches `goal_accepted_seen` — and
+    /// only that flag (all goal flags consistent: `goal_seen` +
+    /// `goal_accepted_seen`, no rejection).
+    #[test]
+    fn delegate_summary_accepted_goal_latches_accepted_flag_only() {
+        let lines = [
+            "{\"type\":\"run_start\",\"ts\":\"t0\",\"max_iters\":40}",
+            "{\"type\":\"goal\",\"ts\":\"t2\",\"outcome\":\"accepted\",\"summary\":\"VERDICT PASS\"}",
+        ];
+        let s = summarize_events(&lines);
+        assert!(s.goal_seen);
+        assert!(s.goal_accepted_seen);
+        assert!(!s.goal_rejected_seen);
+        assert_eq!(s.state(), "done");
+    }
+
+    /// T234 req 1 (fail-safe leg): a goal line with a MISSING or unparseable
+    /// `outcome` sets `goal_seen` only — exactly the pre-T234 behavior; the
+    /// resolution flags stay false rather than guessing.
+    #[test]
+    fn delegate_summary_goal_line_without_outcome_sets_goal_seen_only() {
+        // Missing outcome field entirely.
+        let missing = ["{\"type\":\"goal\",\"ts\":\"t2\",\"summary\":\"no outcome field\"}"];
+        let s = summarize_events(&missing);
+        assert!(s.goal_seen);
+        assert!(!s.goal_accepted_seen && !s.goal_rejected_seen, "missing outcome must not guess");
+        // Unparseable outcome (present but not a string).
+        let non_string = ["{\"type\":\"goal\",\"ts\":\"t2\",\"outcome\":7}"];
+        let s = summarize_events(&non_string);
+        assert!(s.goal_seen);
+        assert!(!s.goal_accepted_seen && !s.goal_rejected_seen, "non-string outcome must not guess");
+    }
+
+    /// T234: the seen-flags are ADDITIVE latches, not a latch-overwrite like
+    /// `summarize_collect`'s verdict — a segment rejected and LATER accepted
+    /// reports both (the orchestrator sees the full gate history: a rejection
+    /// was seen AND an acceptance was seen; the collect verdict still says
+    /// the LATEST verdict is accepted).
+    #[test]
+    fn delegate_summary_rejected_then_accepted_latches_both_flags() {
+        let lines = [
+            "{\"type\":\"run_start\",\"ts\":\"t0\",\"max_iters\":40}",
+            "{\"type\":\"goal\",\"ts\":\"t2\",\"outcome\":\"rejected\",\"reason\":\"check failed\"}",
+            "{\"type\":\"goal\",\"ts\":\"t3\",\"outcome\":\"accepted\",\"summary\":\"fixed and verified\"}",
+        ];
+        let s = summarize_events(&lines);
+        assert!(s.goal_seen);
+        assert!(s.goal_rejected_seen && s.goal_accepted_seen);
+        assert_eq!(s.state(), "done");
+    }
+
+    /// T234 req 2: the T58 segment reset covers the new flags — a pre-resume
+    /// rejection must not bleed into the resumed segment's summary (the
+    /// resume case: the gate spoke in segment 1, the child kept running in
+    /// segment 2).
+    #[test]
+    fn delegate_summary_run_start_resets_goal_outcome_flags() {
+        let lines = [
+            // Segment 1: ran, gate rejected.
+            "{\"type\":\"run_start\",\"ts\":\"t0\",\"max_iters\":40}",
+            "{\"type\":\"goal\",\"ts\":\"t1\",\"outcome\":\"rejected\",\"reason\":\"check failed\"}",
+            // Segment 2: the resume — fresh run_start, fresh iterations.
+            "{\"type\":\"run_start\",\"ts\":\"t2\",\"max_iters\":40}",
+            "{\"type\":\"iteration\",\"ts\":\"t3\",\"n\":1}",
+        ];
+        let s = summarize_events(&lines);
+        assert!(!s.goal_seen, "the pre-resume goal latch resets with the segment");
+        assert!(
+            !s.goal_rejected_seen && !s.goal_accepted_seen,
+            "a pre-resume rejection must not bleed into the resumed segment"
+        );
+        assert_eq!(s.state(), "running");
+    }

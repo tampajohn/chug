@@ -4,7 +4,7 @@
 // T109 req 4 count-pin anchor (see mod.rs's pin): this family's
 // #[test] fn count — a dropped `mod wait_terminal;` line fails the pin's
 // reference to this const to compile.
-pub(super) const TEST_COUNT: usize = 7;
+pub(super) const TEST_COUNT: usize = 9;
     use super::*; // the shared harness (delegate::tests) + delegate's own imports
 
     // ---- T89: the terminal wait mode ----
@@ -391,3 +391,126 @@ pub(super) const TEST_COUNT: usize = 7;
         );
     }
 
+
+    // ---- T234: the outcome-resolved terminal wake set ----
+
+    /// T234 req 3 + 6(a): a goal-gate REJECTION already present at entry is
+    /// STALE NEWS — the gate spoke before the wait began and the driver
+    /// KEEPS RUNNING after a rejection — so a `terminal: true` wait must
+    /// block to its deadline instead of instant-returning on the stale
+    /// verdict (the pre-T234 outcome-blind latch woke on the goal line's
+    /// mere presence, collapsing every later terminal long-poll into
+    /// instant polling exactly when the arc got interesting).
+    ///
+    /// NON-VACUOUSNESS: kills named mutant (a) (the outcome ignored — the
+    /// pre-row behavior, `goal_seen` driving the terminal wake → instant
+    /// return) and mutant (c)-at-entry (rejection presence waking without
+    /// the entry gate): both fail the elapsed lower bound and the
+    /// `waited: >= 3` pin.
+    #[test]
+    fn delegate_status_terminal_wait_ignores_rejection_present_at_entry() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_events_fixture(
+            tmp.path(),
+            &[
+                T29_RUN_START,
+                "{\"type\":\"goal\",\"ts\":\"t2\",\"outcome\":\"rejected\",\"reason\":\"check failed\"}",
+            ],
+        );
+        let ctx = delegate_ctx(tmp.path());
+        let started = Instant::now();
+        let result = dispatch(
+            &ctx,
+            "delegate",
+            &json!({
+                "action": "status",
+                "cwd": tmp.path(),
+                "terminal": true,
+                "wait_secs": 3
+            }),
+        );
+        let elapsed = started.elapsed();
+        assert!(!result.is_error, "{}", result.content);
+        // NOT early: only the deadline leg (>= 3 s) satisfies this — the
+        // stale rejection must never relatch the terminal wake.
+        assert!(
+            elapsed >= Duration::from_millis(2900),
+            "stale rejection instant-woke a terminal wait: {elapsed:?}"
+        );
+        assert!(elapsed < Duration::from_secs(30), "terminal wait hung: {elapsed:?}");
+        let waited = waited_secs_of(&result.content).expect("waited: line present");
+        assert!(waited >= 3, "waited: {waited}s — terminal wait woke early");
+        // The deadline render still RESOLVES the verdict for the poller:
+        // the compat latch plus the outcome flags (the accepted line absent).
+        assert!(result.content.contains("goal_seen: true"), "{}", result.content);
+        assert!(result.content.contains("goal_rejected_seen: true"), "{}", result.content);
+        assert!(!result.content.contains("goal_accepted_seen"), "{}", result.content);
+    }
+
+    /// T234 req 3 + 6(c): a NEW rejection landing mid-wait wakes the
+    /// terminal wait ONCE — the orchestrator wants to steer immediately —
+    /// and the waking payload becomes the NEXT call's entry: a second
+    /// terminal wait over the now-stale rejection blocks normally. The
+    /// rejected-wakes-EVERY-poll mutant (no entry gating) passes call 1 but
+    /// fails call 2's elapsed lower bound.
+    #[test]
+    fn delegate_status_terminal_wait_wakes_once_on_new_rejection_then_blocks() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_events_fixture(tmp.path(), &[T29_RUN_START]);
+        let events = tmp.path().join(".chug/events.jsonl");
+        let writer = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(300));
+            append_events_line(
+                &events,
+                "{\"type\":\"goal\",\"ts\":\"t2\",\"outcome\":\"rejected\",\"reason\":\"check failed\"}",
+            );
+        });
+        // Call 1: the NEW rejection mid-wait wakes early.
+        let started = Instant::now();
+        let result = dispatch(
+            &delegate_ctx(tmp.path()),
+            "delegate",
+            &json!({
+                "action": "status",
+                "cwd": tmp.path(),
+                "terminal": true,
+                "wait_secs": 30
+            }),
+        );
+        let elapsed = started.elapsed();
+        writer.join().unwrap();
+        assert!(!result.is_error, "{}", result.content);
+        assert!(
+            elapsed < Duration::from_secs(15),
+            "terminal wait did not wake on the new rejection: {elapsed:?}"
+        );
+        // The wake carries the resolution: the rejection flag (plus the
+        // compat latch and state, byte-compatible).
+        assert!(result.content.contains("goal_rejected_seen: true"), "{}", result.content);
+        assert!(result.content.contains("goal_seen: true"), "{}", result.content);
+        assert!(!result.content.contains("goal_accepted_seen"), "{}", result.content);
+
+        // Call 2: the rejection is now STALE at entry — the wait blocks to
+        // its (short) deadline instead of relatching (the payload call 1
+        // returned is exactly the entry call 2 sees).
+        let started2 = Instant::now();
+        let result2 = dispatch(
+            &delegate_ctx(tmp.path()),
+            "delegate",
+            &json!({
+                "action": "status",
+                "cwd": tmp.path(),
+                "terminal": true,
+                "wait_secs": 3
+            }),
+        );
+        let elapsed2 = started2.elapsed();
+        assert!(!result2.is_error, "{}", result2.content);
+        assert!(
+            elapsed2 >= Duration::from_millis(2900),
+            "stale rejection re-woke the second terminal wait: {elapsed2:?}"
+        );
+        assert!(elapsed2 < Duration::from_secs(30), "terminal wait hung: {elapsed2:?}");
+        let waited = waited_secs_of(&result2.content).expect("waited: line present");
+        assert!(waited >= 3, "waited: {waited}s — stale rejection woke the wait early");
+    }

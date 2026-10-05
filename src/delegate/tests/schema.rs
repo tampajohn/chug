@@ -80,15 +80,33 @@ pub(super) const TEST_COUNT: usize = 10;
             desc.contains("default false"),
             "terminal must name its default: {desc}"
         );
+        // T234: the wake set is outcome-resolved — an ACCEPTED verdict or an
+        // abort wakes on presence, a REJECTION only when NEW since the wait
+        // began. The pre-T234 presence phrasing ("`goal_seen` or
+        // `abort_seen` flipping true") must be gone: a stale rejection is
+        // not a wake.
         assert!(
-            desc.contains("goal_seen") && desc.contains("abort_seen"),
-            "terminal must name the verdict-flag wake set: {desc}"
+            desc.contains("goal_accepted_seen") && desc.contains("abort_seen"),
+            "terminal must name the accepted/abort verdict wake set: {desc}"
+        );
+        assert!(
+            desc.contains("goal_rejected_seen") && desc.contains("NEW"),
+            "terminal must name the new-rejection wake and its outcome flag: {desc}"
+        );
+        assert!(
+            desc.contains("stale news and never wakes"),
+            "terminal must name the stale-rejection exclusion: {desc}"
+        );
+        assert!(
+            !desc.contains("`goal_seen` or `abort_seen`"),
+            "the pre-T234 presence phrasing must be gone (a stale rejection is not a wake): {desc}"
         );
         assert!(
             desc.contains("wait_secs > 0"),
             "terminal must name its wait_secs > 0 requirement: {desc}"
         );
-        // The tool description names the terminal mode too (doc honesty).
+        // The tool description names the terminal mode too (doc honesty),
+        // and — T234 — its status sentence names the resolved verdict flags.
         let tool_desc = schema
             .get("description")
             .and_then(Value::as_str)
@@ -96,6 +114,14 @@ pub(super) const TEST_COUNT: usize = 10;
         assert!(
             tool_desc.contains("terminal"),
             "tool description must name the terminal wait mode: {tool_desc}"
+        );
+        assert!(
+            tool_desc.contains("goal_accepted_seen") && tool_desc.contains("goal_rejected_seen"),
+            "tool description's status sentence must name the resolved goal verdict: {tool_desc}"
+        );
+        assert!(
+            tool_desc.contains("a NEW rejection since the wait began"),
+            "tool description's terminal sentence must name the new-rejection wake: {tool_desc}"
         );
     }
 
