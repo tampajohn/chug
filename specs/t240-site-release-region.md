@@ -1,6 +1,6 @@
 # T240 — RELEASE region on chug.sh: latest release always current
 
-check: export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared; touch src/*.rs tests/*.rs; cargo test --test site_sync
+check: export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-validate-a; touch src/*.rs tests/*.rs; cargo test --test site_sync
 
 estimate: ~180 lines (region generator + nav + pins)
 
