@@ -1,6 +1,6 @@
 # T239 — site-sync gate-count guard: pin the three surviving-mutant legs (validator findings)
 
-check: cargo test --test site_sync
+check: export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared; touch src/*.rs tests/*.rs; cargo test --test site_sync
 
 estimate: ~60 lines (tests-only fixture pins)
 
