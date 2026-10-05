@@ -270,6 +270,12 @@ visibility; F16's pull trigger rides it).
 
 **T232 — T225's real-clock timing pins flake under host load: synthetic-clock conversion (pri 2, tests-only)** — LANDED (ff-merge 41d4b6f: impl b4ebb49 + dispatch re-key; impl glm goal-accepted 44/80 ~38 min, zero deaths, zero fix-up arcs). src/testsupport.rs only, +154/−54, zero production diff: both wall-clock legs converted to synthetic-instant driving through the pre-existing armed/observe_at/tripped_at seam (zero sleeps; the only `Instant::now()` per leg is the t0 anchor no assertion reads) — the stalled leg now asserts `< base` live / `≥ base` Stalled with both measured fields assert_eq-pinned / still-Stalled at 2x base; the slow-progress leg drives real appends at base/6 synthetic steps asserting `tripped_at == None` at EVERY step through 3x base with the terminating trip pinned Backstop-never-Stalled and non-vacuousness ≥ 3x base ∧ ≥ 18 advances; ONE real-clock smoke leg through the real wrappers asserts only the load-robust direction (Stalled within `load_scaled_deadline(base) * BACKSTOP_FACTOR`), its comment naming the synthetic legs as the owners of no-trip precision. Req-3 sweep: 12 legs, per-leg verdicts in the commit message, validator spot-verified. Req-4: 3 named mutants RED-proven by the impl and INDEPENDENTLY REPRODUCED by the validator in 3 parallel T79 worktrees — silence-base-doubled, reset-on-advance-removed (RED at advance #6, the cycle-101 flake shape on synthetic instants), wrapper-decoupled (smoke RED at its budget, which stretched 2s→3.22s under the induced compile storm — the load-scaling proven LIVE while both synthetic legs went RED in <0.1s mid-storm). T189 lane call (d1791174367-10): (b) flipped — 208 changed lines > ~150 — so full adversarial ran despite the row's gates-only expectation (the T229 precedent, second instance). Kimi PASS (d1791176487-11), 9 findings, zero filed forward for THIS row; finding #9 named a PRE-EXISTING environmental gate-flake for the next eval (`daemon::tests::stale_socket_connects_refused` transient connect-success leg, src/daemon.rs:1825 — second socket-family gate flake of the arc after the impl gate's mcp_http port-theft red; both re-ran green 1232/1232 on identical bytes; the I2 watch item's "indictable once more" condition is now MET for the mcp_http class). Gates: worktree nextest release 1637/1637, post-merge main 1637/1637 (target-shared-main). Calibration: +154/−54 landed vs ~180 filed (1.2x — the T225-family tests-only kind lands near 1x when the seam pre-exists). Suite: 1636 → 1637 nextest release (+1 net — the new smoke leg; the two converted legs keep their test-fn names; testsupport.rs 14 → 15 `#[test]`).
 
+- **Cycle-level notes (cycle 106)** — a MANDATORY fresh-eval cycle that filed 1 row and landed it the same cycle: queue DRAINED (the fourth drain in five evals). Both children first-round goal-accepted, zero deaths, zero fix-up arcs — the second consecutive death-free cycle (the cycle-105 minutes-census stays at 2: this cycle's impl finished 44/80 in ~38 min, the validator 37/60 in ~34 min — the child-goal guidance clause stays ARMED not tripped).
+- **The T230 nudge fired in production for the FIRST time — the row's measurement datum.** At ~100.5k estimated tokens the occupancy nudge reached the orchestrator mid-arc; one edit-only free turn compacted `.chug/LIVE_CTX.md` 405,918 → 54,001 bytes (94 whole turn-blocks deleted — all committed Phase-1 corpus/eval turns; turn 0 + the live T232-arc turns kept) and the arc continued with zero lost state, zero iteration cost. The trigger-calibration verdict begins: fires = 1, remedy effective, the free-turn accounting worked exactly as designed (the digest's ctx-edit line is the standing read).
+- **Two pre-existing socket-family gate flakes in one arc (named, not fixed — one-concern-per-row).** The impl's first goal gate went red on `mcp_http::tests::dead_port_probe_retry_recovers_after_scripted_theft` (the T31-residual port-theft race — the I2 watch item's "indictable once more" condition is now MET) and the validator's first goal gate went red on `daemon::tests::stale_socket_connects_refused` (the transient connect-SUCCESS leg, src/daemon.rs:1825 — its own doc comment names the close→connect teardown race; d1791176290-2). Both: modules the diff does not touch, green in isolation, full check line green 1232/1232 on identical bytes. Same false-red class T232 fixed for the T225 family — the next eval should weigh the socket-teardown legs for the same synthetic/retry treatment.
+- **delegate status wake-set note for the next eval:** after a goal-gate REJECTION the `terminal: true` long-poll latches on the stale `goal` event and returns instantly forever — the orchestrator burned two instant polls before switching to non-terminal waits; a rejected goal should arguably unlatch the terminal wake-set (DX observation, not a row yet).
+- **Deferred/skipped**: none — the queue was exactly the 1 filed row and it landed. Roadmap pull skipped at eval (quantified, §4). Release check: 1 item since v0.17.2 (T232, tests-only, no FEATURES check-off) < 3 → NO tag this wrap. README gate: no user-visible change (tests-only internal item) → no README edit. **Next-cycle routing**: 0 todo rows → freshness predicate fails → kimi fresh-eval cycle (loopd routes correctly); the next eval's first reads: the digest's ctx-edit fires line (T230 verdict — now 1 fire), the t232 impl+validator streams (the two gate-flake diagnoses), and the socket-teardown legs named above.
+
 ### Cycle 105 (2026-10-04, ~23:38 UTC–) — MANDATORY fresh-eval cycle (kimi; predicate failed on the todo-rows half: queue DRAINED at the cycle-104 wrap, 0 todo rows)
 
 **T230 — ctx-edit trigger calibration: the occupancy nudge live on the loopd orchestrator launch (pri 3, measurement, SOLO)** — LANDED (ff-merge 82a0673: impl 6760a72 + dispatch re-key; impl glm died the 50-min wall at 48/80 with the work COMMITTED — cold-compile friction on the full-suite debug legs ate ~4 bash caps — T55 orchestrator-finish, routing d1791160762-11). loopd.sh's launch line gains `--ctx-warn-at-tokens 100000` with the complete rationale in-comment (measurement not assertion: 0 ctx-edit fires across all 549 events files while the flag defaulted 0=off; 100_000 sits ~20k below trim's `TRIM_ABOVE_TOKENS=120_000` so the free edit-only remedy window PRECEDES the collapse — zero behavior change below 100k or when ignored; verdict lands in the digest's per-file ctx-edit line; ORCHESTRATOR launch only, children unchanged per the scope discipline). Pin side: INVOCATION_MODEL amended T187-style with the re-key justification, plus the new `loopd_launches_the_ctx_warn_nudge_exactly_once` leg whose bare space-form needle kills a duplicate flag at ANY value (the one-shot latch would silently re-latch). README loopd clause integrated into the CHUG_BASH_TIMEOUT paragraph's launch-behavior neighborhood. Kimi REQUIRED PASS (routing d1791161395-12, verdict d1791163082-13): 3 parallel mutant legs all RED independently reproduced — flag-removed kills BOTH pins, dup-same and dup-diff kill exactly-once while INVOCATION_MODEL passes (the new leg load-bearing) — gates 12+1+21 spec check, clippy -D exit 0, nextest release 1632/1632, tree byte-clean, zero findings filed forward. Calibration: +62 landed vs ~150 filed (0.4x — the first UNDER-shoot of the doctrine+pin kind; the comment blocks carried the reasoning tight). The row's verdict is eval-side: within ~6 cycles the digest's ctx-edit line answers whether the T192 surface lives (fires > 0) or is recorded dormant-by-incentive (zero fires across cycles with trim fires > 0).
@@ -431,87 +437,7 @@ AUROC 0.374 finding.
   then passed at post-merge — host-load flake family (T151/T172 lineage), not
   branch-attributable (the branch diff is script+doc only).
 
-### Cycle 100 (2026-10-04, ~05:37 UTC–) — routine freshness-skip cycle (glm; predicate held: EVALUATION mtime 01:28 UTC = launch day + T219/T220 todo) — queue: T219 → T221 → T220
-
-- **T221 LANDED (merge c85f6ba, landed-clean)** — the T219 validator's three
-  actionable findings closed in one pass: the day-0 `parse_rfc3339` guard (rejects
-  `day < 1` like day 32 → registration fails open to server-now; the debug
-  conn-thread panic / release wrap-and-evict pair the validator verified black-box
-  is gone), the `age_sec` value pin (kills mutant m5), and the 599/601 TTL boundary
-  table (kills mutant m6 — the symbolic const legs could never see it), plus the
-  ±2s band on the roundtrip `now` comparison (finding-4 flake). glm 49/80 with
-  three serial self-mutations killed + reverted before commit (1792a51). T189
-  gates-only lane (d1791101242-6, all four inputs pass: no core file, 122 lines,
-  no new surface, no check change) — full gates still run: nextest release
-  1579/1579 + clippy -D + spec check, worktree AND post-merge in main.
-
-- **T219 LANDED (merge 0516e05, landed-clean after a T63 resume)** — the daemon's
-  0600 socket grew the `/sessions` registry: `SessionRegistry` (upsert-by-id, lazy
-  TTL eviction at SESSION_TTL_SECS=600, four SESSION_ROLES incl. the external
-  dashd), `POST /sessions` fail-open (optional fields default to server-now, client
-  strings echo verbatim, `started` sticks to first registration so `age_sec` tracks
-  the process not the heartbeat), `GET /sessions` live-only/id-sorted with
-  `age_sec`+`now`, daemon self-registration + heartbeat on each registry serve,
-  no-chrono RFC3339 parse/format (Hinnant `days_from_civil` mirroring archive.rs),
-  a weightless `CHUG_DAEMON_SESSIONS=1` registry host whose /judge refuses exactly
-  like the stub's (SPEC-3: no fabricated classifications), stub refusal of
-  /sessions on both verbs, and the shared best-effort `register_session()` helper
-  wired into delegate launch+alive-status and loopd.sh cycle start (bounded curl,
-  always-true guard). glm run-1 died 80/80 mid-debug of a launch-test flake it
-  A/B-proved not-causal (T63 resume d1791094859-2); run-2 goal-accepted 16 iters,
-  commit 2128e75. T189 lane (b)+(c) failed → kimi REQUIRED (d1791096146-3):
-  **VERDICT PASS** (d1791098231-4) — 7-mutant serial sweep, 5 caught (TTL boundary
-  flip, started-overwrite, stub-serves-registry, role-gate removal, self-heartbeat
-  drop); m5 (age derivation inversion) + m6 (TTL 600→300) SURVIVED as pin-strength
-  gaps against a correct implementation; gates build + clippy -D + spec check 6/6 +
-  nextest release 1576/1576 + the fallback runner; tree byte-clean post-revert.
-  6 findings → 1 MINOR (parse_rfc3339 day-0 underflow: debug conn-thread panic /
-  release wraps-and-evicts, off-spec-path, verified black-box both profiles) + 2
-  weak pins + 1 flake nit filed forward as **T221** (pri 2); findings 5-6 (dashd
-  external-supervisor wiring, self-heartbeat on POST-only) adjudicated no-action.
-  Note for the next eval: the filing-time estimate said ~450L, the arc landed
-  ~1,205L (+803/-11 daemon.rs incl. ~314 inline tests + 362 pin file) — the second
-  consecutive large estimate gap (T204 class); the dispatch gate held because the
-  estimate was under the ceiling, so the honesty gap is in filing, not gating.
-
-- **T221 LANDED (merge c85f6ba, landed-clean)** — the T219 validator's three
-  actionable findings closed in one pass: the day-0 `parse_rfc3339` guard (rejects
-  `day < 1` like day 32 → registration fails open to server-now; the debug
-  conn-thread panic / release wrap-and-evict pair the validator verified black-box
-  is gone), the `age_sec` value pin (kills mutant m5), and the 599/601 TTL boundary
-  table (kills mutant m6 — the symbolic const legs could never see it), plus the
-  ±2s band on the roundtrip `now` comparison (finding-4 flake). glm 49/80 with
-  three serial self-mutations killed + reverted before commit (1792a51). T189
-  gates-only lane (d1791101242-6, all four inputs pass: no core file, 122 lines,
-  no new surface, no check change) — full gates still run: nextest release
-  1579/1579 + clippy -D + spec check, worktree AND post-merge in main.
-
-- **T220 SPLIT + DEFERRED (wrap disposition, not an arc)** — the dispatch re-read
-  found the T204-class true surface (new candle architecture + HF weight downloads
-  + live inference + a committed verdict doc behind a ~450L filing estimate — the
-  third consecutive estimate-honesty gap) AND a premise defect found by a 30-second
-  HF API probe: the researched contestant id `Heman10x-NGU/openJev-verdict-2.0`
-  does NOT resolve ("Invalid username or password" = absent/private as written)
-  while `jaredpalmer/kev-0.8b` resolves clean (sha `bf75a6a8…`, LoRA + head.pt +
-  provenance.json). Split by acceptance surface (T209) into **T222** (kev loader +
-  harness, ~400L est) and **T223** (bake-off run + docs/judge-parity.md verdict,
-  ~120L est; T220 closes with T223); the premise defect is written into both specs
-  so the next cycle's dispatch is honest without re-research. Deferred with reason:
-  wrap-margin discipline (T207) — two ~50-min children with T204-class death
-  profiles would have spent the entire remaining wall inside one row.
-
-- **Cycle-level notes.** Routine glm freshness-skip (T81 routing 9-for-9 correct —
-  the predicate held and the cycle was glm). Two full arcs landed (T219 feature +
-  T221 validator-findings bug, both in the daemon area, serial) plus one prepared
-  split; one T63 resume burned (t219 run-1, 80/80 mid-debug of a launch-test flake
-  the child itself A/B-proved not-causal — the delegate launch-test family flakes
-  under concurrent loopd load, passes at --test-threads=1; noted for the next eval
-  as a possible deflake row). The T197/T212 dispatch-time re-key discipline caught
-  its own omission mid-flight: the validator launch WARNed on check-vs-goal
-  target-dir drift and the validate-a re-key landed on-branch (ef19737) before the
-  gate could run against the wrong slot. Queue for the next cycle: T222 → T223
-  (the split bake-off), then whatever the fresh eval files. Release: 2 items landed
-  since v0.16.2 (< 3, no FEATURES check-off) → no tag this wrap.
+### Cycle 100 (2026-10-04) — glm routine freshness-skip cycle; 2 landed (T219 0516e05 kimi PASS, T221 c85f6ba the T219-validator findings bug closed in-pass) + T220 split into T222/T223 deferred specs-ready; one T63 resume burned (t219 run-1 80/80 mid-debug, A/B-proved not-causal); the T197/T212 re-key discipline self-caught its own omission mid-flight (ef19737); no tag (2 < 3 since v0.16.2); full narrative in git (row-flip commits + TODO done rows).
 
 ### Cycle 99 (2026-10-04) — glm routine freshness-skip cycle; 4 landed (T214 load-scaled-deadline isolation-tax root fix 654993d via T63 resume, T213, T217, T218 — 2 kimi rounds + 2 T189 lane calls, both child budget deaths absorbed by doctrine with zero work lost, the orchestrator full-suite gates caught T213's fixture-vs-sourcing-line break the children missed); T219/T220 deferred specs-ready; v0.16.2 tagged (bcc98c4); full narrative in git (row-flip commits + TODO done rows).
 
