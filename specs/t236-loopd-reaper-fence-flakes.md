@@ -1,6 +1,6 @@
 # T236 — loopd_orphan_reaper timing-fence reds under full-suite load (the fence class, not timeout bumps)
 
-check: set -o pipefail; export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared; touch src/*.rs tests/*.rs; cargo test --test loopd_orphan_reaper && cargo test --bin chug
+check: set -o pipefail; export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-validate-a; touch src/*.rs tests/*.rs; cargo test --test loopd_orphan_reaper && cargo test --bin chug
 
 ## Repo context
 
