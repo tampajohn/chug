@@ -187,28 +187,53 @@ todo_facts() { # -> "<done> <total>" ("0 0" when TODO.md is missing)
   } END { printf "%d %d", done + 0, total + 0 }' "$CHUG/TODO.md"
 }
 
-# --- fact 2 (req 1): current test count — newest commit message quoting a gate
-# Priority inside a message: `nextest N/M` (N = passed) > `suite N unit` >
-# `N unit`. A filtered run ("cargo test --bin chug image 16/16") matches none
-# of these, deliberately: the card cites a full-suite gate count or nothing.
-# Walks newest-first and stops at the newest message that carries one; the
-# card names that commit, so the citation stays checkable (req 4).
-test_count() { # -> "<n>\t<short-ref>" ("" when no message quotes a gate)
+# --- fact 2 (req 1): current test count — newest commit message quoting a
+# FULL-suite gate (T238: subset counts never masquerade as the suite total —
+# the operator's "113 tests green" was ab93f94's mid-run census "nextest
+# 113/1402", not a suite count). A candidate count inside a message is
+# accepted only when it is provably the full suite:
+#   (a) an N/N pair with EQUAL operands at or above GATE_FLOOR (500 — above
+#       every package subset; the wrap gate's stable shapes: "nextest
+#       1496/1496", release builds "1664/1664"), or
+#   (b) a count the message labels full-suite ADJACENT to the number
+#       ("full suite 40 unit" — the early-era prose shape).
+# Everything else is skipped and the walk CONTINUES to older commits:
+# mismatched mid-run censuses ("nextest 113/1402"), equal-operand package
+# subsets ("site_sync 22/22" via a package nextest run — equal but far below
+# the floor), and bare partial forms ("113 tests"). Failing all 200 messages
+# the card prints the honest n/a — never a subset number. The label leg must
+# sit next to the count, never anywhere in the message: ab93f94's own subject
+# says "full-suite load" around a subset census, so a whole-message label
+# check would re-publish exactly the bug this guard kills.
+# Priority inside a message: `nextest N/M` (N = passed; one runner word such
+# as "release" may sit between) > the labeled `full suite N unit` prose. A
+# filtered run ("cargo test --bin chug image 16/16") matches none of these,
+# deliberately: the card cites a full-suite gate count or nothing.
+GATE_FLOOR=500
+test_count() { # -> "<n>\t<short-ref>" ("" when no message quotes a full-suite gate)
   git --no-pager -C "$CHUG" log -200 --format='%x1e%h%x1f%B' 2>/dev/null \
-    | awk -v RS="$(printf '\036')" -F"$(printf '\037')" '
+    | awk -v RS="$(printf '\036')" -F"$(printf '\037')" -v floor="$GATE_FLOOR" '
       NF < 2 { next }   # text before the first record separator
       {
-        if (match($2, /nextest [0-9]+\/[0-9]+/)) {
-          n = substr($2, RSTART + 8, RLENGTH - 8); sub(/\/[0-9]+$/, "", n)
-          print n "\t" $1; exit
+        # leg (a): every nextest N/M in the message, leftmost first — accept
+        # the first pair the guard passes, keep walking within/older when none
+        msg = $2; pos = 1
+        while (match(substr(msg, pos), /nextest( [a-z][a-z-]*)? [0-9]+\/[0-9]+/)) {
+          oend = RSTART + RLENGTH   # captured before the inner match clobbers it
+          pair = substr(msg, pos + RSTART - 1, RLENGTH)
+          if (match(pair, /[0-9]+\/[0-9]+$/)) {
+            split(substr(pair, RSTART, RLENGTH), nm, "/")
+            if (nm[1] + 0 == nm[2] + 0 && nm[1] + 0 >= floor) {
+              print nm[1] "\t" $1; exit
+            }
+          }
+          pos += oend - 1
         }
-        if (match($2, /suite [0-9]+ unit/)) {
-          n = substr($2, RSTART + 6, RLENGTH - 11)
-          print n "\t" $1; exit
-        }
-        if (match($2, /[0-9]+ unit/)) {
-          n = substr($2, RSTART, RLENGTH - 5)
-          print n "\t" $1; exit
+        # leg (b): the count itself labeled full-suite, adjacent
+        if (match($2, /full[ -]suite[ :]*[0-9]+ unit/)) {
+          lbl = substr($2, RSTART, RLENGTH)
+          match(lbl, /[0-9]+/)
+          print substr(lbl, RSTART, RLENGTH) "\t" $1; exit
         }
       }'
 }

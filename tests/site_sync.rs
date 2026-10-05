@@ -67,8 +67,10 @@ fn commit(dir: &Path, subject: &str, body: Option<&str>, date: &str, allow_empty
 }
 
 /// The chug repo half of the fixture: EVALUATION.md, loopd logs, a 2-done/1-todo
-/// TODO.md, two landed-item commits (t3 gate "suite 40 unit", t4 gate
-/// "nextest 55/55") and a newest gate-less chore commit (walk-back leg).
+/// TODO.md, two landed-item commits (t3 gate "full suite 40 unit" — the T238
+/// labeled-full-suite leg, below the floor, and t4 gate "nextest 555/555" —
+/// equal operands above the T238 floor) and a newest gate-less chore commit
+/// (walk-back leg).
 fn chug_fixture(dir: &Path) {
     let loopd = dir.join(".chug/loopd");
     std::fs::create_dir_all(&loopd).unwrap();
@@ -100,7 +102,7 @@ fn chug_fixture(dir: &Path) {
     commit(
         dir,
         "t4: second item lands in the loop",
-        Some("review+post-merge nextest 55/55 + clippy"),
+        Some("review+post-merge nextest 555/555 + clippy"),
         "2026-09-21",
         true,
     );
@@ -173,9 +175,10 @@ fn block_contents_match_the_named_sources() {
     // items landed = done rows / total rows in the fixture TODO.md (2 of 3)
     assert!(html.contains("<b>2/3</b>"), "done/total card:\n{html}");
     assert!(html.contains("done rows in TODO.md, 3 item rows total"));
-    // current test count = newest gate-quoting commit message (t4's nextest
-    // 55/55 — NOT t3's older suite 40, NOT the gate-less chore HEAD)
-    assert!(html.contains("<b>55</b>"), "tests card:\n{html}");
+    // current test count = newest FULL-suite gate count (t238): t4's nextest
+    // 555/555 — equal operands above the floor — NOT t3's older labeled
+    // "full suite 40 unit", NOT the gate-less chore HEAD
+    assert!(html.contains("<b>555</b>"), "tests card:\n{html}");
     assert!(!html.contains("<b>40</b>"), "older gate count must lose to the newest:\n{html}");
     assert!(html.contains("newest full-suite gate count in a commit message"));
     // cycle count = "cycle OK" lines in .chug/loopd/loopd.log
@@ -1506,15 +1509,139 @@ fn t217_commit_message_records_the_input_stat_counts() {
     let f = fixture();
     let out = run_sync(&f, true);
     assert!(out.status.success(), "sync: {:?}", String::from_utf8_lossy(&out.stderr));
-    // regions written: the fixture's own facts (2/3 items, t4's 55, 2 cycles)
+    // regions written: the fixture's own facts (2/3 items, t4's 555, 2 cycles)
     let html = page(&f);
     assert!(html.contains("<b>2/3</b>"), "items card:\n{html}");
-    assert!(html.contains("<b>55</b>"), "tests card:\n{html}");
+    assert!(html.contains("<b>555</b>"), "tests card:\n{html}");
     assert!(html.contains("<b>2</b>"), "cycles card:\n{html}");
     // ... and the commit body names the same counts
     let log = git(&f.site, &["log", "-1", "--format=%B"], None);
     let body = String::from_utf8_lossy(&log.stdout);
     assert!(body.contains("items 2/3"), "items count in the commit body: {body}");
-    assert!(body.contains("tests 55"), "tests count in the commit body: {body}");
+    assert!(body.contains("tests 555"), "tests count in the commit body: {body}");
     assert!(body.contains("cycles 2"), "cycles count in the commit body: {body}");
+}
+
+// --- T238 — the gate-count scraper reads only FULL-suite counts ---------------
+
+/// T238 req 2 pin: the newest gate-quoting commit carries SUBSETS — the live
+/// ab93f94 shape (a mid-run census "nextest 113/1402", which the card rendered
+/// as "113 tests green" at the newest "full-suite gate count") plus a
+/// mismatched red-tail run ("nextest 1400/1496" — 96 failed, caught by the
+/// EQUALITY leg alone since its passed operand clears the floor) — while an
+/// older commit carries the real suite total ("nextest 1496/1496"). The
+/// region must walk back and show 1496 at the OLDER commit's ref, never a
+/// subset or red-tail number. The census message deliberately also carries
+/// the two prose traps the live commit had: the bare "113 tests" partial form
+/// and the "full-suite load" phrase — a whole-message label check would
+/// re-publish exactly this bug, so the labeled leg must stay adjacent to the
+/// count.
+#[test]
+fn t238_subset_census_walks_back_to_the_full_count() {
+    let f = fixture();
+    let full = commit(
+        &f.chug,
+        "merge: t220 lands the pinned suite",
+        Some("post-merge gates green (1496/1496), nextest 1496/1496 + clippy"),
+        "2026-09-22",
+        true,
+    );
+    let census = commit(
+        &f.chug,
+        "chore: timing-fence census under full-suite load",
+        Some(
+            "mid-run census: nextest 113/1402 (113 tests green so far); \
+             red tail on the older run: nextest 1400/1496 (96 failed)",
+        ),
+        "2026-09-23",
+        true,
+    );
+    let out = run_sync(&f, true);
+    assert!(out.status.success(), "sync: {:?}", String::from_utf8_lossy(&out.stderr));
+    let html = page(&f);
+    assert!(
+        html.contains("<b>1496</b><span>tests green at the newest full-suite gate count in a commit message"),
+        "the region must show the older FULL count, not the newest subset:\n{html}"
+    );
+    assert!(!html.contains("<b>113</b>"), "the subset census must never become the suite total:\n{html}");
+    // the citation stays checkable (req 4): the card names the FULL-count
+    // commit, never the census commit
+    let at = html.find("tests green at the newest full-suite").expect("tests card");
+    let card = &html[at.saturating_sub(60)..(at + 160).min(html.len())];
+    assert!(card.contains(&full), "the card cites the full-count commit: {card}");
+    assert!(!card.contains(&census), "the card must not cite the census commit: {card}");
+}
+
+/// T238 req 3 pin: an EQUAL-operand subset is not the suite total — a
+/// single-package gate run ("site_sync 22/22", carried both in the named
+/// form and as the package nextest run the grammar matches) sits far below
+/// the floor, so the walk skips it and cites the older full count.
+#[test]
+fn t238_equal_operand_package_subset_is_not_accepted() {
+    let f = fixture();
+    let full = commit(
+        &f.chug,
+        "merge: t221 lands",
+        Some("gates green: nextest 1500/1500 + clippy -D warnings"),
+        "2026-09-22",
+        true,
+    );
+    let subset = commit(
+        &f.chug,
+        "chore: site_sync gate run",
+        Some("package gate site_sync 22/22 via cargo nextest -p site_sync: nextest 22/22"),
+        "2026-09-23",
+        true,
+    );
+    let out = run_sync(&f, true);
+    assert!(out.status.success(), "sync: {:?}", String::from_utf8_lossy(&out.stderr));
+    let html = page(&f);
+    assert!(
+        html.contains("<b>1500</b><span>tests green at the newest full-suite gate count in a commit message"),
+        "an equal-operand package subset must lose to the older full count:\n{html}"
+    );
+    assert!(!html.contains("<b>22</b>"), "the subset 22/22 must never render:\n{html}");
+    let at = html.find("tests green at the newest full-suite").expect("tests card");
+    let card = &html[at.saturating_sub(60)..(at + 160).min(html.len())];
+    assert!(card.contains(&full), "the card cites the full-count commit: {card}");
+    assert!(!card.contains(&subset), "the card must not cite the subset commit: {card}");
+}
+
+/// T238 req 1 tail: when NO commit in the walk window carries an acceptable
+/// full-suite count — only subsets — the card prints the honest n/a (and the
+/// sync commit records it) rather than dressing a subset number up as the
+/// suite total.
+#[test]
+fn t238_no_full_suite_count_anywhere_prints_na_not_a_subset() {
+    let keep = tempfile::tempdir().unwrap();
+    let chug = keep.path().join("chug");
+    let site = keep.path().join("site");
+    std::fs::create_dir_all(&chug).unwrap();
+    std::fs::create_dir_all(&site).unwrap();
+    git(&chug, &["-c", "init.defaultBranch=main", "init", "-q"], None);
+    git(&site, &["-c", "init.defaultBranch=main", "init", "-q"], None);
+    // T217 inputs present and readable: only the gate-count fact is empty
+    std::fs::create_dir_all(chug.join(".chug/loopd")).unwrap();
+    std::fs::write(chug.join(".chug/loopd/loopd.log"), "2026-09-25T10:00:00Z cycle OK: x\n").unwrap();
+    std::fs::write(chug.join("EVALUATION.md"), "# EVALUATION — fixture\n").unwrap();
+    std::fs::write(chug.join("TODO.md"), "# TODO\n").unwrap();
+    commit(&chug, "seed: subsets only", None, "2026-09-19", false);
+    commit(&chug, "chore: site_sync gate", Some("site_sync 22/22 (nextest 22/22)"), "2026-09-20", true);
+    commit(&chug, "chore: loop_spec pin", Some("loop_spec 5/5 (nextest 5/5)"), "2026-09-21", true);
+    site_fixture(&site);
+    let f = Fixture { _keep: keep, chug, site };
+    let out = run_sync(&f, true);
+    assert!(out.status.success(), "sync: {:?}", String::from_utf8_lossy(&out.stderr));
+    let html = page(&f);
+    assert!(
+        html.contains("<b>n/a</b><span>tests green — no full-suite gate count found in recent commit messages</span>"),
+        "subsets only => the honest n/a card, never a subset number:\n{html}"
+    );
+    assert!(!html.contains("<b>22</b>") && !html.contains("<b>5</b>"), "no subset number anywhere:\n{html}");
+    let log = git(&f.site, &["log", "-1", "--format=%B"], None);
+    assert!(
+        String::from_utf8_lossy(&log.stdout).contains("tests n/a"),
+        "the sync commit records the n/a: {}",
+        String::from_utf8_lossy(&log.stdout)
+    );
 }
