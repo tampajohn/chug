@@ -1,6 +1,6 @@
 # T245 — release reconcile-after-tag must MERGE (v0.17.4 orphaned by rebase)
 
-check: cargo test --test todo_consistency
+check: export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-validate-a; touch src/*.rs tests/*.rs; cargo test --test todo_consistency
 
 estimate: ~60 lines (doctrine sentence + pin legs + row)
 
