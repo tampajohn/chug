@@ -4023,3 +4023,460 @@ fn todo_edit_guard_floor_targets_main_dedicated_dir_inside_step_5() {
          exemption ({no_touch})"
     );
 }
+
+// ---- T251 — the ctx-edit casualty clauses: mutation-checkpoint ordering + read-first recovery ----
+//
+// Cycle 128 (glm orchestrator, events-20261006-182121.jsonl) fast-forwarded
+// main bd66e31→c982efa (the T249 landing), wrote three bookkeeping files
+// dirty (TODO flip, EVALUATION.md Outcomes, DEPENDENCIES.md), and then —
+// under the T230 occupancy nudge — had an ACCEPTED LIVE_CTX edit collapse
+// its context 108,645 → 1,004 tokens in ONE edit (iter 103), amputating the
+// turns covering the merge and the dirty files' provenance. It spent ~45
+// iterations rediscovering its own state (reflog, the three dirty files,
+// the merge story) and landed the bookkeeping VERBATIM (cfef97f) — zero
+// work lost ONLY because the files were still on disk. Nothing in doctrine
+// required the read-first behavior, and the fleet census (cycle-130 eval,
+// I1) shows deep collapses are the feature's NORMAL operation: 10 accepted
+// LIVE_CTX edits since T192, 8 of them >75% single-edit collapses, 4 of
+// them 89–99%. The hazard is collapse TIMING (mid-mutation, uncommitted
+// bookkeeping), not depth — a driver-side ratio/shrink-floor gate was
+// weighed and REJECTED at filing (it fights the primary use pattern; the
+// T192 pinned/pair/shrink guards already reject malformed edits), so the
+// fix is doctrine, not code. Two clauses, both naming the casualty:
+// (1) step 5's MUTATION-CHECKPOINT ORDERING — the row-flip/Outcomes
+// bookkeeping is written to disk BEFORE any irreversible mutation (a merge
+// or fast-forward into main, a push) wherever the content is knowable
+// pre-mutation, committed IMMEDIATELY after, and NO child dispatch may
+// happen between the mutation and its bookkeeping commit; (2) the Hard
+// rules' READ-FIRST RECOVERY rule — repo state the orchestrator does not
+// remember producing (dirty files, a moved HEAD, commits it did not watch
+// land) is load-bearing until reconstruction proves it disposable, and the
+// four state-destroying git commands are banned against unremembered state
+// (the cycle-61 kill rule's verify-then-act discipline, payloads there,
+// repo state here). Legs (ao)–(ap) pin both clauses in the T48/T64
+// pattern: every needle exactly-once file-wide and inside its section's
+// window (step 5 = `5. **` through `6. **`, reusing the T120 anchors;
+// Hard rules = `## Hard rules` through end-of-file, the spec's LAST
+// section), in the written order. Deleting either clause drops its needles
+// to 0 and the named leg goes red; duplicating one fires the count-2 leg;
+// moving either out of its window (or against its anchors) dies on the
+// ordering asserts. Scope discipline: LOOP-SPEC.md and this file ONLY —
+// the T192 shrink/pair/pinned guards are untouched (collapse depth stays
+// the model's choice), and no driver code changes.
+
+/// The ordering clause's lead — the bolded clause name + T-number. Must
+/// occur EXACTLY once in LOOP-SPEC.md.
+const MUTATION_CHECKPOINT_LEAD: &str = "Mutation-checkpoint ordering (T251)";
+
+/// The write-before commitment — bookkeeping to disk BEFORE the
+/// irreversible mutation. Must occur EXACTLY once in LOOP-SPEC.md.
+const WRITTEN_BEFORE_MUTATION: &str = "MUST be written to disk BEFORE the";
+
+/// The knowability carve-out — where the content is knowable pre-mutation
+/// (the row flip's merge ref is NOT, which is why the commitment splits
+/// into write-before + commit-immediately). Must occur EXACTLY once.
+const KNOWABLE_PRE_MUTATION: &str = "knowable pre-mutation";
+
+/// The commit-immediately commitment. Must occur EXACTLY once.
+const COMMITTED_IMMEDIATELY: &str = "IMMEDIATELY after the mutation lands";
+
+/// The no-dispatch commitment — nothing flies between the mutation and its
+/// bookkeeping commit. Must occur EXACTLY once.
+const NO_DISPATCH_BETWEEN: &str = "NO further child dispatch";
+
+/// The no-dispatch window's span — mutation to bookkeeping commit. Must
+/// occur EXACTLY once.
+const BETWEEN_MUTATION_AND_COMMIT: &str =
+    "between an irreversible mutation and its bookkeeping";
+
+/// The casualty-evidence needle — names the ctx-edit casualty. Must occur
+/// EXACTLY once (the Hard-rules rule names the same casualty WITHOUT the
+/// "The evidence is the cycle-128" prefix, so this count stays one).
+const CTX_EDIT_EVIDENCE: &str = "The evidence is the cycle-128 ctx-edit casualty";
+
+/// The collapse-depth needle — the accepted 99% LIVE_CTX collapse. Must
+/// occur EXACTLY once.
+const COLLAPSE_99: &str = "99% LIVE_CTX collapse";
+
+/// The timing needle — the collapse fired BETWEEN the fast-forward and the
+/// bookkeeping commit (the exact hazard the clause closes). Must occur
+/// EXACTLY once.
+const FIRED_BETWEEN_FF_AND_COMMIT: &str =
+    "fired BETWEEN the fast-forward and the bookkeeping commit";
+
+/// The verbatim-recovery needle — on-disk dirty files were the only reason
+/// the recovery landed the bookkeeping verbatim. Must occur EXACTLY once.
+const DIRTY_FILES_REASON: &str = "on-disk dirty files were the only reason";
+
+/// The operational summary's write half — while the story is still in
+/// context. Must occur EXACTLY once.
+const STORY_IN_CONTEXT: &str = "while the story is still";
+
+/// The operational summary's commit half. Must occur EXACTLY once.
+const COMMIT_THE_MOMENT: &str = "commit it the moment the mutation lands.";
+
+/// Step-5 anchors bracketing the clause's position: the Outcomes-per-item
+/// tail sentence and the push lead it follows (the clause CAPS step 5's
+/// bookkeeping-ordering rules, before step 6's budget check).
+const OUTCOMES_PER_ITEM_TAIL: &str = "children never own the row.";
+const PUSH_LEAD: &str = "**Push after each item";
+
+/// (ao) T251 — step 5's mutation-checkpoint ordering clause: every
+/// load-bearing needle occurs EXACTLY once in LOOP-SPEC.md, all inside
+/// step 5's window (the T64 loose-heading pattern), and the clause sits
+/// AFTER the Outcomes-per-item + push bookkeeping rules it caps and BEFORE
+/// step 6's heading. Delete the clause and the needles go red at count 0;
+/// duplicate any needle and this fires at count 2; move the clause out of
+/// step 5 (or before the push rule it extends) and the ordering assert
+/// dies.
+#[test]
+fn mutation_checkpoint_ordering_clause_exactly_once_inside_step_5() {
+    // Needle self-checks (T48 idiom): a mangled needle must not let this
+    // pin pass silently.
+    assert!(
+        MUTATION_CHECKPOINT_LEAD.starts_with("Mutation-checkpoint")
+            && MUTATION_CHECKPOINT_LEAD.ends_with("(T251)"),
+        "the lead needle must carry the clause's name + T-number verbatim"
+    );
+    assert!(
+        WRITTEN_BEFORE_MUTATION.starts_with("MUST be written to disk")
+            && WRITTEN_BEFORE_MUTATION.ends_with("BEFORE the"),
+        "the write-before needle must carry the ordering commitment verbatim"
+    );
+    assert!(
+        CTX_EDIT_EVIDENCE.starts_with("The evidence is the cycle-128")
+            && CTX_EDIT_EVIDENCE.ends_with("ctx-edit casualty"),
+        "the evidence needle must name the ctx-edit casualty verbatim"
+    );
+    assert!(
+        FIRED_BETWEEN_FF_AND_COMMIT.starts_with("fired BETWEEN")
+            && FIRED_BETWEEN_FF_AND_COMMIT.ends_with("bookkeeping commit"),
+        "the timing needle must carry the between-FF-and-commit fact \
+         verbatim"
+    );
+    assert!(
+        DIRTY_FILES_REASON.starts_with("on-disk dirty files")
+            && DIRTY_FILES_REASON.ends_with("the only reason"),
+        "the verbatim-recovery needle must carry the dirty-files fact \
+         verbatim"
+    );
+    let spec = loop_spec();
+    for (needle, what) in [
+        (MUTATION_CHECKPOINT_LEAD, "the clause's bolded lead"),
+        (WRITTEN_BEFORE_MUTATION, "the write-before commitment"),
+        (KNOWABLE_PRE_MUTATION, "the knowability carve-out"),
+        (COMMITTED_IMMEDIATELY, "the commit-immediately commitment"),
+        (NO_DISPATCH_BETWEEN, "the no-dispatch commitment"),
+        (BETWEEN_MUTATION_AND_COMMIT, "the no-dispatch window's span"),
+        (CTX_EDIT_EVIDENCE, "the ctx-edit casualty evidence"),
+        (COLLAPSE_99, "the 99% LIVE_CTX collapse depth"),
+        (FIRED_BETWEEN_FF_AND_COMMIT, "the collapse-timing evidence"),
+        (DIRTY_FILES_REASON, "the verbatim-recovery fact"),
+        (STORY_IN_CONTEXT, "the write-while-in-context summary"),
+        (COMMIT_THE_MOMENT, "the commit-the-moment summary"),
+    ] {
+        assert_eq!(
+            spec.matches(needle).count(),
+            1,
+            "LOOP-SPEC must state {what} exactly once — zero means the \
+             mutation-checkpoint ordering clause was deleted (or a needle \
+             was rewrapped across a line break), more than one means it is \
+             stated twice"
+        );
+    }
+    let start = spec
+        .find(STEP5_HEADING_LOOSE)
+        .expect("step-5 heading (`5. **`) present");
+    let end = start
+        + spec[start..]
+            .find(STEP6_HEADING_LOOSE)
+            .expect("step-6 heading present after step 5's");
+    let window = &spec[start..end];
+    let outcomes_tail = window.find(OUTCOMES_PER_ITEM_TAIL).expect(
+        "step-5's window must carry the Outcomes-per-item tail \
+         (\"children never own the row\") the clause follows",
+    );
+    let push_lead = window.find(PUSH_LEAD).expect(
+        "step-5's window must carry the push lead (\"**Push after each \
+         item\") the clause follows",
+    );
+    let lead = window.find(MUTATION_CHECKPOINT_LEAD).unwrap_or_else(|| {
+        panic!(
+            "step-5's window must carry the mutation-checkpoint ordering \
+             clause — it was deleted, or moved out of step 5"
+        )
+    });
+    let written = window.find(WRITTEN_BEFORE_MUTATION).expect(
+        "the write-before commitment must sit inside step 5's window \
+         (rewrapped across a line break?)",
+    );
+    let knowable = window.find(KNOWABLE_PRE_MUTATION).expect(
+        "the knowability carve-out must sit inside step 5's window \
+         (rewrapped?)",
+    );
+    let immediately = window.find(COMMITTED_IMMEDIATELY).expect(
+        "the commit-immediately commitment must sit inside step 5's \
+         window (rewrapped?)",
+    );
+    let no_dispatch = window.find(NO_DISPATCH_BETWEEN).expect(
+        "the no-dispatch commitment must sit inside step 5's window \
+         (rewrapped?)",
+    );
+    let span = window.find(BETWEEN_MUTATION_AND_COMMIT).expect(
+        "the no-dispatch window's span must sit inside step 5's window \
+         (rewrapped?)",
+    );
+    let evidence = window.find(CTX_EDIT_EVIDENCE).expect(
+        "the ctx-edit casualty evidence must sit inside step 5's window \
+         (rewrapped?)",
+    );
+    let collapse = window.find(COLLAPSE_99).expect(
+        "the 99% LIVE_CTX collapse depth must sit inside step 5's window \
+         (rewrapped?)",
+    );
+    let fired = window.find(FIRED_BETWEEN_FF_AND_COMMIT).expect(
+        "the collapse-timing evidence must sit inside step 5's window \
+         (rewrapped?)",
+    );
+    let dirty = window.find(DIRTY_FILES_REASON).expect(
+        "the verbatim-recovery fact must sit inside step 5's window \
+         (rewrapped?)",
+    );
+    let story = window.find(STORY_IN_CONTEXT).expect(
+        "the write-while-in-context summary must sit inside step 5's \
+         window (rewrapped?)",
+    );
+    let moment = window.find(COMMIT_THE_MOMENT).expect(
+        "the commit-the-moment summary must sit inside step 5's window \
+         (rewrapped?)",
+    );
+    assert!(
+        outcomes_tail < push_lead
+            && push_lead < lead
+            && lead < written
+            && written < knowable
+            && knowable < immediately
+            && immediately < no_dispatch
+            && no_dispatch < span
+            && span < evidence
+            && evidence < collapse
+            && collapse < fired
+            && fired < dirty
+            && dirty < story
+            && story < moment,
+        "the ordering clause must CAP step 5's bookkeeping rules — AFTER \
+         the Outcomes-per-item tail ({outcomes_tail}) and the push lead \
+         ({push_lead}), BEFORE step 6 — and read in its own written order \
+         (lead {lead}, write-before {written}, knowable {knowable}, \
+         immediately {immediately}, no-dispatch {no_dispatch}, span \
+         {span}, evidence {evidence}, collapse {collapse}, timing {fired}, \
+         dirty-files {dirty}, in-context {story}, commit-the-moment \
+         {moment})"
+    );
+}
+
+/// The recovery rule's lead — the bolded rule name. Must occur EXACTLY
+/// once in LOOP-SPEC.md.
+const READ_FIRST_LEAD: &str = "Read-first recovery against unremembered state";
+
+/// The load-bearing commitment. Must occur EXACTLY once.
+const TREAT_AS_LOAD_BEARING: &str = "MUST treat that state as";
+
+/// The reconstruction recipe — files, then reflog, then the story. Must
+/// occur EXACTLY once.
+const READ_FILES_REFLOG: &str = "read the files, read the reflog";
+
+/// The banned-commands lead — the first state-destroying command. Must
+/// occur EXACTLY once (`git clean` alone also appears in the build-cache
+/// text, so the needle carries the NEVER-run lead).
+const NEVER_RUN_CHECKOUT: &str = "NEVER run `git checkout --`";
+
+/// The banned-commands list's tail — reset --hard + worktree remove
+/// against unremembered state, contiguous as written. Must occur EXACTLY
+/// once.
+const BANNED_LIST_TAIL: &str =
+    "`git reset --hard`, or `git worktree remove` against unremembered state";
+
+/// The disposable gate — reconstruction must PROVE the state disposable
+/// before any destroy. Must occur EXACTLY once.
+const PROVES_DISPOSABLE: &str = "proves it disposable";
+
+/// The casualty naming — context amputation, the rule's why. Must occur
+/// EXACTLY once.
+const AMPUTATION_WHY: &str = "context amputation makes the orchestrator";
+
+/// The stranger phrase — the casualty's named mechanism. Must occur
+/// EXACTLY once.
+const STRANGER_TO_OWN_WORK: &str = "stranger to its own work";
+
+/// The kill-rule tie — the same verify-then-act discipline, WITHOUT
+/// re-quoting the kill rule's pinned "verify-then-kill is SEQUENTIAL"
+/// needle (leg (k) holds that exactly-once; a re-quote would fire it at
+/// count 2). Must occur EXACTLY once.
+const VERIFY_THEN_ACT: &str = "the same verify-then-act discipline";
+
+/// The payloads/repo-state discriminator. Must occur EXACTLY once.
+const PAYLOADS_THERE_REPO_STATE_HERE: &str = "payloads there, repo state here";
+
+/// The rule's closing imperative. Must occur EXACTLY once.
+const READ_RECONSTRUCT_ACT: &str = "reconstruct, then act.";
+
+/// Hard-rules anchors bracketing the rule's position: the single-driver
+/// bullet's tail it sits AFTER, and the two bullets it precedes
+/// (Children-never-edit, README gate).
+const CHAT_TAIL_ANCHOR: &str = "trusted not to run chat turns in the repo mid-cycle).";
+const CHILDREN_NEVER_EDIT: &str =
+    "Children never edit TODO.md or LEDGER.md in the main tree.";
+const README_GATE_LEAD: &str = "README gate before";
+
+/// (ap) T251 — the Hard rules' read-first recovery rule: every
+/// load-bearing needle occurs EXACTLY once in LOOP-SPEC.md, all inside the
+/// Hard-rules window (the spec's LAST section — `## Hard rules` through
+/// end-of-file), and the rule sits AFTER the single-driver bullet's tail
+/// and BEFORE the Children-never-edit and README-gate bullets. Delete the
+/// rule and the needles go red at count 0; duplicate any needle and this
+/// fires at count 2; move the rule out of Hard rules (or against its
+/// anchor bullets) and the ordering assert dies.
+#[test]
+fn read_first_recovery_rule_exactly_once_inside_hard_rules() {
+    // Needle self-checks (T48 idiom): a mangled needle must not let this
+    // pin pass silently.
+    assert!(
+        READ_FIRST_LEAD.starts_with("Read-first")
+            && READ_FIRST_LEAD.ends_with("unremembered state"),
+        "the lead needle must carry the read-first language + its scope \
+         (unremembered state) verbatim"
+    );
+    assert!(
+        TREAT_AS_LOAD_BEARING.starts_with("MUST treat")
+            && TREAT_AS_LOAD_BEARING.ends_with("state as"),
+        "the load-bearing needle must carry the MUST commitment verbatim"
+    );
+    assert!(
+        NEVER_RUN_CHECKOUT.starts_with("NEVER run")
+            && NEVER_RUN_CHECKOUT.ends_with("checkout --`"),
+        "the banned-commands lead must carry the NEVER + the first \
+         state-destroying command verbatim"
+    );
+    assert!(
+        BANNED_LIST_TAIL.starts_with("`git reset --hard`")
+            && BANNED_LIST_TAIL.ends_with("unremembered state"),
+        "the banned-list tail must carry reset --hard + worktree remove \
+         against unremembered state verbatim"
+    );
+    assert!(
+        !VERIFY_THEN_ACT.contains("verify-then-kill is SEQUENTIAL"),
+        "the kill-rule tie must NOT re-quote the kill rule's pinned \
+         verify-then-kill needle (leg (k) holds it exactly-once)"
+    );
+    let spec = loop_spec();
+    for (needle, what) in [
+        (READ_FIRST_LEAD, "the rule's bolded lead"),
+        (TREAT_AS_LOAD_BEARING, "the load-bearing commitment"),
+        (READ_FILES_REFLOG, "the files-then-reflog recipe"),
+        (NEVER_RUN_CHECKOUT, "the banned-commands lead"),
+        (BANNED_LIST_TAIL, "the banned-commands list's tail"),
+        (PROVES_DISPOSABLE, "the proves-it-disposable gate"),
+        (AMPUTATION_WHY, "the context-amputation why"),
+        (STRANGER_TO_OWN_WORK, "the stranger-to-own-work mechanism"),
+        (VERIFY_THEN_ACT, "the verify-then-act tie to the kill rule"),
+        (PAYLOADS_THERE_REPO_STATE_HERE, "the payloads/repo-state split"),
+        (READ_RECONSTRUCT_ACT, "the closing imperative"),
+    ] {
+        assert_eq!(
+            spec.matches(needle).count(),
+            1,
+            "LOOP-SPEC must state {what} exactly once — zero means the \
+             read-first recovery rule was deleted (or a needle was \
+             rewrapped across a line break), more than one means it is \
+             stated twice"
+        );
+    }
+    let hr = spec
+        .find(HARD_RULES_HEADING)
+        .expect("Hard-rules heading (`## Hard rules`) present");
+    // The Hard rules are the spec's LAST section — the window runs to
+    // end-of-file.
+    let window = &spec[hr..];
+    let chat_tail = window.find(CHAT_TAIL_ANCHOR).expect(
+        "the Hard-rules window must carry the single-driver bullet's tail \
+         (the rule's preceding anchor)",
+    );
+    let lead = window.find(READ_FIRST_LEAD).unwrap_or_else(|| {
+        panic!(
+            "the Hard-rules window must carry the read-first recovery rule \
+             — it was deleted, or moved out of Hard rules"
+        )
+    });
+    let treat = window.find(TREAT_AS_LOAD_BEARING).expect(
+        "the load-bearing commitment must sit inside the Hard-rules window \
+         (rewrapped across a line break?)",
+    );
+    let files = window.find(READ_FILES_REFLOG).expect(
+        "the files-then-reflog recipe must sit inside the Hard-rules \
+         window (rewrapped?)",
+    );
+    let never_run = window.find(NEVER_RUN_CHECKOUT).expect(
+        "the banned-commands lead must sit inside the Hard-rules window \
+         (rewrapped?)",
+    );
+    let banned = window.find(BANNED_LIST_TAIL).expect(
+        "the banned-commands list's tail must sit inside the Hard-rules \
+         window (rewrapped?)",
+    );
+    let disposable = window.find(PROVES_DISPOSABLE).expect(
+        "the proves-it-disposable gate must sit inside the Hard-rules \
+         window (rewrapped?)",
+    );
+    let amputation = window.find(AMPUTATION_WHY).expect(
+        "the context-amputation why must sit inside the Hard-rules window \
+         (rewrapped?)",
+    );
+    let stranger = window.find(STRANGER_TO_OWN_WORK).expect(
+        "the stranger-to-own-work mechanism must sit inside the \
+         Hard-rules window (rewrapped?)",
+    );
+    let verify_act = window.find(VERIFY_THEN_ACT).expect(
+        "the verify-then-act tie must sit inside the Hard-rules window \
+         (rewrapped?)",
+    );
+    let payloads = window.find(PAYLOADS_THERE_REPO_STATE_HERE).expect(
+        "the payloads/repo-state split must sit inside the Hard-rules \
+         window (rewrapped?)",
+    );
+    let imperative = window.find(READ_RECONSTRUCT_ACT).expect(
+        "the closing imperative must sit inside the Hard-rules window \
+         (rewrapped?)",
+    );
+    let children = window.find(CHILDREN_NEVER_EDIT).expect(
+        "the Hard-rules window must carry the Children-never-edit bullet \
+         (the rule's following anchor)",
+    );
+    let readme = window.find(README_GATE_LEAD).expect(
+        "the Hard-rules window must carry the README-gate bullet (the \
+         rule's section stays anchored through its end)",
+    );
+    assert!(
+        chat_tail < lead
+            && lead < treat
+            && treat < files
+            && files < never_run
+            && never_run < banned
+            && banned < disposable
+            && disposable < amputation
+            && amputation < stranger
+            && stranger < verify_act
+            && verify_act < payloads
+            && payloads < imperative
+            && imperative < children
+            && children < readme,
+        "the read-first rule must sit INSIDE the Hard-rules window — \
+         AFTER the single-driver bullet's tail ({chat_tail}) and BEFORE \
+         the Children-never-edit ({children}) and README-gate ({readme}) \
+         bullets — and read in its own written order (lead {lead}, \
+         load-bearing {treat}, recipe {files}, banned lead {never_run}, \
+         banned tail {banned}, disposable {disposable}, amputation \
+         {amputation}, stranger {stranger}, verify-then-act {verify_act}, \
+         payloads {payloads}, imperative {imperative})"
+    );
+}
