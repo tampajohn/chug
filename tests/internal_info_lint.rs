@@ -182,6 +182,13 @@ const PATTERNS: &[Pattern] = &[
 // zero-hit-at-HEAD gate. Excluded per the spec's own over-broad/refine rule
 // (specs/t249-internal-info-lint.md), dashd-style; the kept-class shapes
 // are pinned passing below so the exclusion stays load-bearing.
+// RESOLVED OUT-CLASS (T250, 2026-10-06): the machine-codename class is
+// operator-personal infra, public-acceptable (the operator's public
+// identity and site footer already name the machines personally), and
+// PERMANENTLY excluded — no class-5 pattern now or later; the two 47cd0d1
+// prose redactions stay and the ~48 residues stay with them. Ruled by the
+// loop under the row's either-half mandate; the IN-CLASS sweep was
+// rejected as bookkeeping-history rewrite with no protective value.
 
 /// Per-FILE allow-list (req 2): exact repo-relative paths never scanned.
 /// Today the only entry is LICENSE — the org name appears there as the MIT
