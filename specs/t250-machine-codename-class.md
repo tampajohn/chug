@@ -47,3 +47,20 @@ GitHub identity and site footer already name them personally).
 
 - History scrubbing (unchanged from T249 — operator call);
 - the site repo and other repos.
+
+## Resolution (2026-10-06 — loop-executed OUT-CLASS per the either-half mandate)
+
+The machine-codename class (`K7` loop host, `F94` checkout codename;
+53 word-bounded lines across 27 tracked files including this lint's own
+self-excluded source) is ruled operator-personal infra and
+public-acceptable — the operator's public identity and site footer
+already name the machines personally, and the operator's own sweep
+(47cd0d1) generalized the two prose spots while keeping the residues:
+the class is not org info. The exclusion is permanent: no class-5
+pattern is added, the kept-class shapes stay pinned passing so the
+exclusion remains load-bearing, and the class-5 note records this
+ruling. IN-CLASS was rejected on the record: redacting ~48 residues
+would rewrite bookkeeping history (TODO.md rows cite the machines as
+provenance for landed commits), touch doctrine files (loopd.sh), and
+flip two load-bearing pins — churn with no protective value for a
+public-acceptable class.
