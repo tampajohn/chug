@@ -1,6 +1,6 @@
 # T249 — internal-info lint: the repo can never re-accumulate org details
 
-check: export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-validate-a; touch src/*.rs tests/*.rs; cargo test --test internal_info_lint --test todo_consistency
+check: export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared; touch src/*.rs tests/*.rs; cargo test --test internal_info_lint --test todo_consistency
 
 estimate: ~150 lines (lint walk + pattern list + pins)
 
