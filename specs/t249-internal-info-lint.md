@@ -98,7 +98,7 @@ real residue means the residue gets redacted in this same arc (below).
    passes).
 5. In-arc redactions (so the lint is green at merge): the runbook
    `runbooks/laya-hf-hosting.md` carries four fleet-abbreviation
-   residuals and `specs/t205-hf-org-laya-hosting.md` one — redact them
+   residuals and `specs/t205-hf-org-laya-hosting.md` two — redact them
    to the operator's generalized vocabulary ("org-private org",
    "internal machine fleet"). The orchestrator handles the TODO row
    literal, the loopd.sh prose mention, and this spec's own literals
