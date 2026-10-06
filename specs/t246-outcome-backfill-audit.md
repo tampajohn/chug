@@ -1,6 +1,6 @@
 # T246 — outcome-backfill audit at wrap: malformed-chain check + wrap audit step
 
-check: export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared; touch src/*.rs tests/*.rs; cargo test --test decisions_audit --test decisions_export --test loop_spec_decision_records --test todo_consistency
+check: export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-validate-a; touch src/*.rs tests/*.rs; cargo test --test decisions_audit --test decisions_export --test loop_spec_decision_records --test todo_consistency
 
 estimate: ~80 lines (audit-script section + fixture leg + doctrine bullet + pin legs + row)
 
