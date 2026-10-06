@@ -14,8 +14,11 @@
 //! of specs/t249-internal-info-lint.md — the spec names classes and match
 //! rules only, and is itself a tracked file this lint scans, so it must
 //! stay redacted). Each entry's `reason` names its spec class and its
-//! derivation: the before-lines of `git show 47cd0d1` plus the pre-amend
-//! message inventory. Report file:line, NEVER the line content.
+//! derivation: the before-lines of `git show 47cd0d1`, the pre-amend pass
+//! 72201fb's diff (the ONLY record of some pre-redaction shapes — the
+//! monorepo-codename entries; 47cd0d1's tree already carried their
+//! intermediate forms), and the pre-amend message inventory. Report
+//! file:line, NEVER the line content.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -143,8 +146,9 @@ const PATTERNS: &[Pattern] = &[
         name: "proxy-hostname",
         reason: "spec class 6: the internal proxy hostname, exact literal — \
                  `internal-llm-proxy` in the 47cd0d1 before-lines (src/api.rs \
-                 comments, specs/t112; the pre-amend pass first generalized \
-                 the raw host to this form, the landed pass to prose)",
+                 comments, specs/t112 — that intermediate form was already \
+                 in tracked files; the landed pass generalized it to prose, \
+                 the pre-amend pass generalized the raw host straight there)",
         hits: |line| word_bounded(line, "internal-llm-proxy", true),
     },
     Pattern {
@@ -437,6 +441,11 @@ fn word_boundary_pins() {
     // machine-codename letters mid-token pass (kept class — see the class-5
     // note above the pattern table)
     assert!(scan_line("rev d0e6f94a1b2c3d4e5f60718293a4b5c6d7e8f90 is pinned").is_empty());
+    // M1-closing pin (validator round 1): the BEFORE word-boundary is
+    // load-bearing — embedded occurrences with a word char before must
+    // never match ("JAVA" embeds VA; "xvideoamp" embeds the org name).
+    // Mutating the before conjunct away is caught HERE, not by walk luck.
+    assert!(scan_line("the JAVA, shop and the xvideoamp, mirror stay legal").is_empty());
     // standalone forms fail
     assert_eq!(scan_line("migrating it to the VA org"), vec!["fleet-abbrev"]);
     assert_eq!(
