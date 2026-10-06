@@ -1,6 +1,6 @@
 # T251 — LOOP-SPEC mutation-checkpoint ordering + read-first recovery rule (the ctx-edit casualty clauses)
 
-check: cd "$(git rev-parse --show-toplevel)" && export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared && touch src/*.rs tests/*.rs && cargo test --release --test loop_spec_recovery
+check: cd "$(git rev-parse --show-toplevel)" && export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-validate-a && touch src/*.rs tests/*.rs && cargo test --release --test loop_spec_recovery
 
 ## Repo context
 
