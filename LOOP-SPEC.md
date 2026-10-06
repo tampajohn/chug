@@ -544,6 +544,32 @@ simultaneously past gates — T194 amends T161's 2-child cap):
    same tradeoff as step 3, the clippy leg runs the exact form step 3 runs
    (`cargo clippy --all-targets -- -D warnings`, zero warnings not exit-0
    clippy — the T176 semantics), and the dir is warm after its first release build.
+   **Cold-scale gate-leg rule (T242) — stated here once, at the rule's
+   first carrier, and referenced from Phase 3's final gates.** The FIRST
+   cargo leg (build / clippy / nextest) in `target-shared-main` after ANY
+   main commit is cold-scale by construction: `build.rs` watches
+   `.git/HEAD` and the loose ref it points at (the T11 banner-hash
+   watcher — the binary reports its checkout's commit), so every
+   wrap/eval/merge commit moves the ref and invalidates the chug-crate
+   fingerprint, and that first leg re-lints/rebuilds the whole crate —
+   measured 4.5–15+ min cold against the 300s bash cap
+   (`CHUG_BASH_TIMEOUT=300`; the T178 `alarm 280` inner bound is right
+   for a per-command wedge and wrong here). Such a leg NEVER runs inline
+   under the bash cap, and NEVER inline-polled in the same bash call
+   beyond it (the cycle-114 shape: the nextest suite itself finished in
+   43s and the inline poll outlived the cap — five 300s kills across
+   cycles 113–114, ~25 orchestrator minutes, before this rule). It runs
+   as a bounded background window:
+   `nohup sh -c '<cargo legs>' > /tmp/wrap-gates-<ts>.log 2>&1 & echo $!`
+   — then continue other wrap/merge duties, then poll the log in LATER
+   bash calls, each poll a quick tail of the log with process liveness
+   via `kill -0` on the recorded pid plus the zombie/defunct exclusion
+   (the ps rule above). The window itself is unbounded — a nohup'd
+   process outlives any single bash call — and the orchestrator's own
+   iteration budget is the bound. Inline is permitted ONLY known-warm: a
+   same-HEAD cargo leg already completed THIS cycle in
+   `target-shared-main` (e.g. this step's todo_consistency guard run)
+   makes a later same-HEAD leg incremental.
    Docs-only rounds (step 3's classification — every changed file ends
    `.md`) shrink the post-merge gate the same way: the guard floor
    replaces the full suite here too, and the main-dedicated-dir rule
@@ -785,7 +811,16 @@ alike) has been harvested.
   remaining (eval commits, Outcomes) → `goal_complete` with the cycle
   summary. Final gates run in main under the T57 main-dedicated cache:
   `CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-main`, the
-  same ALWAYS rule as step 5's post-merge re-run. The clippy leg is the
+  same ALWAYS rule as step 5's post-merge re-run. **The cold-scale
+  gate-leg rule (T242) binds here too — step 5's shared statement governs
+  both main-dedicated gate surfaces:** the FIRST cargo leg (build /
+  clippy / nextest) in `target-shared-main` after ANY main commit is
+  cold-scale by construction (`build.rs` watches `.git/HEAD` and the
+  loose ref, so every commit invalidates the chug-crate fingerprint) and
+  runs as a bounded background window per step 5's pattern — never
+  inline under the bash cap, never inline-polled in the same call beyond
+  it — with inline permitted only known-warm (a same-HEAD cargo leg
+  already completed this cycle in `target-shared-main`). The clippy leg is the
   exact form — `cargo clippy --all-targets -- -D warnings`, zero warnings
   not exit-0 clippy (the T176 semantics — nextest compiles cfg(test) code
   but never lints it). Never force-push; a
