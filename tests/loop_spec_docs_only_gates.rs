@@ -7,8 +7,9 @@
 //! diff the suite cannot go red for (guard suites excepted — and see leg
 //! (i): an edit touching a PINNED doctrine carrier CAN go red). The remedy is
 //! orchestrator-side and mechanical: when the round diff touches ONLY
-//! `*.md`, the gates shrink to the guard floor (`cargo test --test
-//! todo_consistency`) at review
+//! `*.md`, the gates shrink to the guard floor (`cargo test --release
+//! --test todo_consistency` — the release profile per T253, the one
+//! profile the loop's gates run) at review
 //! AND post-merge, with the classification stated as a template command so
 //! no judgment call is needed; validators keep an explicit escape clause
 //! (a doc diff that QUOTES commands or check lines — the T67 class, where a
@@ -60,10 +61,11 @@ const FULL_GATES_ARROW: &str = "\u{2192} full gates";
 /// AND post-merge). The phrase/command needles must occur EXACTLY once in
 /// LOOP-SPEC.md. FLOOR_CMD is pinned
 /// window-scoped, not whole-file: step 5 already carries one
-/// `cargo test --test todo_consistency` occurrence (the T8 guard run after
+/// `cargo test --release --test todo_consistency` occurrence (the T8
+/// guard run after
 /// every TODO.md edit), so the whole-file count is 2 — one per window.
 const FLOOR: &str = "gates shrink to the guard floor";
-const FLOOR_CMD: &str = "cargo test --test todo_consistency";
+const FLOOR_CMD: &str = "cargo test --release --test todo_consistency";
 /// The step-5 T8 guard run's own sentence form, backticked with its
 /// "(seconds)" tail — T231 (cycle 105) deliberately added a SECOND
 /// occurrence of the bare FLOOR_CMD substring to step 5 (the
@@ -73,8 +75,11 @@ const FLOOR_CMD: &str = "cargo test --test todo_consistency";
 /// bare default", not "(seconds)", and the new T231 pin leg (an) in
 /// loop_spec_recovery.rs pins the env-prefixed form separately (the
 /// T187 pattern: the pin follows the deliberately re-keyed carrier with
-/// the justification named).
-const FLOOR_CMD_T8: &str = "`cargo test --test todo_consistency` (seconds)";
+/// the justification named). T253 (cycle 131) keyed both forms to the
+/// RELEASE profile — the guard runs the profile the gates run (T78), so
+/// a bare `cargo test` debug form is no longer a surface the doctrine
+/// names.
+const FLOOR_CMD_T8: &str = "`cargo test --release --test todo_consistency` (seconds)";
 const SKIP: &str = "skipped at review AND post-merge";
 
 /// (f) The validator escape clause (T67 class): validators retain the right
@@ -256,12 +261,14 @@ fn reduced_gate_set_names_the_guard_floor_and_skip_scope() {
         step3.matches(FLOOR_CMD).count(),
         1,
         "step 3's docs-only override must name the guard-suite floor \
-         `cargo test --test todo_consistency` exactly once"
+         `cargo test --release --test todo_consistency` exactly once — \
+         zero means the release form (T253) was reverted to a bare \
+         debug-profile command"
     );
     assert_eq!(
         step5.matches(FLOOR_CMD_T8).count(),
         1,
-        "step 5's pre-existing T8 guard run (`cargo test --test \
+        "step 5's pre-existing T8 guard run (`cargo test --release --test \
          todo_consistency` (seconds) after every TODO.md edit) must stay \
          intact — T231's env-prefixed invocation is a deliberate second \
          form, pinned separately (leg (an), loop_spec_recovery.rs)"

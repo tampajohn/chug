@@ -361,3 +361,234 @@ fn known_warm_exemption_names_the_guard_run_example() {
          same-HEAD completion"
     );
 }
+
+// ---- T253 — the known-warm exemption is PROFILE-exact; the guard floor names --release ----
+//
+// Cycle 130 fired the profile-blind warmth doctrine twice in one delta
+// (the standing inline-cold-scale census's third and fourth fires): (1)
+// the orchestrator's post-merge main-dedicated guard leg (bare `cargo
+// test --test todo_consistency`, DEBUG) was killed at the 300s bash cap
+// 300,136ms in, minutes after the same dir's release gates ran green
+// same-HEAD — T242's letter PERMITTED the inline run ("a same-HEAD cargo
+// leg already completed THIS cycle"; its example even names the guard
+// run, which is itself a cross-profile counterexample) — and the
+// identical legs re-run WITH `--release` passed instantly; (2)
+// t251-impl's bare `cargo clippy --all-targets -- -D warnings` (dev) was
+// killed inline at the cap; windowed, dev clippy took 7m44s cold vs 51s
+// release in the same worktree (the T253 amendment keys the clippy
+// surfaces' form to --release — T235's needle pins that form). Root
+// cause is doctrinal, not cargo: T242's known-warm clause and the
+// guard/clippy templates never named a profile, so a leg's warmth was
+// left to inference — and the inference is wrong whenever the leg's
+// profile differs from the dir's warm one. The doctrine now names the
+// profile at every surface: the known-warm exemption is profile-exact at
+// BOTH gate surfaces, the per-profile warmth principle is stated once at
+// the step-5 carrier with the fire named, the (seconds) tie-back
+// qualifies the warmth claim with the profile the gates run, and the
+// main-dedicated guard invocation runs `--release` (the docs-only floor's
+// FLOOR_CMD/FLOOR_CMD_T8 needles in loop_spec_docs_only_gates.rs pin the
+// floor commands; the T231 leg in loop_spec_recovery.rs pins the
+// invocation beside this one). This leg pins the profile-exact phrasing,
+// the per-profile principle, the release guard invocation, and the fire's
+// duration token in the file's pattern.
+
+/// Step 5's profile-exact statement of the completed leg — same-HEAD AND
+/// same-profile (T253; flat-matched, the clause wraps mid-phrase). Must
+/// occur EXACTLY once, inside step 5's window.
+const S5_PROFILE_EXACT: &str = "same-HEAD, SAME-PROFILE cargo leg already completed THIS cycle";
+
+/// Step 5's profile-exact statement of the later leg the exemption
+/// licenses — the incremental leg must match BOTH qualifiers too.
+const S5_PROFILE_LATER: &str = "later same-HEAD, same-profile leg incremental";
+
+/// Phase 3's profile-exact restatement (the in-sentence lowercase form,
+/// distinct from step 5's capitalized statement, so the two surfaces
+/// cannot stand in for one another). Must occur EXACTLY once, inside the
+/// Phase-3 window.
+const P3_PROFILE_EXACT: &str = "same-HEAD, same-profile cargo leg already completed this cycle";
+
+/// The per-profile warmth principle — stated once at the step-5 carrier,
+/// with the cycle-130 fire named beside it (both flat-matched).
+const PER_PROFILE: &str = "Warmth is per-PROFILE, never per-dir";
+const FIRE_PRINCIPLE: &str = "a release leg does not warm a debug leg";
+
+/// The fire clause in the known-warm amendment — the same-HEAD debug
+/// guard leg that died at the cap minutes after the same dir's release
+/// gates ran green (the cross-profile counterexample).
+const FIRE_NAMED: &str = "a same-HEAD debug guard leg died at the bash cap";
+
+/// The (seconds) tie-back's profile qualifier (the T231 sentence, amended
+/// by T253): the dir is warm across cycles IN THE PROFILE THE GATES RUN.
+const SECONDS_PROFILE_QUALIFIER: &str = "warm across cycles IN THE PROFILE THE GATES RUN";
+
+/// The cycle-130 fire's measured duration — the load-bearing evidence
+/// token (the orchestrator's guard leg killed at 300,136ms; the identical
+/// `--release` re-run passed instantly).
+const FIRE_DURATION: &str = "300,136ms";
+
+/// The release-profile main-dedicated guard invocation (the T231
+/// invocation as amended by T253) — raw-text pinned: it must stay on ONE
+/// line to stay copy-pasteable. Must occur EXACTLY once, inside step 5's
+/// window.
+const GUARD_RELEASE_INVOCATION: &str =
+    "CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-main cargo test --release --test todo_consistency";
+
+/// (e) T253 — the known-warm exemption is profile-exact at BOTH gate
+/// surfaces, the per-profile warmth principle is stated once at the
+/// step-5 carrier naming the cycle-130 fire, the (seconds) tie-back
+/// qualifies the warmth claim with the profile the gates run, and the
+/// main-dedicated guard invocation runs `--release`. Reverting the
+/// profile-exact phrasing at either surface, reverting the guard's
+/// `--release`, or dropping the fire's evidence token flips this leg red
+/// (count 0, or a window miss); duplicating any needle fires its count
+/// leg; rewrapping the raw-text invocation across a line break dies on
+/// the raw count/window legs.
+#[test]
+fn known_warm_exemption_is_profile_exact_and_guard_floor_names_release() {
+    // Needle self-checks (T48 idiom): a mangled needle must not let this
+    // pin pass silently.
+    assert!(
+        S5_PROFILE_EXACT.contains("SAME-PROFILE")
+            && S5_PROFILE_EXACT.ends_with("THIS cycle"),
+        "the step-5 profile-exact needle must carry the SAME-PROFILE \
+         qualifier + the THIS-cycle bound verbatim"
+    );
+    assert!(
+        S5_PROFILE_LATER.starts_with("later same-HEAD")
+            && S5_PROFILE_LATER.ends_with("leg incremental"),
+        "the step-5 later-leg needle must carry the same-profile \
+         incremental-leg language verbatim"
+    );
+    assert!(
+        P3_PROFILE_EXACT.contains("same-profile")
+            && P3_PROFILE_EXACT.ends_with("this cycle"),
+        "the Phase-3 profile-exact needle must carry the in-sentence \
+         same-profile form verbatim (lowercase, distinct from step 5's)"
+    );
+    assert!(
+        PER_PROFILE.starts_with("Warmth is per-PROFILE")
+            && PER_PROFILE.ends_with("never per-dir"),
+        "the principle needle must carry the per-PROFILE warmth statement \
+         verbatim"
+    );
+    assert!(
+        FIRE_NAMED.contains("debug guard leg")
+            && FIRE_NAMED.ends_with("bash cap"),
+        "the fire needle must name the cross-profile casualty verbatim"
+    );
+    assert!(
+        SECONDS_PROFILE_QUALIFIER.starts_with("warm across cycles")
+            && SECONDS_PROFILE_QUALIFIER.ends_with("THE GATES RUN"),
+        "the tie-back qualifier needle must carry the profile-the-gates-run \
+         language verbatim"
+    );
+    assert_eq!(FIRE_DURATION, "300,136ms");
+    assert!(
+        GUARD_RELEASE_INVOCATION.starts_with("CARGO_TARGET_DIR=")
+            && GUARD_RELEASE_INVOCATION.contains("target-shared-main")
+            && GUARD_RELEASE_INVOCATION.ends_with("--release --test todo_consistency"),
+        "the invocation needle must carry the T57 env prefix + the \
+         release-profile guard selection verbatim"
+    );
+
+    let raw = loop_spec();
+    let spec = flat(&raw);
+    let s5 = flat(step5_window(&raw));
+    let p3 = flat(phase3_window(&raw));
+
+    // Profile-exact phrasing at BOTH T242 surfaces: each needle occurs
+    // EXACTLY once whole-file and inside its own window — a revert at
+    // either surface drops its count to 0, a duplicate fires the count
+    // leg, a move out of the window dies on the contains.
+    for (needle, what, window, wname) in [
+        (
+            S5_PROFILE_EXACT,
+            "step 5's same-HEAD, SAME-PROFILE completed-leg statement",
+            &s5,
+            "step 5",
+        ),
+        (
+            S5_PROFILE_LATER,
+            "step 5's same-profile later-leg statement",
+            &s5,
+            "step 5",
+        ),
+        (
+            P3_PROFILE_EXACT,
+            "Phase 3's same-HEAD, same-profile restatement",
+            &p3,
+            "Phase 3",
+        ),
+    ] {
+        assert_eq!(
+            spec.matches(needle).count(),
+            1,
+            "LOOP-SPEC must state {what} exactly once — zero means the \
+             profile-exact amendment was reverted, more than one means it \
+             is stated twice"
+        );
+        assert!(
+            window.contains(needle),
+            "{wname}'s window must carry {what} ({needle:?})"
+        );
+    }
+
+    // The per-profile principle + the fire's two clauses: exactly once,
+    // at the step-5 carrier (the single-statement discipline — Phase 3
+    // references the shared statement, it does not restate the
+    // principle).
+    for (needle, what) in [
+        (PER_PROFILE, "the warmth-is-per-PROFILE principle"),
+        (FIRE_PRINCIPLE, "the release-leg-does-not-warm-debug principle"),
+        (FIRE_NAMED, "the cycle-130 fire's cross-profile casualty clause"),
+    ] {
+        assert_eq!(
+            spec.matches(needle).count(),
+            1,
+            "LOOP-SPEC must state {what} exactly once, at the step-5 \
+             carrier — zero means the amendment was dropped, more than \
+             one means the principle forked into a second variant"
+        );
+        assert!(
+            s5.contains(needle),
+            "step 5's window must carry {what} ({needle:?})"
+        );
+    }
+
+    // The (seconds) tie-back's profile qualifier and the fire's measured
+    // duration: exactly once, inside step 5's window.
+    assert_eq!(
+        spec.matches(SECONDS_PROFILE_QUALIFIER).count(),
+        1,
+        "LOOP-SPEC must qualify the (seconds) warmth claim with the \
+         profile the gates run exactly once — zero means the T253 \
+         qualifier was reverted, more than one means it is stated twice"
+    );
+    assert!(s5.contains(SECONDS_PROFILE_QUALIFIER));
+    assert_eq!(
+        spec.matches(FIRE_DURATION).count(),
+        1,
+        "LOOP-SPEC must carry the cycle-130 fire's 300,136ms duration \
+         exactly once — zero means the evidence token was dropped, more \
+         than one means it leaked beyond the tie-back"
+    );
+    assert!(s5.contains(FIRE_DURATION));
+
+    // The release-profile guard invocation: raw-text pinned (one line,
+    // copy-pasteable), exactly once, inside step 5's window. Reverting
+    // the `--release` drops the count to 0 — the same flip T231's leg in
+    // loop_spec_recovery.rs rides.
+    assert_eq!(
+        raw.matches(GUARD_RELEASE_INVOCATION).count(),
+        1,
+        "LOOP-SPEC must carry the release-profile main-dedicated guard \
+         invocation exactly once, on one line — zero means the `--release` \
+         was reverted (a bare debug-profile guard leg in target-shared-main \
+         is cold-scale, the cycle-130 fire), more than one means it forked"
+    );
+    assert!(
+        step5_window(&raw).contains(GUARD_RELEASE_INVOCATION),
+        "the release-profile guard invocation must live inside step 5's \
+         window (the TODO.md-edit guard paragraph)"
+    );
+}

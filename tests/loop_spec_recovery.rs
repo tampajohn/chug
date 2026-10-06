@@ -2304,12 +2304,19 @@ fn goal_template_clippy_bar_denies_warnings() {
 // surface is deliberately UNCHANGED — spec check lines stay test-only (the
 // goal gate's job is test-green; lint is these gates' job) — and the impl
 // goal template is untouched (T176's prose already demands the form).
+// T253 (cycle 131) keyed the form to the RELEASE profile at all four
+// surfaces — every gate surface runs the one profile the loop warms
+// (T78/T82), so the dev-profile form was a cross-profile cold-scale leg
+// waiting to fire (the cycle-130 t251-impl kill); the count stays 4 and
+// the needle self-check carries the new exact form.
 
-/// The exact clippy form every orchestrator gate surface must name. Must
-/// occur EXACTLY once inside EACH of the three gate windows and exactly
-/// FOUR times in LOOP-SPEC.md overall — the three gate surfaces plus the
-/// T176 prose paragraph's pre-existing mention in step 2's window.
-const CLIPPY_ALL_TARGETS_FORM: &str = "cargo clippy --all-targets -- -D warnings";
+/// The exact clippy form every orchestrator gate surface must name — the
+/// RELEASE-profile form (T253): `--release` between `--all-targets` and
+/// the lint level, exactly as the gates run it. Must occur EXACTLY once
+/// inside EACH of the three gate windows and exactly FOUR times in
+/// LOOP-SPEC.md overall — the three gate surfaces plus the T176 prose
+/// paragraph's pre-existing mention in step 2's window.
+const CLIPPY_ALL_TARGETS_FORM: &str = "cargo clippy --all-targets --release -- -D warnings";
 
 /// Phase 3's final-gates bullet anchor — the form must sit after it inside
 /// the Phase-3 window (the bullet is where the cycle-107 catch fired).
@@ -2331,8 +2338,9 @@ fn orchestrator_gate_surfaces_pin_the_exact_clippy_form() {
     // Needle self-check (T48 idiom): a mangled needle must not let this
     // pin pass silently.
     assert_eq!(
-        CLIPPY_ALL_TARGETS_FORM, "cargo clippy --all-targets -- -D warnings",
-        "the needle must be the exact --all-targets form verbatim"
+        CLIPPY_ALL_TARGETS_FORM, "cargo clippy --all-targets --release -- -D warnings",
+        "the needle must be the exact --all-targets --release form verbatim \
+         (T253: the release profile is the one the loop's gates warm)"
     );
 
     let spec = loop_spec();
@@ -3672,8 +3680,9 @@ const FILTER_LIST_NEEDLE: &str = "tail/head/grep.";
 
 /// The gate sentence (the existing TODO.md-edit rule) the new sentence
 /// sits AFTER — the carrier extends the gate, never replaces or precedes
-/// it.
-const GATE_SENTENCE_NEEDLE: &str = "runs `cargo test --test todo_consistency` (seconds)";
+/// it. T253 keyed the guard to the RELEASE profile (the profile the gates
+/// run, T78).
+const GATE_SENTENCE_NEEDLE: &str = "runs `cargo test --release --test todo_consistency` (seconds)";
 
 /// The sed bookkeeping paragraph that CLOSES the region — the sentence
 /// must sit before it (inside the TODO.md-edit paragraph, not drifted
@@ -3755,7 +3764,7 @@ fn todo_edit_gate_unpiped_needles_exactly_once_inside_step_5() {
     let window = &spec[start..end];
     let gate = window.find(GATE_SENTENCE_NEEDLE).expect(
         "step-5's window must carry the gate sentence \
-         (`cargo test --test todo_consistency` (seconds)) the unpiped rule \
+         (`cargo test --release --test todo_consistency` (seconds)) the unpiped rule \
          guards",
     );
     let unpiped = window.find(GATE_UNPIPED_NEEDLE).unwrap_or_else(|| {
@@ -3832,9 +3841,13 @@ fn todo_edit_gate_unpiped_needles_exactly_once_inside_step_5() {
 /// The amended invocation needle — the T57 main-dedicated dir prefix +
 /// the guard's test selection, contiguous as written (single line, per
 /// the file's long-inline-command precedent at the T82 runner
-/// templates). Must occur EXACTLY once in LOOP-SPEC.md.
+/// templates). T253 keyed the guard to the RELEASE profile — the
+/// profile the gates run in that dir (T78) — so a debug-profile guard
+/// leg there is cold-scale (the cycle-130 fire: a 300,136ms kill, its
+/// identical `--release` re-run instant). Must occur EXACTLY once in
+/// LOOP-SPEC.md.
 const GUARD_TARGET_DIR_NEEDLE: &str =
-    "CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-main cargo test --test todo_consistency";
+    "CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-main cargo test --release --test todo_consistency";
 
 /// The never-the-bare-default needle — the guard builds in the
 /// main-dedicated dir, not the cold-by-construction default, contiguous
@@ -3881,9 +3894,10 @@ fn todo_edit_guard_floor_targets_main_dedicated_dir_inside_step_5() {
     assert!(
         GUARD_TARGET_DIR_NEEDLE
             .starts_with("CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-main")
-            && GUARD_TARGET_DIR_NEEDLE.ends_with("cargo test --test todo_consistency"),
+            && GUARD_TARGET_DIR_NEEDLE.ends_with("cargo test --release --test todo_consistency"),
         "the invocation needle must carry the T57 env prefix + the guard's \
-         test selection verbatim (contiguous as written)"
+         release-profile test selection verbatim (contiguous as written, \
+         per T253)"
     );
     assert!(
         GUARD_NEVER_DEFAULT_NEEDLE.starts_with("never the bare default")
@@ -3960,7 +3974,7 @@ fn todo_edit_guard_floor_targets_main_dedicated_dir_inside_step_5() {
     let window = &spec[start..end];
     let gate = window.find(GATE_SENTENCE_NEEDLE).expect(
         "step-5's window must carry the gate sentence \
-         (`cargo test --test todo_consistency` (seconds)) the target-dir \
+         (`cargo test --release --test todo_consistency` (seconds)) the target-dir \
          rule qualifies",
     );
     let unpiped = window.find(GATE_UNPIPED_NEEDLE).expect(

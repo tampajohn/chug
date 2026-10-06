@@ -208,11 +208,14 @@ simultaneously past gates — T194 amends T161's 2-child cap):
    CHILD A` commit attempt — each a round trip inside a 200-iteration
    budget that later ran out unwrapped.
    The clippy bar in that goal is the `-D warnings` form — the child runs
-   `cargo clippy --all-targets -- -D warnings` and must reach zero
-   warnings, not merely exit-0 clippy (the cycle-77 T166 instance is the
-   evidence: an impl committed with a `needless_lifetimes` warning under a
-   "clippy clean" claim, caught by the kimi validator and fixed on-branch
-   at 7911b3c — a mechanical nit the child's own gate should have caught).
+   `cargo clippy --all-targets --release -- -D warnings` and must reach
+   zero warnings, not merely exit-0 clippy (the cycle-77 T166 instance is
+   the evidence: an impl committed with a `needless_lifetimes` warning
+   under a "clippy clean" claim, caught by the kimi validator and fixed
+   on-branch at 7911b3c — a mechanical nit the child's own gate should
+   have caught; the bar's profile is release too — the cycle-130
+   t251-impl child's bare dev-profile clippy ran 7m44s cold in the same
+   worktree where the release clippy took 51s).
    `max_iters: 80` and `max_minutes: 50` are explicit — delegate's
    defaults stay 40/35, and the template overrides minutes explicitly;
    T21's headroom must survive the migration.
@@ -345,9 +348,10 @@ simultaneously past gates — T194 amends T161's 2-child cap):
    else the same touch guard + bounded cap around the fallback
    `touch src/*.rs tests/*.rs; CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared perl -e 'alarm 280; exec @ARGV' cargo test --release -- --test-threads=4`;
    the clippy leg runs beside the suite, not through it —
-   `cargo clippy --all-targets -- -D warnings`, zero warnings not exit-0
-   clippy (the T176 semantics — nextest compiles cfg(test) code but never
-   LINTS it, so a narrower clippy form lets test-only warnings through) —
+   `cargo clippy --all-targets --release -- -D warnings`, zero warnings
+   not exit-0 clippy (the T176 semantics — nextest compiles cfg(test)
+   code but never LINTS it, so a narrower clippy form lets test-only
+   warnings through) —
    the T47 env prefix keeps the gate on the shared warm cache; bash tool
    calls don't share env, so the step-1 export doesn't persist between
    calls; the T195 `touch` prefix rebinds the shared dir's artifacts to
@@ -387,9 +391,10 @@ simultaneously past gates — T194 amends T161's 2-child cap):
    after a first cold build). Never trust a claim of green without seeing it.
    **Docs-only rounds skip the cargo gates (T80).** When the round diff
    touches ONLY `*.md` — file-extension-exact, not "mostly docs" — gates
-   shrink to the guard floor `cargo test --test todo_consistency` (still
-   under the bounded-cap rule, same T195 touch guard + env prefix as the
-   full gate), and the
+   shrink to the guard floor
+   `cargo test --release --test todo_consistency` (still under the
+   bounded-cap rule, same T195 touch guard + env prefix as the full
+   gate), and the
    full build/clippy/test is skipped at review AND post-merge (step 5
    applies the same
    classification). The classification is mechanical and stated as a
@@ -578,8 +583,9 @@ simultaneously past gates — T194 amends T161's 2-child cap):
    `cargo test --release -- --test-threads=4` under the bounded cap (step
    3's templates: `alarm 280` below the `CHUG_BASH_TIMEOUT=300` bash cap) —
    same tradeoff as step 3, the clippy leg runs the exact form step 3 runs
-   (`cargo clippy --all-targets -- -D warnings`, zero warnings not exit-0
-   clippy — the T176 semantics), and the dir is warm after its first release build.
+   (`cargo clippy --all-targets --release -- -D warnings`, zero warnings
+   not exit-0 clippy — the T176 semantics), and the dir is warm after its
+   first release build.
    **Cold-scale gate-leg rule (T242) — stated here once, at the rule's
    first carrier, and referenced from Phase 3's final gates.** The FIRST
    cargo leg (build / clippy / nextest) in `target-shared-main` after ANY
@@ -603,9 +609,12 @@ simultaneously past gates — T194 amends T161's 2-child cap):
    (the ps rule above). The window itself is unbounded — a nohup'd
    process outlives any single bash call — and the orchestrator's own
    iteration budget is the bound. Inline is permitted ONLY known-warm: a
-   same-HEAD cargo leg already completed THIS cycle in
+   same-HEAD, SAME-PROFILE cargo leg already completed THIS cycle in
    `target-shared-main` (e.g. this step's todo_consistency guard run)
-   makes a later same-HEAD leg incremental.
+   makes a later same-HEAD, same-profile leg incremental. Warmth is
+   per-PROFILE, never per-dir: a release leg does not warm a debug leg
+   (the cycle-130 fire — a same-HEAD debug guard leg died at the bash
+   cap minutes after the same dir's release gates ran green).
    Docs-only rounds (step 3's classification — every changed file ends
    `.md`) shrink the post-merge gate the same way: the guard floor
    replaces the full suite here too, and the main-dedicated-dir rule
@@ -633,7 +642,7 @@ simultaneously past gates — T194 amends T161's 2-child cap):
    pipe splits one cell into two and fails the guard (cycle-16's
    goal-gate death: a recipe pipe in the T37 notes cell rejected
    `goal_complete` at ~118/120 and the run aborted 120/120) — and the
-   orchestrator runs `cargo test --test todo_consistency` (seconds)
+   orchestrator runs `cargo test --release --test todo_consistency` (seconds)
    after every TODO.md edit, before committing.
    The todo_consistency run is UNPIPED, or the chain begins
    `set -o pipefail;` — a piped gate whose filter exits 0 reports
@@ -641,15 +650,19 @@ simultaneously past gates — T194 amends T161's 2-child cap):
    ANY ad-hoc gate chain the orchestrator pipes through
    tail/head/grep.
    The guard run names the T57 main-dedicated dir IN its invocation —
-   `CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-main cargo test --test todo_consistency` —
+   `CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-main cargo test --release --test todo_consistency` —
    never the bare default `target/`: a version bump colds that dir by
    construction (a manifest-only change stales every artifact in it),
    and the cycle-104 wrap paid it four consecutive 300s guard/gate
    timeouts (`Compiling chug v0.17.1` killed mid-compile four times,
    ~20 wrap minutes burned) — the main-dedicated dir is warm across
-   cycles, which is what makes the (seconds) above true, and the guard
-   needs the env prefix only, NO T195 touch (the main-dedicated
-   exemption: every builder in that dir is a main checkout).
+   cycles IN THE PROFILE THE GATES RUN (release per T78 — a bare
+   `cargo test` debug leg is cold-scale there, the cycle-130 fire: a
+   300,136ms kill at the bash cap whose identical `--release` re-run
+   passed instantly), which is what makes the (seconds) above true,
+   and the guard needs the env prefix only, NO T195 touch (the
+   main-dedicated exemption: every builder in that dir is a main
+   checkout).
    When editing repo files with `sed` or other in-place bash edits
    (bookkeeping, harvest, gates scripting), grep-verify the intended
    needle in the same command line or the immediately following one —
@@ -899,9 +912,10 @@ alike) has been harvested.
   loose ref, so every commit invalidates the chug-crate fingerprint) and
   runs as a bounded background window per step 5's pattern — never
   inline under the bash cap, never inline-polled in the same call beyond
-  it — with inline permitted only known-warm (a same-HEAD cargo leg
-  already completed this cycle in `target-shared-main`). The clippy leg is the
-  exact form — `cargo clippy --all-targets -- -D warnings`, zero warnings
+  it — with inline permitted only known-warm (a same-HEAD, same-profile
+  cargo leg already completed this cycle in `target-shared-main`). The
+  clippy leg is the exact form —
+  `cargo clippy --all-targets --release -- -D warnings`, zero warnings
   not exit-0 clippy (the T176 semantics — nextest compiles cfg(test) code
   but never lints it). Never force-push; a
   rejected push means the remote moved — stop
