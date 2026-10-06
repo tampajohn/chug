@@ -1,6 +1,6 @@
 # T248 — LOOP-SPEC Phase 3: the token verbatim appears ONLY in a true disposition wrap subject + post-commit sleep-ok probe (3 fires, 2 classes)
 
-check: export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared; touch src/*.rs tests/*.rs; cargo test --test loop_spec_empty_chain --test todo_consistency
+check: export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-validate-a; touch src/*.rs tests/*.rs; cargo test --test loop_spec_empty_chain --test todo_consistency
 
 estimate: ~60 lines all-in (two clause sentences ~15 + two pin legs ~30 + row)
 
