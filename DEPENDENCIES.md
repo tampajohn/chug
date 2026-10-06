@@ -60,7 +60,11 @@ private `tampajohn/*` repos) is, before ANY consumer points at it:
 2. **Secret-scanned over its training corpus** (gitleaks-class), with the
    scan result recorded in the model card — the operator's spill history
    makes this a hard gate, not advice. The repo-wide equivalent lives at
-   `tests/no_secret_spill.rs` (HF_TOKEN appears as a NAME, never a value).
+   `tests/no_secret_spill.rs` (HF_TOKEN appears as a NAME, never a value);
+   the org-identifying-literal sibling is `tests/internal_info_lint.rs`
+   (T249) — the tracked tree is pattern-scanned (org name LICENSE-only,
+   fleet abbreviation, internal codenames, internal hosts) so the
+   2026-10-06 redaction pass cannot regrow.
 3. **Revision-pinned by consumers** — `CHUG_LAYA_CHECKPOINT=org/model@REV`
    (a policy-affecting artifact must not move under a running fleet).
 
