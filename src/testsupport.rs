@@ -365,7 +365,22 @@ fn t214_live_deadline_stays_within_base_and_4x() {
         Duration::from_secs(90),
         Duration::from_millis(1234),
     ] {
+        // T252: bracket the live call with two load reads. `load_scaled_deadline`
+        // reads the 1-minute load average INTERNALLY, and the expected
+        // composition below reads it AGAIN — when the average updates between
+        // the two reads (a busy host crossing a loadavg update boundary — the
+        // cycle-130 goal-gate fire: cold recompile + 42 parallel test
+        // binaries, left 98.95s vs right 94.6s), the equality false-reds
+        // though the fence is correct. Assert the composition only when the
+        // bracket reads coincide — the seam was stable across the live call
+        // (the near-universal case: loadavg quantizes and updates on a
+        // multi-second cadence while the bracket reads are microseconds
+        // apart, so the equality leg still fires on virtually every run and
+        // the pin stays load-bearing). The [base, 4x base] invariant legs
+        // below are the assertions that carry a churn-window run.
+        let before = read_loadavg_1m();
         let scaled = load_scaled_deadline(base);
+        let after = read_loadavg_1m();
         assert!(
             scaled >= base,
             "the fence must never shrink below its base: {scaled:?} < {base:?}"
@@ -375,7 +390,9 @@ fn t214_live_deadline_stays_within_base_and_4x() {
             "the fence must never exceed 4x its base: {scaled:?} > {:?}",
             base * 4
         );
-        if let (Some(load), Ok(cores)) = (read_loadavg_1m(), std::thread::available_parallelism()) {
+        if let (Some(load), Ok(cores)) = (after, std::thread::available_parallelism())
+            && before == after
+        {
             let expected = scaled_deadline(
                 Some(load),
                 u32::try_from(cores.get()).ok(),
