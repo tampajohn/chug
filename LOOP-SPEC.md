@@ -844,7 +844,24 @@ alike) has been harvested.
   whose subject drops the token silently resets the streak and defeats
   the pacing. The walk skips pure bookkeeping (`eval:` commits that are
   not wrap notes — Outcomes compaction and the like) and stops at any
-  real wrap or landed work; keep the token verbatim.
+  real wrap or landed work; keep the token verbatim. Quote discipline
+  (T248): the token appears verbatim ONLY in a true disposition wrap
+  subject — an `eval:` commit subject carries the literal token when
+  and only when the commit IS that wrap; every other mention writes
+  around it (a negation drops the noun — e.g. "NOT a disposition — the
+  token does not bind"; a description or quotation says "the T237
+  token" or "the disposition token"), because the walk is a dumb
+  substring match by design and reads a negated or descriptive quote
+  as a disposition (three fires: cycle-118 00c26f3 and cycle-123
+  b4b935d negations, cycle-124 a5bd504 descriptive); awk
+  quote-detection stays REJECTED per d1791277274-2 (brittle) — the
+  authoring surface is the only guard. Probe timing (T248): the wrap's
+  T237-watch `./loopd.sh sleep-ok` probe runs AFTER the wrap-notes
+  commit lands (or the notes explicitly name the probe as pre-commit)
+  — the probe must read the streak the landed subject actually
+  produces, never a pre-commit read reported as the post-commit
+  machine streak (the cycle-123 miss: `60 0` probed at the pre-wrap
+  HEAD, `120 1` post-commit).
 - Final gates green in main (build + clippy + step 5's T82 gate runner —
   `cargo nextest run --release` when `cargo nextest` is on PATH, else
   `cargo test --release`) → push anything

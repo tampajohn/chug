@@ -259,3 +259,62 @@ fn chain_clause_carries_the_handoff_trips_and_adjudication() {
         );
     }
 }
+
+// ---- the T248 Phase-3 legs: quote discipline + probe timing ----
+
+/// (d) The quote-discipline rule (Phase 3's T237 token bullet) — the token
+/// appears verbatim ONLY in a true disposition wrap subject; every other
+/// mention in an `eval:` subject writes around it. Must occur EXACTLY once
+/// in LOOP-SPEC.md (whitespace-collapsed).
+const QUOTE_NEEDLE: &str = "verbatim ONLY in a true disposition wrap subject";
+
+/// (e) The probe-timing rule (the same bullet) — the wrap's T237-watch
+/// sleep-ok probe reads the streak after the wrap-notes commit lands (or
+/// is explicitly named pre-commit). Must occur EXACTLY once.
+const PROBE_NEEDLE: &str = "probe runs AFTER the wrap-notes commit lands";
+
+/// (d) The quote-discipline rule occurs EXACTLY once in LOOP-SPEC.md.
+/// Delete the clause (or reword the needle phrase) and this goes red at
+/// count 0; a duplicate statement of the rule elsewhere also goes red;
+/// rewrapping the phrase cannot save a deletion (the needle matches
+/// whitespace-collapsed text).
+#[test]
+fn quote_discipline_needle_occurs_exactly_once() {
+    // Needle self-check (T48 idiom): a mangled needle must not let this
+    // pin pass silently.
+    assert!(
+        QUOTE_NEEDLE.starts_with("verbatim ONLY")
+            && QUOTE_NEEDLE.ends_with("disposition wrap subject"),
+        "the quote-discipline needle must carry the verbatim-token rule — \
+         ONLY in a true disposition wrap subject"
+    );
+    let spec = flat(&loop_spec());
+    assert_eq!(
+        spec.matches(QUOTE_NEEDLE).count(),
+        1,
+        "LOOP-SPEC must state the quote-discipline rule ({QUOTE_NEEDLE:?}) \
+         exactly once — zero means the rule was deleted or reworded (the \
+         T248 text-revert mutant), more than one means it is stated twice"
+    );
+}
+
+/// (e) The probe-timing rule occurs EXACTLY once in LOOP-SPEC.md. Delete
+/// the clause (or reword the needle phrase) and this goes red at count 0;
+/// a duplicate statement of the rule elsewhere also goes red.
+#[test]
+fn probe_timing_needle_occurs_exactly_once() {
+    assert!(
+        PROBE_NEEDLE.starts_with("probe runs AFTER")
+            && PROBE_NEEDLE.ends_with("wrap-notes commit lands"),
+        "the probe-timing needle must carry the post-commit probe rule — \
+         the probe reads the streak after the wrap-notes commit lands"
+    );
+    let spec = flat(&loop_spec());
+    assert_eq!(
+        spec.matches(PROBE_NEEDLE).count(),
+        1,
+        "LOOP-SPEC must state the probe-timing rule ({PROBE_NEEDLE:?}) \
+         exactly once — zero means the rule was deleted or reworded (the \
+         T248 text-revert mutant), more than one means it is stated twice"
+    );
+}
