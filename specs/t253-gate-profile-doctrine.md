@@ -1,6 +1,6 @@
 # T253 — gate/guard doctrine names the profile: T242 known-warm profile-exact + `--release` on the guard-floor and clippy surfaces
 
-check: cd "$(git rev-parse --show-toplevel)" && export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-validate-a && touch src/*.rs tests/*.rs && cargo test --release --test loop_spec_cold_gates --test loop_spec_docs_only_gates --test loop_spec_recovery --test todo_consistency
+check: cd "$(git rev-parse --show-toplevel)" && export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared && touch src/*.rs tests/*.rs && cargo test --release --test loop_spec_cold_gates --test loop_spec_docs_only_gates --test loop_spec_recovery --test todo_consistency
 
 ## Repo context
 
