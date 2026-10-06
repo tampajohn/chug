@@ -81,4 +81,4 @@ tests/loop_spec_cold_gates.rs; doctrine+pin density band 0.4–3.3x applies)
   the family is green; no other file touched (doctrine rows stay in their
   named targets).
 
-check: export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared; touch src/*.rs tests/*.rs; cargo test --test loop_spec_cold_gates --test loop_spec_check_wall --test loop_spec_docs_only_gates --test loop_spec_tag_doctrine --test loop_spec_validation_lane --test todo_consistency
+check: export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-validate-a; touch src/*.rs tests/*.rs; cargo test --test loop_spec_cold_gates --test loop_spec_check_wall --test loop_spec_docs_only_gates --test loop_spec_tag_doctrine --test loop_spec_validation_lane --test todo_consistency
