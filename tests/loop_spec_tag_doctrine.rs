@@ -11,6 +11,12 @@
 //! BOOTSTRAP clause — the FIRST tag is operator-cut, so the loop invents
 //! nothing while no `v*` tag exists.
 //!
+//! T245 extends the doctrine with the reconcile rule (when the remote moves
+//! after a release tag is published, integrate by MERGE, never rebase — a
+//! rebase orphans the published tag, the cycle-116 v0.17.4 evidence) and
+//! the trigger count's ancestor sanity check (`git merge-base --is-ancestor
+//! <tag> HEAD` before the next tag cut) — both pinned below.
+//!
 //! T48 doctrine: LOOP-SPEC.md is resolved from the checkout the binary RUNS
 //! against (`std::env::current_dir()`), never the compile-time manifest-dir
 //! macro; T78 idiom: multi-word needles are matched against
@@ -120,6 +126,68 @@ fn bootstrap_names_the_operator_cut_first_tag() {
             1,
             "LOOP-SPEC must state {what} exactly once — the bootstrap is what \
              makes the override safe before the operator's first tag"
+        );
+    }
+}
+
+/// (e) T245 — the reconcile rule: when the remote moves after a release tag
+/// is published, the integrate is a MERGE, never a rebase (a rebase orphans
+/// the published tag — the cycle-116 v0.17.4 evidence), and a merge that is
+/// impossible mid-wrap holds the release commit local until the integrate
+/// lands (the tag pushes with the integrate, still atomic).
+#[test]
+fn reconcile_after_published_tag_integrates_by_merge_never_rebase() {
+    let flat_spec = flat(&loop_spec());
+    for (needle, what) in [
+        (
+            "integrate by MERGE, never rebase",
+            "the MERGE-never-rebase reconcile rule",
+        ),
+        (
+            "a rebase orphans the published tag",
+            "the orphan-the-tag failure mode",
+        ),
+        (
+            "the release commit stays local until the integrate lands",
+            "the hold-local-when-merge-impossible fallback",
+        ),
+    ] {
+        assert_eq!(
+            flat_spec.matches(needle).count(),
+            1,
+            "LOOP-SPEC must state {what} exactly once — zero means it was \
+             dropped or reworded, more than one means it is duplicated"
+        );
+    }
+}
+
+/// (f) T245 — the trigger count's ancestor sanity check: the "≥3 items
+/// since the newest `v*` tag" count anchors on a tag that must be an
+/// ANCESTOR of HEAD (`git merge-base --is-ancestor <tag> HEAD` before the
+/// next tag cut); a non-ancestor newest tag falls back to the previous
+/// ancestor tag with the orphan named in the notes.
+#[test]
+fn tag_count_anchors_on_an_ancestor_of_head() {
+    let flat_spec = flat(&loop_spec());
+    for (needle, what) in [
+        (
+            "git merge-base --is-ancestor <tag> HEAD",
+            "the merge-base ancestor sanity check",
+        ),
+        (
+            "the count anchors on the previous ancestor tag",
+            "the non-ancestor fallback anchoring",
+        ),
+        (
+            "the orphan is named in the notes",
+            "the orphan-named-in-the-notes rule",
+        ),
+    ] {
+        assert_eq!(
+            flat_spec.matches(needle).count(),
+            1,
+            "LOOP-SPEC must state {what} exactly once — zero means it was \
+             dropped or reworded, more than one means it is duplicated"
         );
     }
 }

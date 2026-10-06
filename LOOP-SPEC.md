@@ -781,7 +781,12 @@ alike) has been harvested.
   Cargo.toml AND Cargo.lock (minor for a feature, patch otherwise;
   `cargo check` regenerates the lock — a manifest-only bump fails
   `--locked` builds, the v0.2.0 lesson), `chore: release
-  vX.Y.Z` commit, `git tag vX.Y.Z`, push commit + tag. HARD RULES: tags
+  vX.Y.Z` commit, `git tag vX.Y.Z`, push commit + tag. ANCESTOR SANITY
+  (T245): that count is computed against a tag that must be an ANCESTOR
+  of HEAD — `git merge-base --is-ancestor <tag> HEAD` is the sanity check
+  before cutting the next tag; a non-ancestor newest tag (a rebase
+  orphaned it, the v0.17.4 lesson) means the count anchors on the
+  previous ancestor tag and the orphan is named in the notes. HARD RULES: tags
   are immutable — never re-tag, never move, never force-push; tag only
   with gates green at HEAD; ONE tag per wrap; tag message = generated
   notes since the previous tag. A failed release workflow files a row —
@@ -837,7 +842,15 @@ alike) has been harvested.
   feat/fix/chore/docs since the previous tag), tag `git tag -a vX.Y.Z -F
   <notes-file>`, and push the commit + tag together with the wrap push
   (the tag-triggered release workflow in `.github/workflows/release.yml`
-  picks it up). HARD RULES: never re-tag or move a tag; never force-push
+  picks it up). RECONCILE RULE (T245): when the remote moves after a
+  release tag is published, integrate by MERGE, never rebase — a rebase
+  orphans the published tag (the cycle-116 v0.17.4 evidence: the launch
+  reconcile rebased release commit 47ed9a5 onto the operator's work as
+  dda73ab, leaving tag v0.17.4 pointing at an orphan, `git describe`
+  undercounting to v0.17.3 until v0.17.5 re-anchors); if a merge is
+  impossible mid-wrap, the release commit stays local until the
+  integrate lands — the tag pushes with the integrate, still atomic.
+  HARD RULES: never re-tag or move a tag; never force-push
   tags; tag ONLY with gates green at HEAD (the wrap's final gates count);
   one tag per wrap max; tag message = the generated notes since the
   previous tag. If the release workflow later fails on a pushed tag, file
