@@ -1993,10 +1993,11 @@ fn t240_malformed_release_markers_are_best_effort_skip() {
 // marker regions at all: the README's `## Quickstart` section leads, then one
 // section per runbooks/*.md file (byte-sorted, runbooks/README.md included),
 // each rendered from the file's content at sync time (fences -> pre.code,
-// headings shifted h2/h3/h4, flat lists, tables verbatim; inline per the T99
-// text rules). Same head/style base as index.html; docs ⇄ home nav; an index
-// of links at the top. Fail-closed: missing runbooks/ -> docs.html untouched,
-// the sync continues. Byte-identical inputs render byte-identical output.
+// headings shifted h2/h3/h4, flat lists, GFM pipe tables -> <table> per T244;
+// inline per the T99 text rules). Same head/style base as index.html; docs ⇄
+// home nav; an index of links at the top. Fail-closed: missing runbooks/ ->
+// docs.html untouched, the sync continues. Byte-identical inputs render
+// byte-identical output.
 
 /// The chug half with the docs corpus: README (a `## Quickstart` section whose
 /// `#`-comment fence lines must not end the extraction and whose `## Next`
@@ -2127,7 +2128,8 @@ fn t241_docs_page_renders_runbooks_sorted_with_escaped_fences_and_nav() {
     // headings shift: the runbook H1 is the section h2, its H2s are h3
     assert!(docs_before.contains("<h2>Runbook: alpha first</h2>"));
     assert!(docs_before.contains("<h3>Run it</h3>"));
-    assert!(docs_before.contains("<b>Use when</b>"), "bold emphasis per the T99 text rules");
+    // T244: bold renders as <strong> (req 3 — was <b> under T241)
+    assert!(docs_before.contains("<strong>Use when</strong>"), "bold emphasis per the T99 text rules");
     // the runbooks index file renders with its relative link rewritten (no dangling href)
     assert!(
         docs_before.contains("href=\"https://github.com/tampajohn/chug/blob/main/runbooks/quick-task.md\""),
@@ -2223,7 +2225,7 @@ fn t241_runbook_edit_updates_docs_and_commits_both_files() {
     assert!(out.status.success());
     let docs_after = docs(&f);
     assert_ne!(docs_before, docs_after, "the runbook edit re-renders docs.html");
-    assert!(docs_after.contains("<b>Edited.</b>"), "the edit is on the page");
+    assert!(docs_after.contains("<strong>Edited.</strong>"), "the edit is on the page");
     assert_eq!(all_commit_subjects(&f).len(), subjects_before + 1, "one commit for the docs change");
     let st = git(&f.site, &["status", "--porcelain"], None);
     assert!(String::from_utf8_lossy(&st.stdout).trim().is_empty(), "BOTH files committed — clean tree");
@@ -2234,4 +2236,210 @@ fn t241_runbook_edit_updates_docs_and_commits_both_files() {
     assert!(out2.status.success());
     assert_eq!(docs(&f), docs_after, "no further churn");
     assert_eq!(sync_commits(&f), 2, "still exactly two sync commits");
+}
+
+// --- T244 — docs.html inline markdown: tables, lists, inline code ------------
+//
+// The operator's complaint: chug.sh/docs.html reads like raw markdown in most
+// sections — the T205 hosting table shipped as literal `| a | b |` text inside
+// a pre block, and the render's inline pass was incomplete. T244 completes it:
+// GFM pipe tables -> <table> (thead/tbody, escaped pipes stay literal cell
+// content per the T216 rule), lists -> <ul>/<ol><li>, `code` -> <code>,
+// **bold** -> <strong>, *italic* -> <em>, links with https-only hrefs.
+
+/// The edge shapes the real corpus lacks, as a fixture runbook riding along
+/// with the copied real corpus: escaped pipes in cells, a no-separator pipe
+/// run (the pre.code fallback), *italic*, an http:// link, and a fence full
+/// of pipes (fence content must never become a table).
+const T244_PROBE: &str = r#"# Runbook: t244 render probe
+
+Edge shapes pinned by tests/site_sync.rs — the real corpus carries the
+table and the lists; this file carries the rest.
+
+## Cells and pipes
+
+| setting | value | notes |
+|---|---|---|
+| judge switch | `CHUG_JUDGE=daemon\|http\|off` | an escaped pipe is one cell |
+| plain | a\|b | two words, one cell |
+
+A pipe run with NO separator row stays a verbatim block:
+
+| not | a | table |
+| no | separator | here |
+
+## Emphasis and links
+
+Runs *italic*, **bold**, and `inline code` together.
+
+- [insecure](http://insecure.example) renders as text, no <a>
+- [secure](https://example.com/ok) keeps its https href
+- [relative](probe.md) rewrites onto the GitHub blob base
+
+## A fence full of pipes
+
+```text
+| not | a table |
+|---|---|
+| fence | content |
+```
+"#;
+
+/// T244 req 5: pins against REAL corpus fixtures — this repo's own README.md
+/// and every runbooks/*.md are copied into the fixture verbatim (plus the
+/// probe runbook above). The T205 hosting table renders as <table> with 3
+/// body rows; quick-task's `- ` list becomes <ul>; the quickstart's
+/// `chug run …` span becomes <code>; and no literal `|---|` or backtick
+/// survives outside a <pre> block.
+#[test]
+fn t244_docs_render_tables_lists_and_inline_from_the_real_corpus() {
+    let f = fixture_t244();
+    let out = run_sync(&f, true);
+    assert!(out.status.success(), "sync failed: {:?}", out.status.code());
+    let d = docs(&f);
+
+    // the T205 hosting table: <table> with thead + exactly 3 body rows
+    let laya = docs_section(&d, "runbook-laya-hf-hosting");
+    assert!(laya.contains("<table>"), "the hosting table renders as a table:\n{laya}");
+    assert!(
+        laya.contains("<thead><tr><th>class</th><th>where</th><th>gating</th></tr></thead>"),
+        "the header row renders as th cells:\n{laya}"
+    );
+    assert_eq!(count(&laya, "<tr>"), 4, "1 header row + the 3 T205 body rows:\n{laya}");
+    assert_eq!(count(&laya, "<tbody>"), 1);
+    assert!(
+        laya.contains("<td>base laya (<code>convaiinnovations/laya</code>, Apache 2.0)</td>"),
+        "cell content renders inline markup:\n{laya}"
+    );
+    assert!(!laya.contains("|---|"), "no delimiter row survives in a rendered table:\n{laya}");
+
+    // quick-task's `- ` list: <ul> with the item's inline code converted
+    let qt = docs_section(&d, "runbook-quick-task");
+    assert!(qt.contains("<ul>\n<li><code>LEDGER.md</code> — the model's external memory"),
+        "the `- ` run renders as <ul><li>:\n{qt}");
+    assert!(
+        qt.contains("<li><code>.chug/transcript.jsonl</code> — every message, append-only.</li>"),
+        "list items keep their inline code:\n{qt}"
+    );
+    assert!(qt.contains("</ul>"), "the list closes:\n{qt}");
+    assert!(qt.contains("<strong>Use when</strong>"), "bold -> <strong>:\n{qt}");
+
+    // the quickstart's inline `chug run …` span -> <code>
+    let qs = docs_section(&d, "quickstart");
+    assert!(
+        qs.contains("<code>chug run --goal \"Fix the flaky login test\" --auto-spec</code>"),
+        "the quickstart's `chug run` span renders as <code>:\n{qs}"
+    );
+
+    // probe: escaped pipes are CELL CONTENT, never a cell split (T216 rule)
+    let probe = docs_section(&d, "runbook-t244-probe");
+    assert!(
+        probe.contains("<td><code>CHUG_JUDGE=daemon|http|off</code></td>"),
+        "an escaped pipe stays a literal pipe inside its one cell:\n{probe}"
+    );
+    assert!(probe.contains("<td>a|b</td>"), "a bare escape renders as one cell:\n{probe}");
+    assert!(!probe.contains("http\\"), "no escaped-pipe fragment anywhere:\n{probe}");
+
+    // probe: emphasis + links
+    assert!(probe.contains("<em>italic</em>"), "*italic* -> <em>:\n{probe}");
+    assert!(probe.contains("<strong>bold</strong>"), "**bold** -> <strong>:\n{probe}");
+    assert!(probe.contains("<li>insecure renders as text, no &lt;a&gt;</li>"),
+        "a non-https href degrades to its link text:\n{probe}");
+    assert!(!probe.contains("href=\"http://"), "no insecure href is ever emitted:\n{probe}");
+    assert!(
+        probe.contains("<a href=\"https://example.com/ok\">secure</a>"),
+        "an https href renders as a link:\n{probe}"
+    );
+    assert!(
+        probe.contains(
+            "<a href=\"https://github.com/tampajohn/chug/blob/main/runbooks/probe.md\">relative</a>"
+        ),
+        "a relative link rewrites onto the GitHub blob base:\n{probe}"
+    );
+
+    // probe: a no-separator pipe run keeps the verbatim pre.code fallback
+    assert!(
+        probe.contains("<pre class=\"code\">\n| not | a | table |\n| no | separator | here |\n</pre>"),
+        "a pipe run with no delimiter row stays verbatim (zero information loss):\n{probe}"
+    );
+    // probe: fence content is never a table — the |---| line survives only here
+    assert!(
+        probe.contains("<pre class=\"code\">\n| not | a table |\n|---|---|\n| fence | content |\n</pre>"),
+        "fence content stays verbatim, never table markup:\n{probe}"
+    );
+
+    // req 5: no literal `|---|` or backtick survives OUTSIDE a <pre> block
+    let bare = outside_pre(&d);
+    assert!(!bare.contains("|---|"), "no delimiter row outside a pre block:\n{bare}");
+    assert!(!bare.contains('`'), "no backtick outside a pre block:\n{bare}");
+
+    // req 4: byte-stable — the second run re-renders byte-identically, no commit
+    let before = d;
+    let n = all_commit_subjects(&f).len();
+    let out2 = run_sync(&f, true);
+    assert!(out2.status.success());
+    assert_eq!(docs(&f), before, "unchanged corpus renders byte-identical docs.html");
+    assert!(String::from_utf8_lossy(&out2.stdout).contains("unchanged"));
+    assert_eq!(all_commit_subjects(&f).len(), n, "no second commit");
+}
+
+/// The t244 fixture: the standard facts fixture, then THIS repo's real
+/// README.md and runbooks/*.md copied in verbatim (the pins read the live
+/// corpus, so a corpus drift that breaks a pin is a render-relevant change),
+/// plus the T244_PROBE edge-shape runbook.
+fn fixture_t244() -> Fixture {
+    let keep = tempfile::tempdir().unwrap();
+    let chug = keep.path().join("chug");
+    let site = keep.path().join("site");
+    std::fs::create_dir_all(&chug).unwrap();
+    std::fs::create_dir_all(&site).unwrap();
+    git(&chug, &["-c", "init.defaultBranch=main", "init", "-q"], None);
+    git(&site, &["-c", "init.defaultBranch=main", "init", "-q"], None);
+    chug_fixture(&chug);
+    let root = std::env::current_dir().expect("cargo sets the test cwd to the package root");
+    std::fs::copy(root.join("README.md"), chug.join("README.md")).unwrap();
+    let rb = chug.join("runbooks");
+    std::fs::create_dir_all(&rb).unwrap();
+    for entry in std::fs::read_dir(root.join("runbooks")).expect("real runbooks/ present") {
+        let entry = entry.unwrap();
+        let path = entry.path();
+        if path.extension().is_some_and(|e| e == "md") {
+            std::fs::copy(&path, rb.join(entry.file_name())).unwrap();
+        }
+    }
+    std::fs::write(rb.join("t244-probe.md"), T244_PROBE).unwrap();
+    // the subject deliberately avoids the landed-item `t<N>:` shape so the
+    // corpus commit never perturbs the facts the sync computes
+    commit(&chug, "docs: t244 corpus fixture (real runbooks + README)", None, "2026-09-22", false);
+    site_fixture_t241(&site);
+    Fixture {
+        _keep: keep,
+        chug,
+        site,
+    }
+}
+
+/// docs_section HTML ID — the slice of the page from `<section id="ID">`
+/// through its closing `</section>`.
+fn docs_section(html: &str, id: &str) -> String {
+    let open = format!("<section id=\"{id}\">");
+    let start = html.find(&open).unwrap_or_else(|| panic!("section {id} missing"));
+    let tail = &html[start..];
+    let close = tail.find("</section>").expect("section closed") + "</section>".len();
+    tail[..close].to_string()
+}
+
+/// outside_pre HTML — the page with every <pre …>…</pre> block removed, so a
+/// pin can assert that no raw markdown byte survives in the rendered prose.
+fn outside_pre(html: &str) -> String {
+    let mut out = String::new();
+    let mut rest = html;
+    while let Some(i) = rest.find("<pre") {
+        let after = &rest[i..];
+        let close = after.find("</pre>").expect("every pre closes") + "</pre>".len();
+        out.push_str(&rest[..i]);
+        rest = &after[close..];
+    }
+    out.push_str(rest);
+    out
 }
