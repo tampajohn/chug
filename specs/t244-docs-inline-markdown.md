@@ -1,6 +1,6 @@
 # T244 — docs.html markdown renderer: tables, lists, inline code (T241 gap)
 
-check: export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared; touch src/*.rs tests/*.rs; cargo test --test site_sync
+check: export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-validate-a; touch src/*.rs tests/*.rs; cargo test --test site_sync
 
 estimate: ~180 lines (inline-markdown pass + pins)
 
