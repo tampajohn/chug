@@ -672,6 +672,19 @@ simultaneously past gates — T194 amends T161's 2-child cap):
    the row flip, so children never own the row. **Push after each item
    lands green** (`git push` once the todo: commit is in) — the operator
    watches origin; don't hold a batch hostage to the wrap.
+   **Mutation-checkpoint ordering (T251).** After any IRREVERSIBLE
+   mutation — a merge or fast-forward into main, a `git push` — the
+   row-flip/Outcomes bookkeeping edits MUST be written to disk BEFORE the
+   mutation wherever the content is knowable pre-mutation, and committed
+   IMMEDIATELY after the mutation lands — and NO further child dispatch
+   may happen between an irreversible mutation and its bookkeeping
+   commit. The evidence is the cycle-128 ctx-edit casualty: the accepted
+   99% LIVE_CTX collapse (context 108,645 → 1,004 tokens in ONE edit)
+   fired BETWEEN the fast-forward and the bookkeeping commit, amputating
+   the turns covering the merge and the dirty files' provenance — the
+   on-disk dirty files were the only reason the recovery landed the
+   bookkeeping verbatim. Write the bookkeeping while the story is still
+   in your context; commit it the moment the mutation lands.
 6. **Budget check.** Fewer than 30 iterations left → stop dispatching, go to
    wrap. Unworked rows stay `todo` — that is a fine outcome. The 30 is
    sized to the wrap tail's measured ~15–25 iteration cost — final gates,
@@ -982,6 +995,18 @@ alike) has been harvested.
   doctrine). An interactive **`chug chat`** does NOT block: note it and
   proceed (shared `.chug/` appends interleave harmlessly; the operator is
   trusted not to run chat turns in the repo mid-cycle).
+- **Read-first recovery against unremembered state (T251).** An
+  orchestrator that encounters repo state it does not remember producing
+  — dirty files it did not write, a HEAD that moved without its merge, a
+  commit on main it did not watch land — MUST treat that state as
+  load-bearing: read the files, read the reflog, reconstruct the story
+  BEFORE any mutating command. NEVER run `git checkout --`, `git clean`,
+  `git reset --hard`, or `git worktree remove` against unremembered state
+  until reconstruction proves it disposable. The ctx-edit casualty is the
+  reason this rule exists: context amputation makes the orchestrator a
+  stranger to its own work — the same verify-then-act discipline as the
+  cycle-61 kill rule, payloads there, repo state here. Read first,
+  reconstruct, then act.
 - Children never edit TODO.md or LEDGER.md in the main tree.
 - README gate before `goal_complete`: it must document everything the cycle
   landed — INTEGRATED into the existing structure, not a bullet appended to
