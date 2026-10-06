@@ -275,6 +275,12 @@ absorption (standing re-file trigger); continuous-mode README density
 
 ## Outcomes (filled at cycle wrap — LOOP-SPEC Phase 3)
 
+### Cycle 121 (2026-10-06, ~09:51 UTC–) — empty-delta disposition cycle, 3rd consecutive (kimi; predicate failed on the todo-rows half — queue DRAINED since the cycle-117 wrap — loopd routed kimi per T81, 19-for-19)
+
+- **No items worked — empty-delta disposition per the standing chain rule (d1791280458-1).** Delta since the cycle-118 fresh eval (4eeda49): THREE bookkeeping commits (00c26f3 + eb52df0 + d017bc5 — the cycles-118/119/120 wrap notes, all EVALUATION.md-only) — zero children in the delta (this cycle's stream: 0 delegate launches, one-segment clean wrap), zero items, zero new evidence; the candidate pool was fully weighed by that eval (10 rejected, 0 filed) and every stream since is a clean disposition wrap. A full re-eval remains the deterministic zero-row burn the predicate's purpose clause exists to skip, so the cycle proceeded directly to wrap duties. TRUE streak: 2 → 3; the ~4+ eval-trip threshold is HUMAN-counted here in Outcomes, never read off the machine streak — ONE empty cycle away: **the next cycle, if its delta is still empty, TRIPS the threshold and runs the real eval** (the cycle-113 precedent — the chain converts itself into its own evaluation at the trip point).
+- **T237 backoff live-verified at the fourth chain link.** loopd.log shows the scaling holding: 240s (streak 2, 09:15:29Z) → 480s (streak 3, 09:39:12Z); the launch cadence keeps stretching as designed (08:27 → 08:52 → 09:23 → 09:51). The standing adjudication carries (d1791277274-2, cycle 119): the cycle-118 negation-quote false positive is consequence-free (bounded over-sleep only, self-correcting; the eval-trip threshold is human-counted) — zero new evidence this cycle, so the fix stays REJECTED, not re-weighed; the re-file trigger is unchanged (a second negation-quote fire, or the inflated streak ever crossing a decision boundary that matters — none exists today). After this wrap's token commit the machine reads 4 (960s); the TRUE count is 3, named here so the next cycle decides on the true count — and on the true count, the next empty cycle is the TRIP.
+- **Cycle-121 wrap notes.** Queue: EMPTY at handoff (drained since cycle 117; zero deferred, zero skipped). Wrap audit per the T246 doctrine (decisions-audit.sh REPORT-only): ZERO routing/verdict/recovery ids this cycle (the 1 record — the eval-routing triage — is outside the backfill scope) → nothing owed; malformed-chain count 1 (the standing `d1791264594-4`, immutable per T70, fix-forward in place); historical unbackfilled 60/91/82 unchanged; duplicate ids 0. Release check: 1 item since v0.17.5 (T246, no FEATURES check-off) < 3 → NO TAG; v0.17.5 ancestor-verified per T245 (`git describe` = v0.17.5-9-gd017bc5 at pre-wrap HEAD). README gate: nothing user-visible → untouched. Harvest: zero children dispatched → nothing owed; no worktrees created or removed (the 12 stale /tmp/chug-loop-* dirs verified HOLLOW — zero `.chug` content, nothing unharvested; operator reclaim surface, untouched per the never-automatic-clean rule). Armed-census updates: the multi-segment-wrap trigger (4th consecutive files the doctrine row) stays at 0 — third consecutive one-segment wrap; child-side 300s cargo kills untripped (no children); process-substitution-under-sh watch: 1 fire this cycle (an orchestrator `diff <(…) <(…)` attempt — under the >2/cycle threshold, named for the census); `deps.wedged-t242` standing (operator cleanup; NOT re-probed — a probe is exactly the wedge class; the four prior live confirmations stand). Near-miss named for the ledger: an `awk … > EVALUATION.md` whose input backup did not exist truncated EVALUATION.md to 0 lines (sh opens the redirect before the command runs) — restored byte-identical via `git checkout` (690 lines, clean status verified), the rewrite re-staged temp-file-then-mv. Decision records: 1 (eval-routing triage — the complete set). Final gates at pre-wrap HEAD d017bc5 via the T242 bounded bg window in target-shared-main: build exit 0 (40.3s — chug-crate re-fingerprint, deps warm) + clippy --all-targets --release -D warnings exit 0 zero warnings (36.5s warm leg) + nextest release 1685/1685 (71.2s); eval_outcomes_carry pins re-verified inline against this rewritten section post-edit. Outcomes compaction: cycle 115 one-lined (116–121 kept full). T237 watch: TRUE streak 2→3, token carried, next launch reads machine-streak 4 (960s) — divergence named above; the next empty cycle TRIPS the human-counted ~4+ threshold → real eval.
+
 ### Cycle 120 (2026-10-06, ~09:23 UTC–) — empty-delta disposition cycle, 2nd consecutive (kimi; predicate failed on the todo-rows half — queue DRAINED since the cycle-117 wrap — loopd routed kimi per T81, 18-for-18)
 
 - **No items worked — empty-delta disposition per the standing chain rule (d1791278727-1).** Delta since the cycle-118 fresh eval (4eeda49): TWO bookkeeping commits (00c26f3 cycle-118 wrap notes + eb52df0 cycle-119 wrap notes, both EVALUATION.md-only) — zero children in the delta (cycle-119's stream: 0 delegate launches, 38 iterations, one-segment clean wrap), zero items, zero new evidence; the candidate pool was fully weighed by that eval (10 rejected, 0 filed) and the only new stream since is a clean disposition wrap. A full re-eval remains the deterministic zero-row burn the predicate's purpose clause exists to skip, so the cycle proceeded directly to wrap duties. TRUE streak: 1 → 2; the ~4+ eval-trip threshold is HUMAN-counted here in Outcomes, never read off the machine streak — two empty cycles away. Pre-authorization per the chain rule: if the next cycle's delta is still empty, the same disposition applies.
@@ -306,69 +312,7 @@ absorption (standing re-file trigger); continuous-mode README density
 
 - **Cycle-level notes (cycle 116, amended at the T245 wrap).** Queue: DRAINED twice — T242 drained it, then the operator filed T244 mid-wrap (push rejected on `bc4b80b`; hash-preserving integrate `ee902b2`, flip references stayed valid — the rejected-push doctrine's cleanest exercise yet) and T244 drained it again. Eval: 10 eval-triage records, all weighed-and-rejected except the T242 carry. The eval's own audit caught the T241 outcome-backfill gap (flip commit 085be34 claimed backfills that never landed) — the three missing records appended at this wrap with this provenance note (d1791235160-17 recovery-routing, d1791236658-18 validation-routing, d1791239794-19 validation-verdict — all landed-clean). Child health: 4/4 children goal-accepted inside budgets (t242 impl 76/80 + validator 39/60, t244 impl 77/80 + validator 33/60) — zero deaths this cycle; minutes census ARMED at 2 stands. The T242 doctrine practiced THREE times in its own landing cycle (t242 post-merge gates, integrate-guard, t244 post-merge gates — all bg windows, zero bash-cap kills). The RED-proof reflex is now bidirectional (t244's impl self-RED-proved 5 mutants AND the validator independently re-derived all 5). Environmental: the validate-a `debug/deps` kernel wedge (validator finding 3) is the first host-fs incident class in the recorded window — renamed aside `deps.wedged-t242`; the t244 validator built around it without issue; operator cleanup item. Operator mid-cycle activity: b0f602a FEATURES.md F10 docs fix reconciled at launch (release commit rebased dda73ab, tag v0.17.4 untouched); bc4b80b T244 filing integrated mid-wrap. Release: T245 landed → 3 items since v0.17.4's content (T242, T244, T245) → TAG FIRES at this wrap; per T245's new ancestor-sanity doctrine the count anchors on v0.17.3 (the newest ANCESTOR tag — v0.17.4 is orphaned) and names the orphan in the notes; v0.17.5 (patch) re-anchors `git describe`. **Wrap finding (filed T245, pri 3):** the launch reconcile's rebase of the PUBLISHED release commit (47ed9a5 → dda73ab) left tag v0.17.4 pointing at an orphan — `git describe` undercounts to v0.17.3 until v0.17.5 re-anchors; main's content is correct (chug v0.17.4 compiles); tags immutable, no surgery — the fix is doctrine (remote-moved-after-tag integrates by MERGE; ancestor sanity check before the next cut).
 
-### Cycle 115 (2026-10-05, ~18:27 UTC–) — fresh-eval cycle (kimi; queue DRAINED at launch → loopd routed kimi per T81, 13-for-13)
-
-- **T240 done bb67a6f** — RELEASE region on chug.sh (operator's row): scripts/site-sync.sh
-  regenerates a `<!-- RELEASE:BEGIN/END -->` band between the hero and STATS from the LOCAL
-  checkout's newest stable v* tag (creatordate; rc channels filtered) — tag, date, GitHub
-  release link, top 3-5 note bullets under the T99 text rules; fail-closed zero-tag; markers +
-  section + nav anchor bootstrapped. glm impl died 80/80 UNCOMMITTED in doc-polish thrash →
-  ONE T63 resume → goal accepted in 9 iters (d1791227661-11). Kimi validator died 60/60 with
-  the verdict WRITTEN — verdict-file doctrine absorbed it (T209; no resume burned): PASS,
-  5 reqs verified, 9/9 mutants KILLED, 0 survivors (d1791231983-13). One non-blocking finding
-  (unguarded `cat > $INDEX` bootstrap page write) fixed on-branch + the family swept (both
-  bootstrap instances). Post-merge gates hit the T242 mechanism LIVE: the alarm-280 SIGKILL
-  landed mid-strip → mode-0644 corrupt test binaries → nextest EACCES; surgical delete +
-  relink recovered (1673/1673, 41.6s). The mcp_serve stub flake (T243, filed this cycle)
-  fired once mid-gate and passed on retry — the filing's indictment confirmed in production.
-- **T241 done 9d85cbb** — DOCS as a second page (operator's row): chug.sh/docs.html fully
-  machine-rendered at sync time from runbooks/*.md (byte-sorted LC_ALL=C, one section each,
-  link index, fence-aware escaping) led by README's `## Quickstart`; docs-home nav +
-  get-started pointer bootstrapped idempotently; deterministic byte-stable; fail-closed on a
-  missing corpus (never a link to an unrendered page). glm impl died TIME-bound 79/80 with
-  the work COMMITTED — orchestrator-finish routing (d1791235160-17), no resume burned.
-  Review gates survived a transient HOST exec-degradation window (~17:35-17:52 local:
-  codesign hang, a trivial echo stub hung kernel-level, cross-family ~90s timeout reds in
-  loopd_orphan_reaper/loopd_daemon_ensure/install_sh — all retried green 65/65 then
-  1676/1676; noted for the next eval). Kimi validator PASS at 51/60, goal accepted
-  (d1791236658-18): 5 reqs verified incl. a 43KB real-corpus rehearsal against the live
-  chug-site snapshot (byte-identical idempotence); 8 mutants: 6 KILLED, 2 SURVIVED
-  (M6 fix-probe + M8 pointer-early) evidencing findings 1+2. All 3 findings fixed on-branch:
-  DOCS_CHANGED staging guard (RED-proven: restored `[ -f ]` guard flips the new stray-sweep
-  assert RED), pointer close-bound pin, drift-free pointer text.
-- **T243 done 1d705d9** — the mcp_serve stub deflake (filed this cycle, fired live once): the
-  T237 validator's load race is closed BY CONSTRUCTION, not by a green run. New
-  `wait_for_stub_file` sibling (10s existence poll — existence-based because the stub
-  creates events.jsonl EMPTY via `: >`, which the content-based dump helper can never
-  satisfy; T158 req-3 outcome panic names the observed launch on a miss); the stub is
-  UNCHANGED (its write order is behavior under test); `cwd.txt` stays read-without-poll,
-  justified ordered-safe (written BEFORE the polled argv.txt, atomically published). Family
-  sweep over src/mcp_serve/tests.rs + tests/mcp_serve.rs (cycle-33 doctrine): the named test
-  was the ONLY poll-one-stub-file→point-assert-another instance; every other stub/fixture
-  file assert converted-or-justified in the commit message. Tests-only +57/−2, no production
-  code, no new deps. T189 gates-only lane (d1791242958-1: 59 lines, tests file only, no
-  surface, no check:-line change — spec already targeted target-shared, no re-key needed);
-  worktree gates 1676/1676 nextest release + clippy --all-targets -D warnings zero warnings.
-  WATCH ITEM adjudicated (child decision d1791242672-1): the FIRST post-fix full
-  `cargo test --bin chug` failed 1/1243 (63.55s vs ~37s typical; name lost through a tail
-  pipe) with no repro across 5 consecutive full runs + 7 module runs — the repo's documented
-  host-load deadline-stretch class (T151/T172), not the named race (which is closed by
-  construction: every assert on a stub-written file now has a poll on that same file or on a
-  file the stub provably wrote earlier). Ledger lesson for the next eval: unpiped test
-  output retains the failing test's name — the T237/c06a555 rule applies to ad-hoc gates too.
-- **Deferred with specs ready**: T242 (cold-scale wrap gate-leg vs 300s cap — doctrine SOLO
-  kimi REQUIRED, ~2h arc; its mechanism fired LIVE at T240's post-merge gates and at THIS
-  cycle's post-merge + wrap gates — the bg-window recovery pattern was used again, growing
-  the filing's evidence base to three same-day uses). The row keeps its full spec; a cold
-  next cycle needs zero human words.
-- Cycle-level: 3 items landed (T240+T241 operator site rows + T243 the filed deflake);
-  queue carries T242 ready. Release: 6 merges since v0.17.3 (T237+T238+T239+T240+T241+T243
-  >= 3) -> v0.17.4 tagged at wrap. Validators caught this cycle: T240's unguarded bootstrap
-  page writes (class swept) + T241's stray-file staging (RED-proven fix) — both
-  non-blocking, both the same "unguarded page write/stage" family; the family is now closed
-  at both call sites.
-  LIVE_CTX compacted once (414KB->82KB). 16+ decision records; t241 outcome backfills folded
-  into the row-flip commit under wrap-budget pressure (verdict + routing ids named there).
+### Cycle 115 (2026-10-05) — fresh-eval cycle (kimi); 3 landed (T240 bb67a6f — chug.sh RELEASE band regenerated at sync time from the local newest stable tag, ONE T63 resume, kimi PASS 9/9 mutants + 1 finding fixed on-branch; T241 9d85cbb — docs.html machine-rendered from runbooks/*.md, T55 orchestrator-finish, kimi PASS with 3 findings fixed on-branch (2 surviving mutants evidence); T243 1d705d9 — mcp_serve stub load-race deflake by construction, T189 gates-only lane); T242 carried deferred spec-ready (its cold-scale mechanism fired live thrice same-day); v0.17.4 tagged (6 ≥ 3 since v0.17.3); gates 1676/1676 + clippy zero; full narrative in git (row-flip commits + TODO done rows).
 
 ### Cycle 114 (2026-10-05) — routine freshness-skip cycle (kimi; pre-fetch routing on the unfetched operator filing); T238 (site-sync gate-count scraper full-suite-only guard, merge f4f3293) + T239 (its three surviving-mutant pin legs, merge 0a6b8d5) both landed same cycle; kimi PASS first round on T238 with 3 weak-test survivors filed forward and closed same-cycle; suite 1664 → 1670; gates 1670/1670 + clippy zero; no tag; full narrative in git (row-flip commits + TODO done rows).
 
