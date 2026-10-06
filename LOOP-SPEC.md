@@ -41,7 +41,33 @@ at launch, `loopd.sh` routes the cycle to `LOOP_ROUTINE_MODEL` (glm); when
 it does not, the cycle launches kimi. **glm never runs this phase** — if
 you are glm and the predicate does not hold when you check, do not
 evaluate: wrap immediately with a note (the next cycle re-routes to kimi
-and evaluates). Commit the evaluation artifacts (`eval: ...`) before
+and evaluates).
+
+**The empty-delta chain (T247).** When the predicate fails on the
+todo-rows half — TODO.md has no `todo` rows, the queue is drained — but
+the delta since the last evaluation is bookkeeping-only (zero children
+launched, zero items landed, every commit an `eval:`/wrap-notes commit),
+the cycle MAY skip the evaluation anyway and proceed to wrap: that is an
+empty-delta
+disposition — the chain rule the T237 backoff paces, pre-authorized here
+so the skipped-eval chain is self-describing for a cold cycle instead of
+carried wrap to wrap in Outcomes prose. Its wrap-notes subject carries
+the Phase-3 token (T237), and its Outcomes entry names the TRUE streak
+and hands it forward ("N empties away") so a cold next cycle reads the
+count from the newest Outcomes entry, not git archaeology. The chain is
+not self-sustaining — the valve: after ~3 consecutive empty-delta
+dispositions, the next (4th) empty cycle RUNS the real evaluation; the
+chain converts itself into its own evaluation at the trip point (cycles
+113 and 122, the two on-schedule trips). The trip binds on the TRUE
+streak, HUMAN-counted from the wrap-notes chain, NEVER on loopd's
+machine streak: the machine walk substring-matches the token in `eval:`
+subjects and counts NEGATED mentions too (the cycle-118 false positive —
+machine read 4 vs TRUE 3 at the cycle-122 trip). That divergence is
+consequence-free for the backoff (a bounded over-sleep, self-correcting;
+adjudication d1791277274-2), but the trip threshold reads the TRUE count
+only.
+
+Commit the evaluation artifacts (`eval: ...`) before
 dispatching.
 
 ## Phase 2 — Work the queue
