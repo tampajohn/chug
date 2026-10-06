@@ -297,7 +297,7 @@ fi
 #   (b) $HOME/.local/bin/chug — install.sh's release install location — when
 #       it REPORTS daemon support: `chug daemon --help` exit 0 (a pre-T204
 #       release refuses the subcommand, so the probe doubles as the
-#       dogfood-upgrade detector; dashd owns those upgrades, never loopd);
+#       dogfood-upgrade detector; the dashboard daemon owns those upgrades, never loopd);
 #   (c) ./target/release/chug — only when it hosts the judge, detected by the
 #       ABSENCE of the feature-off refusal literal (src/daemon.rs
 #       real_backend's cfg(not(feature = "daemon")) bail — the same string
