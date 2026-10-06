@@ -1,4 +1,4 @@
-# T248 — LOOP-SPEC Phase 3: negations never quote the empty-delta token verbatim + post-commit sleep-ok probe (2nd fire)
+# T248 — LOOP-SPEC Phase 3: the token verbatim appears ONLY in a true disposition wrap subject + post-commit sleep-ok probe (3 fires, 2 classes)
 
 check: export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared; touch src/*.rs tests/*.rs; cargo test --test loop_spec_empty_chain --test todo_consistency
 
@@ -13,29 +13,40 @@ scale the cycle-OK backoff. The walk counts NEGATED mentions too — a
 wrap-notes subject that writes "NOT an empty-delta disposition … token
 does not bind" still contains the substring and reads as a disposition.
 
-This has now fired TWICE:
+This has now fired THREE times, in TWO carrier classes:
 
-1. **Cycle 118** (00c26f3): "NOT an empty-delta disposition → the token
-   does not bind" — machine read streak 1..4 across cycles 119–122
-   against TRUE 0..3 (reproduced live at cycle 119). Adjudicated
-   consequence-free (bounded over-sleep, self-correcting; the eval-trip
-   threshold is human-counted) and REJECTED as a filing candidate at
-   d1791277274-2 — with a named re-file trigger: **"a second
-   negation-quote fire"**.
-2. **Cycle 123** (b4b935d): "T237 watch: NOT an empty-delta disposition
-   (real eval ran on a worked delta) — token does not bind, streak STAYS
-   0" — the machine reads streak 1 at TRUE 0 RIGHT NOW (live-probed
+1. **Cycle 118** (00c26f3, NEGATION): "NOT an empty-delta disposition
+   → the token does not bind" — machine read streak 1..4 across cycles
+   119–122 against TRUE 0..3 (reproduced live at cycle 119).
+   Adjudicated consequence-free (bounded over-sleep, self-correcting;
+   the eval-trip threshold is human-counted) and REJECTED as a filing
+   candidate at d1791277274-2 — with a named re-file trigger: **"a
+   second negation-quote fire"**.
+2. **Cycle 123** (b4b935d, NEGATION): "T237 watch: NOT an empty-delta
+   disposition (real eval ran on a worked delta) — token does not bind,
+   streak STAYS 0" — the machine reads streak 1 at TRUE 0 (live-probed
    `./loopd.sh sleep-ok` → `120 1` at HEAD b4b935d, cycle 124). Worse,
    the cycle-123 wrap claimed "machine and true alike, sleep-ok 60 0
    probed" — but that probe ran PRE-commit (at 11fc85a); post-commit
-   the claim never held. The probe-timing gap is the second defect in
-   this row.
+   the claim never held. The probe-timing gap is this row's second
+   clause.
+3. **Cycle 124** (a5bd504, DESCRIPTIVE — the class-broadening fire):
+   the T248 filing commit's own subject wrote "the T247 empty-delta
+   disposition itself stands" — a verbatim quote neither negated nor a
+   disposition wrap. Found live at the cycle-124 wrap: the post-commit
+   probe read `480 3` against the `240 2` the wrap notes had just
+   predicted (true positive + cycle-123 negation + this descriptive
+   quote). The class is ANY verbatim quote in an `eval:` subject
+   outside a true disposition wrap — negation, description, quotation.
 
-The re-file trigger has TRIPPED (cycle 124, verified live). The fix is
-the authoring surface, not the walk: awk negation-detection was weighed
-brittle at cycle 119 and STAYS rejected — loopd.sh is not touched. Two
-sentences in Phase 3's T237 token bullet kill both classes: (a) a
-negation never quotes the token verbatim, (b) the watch probe runs
+The re-file trigger has TRIPPED (fire 2, verified live) and fire 3
+broadened the class the same cycle. The fix is the authoring surface,
+not the walk: awk quote-detection was weighed brittle at cycle 119 and
+STAYS rejected — loopd.sh is not touched. Two sentences in Phase 3's
+T237 token bullet kill the whole class: (a) the token verbatim appears
+ONLY in a true disposition wrap subject — every other mention
+(negation, description, quotation) writes around it ("the T237 token",
+"the disposition token", dropping the noun); (b) the watch probe runs
 after the wrap-notes commit lands.
 
 ## Repo context
@@ -57,16 +68,17 @@ after the wrap-notes commit lands.
 
 ## Requirements
 
-1. LOOP-SPEC Phase 3's T237 token bullet gains the **negation-phrasing
-   clause**, containing the exact needle phrase "never quote the token
-   verbatim in a negation": a wrap-notes subject that must say the
-   disposition did NOT happen writes around the token (drops the noun —
-   e.g. "NOT a disposition — the token does not bind" — or rephrases so
-   the literal two-word-plus string never appears); the walk is a dumb
-   substring match by design (both false positives named: cycle-118
-   00c26f3 and cycle-123 b4b935d); awk negation-detection stays
-   rejected per d1791277274-2 — the authoring surface is the only
-   guard.
+1. LOOP-SPEC Phase 3's T237 token bullet gains the **quote-discipline
+   clause**, containing the exact needle phrase "verbatim ONLY in a
+   true disposition wrap subject": an `eval:` commit subject carries
+   the literal token only when the commit IS that wrap — every other
+   mention writes around it (a negation drops the noun — e.g. "NOT a
+   disposition — the token does not bind"; a description or quotation
+   says "the T237 token" / "the disposition token"); the walk is a dumb
+   substring match by design (all three fires named: cycle-118 00c26f3
+   and cycle-123 b4b935d negations, cycle-124 a5bd504 descriptive);
+   awk quote-detection stays rejected per d1791277274-2 — the authoring
+   surface is the only guard.
 2. The same bullet gains the **probe-timing clause**, containing the
    exact needle phrase "probe runs AFTER the wrap-notes commit lands":
    the wrap's T237-watch `./loopd.sh sleep-ok` probe reads the streak
@@ -93,7 +105,8 @@ after the wrap-notes commit lands.
   the divergence is adjudicated consequence-free — bounded over-sleep,
   self-correcting — and the eval-trip threshold is human-counted per
   the T247 clause).
-- Retro-editing the cycle-118/cycle-123 wrap subjects (history is
-  immutable; the streak self-corrects at the next real wrap).
+- Retro-editing the cycle-118/cycle-123/cycle-124 carrier subjects
+  (history is immutable; the streak self-corrects at the next real
+  wrap).
 - Mechanizing negation detection, probe timing, or the trip threshold
   anywhere in loopd.sh.
