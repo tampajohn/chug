@@ -47,7 +47,7 @@ fn run_audit(corpus: &Path) -> String {
 }
 
 /// Assert every needle occurs in `content`, each strictly after the previous
-/// one — pins the five-section heading order without pinning volatile paths.
+/// one — pins the six-section heading order without pinning volatile paths.
 fn assert_named_in_order(content: &str, needles: &[&str]) {
     let mut cursor = 0;
     for needle in needles {
@@ -75,12 +75,15 @@ fn write_corpus(dir: &Path, name: &str, body: &str) -> PathBuf {
     path
 }
 
-/// The five section headings in render order (the shape-stable skeleton the
-/// digest and eyeball diffs rely on).
-const SECTION_HEADINGS: [&str; 5] = [
+/// The six section headings in render order (the shape-stable skeleton the
+/// digest and eyeball diffs rely on). The malformed-chain section (T246)
+/// sits right after the unresolved-subject section — both are subject-shape
+/// checks on outcome records.
+const SECTION_HEADINGS: [&str; 6] = [
     "## records by class",
     "## outcome choice outside closed set (landed-clean | fixed-up | reverted): ",
     "## outcome subject resolves to no existing id: ",
+    "## outcome subject resolves to another outcome record (malformed chain): ",
     "## routing/verdict records without an outcome backfill naming their id",
     "## duplicate ids: ",
 ];
@@ -207,7 +210,17 @@ fn audit_seven_violation_fixture_renders_the_grandfather_shape() {
         "resolved subject o3 is not flagged:\n{audit}"
     );
 
-    // Section 4: per-class counts — only r4 (recovery-routing) is
+    // Section 4 (the T246 malformed-chain section): every resolving subject
+    // here lands on a NON-outcome record (o3's and the clean outcomes'
+    // subjects are routing/verdict records), so the chain count is zero —
+    // a resolving subject that is NOT a decision id is the other defect
+    // class, pinned separately below.
+    assert!(
+        audit.contains("## outcome subject resolves to another outcome record (malformed chain): 0\n"),
+        "malformed-chain count:\n{audit}"
+    );
+
+    // Section 5: per-class counts — only r4 (recovery-routing) is
     // unbackfilled; every class in the set renders, zero or not.
     assert_named_in_order(
         &audit,
@@ -219,15 +232,16 @@ fn audit_seven_violation_fixture_renders_the_grandfather_shape() {
         ],
     );
 
-    // Section 5: fixture ids are unique.
+    // Section 6: fixture ids are unique.
     assert!(audit.contains("## duplicate ids: 0\n"), "dups:\n{audit}");
 }
 
 /// The clean-corpus leg: every outcome choice inside the closed set, every
-/// subject resolving, every routing/verdict record backfilled, ids unique —
-/// all five sections still print, at zero (shape-stable for the digest).
+/// subject resolving to a NON-outcome record, every routing/verdict record
+/// backfilled, ids unique — all six sections still print, at zero
+/// (shape-stable for the digest).
 #[test]
-fn audit_clean_fixture_renders_all_five_sections_at_zero() {
+fn audit_clean_fixture_renders_all_six_sections_at_zero() {
     let tmp = tempfile::tempdir().unwrap();
     let mut body = String::new();
     body.push_str(&record("d1790000000-1", "validation-routing", "T199", "kimi-required"));
@@ -247,6 +261,7 @@ fn audit_clean_fixture_renders_all_five_sections_at_zero() {
             "## records by class\n",
             "## outcome choice outside closed set (landed-clean | fixed-up | reverted): 0\n",
             "## outcome subject resolves to no existing id: 0\n",
+            "## outcome subject resolves to another outcome record (malformed chain): 0\n",
             "## routing/verdict records without an outcome backfill naming their id\n",
             "  - validation-routing: 0\n",
             "  - validation-verdict: 0\n",
@@ -260,6 +275,78 @@ fn audit_clean_fixture_renders_all_five_sections_at_zero() {
     assert!(
         !audit.contains("\n  - d1790"),
         "zero sections list no ids:\n{audit}"
+    );
+}
+
+/// The T246 malformed-chain leg: an outcome whose `subject` resolves to
+/// ANOTHER OUTCOME record (not a logged decision id) is the defect class
+/// that fired in BOTH of the last two wraps and was caught only by the NEXT
+/// eval's manual jq spot-check — the fixture here mirrors the real cycle-116
+/// fire (verdict d1791262814-2 backfilled by outcome d1791262925-3; the
+/// flip-time outcome d1791264594-4 then subjects d1791262925-3, an outcome
+/// id, instead of a decision id). The chain record RESOLVES, so the
+/// unresolved-subject section stays silent — exactly why the class went
+/// unseen — and the malformed-chain section names the offending outcome's
+/// own id. The good backfill (subject resolves to a decision record) is
+/// never flagged, and the verdict counts as backfilled: only the new
+/// section tells the story.
+#[test]
+fn audit_flags_an_outcome_subjecting_another_outcome_as_a_malformed_chain() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut body = String::new();
+    // The real cycle-116 shapes: the verdict, its GOOD backfill (subject is
+    // a decision id), and the malformed flip-time outcome (subject is an
+    // OUTCOME id).
+    body.push_str(&record("d1791262814-2", "validation-verdict", "T245", "PASS"));
+    body.push_str(&record(
+        "d1791262925-3",
+        "outcome",
+        "d1791262814-2",
+        "landed-clean",
+    ));
+    body.push_str(&record(
+        "d1791264594-4",
+        "outcome",
+        "d1791262925-3",
+        "landed-clean",
+    ));
+    let corpus = write_corpus(tmp.path(), "decisions.jsonl", &body);
+
+    let audit = run_audit(&corpus);
+
+    assert_named_in_order(
+        &audit,
+        &[
+            "records: 3\n",
+            "## outcome subject resolves to no existing id: 0\n",
+            "## outcome subject resolves to another outcome record (malformed chain): 1\n",
+        ],
+    );
+    // The offending OUTCOME record's id is listed (its subject is not).
+    assert!(
+        audit.contains("  - d1791264594-4\n"),
+        "the outcome-subjecting outcome is named:\n{audit}"
+    );
+    // The victim backfill is NOT echoed anywhere: d1791262925-3 is a
+    // well-formed outcome (clean choice, subject resolves to a decision
+    // record), so no section lists it.
+    assert!(
+        !audit.contains("  - d1791262925-3\n"),
+        "the good backfill stays unflagged:\n{audit}"
+    );
+    // The verdict counts as backfilled (an outcome names its id — even
+    // though the chain that follow-on outcome belongs to is malformed):
+    // the backfill section stays all-zero, the malformed-chain section is
+    // the ONLY surface that fires.
+    assert_named_in_order(
+        &audit,
+        &[
+            "## routing/verdict records without an outcome backfill naming their id\n",
+            "  - validation-routing: 0\n",
+            "  - validation-verdict: 0\n",
+            "  - recovery-routing: 0\n",
+            "## duplicate ids: 0\n",
+        ],
     );
 }
 
@@ -285,6 +372,7 @@ fn audit_missing_corpus_renders_the_empty_shape_and_names_the_path_on_stderr() {
             "## records by class\n",
             "## outcome choice outside closed set (landed-clean | fixed-up | reverted): 0\n",
             "## outcome subject resolves to no existing id: 0\n",
+            "## outcome subject resolves to another outcome record (malformed chain): 0\n",
             "## routing/verdict records without an outcome backfill naming their id\n",
             "  - validation-routing: 0\n",
             "  - validation-verdict: 0\n",
@@ -405,6 +493,12 @@ fn audit_stays_bounded_and_exact_at_10x_corpus_size() {
     assert!(
         audit.contains("## outcome subject resolves to no existing id: 5\n"),
         "5 unresolvable subjects at 10x:\n{audit}"
+    );
+    assert!(
+        audit.contains(
+            "## outcome subject resolves to another outcome record (malformed chain): 0\n"
+        ),
+        "0 malformed chains at 10x — the id->class join stays O(1):\n{audit}"
     );
     assert!(
         audit.contains("  - validation-routing: 5\n"),

@@ -1,5 +1,6 @@
 //! T75 — doctrine pins: LOOP-SPEC's Phase-3 wrap checklist carries the
-//! decision-records sentence (the zero-call adoption gap).
+//! decision-records sentence (the zero-call adoption gap), and (T246) the
+//! wrap-audit step the outcome-backfill defect class forced.
 //!
 //! T70 landed the `decision_log` tool + `.chug/decisions.jsonl` AND wired
 //! adoption at four named points (Phase-1 `eval-triage`, step-2
@@ -22,6 +23,11 @@
 //! LOOP-SPEC.md. No production code changes; this file is doctrine-only.
 //! The pin file greps LOOP-SPEC.md only — never a spec prose copy (the T67
 //! self-match lesson).
+//!
+//! T78 idiom: multi-word needles are matched against whitespace-collapsed
+//! text because the doctrine prose wraps mid-phrase (the T246 wrap-audit
+//! needle spans a line break in the bullet, so its pin is asserted against
+//! flat text — the pre-T246 needles all sat on one line and pinned raw).
 //!
 //! T48 doctrine: every pin resolves LOOP-SPEC.md from the checkout the
 //! binary RUNS against (`std::env::current_dir()`; cargo runs test binaries
@@ -74,10 +80,25 @@ const WINDOW_CLASS_TOKENS: [&str; 6] = [
     "`outcome` backfills",
 ];
 
+/// (f) The T246 wrap-audit token — the wrap step the decisions bullet
+/// carries after the outcome-backfill defect class fired in BOTH of the
+/// last two wraps (cycle-115's three missing backfills, cycle-116's
+/// unbackfilled verdict id + outcome-subjecting-outcome chain) and was
+/// caught only by the NEXT eval's manual jq spot-check. The sentence wraps
+/// mid-phrase in the doctrine prose, so it pins against FLAT text.
+const WRAP_AUDIT: &str = "The wrap runs `scripts/decisions-audit.sh`";
+
 fn loop_spec() -> String {
     let root = std::env::current_dir().expect("cargo sets the test cwd to the package root");
     std::fs::read_to_string(root.join("LOOP-SPEC.md"))
         .unwrap_or_else(|e| panic!("reading LOOP-SPEC.md from the runtime checkout: {e}"))
+}
+
+/// Wrap-insensitive copy (the T78 flat idiom): the doctrine prose wraps
+/// mid-phrase, so a multi-word needle must match whitespace-collapsed text
+/// or the pin goes red on the REAL doctrine.
+fn flat(s: &str) -> String {
+    s.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// (a) The carries-records token occurs in LOOP-SPEC.md exactly once.
@@ -192,4 +213,47 @@ fn needles_live_inside_the_phase3_wrap_window() {
              accounting surface"
         );
     }
+}
+
+/// (f) The T246 wrap-audit step occurs in LOOP-SPEC.md exactly once,
+/// whitespace-collapsed (T78 — the sentence wraps mid-phrase in the
+/// bullet), and inside the Phase-3 wrap window (T64 heading-scope
+/// pattern). Removing the wrap step from the bullet goes red (count 0);
+/// restating it in a second place also goes red. The step is REPORT-only
+/// doctrine — this pin guards its existence at the accounting surface,
+/// never a merge gate.
+#[test]
+fn wrap_audit_token_occurs_exactly_once_whitespace_collapsed() {
+    // Needle self-check (T48 idiom): a mangled needle must not let this
+    // pin pass silently.
+    assert!(
+        WRAP_AUDIT.starts_with("The wrap runs")
+            && WRAP_AUDIT.contains("scripts/decisions-audit.sh"),
+        "the needle must name the wrap-time decisions-audit run"
+    );
+    let spec = loop_spec();
+    assert_eq!(
+        flat(&spec).matches(&flat(WRAP_AUDIT)).count(),
+        1,
+        "LOOP-SPEC must state that the wrap runs scripts/decisions-audit.sh \
+         exactly once (whitespace-collapsed) — zero means the T246 wrap \
+         step was dropped from the decisions bullet, more than one means \
+         it is stated twice"
+    );
+    // ...and the step lives in the Phase-3 wrap window: the accounting
+    // surface is where the audit + backfill + name step belongs.
+    let start = spec
+        .find(PHASE3_HEADING)
+        .expect("LOOP-SPEC Phase-3 heading (`## Phase 3`) present");
+    let end = start
+        + spec[start..]
+            .find(HARD_RULES_HEADING)
+            .expect("LOOP-SPEC Hard-rules heading (`## Hard`) present after Phase 3");
+    let flat_window = flat(&spec[start..end]);
+    assert_eq!(
+        flat_window.matches(&flat(WRAP_AUDIT)).count(),
+        1,
+        "the T246 wrap-audit step must sit exactly once inside the Phase-3 \
+         wrap window (flat-matched)"
+    );
 }

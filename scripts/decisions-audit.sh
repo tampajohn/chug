@@ -8,11 +8,19 @@
 # so everything it counts there is grandfathered history, immutable by the
 # T70 append-only invariant; outcome records whose `subject` resolves to no
 # record id (the exact-equality definition the write-time subject lint in
-# src/decisions.rs applies, so lint and audit agree); routing/verdict
-# records with NO outcome backfill naming their id (count by class); and
-# duplicate ids. All five sections print even when zero, so digests and
-# eyeball diffs stay shape-stable. REPORT-only by doctrine: missing
-# backfills are surfaced, never gated (T199 out-of-scope).
+# src/decisions.rs applies, so lint and audit agree); outcome records whose
+# `subject` resolves to a record whose OWN class is `outcome` — a malformed
+# chain (T246): the mis-targeted backfill labels nothing (decisions-export
+# joins outcome labels to NON-outcome records by subject id, so the
+# outcome-subjecting outcome joins no row AND the intended subject stays
+# unlabeled) and the T70 remedy is fix-forward — append the correctly-
+# targeted outcome with a provenance note, never edit history; routing/
+# verdict records with NO outcome backfill naming their id (count by
+# class); and duplicate ids. All six sections print even when zero, so
+# digests and eyeball diffs stay shape-stable. REPORT-only by doctrine:
+# missing backfills and malformed chains are surfaced, never gated (T199
+# out-of-scope; T246 keeps the wrap step a run + backfill + name, not a
+# merge gate).
 #
 # jq + bash builtins only, LC_ALL=C, one pass over the corpus (fromjson?
 # drops malformed lines — a torn tail line from a killed writer degrades
@@ -43,12 +51,13 @@ else
 fi
 
 # One pass over the raw corpus -> the whole rendered report. Line-oriented
-# fromjson? tolerance up front; object-indexed sets for the two joins (ids,
-# backfilled subjects) so lookups stay O(1) at corpus scale.
+# fromjson? tolerance up front; object-indexed sets for the three joins (ids,
+# id->class, backfilled subjects) so lookups stay O(1) at corpus scale.
 JQ_PROG=$(cat <<'JQEOF'
 (split("\n")
  | map(select(length > 0) | fromjson? | select(type == "object"))) as $r
 | (reduce ($r | map(.id // ""))[] as $i ({}; .[$i] = true)) as $idset
+| (reduce ($r[]) as $rec ({}; .[($rec.id // "")] = ($rec.class // "?"))) as $idclass
 | ([$r[] | .class // "?"] | group_by(.)
    | map({k: .[0], n: length}) | sort_by(.k)) as $byclass
 | ([$r[] | .id // ""] | group_by(.)
@@ -58,6 +67,7 @@ JQ_PROG=$(cat <<'JQEOF'
                 and (.choice // "") != "fixed-up"
                 and (.choice // "") != "reverted")]) as $badchoice
 | ([$out[] | select(($idset[.subject // ""] // false) | not)]) as $badsubj
+| ([$out[] | select(($idclass[.subject // ""] // "") == "outcome")]) as $malchain
 | (reduce ([$out[] | .subject // ""] | unique)[] as $s ({}; .[$s] = true)) as $bfset
 | (["validation-routing", "validation-verdict", "recovery-routing"] | map(
     . as $c | {k: $c, n: ([$r[] | select(.class == $c
@@ -73,6 +83,9 @@ JQ_PROG=$(cat <<'JQEOF'
 + "\n## outcome subject resolves to no existing id: \($badsubj | length)\n"
 + (if ($badsubj | length) == 0 then ""
    else ($badsubj | map(.subject // "?") | sort | map("  - \(.)") | join("\n")) + "\n" end)
++ "\n## outcome subject resolves to another outcome record (malformed chain): \($malchain | length)\n"
++ (if ($malchain | length) == 0 then ""
+   else ($malchain | map(.id // "?") | sort | map("  - \(.)") | join("\n")) + "\n" end)
 + "\n## routing/verdict records without an outcome backfill naming their id\n"
 + ($nobf | map("  - \(.k): \(.n)") | join("\n")) + "\n"
 + "\n## duplicate ids: \($dups | length)"

@@ -775,7 +775,16 @@ alike) has been harvested.
   `validation-verdict` per item, `outcome` backfills at row flips;
   a cycle that worked items with zero `decision_log` records
   is an incomplete wrap (the T23→T24 zero-calls lesson; cycles 34+35
-  shipped nine routing/verdict decisions with none recorded).
+  shipped nine routing/verdict decisions with none recorded). The wrap
+  runs `scripts/decisions-audit.sh` (REPORT-only — never a merge gate):
+  every routing/verdict/recovery id from THIS cycle without an outcome
+  backfill gets one appended before the wrap push, each with a provenance
+  note naming the flip or verdict it labels; a nonzero malformed-chain
+  count (an outcome whose subject resolves to another outcome record —
+  the label joins no row and the intended subject trains unlabeled; the
+  T246 cycle-115/116 fires) is named in the wrap notes and fixed forward
+  per the T70 append-only invariant: append the correctly-targeted
+  outcome with a provenance note, never edit history.
 - **Release trigger (T100): the loop cuts tags.** If ≥3 items landed
   since the newest `v*` tag OR any FEATURES.md check-off landed: bump
   Cargo.toml AND Cargo.lock (minor for a feature, patch otherwise;
