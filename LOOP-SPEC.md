@@ -145,6 +145,16 @@ simultaneously past gates — T194 amends T161's 2-child cap):
    the T204 row said "~800" and the arc landed ~3,000+ all-in across
    both halves (10 child segments, 9 aborts, zero goal-accepted
    children).
+   **Dispatch-time internal-info gate (T249) — every filing must pass
+   `tests/internal_info_lint.rs`.** Filings are the main ingress for
+   org-identifying literals (specs quote operator context; runbooks and
+   TODO rows name internal hosts, codenames, and the org) — the lint
+   walks every tracked file against its pattern list and fails the
+   suite on a hit, so a filing written with internal names is caught at
+   the dispatch gate, not on the public tree. It is a normal test
+   target: `cargo test` and the wrap gates run it automatically; the
+   license-only allow-list and the full pattern derivation live in the
+   lint source (specs/t249-internal-info-lint.md names the classes).
    Launch:
    ```
    delegate  action: "launch"

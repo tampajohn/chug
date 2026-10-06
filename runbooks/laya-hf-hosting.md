@@ -14,7 +14,7 @@ approval workflow — wrong tool). Three artifact classes, three postures:
 | class | where | gating |
 |---|---|---|
 | base laya (`convaiinnovations/laya`, Apache 2.0) | public, upstream | none — the chug default stays public so no public user hits an auth wall; mirroring to `org/laya-base` is OPTIONAL (availability pinning only) |
-| stop-completion judge (`tampajohn/…`, trained on the operator's personal Claude Code transcripts) | personal org today | migrating it to the VA org is the operator's IP call — flagged, not decided here |
+| stop-completion judge (`tampajohn/…`, trained on the operator's personal Claude Code transcripts) | personal org today | migrating it to the org's HF org is the operator's IP call — flagged, not decided here |
 | F13 loop-decision fine-tunes (trained on chug `decisions.jsonl`) | org-private from day one | public-repo work is fine only while chug loops against public repos; against internal monorepos the logs encode internal structure/doctrine |
 
 ## Hosting decision — PENDING the operator's Monday 2026-10-05 call
@@ -22,7 +22,7 @@ approval workflow — wrong tool). Three artifact classes, three postures:
 NO org-side work (repo creation, membership, Vault tokens) happens
 before this. Ranked from the 2026-10-02 analysis:
 
-1. **JFrog Artifactory HF repository** — PREFERRED if available (VA runs
+1. **JFrog Artifactory HF repository** — PREFERRED if available (the org runs
    JFrog; the HF repo type hosts models behind existing SSO/IAM; clients
    point `HF_ENDPOINT` at the Artifactory repo URL). VERIFY first:
    Artifactory version + HF repo type enabled. If present, it displaces
@@ -95,7 +95,7 @@ same rule (HF_TOKEN appears as a NAME, never a value).
 Degrade: absent file → silent no-op (public base laya); unauthed daemon
 → the 401 line above + fail-open; the loop never stalls on the judge.
 
-## Publish contract (every VA-bound fine-tune, before any consumer points at it)
+## Publish contract (every org-bound fine-tune, before any consumer points at it)
 
 1. **PRIVATE at creation** — org-membership gating, not HF's "gated".
 2. **Secret-scanned over the training corpus** (gitleaks-class), scan
@@ -114,7 +114,7 @@ Degrade: absent file → silent no-op (public base laya); unauthed daemon
    only; humans: membership).
 5. Mint the read-scoped token INTO VAULT (never into this repo, never
    into `.chug/*.json` in git).
-6. Decide the stop-judge migration (personal-transcript-derived IP → VA
+6. Decide the stop-judge migration (personal-transcript-derived IP → org
    asset call).
 
 Out of scope here: training/publishing the F13 fine-tunes (F13 phases),

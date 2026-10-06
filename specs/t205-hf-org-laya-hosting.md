@@ -14,7 +14,7 @@ tool). Three artifact classes need different treatment: base laya
 (convaiinnovations/laya, Apache 2.0, already public — no gating;
 optional mirror for revision pinning), the stop-completion judge
 (tampajohn/, trained on operator's personal Claude Code transcripts —
-VA-org migration is the operator's IP call, flagged), and F13
+org-HF-org migration is the operator's IP call, flagged), and F13
 loop-decision fine-tunes (trained on chug decisions.jsonl — PUBLIC-repo
 work today, but once chug loops against internal monorepos the logs
 encode internal structure/doctrine: org-private from day one).
@@ -50,7 +50,7 @@ too — only the org steps wait.
 
 ## Hosting options (ranked, operator 2026-10-02 Databricks question)
 
-1. **JFrog Artifactory HF repository** (PREFERRED if available): VA
+1. **JFrog Artifactory HF repository** (PREFERRED if available): the org
    already runs JFrog (wheels ship there); JFrog's Hugging Face repo
    type (local + remote/proxy, 7.9x+) hosts first-party models behind
    EXISTING SSO/IAM — no new membership silo. HF clients pull via
@@ -95,7 +95,7 @@ too — only the org steps wait.
    verify the org HF org exists (else create with IT); create the
    private judge repo(s); set org membership / Artifactory perms; mint
    a read-scoped token into Vault; decide the stop-judge migration
-   (personal-transcript-derived IP -> VA asset call).
+   (personal-transcript-derived IP -> org asset call).
 5. DEPENDENCIES.md (T203) gains the HF row: huggingface.co /
    hf-hub downloads / optional (public default) or HF_TOKEN (private) /
    fail-open degrade.
