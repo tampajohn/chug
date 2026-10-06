@@ -1,6 +1,6 @@
 # T247 — LOOP-SPEC Phase 1: codify the empty-delta chain (disposition rule + eval-trip valve + human-counted streak)
 
-check: export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared; touch src/*.rs tests/*.rs; cargo test --test loop_spec_empty_chain --test todo_consistency
+check: export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-validate-a; touch src/*.rs tests/*.rs; cargo test --test loop_spec_empty_chain --test todo_consistency
 
 estimate: ~70 lines all-in (Phase-1 clause ~30 + new pin file ~40 + row)
 
