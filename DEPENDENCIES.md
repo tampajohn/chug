@@ -1,6 +1,6 @@
 # DEPENDENCIES.md — audited external-dependency inventory
 
-Audited 2026-10-02 (operator session, F94 checkout `a2f0df3`): "sans the LLM
+Audited 2026-10-02 (operator session, checkout `a2f0df3`): "sans the LLM
 proxy, I want to audit the dependencies of chug." This doc is the record of
 that audit — the eval corpus and future dependency reviews read it, and new
 dependencies get checked against it (reuse > extend > create applies to
@@ -52,7 +52,7 @@ degraded note, and the loop continues.
 
 ## Private fine-tune hosting — the T205 publish contract
 
-Any laya fine-tune destined for the org HF org (or the interim
+Any laya fine-tune destined for an org-private HF org (or the interim
 private `tampajohn/*` repos) is, before ANY consumer points at it:
 
 1. **PRIVATE at creation** — org-membership gating is the mechanism, NOT

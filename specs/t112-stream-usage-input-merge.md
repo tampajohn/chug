@@ -11,7 +11,7 @@ identical either way — T15 budget enforcement, budget-low token warnings,
 events.jsonl iteration lines, abort/goal token summaries, and Langfuse
 usage all ride `usage()` unchanged.
 
-**Bug**: on the production endpoint (`internal-llm-proxy`),
+**Bug**: on the production endpoint (an internal LLM proxy endpoint),
 streamed runs report `input_tokens: 0` for the whole run. Evidence:
 
 - `.chug/events-20260928-091512.jsonl` (cycle-60 orchestrator, post-T108

@@ -69,4 +69,4 @@ never 2 validators" — LOOP-SPEC Phase 2) bind every cycle with 3+ rows.
 - >3 children (merge serialization makes it queue at the gate anyway);
   validator on non-kimi family; per-item multi-validator; relaxing the
   single-driver guard (one main, one LEDGER — multi-loop is the
-  repo-level lever and already exists as the dashd/internal-monorepo pattern).
+  repo-level lever and already exists as the dashboard/internal-monorepo pattern).

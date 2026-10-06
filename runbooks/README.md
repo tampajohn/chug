@@ -10,4 +10,4 @@ Pick the line that sounds like your situation:
 - "Can chug drive some other repo? Evaluate it before committing a loop" → [repo-eval.md](repo-eval.md)
 - "The self-improvement loop: start it, read it, stop it, recover it" → [loop-ops.md](loop-ops.md)
 - "Get a second pair of eyes on this code or diff, then file the findings" → [adversarial-review.md](adversarial-review.md)
-- "Host or consume a org-private laya judge fine-tune (org/token/endpoint, publish contract)" → [laya-hf-hosting.md](laya-hf-hosting.md)
+- "Host or consume an org-private laya judge fine-tune (org/token/endpoint, publish contract)" → [laya-hf-hosting.md](laya-hf-hosting.md)

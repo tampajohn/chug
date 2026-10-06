@@ -1,13 +1,13 @@
 # laya checkpoint hosting: org-private fine-tunes + the token path (T205)
 
 When to reach for this: you are hosting or consuming a laya judge
-fine-tune for a VideoAmp (VA) machine fleet — the daemon's risk-gate
+fine-tune for an internal machine fleet — the daemon's risk-gate
 model. One-page contract here; the code pins are `src/hf_hosting.rs`,
 `src/judge_model.rs`, and `tests/no_secret_spill.rs`.
 
 ## The gating decision (already made)
 
-A PRIVATE repo in the org HF org: org-membership-gated, machines
+A PRIVATE repo in the org's HF org: org-membership-gated, machines
 pull via a read-scoped `HF_TOKEN`. NOT HF's "gated" feature (public +
 approval workflow — wrong tool). Three artifact classes, three postures:
 
@@ -27,7 +27,7 @@ before this. Ranked from the 2026-10-02 analysis:
    point `HF_ENDPOINT` at the Artifactory repo URL). VERIFY first:
    Artifactory version + HF repo type enabled. If present, it displaces
    the HF org.
-2. **org HF org private repo** — works today, adds a second
+2. **the org HF org private repo** — works today, adds a second
    membership/token silo.
 3. ~~Databricks Model Registry~~ — REJECTED 2026-10-02: speaks ONLY the
    MLflow API; no HF-Hub-compatible endpoint exists; would mean a

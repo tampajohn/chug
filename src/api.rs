@@ -990,7 +990,7 @@ impl<'a> StreamAccumulator<'a> {
                 // T108 parity pins stay green. But some proxies send
                 // placeholder zeros in `message_start` and the real counts —
                 // input included — ONLY in `message_delta`; observed live on
-                // internal-llm-proxy (cycle-61 probe):
+                // the internal LLM proxy endpoint (cycle-61 probe):
                 //   message_start: "usage":{"input_tokens":0,"output_tokens":0}
                 //   message_delta: "usage":{"input_tokens":257,"output_tokens":1}
                 // Discarding that input made every streamed run report
@@ -2652,7 +2652,7 @@ mod tests {
     }
 
     /// T112 regression pin — the EXACT observed production shape
-    /// (internal-llm-proxy, cycle-61 live probe): the proxy
+    /// (the internal LLM proxy endpoint, cycle-61 live probe): the proxy
     /// sends placeholder zeros in `message_start` and the real counts — input
     /// included — only in `message_delta`. The delta's usage must merge over
     /// the skeleton so `usage()` reports the real run totals (pre-fix every

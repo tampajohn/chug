@@ -51,6 +51,6 @@ where the eval's time actually went.
 
 ## 3. If FEASIBLE
 
-One loop per repo is the repo-level lever (the dashd/internal-monorepo pattern):
+One loop per repo is the repo-level lever (the dashboard/internal-monorepo pattern):
 give the repo its own TODO.md, specs/, and `./loopd.sh` — don't merge it
 into another repo's cycle.

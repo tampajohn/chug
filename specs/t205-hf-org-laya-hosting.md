@@ -56,7 +56,7 @@ too — only the org steps wait.
    EXISTING SSO/IAM — no new membership silo. HF clients pull via
    HF_ENDPOINT pointed at the Artifactory repo URL + Artifactory token.
    VERIFY (operator): our Artifactory version + HF repo type enabled.
-2. **org HF org private repo** (the original plan): works today,
+2. **the org HF org private repo** (the original plan): works today,
    but adds a second membership/token silo to manage.
 3. **Databricks Model Registry** (REJECTED 2026-10-02, verified against
    Databricks lifecycle docs): the registry speaks ONLY the MLflow API
@@ -79,7 +79,7 @@ too — only the org steps wait.
    points downloads at Artifactory or any HF-compatible host; default
    stays public huggingface.co.
 2. Publish contract (documented in the repo — DEPENDENCIES.md section
-   + runbooks/ entry): any laya fine-tune destined for the videoamp HF
+   + runbooks/ entry): any laya fine-tune destined for the org HF
    org is (a) PRIVATE at creation, (b) secret-scanned over its training
    corpus (gitleaks-class) with the scan result recorded in the model
    card, (c) revision-pinned by consumers. Base-laya mirroring to

@@ -20,8 +20,8 @@ when to use it, the exact command/goal template, and the expected arc.
 - T188 (auto-spec) + T189 (low-stakes lane) change the quick-task arc;
   the runbook for it references those flags but must be accurate TODAY
   (write against current flags, annotate the T188/T189 follow-up).
-- Existing worked examples to distill: internal-monorepo feasibility eval
-  (INTERNAL-MONOREPO-FEASIBILITY.md arc), codex adversarial review arc,
+- Existing worked examples to distill: the internal-monorepo feasibility eval
+  (the internal-monorepo feasibility arc), codex adversarial review arc,
   loopd operations (loopd.sh status / kickstart / HALT recovery),
   dashd dogfood loop on K7.
 
