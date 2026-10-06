@@ -1,359 +1,299 @@
-# EVALUATION — chug, assessed by chug-loop (2026-10-06, cycle 130)
+# EVALUATION — chug, assessed by chug-loop (2026-10-06, cycle 131)
 
-Fresh eval on a WORKED delta — the T249+T250 arcs. The freshness
-predicate failed on the todo-rows half (queue DRAINED at the cycle-129
-wrap), and the delta since the cycle-126 fresh eval (c56218b) is NOT
-bookkeeping-only — TWO items landed — so the codified empty-delta
-chain rule (T247) correctly REFUSES to authorize a skip for the THIRD
-time (cycle-123/126 precedents: a worked delta forces the real eval).
+Fresh eval on a WORKED delta — the T251+T252 arcs. The freshness
+predicate failed on the todo-rows half (queue DRAINED at the cycle-130
+wrap-close), and the delta since the cycle-130 fresh eval (5422753) is
+NOT bookkeeping-only — TWO items landed — so the T247 empty-delta
+skip rule correctly REFUSES to authorize a skip for the FOURTH time
+(cycle-123/126/130 precedents: a worked delta forces the real eval).
 loopd routed kimi per T81 (`./loopd.sh routing` → `eval
 anthropic-system.ai.kimi-k3`, probed live; this stream IS kimi) —
-26-for-26. Delta: SEVENTEEN commits (c096c98 + 2352f51 wraps, operator
-47cd0d1 redaction + ab3576f T249 filing, the T249 arc bd66e31 →
-d4a8923 + cfef97f flip + 8c2a817 wrap, the T250 arc fdc13f9 → f58f7a8
-+ eaf078c flip + 77eec09 wrap), TWO items landed (T249 internal-info
-lint; T250 machine-codename OUT-CLASS ruling), TWO children (glm impl
-57/80 goal-accepted first-try ~56 min; kimi validator 50/60 PASS first
-round, 7 T79-parallel mutants 6 killed + 1 informational survivor
-closed by the validator's own RED-proven pin c982efa), ZERO fix-up
-arcs, ZERO budget deaths, ZERO resumes, ONE empty-delta disposition
-(cycle 127, TRUE streak 0→1, chain then reset by cycle-128's real
-wrap), `.chug/decisions.jsonl` 1,215 → 1,242 (+27; outcomes 313 →
-322; labeled joins ~283 → ~292 — the THIRD consecutive non-zero
-label growth), suite 1692 → 1700 (+8 lint pins), digest FRESH (616
-files, 37,803 iterations, generated 18:56:00Z, staleness probe FRESH).
-Headline: **ONE row filed (T251 — the ctx-edit casualty doctrine).
-The delta's marquee event is the cycle-128 glm orchestrator's accepted
-99% single-edit context collapse (108,645 → 1,004 tokens) fired
-mid-bookkeeping after an irreversible merge — zero work lost
-(reflog-proven recovery), ~45 iterations of rediscovery cost, and a
-named near-miss path. The roadmap pull skips a THIRTEENTH consecutive
-eval (corpus 1,242 / 322 outcome / ~292 labeled vs the ~2,570 GO
-precondition). Queue after filing: T251.**
+28-for-28. Delta: EIGHT commits (edb5ad5 impl + 2fec427/0ae8375
+re-keys + f24ba45 merge + 52d628f flip + 10c9148 release + 9fcc036
+wrap + 7aa1287 T252), TWO items landed (T251 mutation-checkpoint +
+read-first recovery doctrine; T252 loadavg double-read flake fix,
+orchestrator-direct at wrap-close), TWO children (glm impl 52/80
+first-try 24m02s goal-accepted; kimi validator 26/60 11m18s PASS first
+round, 3 T79-parallel mutants all killed), ZERO fix-up arcs, ZERO
+budget deaths, ZERO resumes, ONE release tag (v0.17.7),
+`.chug/decisions.jsonl` 1,242 → 1,259 (+17; outcomes 322 → 326;
+labeled joins ~292 → 298 — the FOURTH consecutive non-zero label
+growth), suite 1702. Digest FRESH (619 files, 38,066 iterations,
+generated 21:15:54Z; staleness probe FRESH). Headline: **ONE row
+filed (T253 — the profile-blind warmth doctrine). The delta's
+diagnostic event is a same-HEAD paradox: the cycle-130 wrap's
+main-dedicated guard leg died at the 300s bash cap MINUTES after the
+release gates ran green at the same HEAD — T242's known-warm clause
+permitted the inline run because it never names a profile, and the
+fleet's warmth is release while the guard/clippy templates run dev.
+The same gap fired twice in one delta (orchestrator guard, impl-child
+clippy), tripping the standing inline-cold-scale census.** The roadmap
+pull skips a FOURTEENTH consecutive eval (corpus 1,259/326/298 vs
+T208's ~2,570 GO precondition). Otherwise the delta is the loop at its
+best: a first-try doctrine arc, a goal-gate flake caught and repaired
+in-cycle in 19 minutes, and the T251 casualty doctrine practiced by
+its own filing cycle before it merged.
 
 ## 1. What chug does well
 
-- **The disk-is-truth architecture absorbed a 99% context amputation
-  with ZERO work loss — the strongest resilience proof in the
-  corpus.** Cycle-128's glm orchestrator, mid-bookkeeping after
-  fast-forwarding main bd66e31→c982efa, had an accepted LIVE_CTX edit
-  collapse its context 108,645 → 1,004 tokens in ONE edit (iter 103,
-  17:55:52Z of events-20261006-182121.jsonl — the merge narrative and
-  the three dirty bookkeeping files' provenance amputated wholesale).
-  Every guard did its job on the way in (9 malformed-edit rejections
-  first: pinned-content, pair-intact, turn-numbering, shrink gate),
-  and every disk surface did its job on the way out: the recovering
-  model read the reflog (FF proven), read the three dirty files
-  (flip/Outcomes/DEPENDENCIES — content good), and landed them
-  VERBATIM as cfef97f. The T192/T230 machinery + the loop's
-  git-as-truth discipline turned a potential cycle-killer into a
-  ~22-minute slowdown. The timing hazard it exposed is §2's I1/T251.
-- **T249's lint caught its own cycle's prose within hours of
-  landing.** The internal-info lint's first live catch was the
-  cycle-128 orchestrator's own Outcomes draft (org-identifying
-  literals in the narrative — de-literalized in-arc): the suite-side
-  walk failed the wrap gates on the very prose describing it. A
-  pattern-list gate that catches its own birth announcement in the
-  same cycle is the dogfood ideal.
-- **T249's validator closed its own survivor with a RED-proven pin.**
-  kimi validator PASS first round at 50/60: 7 T79-parallel mutants, 6
-  killed; the 1 informational survivor (M1 — the class-5
-  before-boundary unpinned) was closed by the validator's own
-  on-branch pin c982efa, RED-proven by execution with byte-identical
-  restore. The validate-then-close-the-gap loop ran inside one child.
-- **T250 executed an operator-decision row on the evidence,
-  orchestrator-direct.** Both halves of the either/or mandate weighed
-  on the record (row-disposition d1791311021-2): OUT-CLASS landed
-  (docs-only +24/−0, permanent exclusion, kept-class pins left
-  load-bearing); IN-CLASS rejected with its costs named (bookkeeping
-  history rewrite, doctrine churn, two flipped pins, no protective
-  value). A policy question decided by the loop with the reasoning
-  auditable in the commit + decision corpus.
-- **The small-row fast path held.** Cycle 129 ran the full T250 arc
-  (worktree + docs impl + gates + lane call + merge + flip + wrap +
-  push) in 41 orchestrator iterations / ~29 min wall; cycle 127's
-  disposition ran 26 iterations / ~9 min.
-- **The T246 backfill doctrine ran debt-free a FOURTH and FIFTH
-  consecutive cycle** (cycle-128's 7 ids and cycle-129's 3 ids all
-  outcome-backfilled at flip time, pre-audit; malformed
-  d1791264594-4 standing historical; duplicates 0).
+- **The goal gate caught a real flake and the loop repaired it
+  in-cycle, orchestrator-direct, in ~19 minutes.** The cycle-130 wrap
+  goal gate FAILED `t214_live_deadline_stays_within_base_and_4x`
+  (20:50:07Z, "check command failed" — left 98.95s vs right 94.6s, the
+  1-min loadavg double-read raced mid-test under cold-compile churn).
+  The orchestrator proved flake-not-regression by construction +
+  repetition (20/20 solo, 30/30 loaded), filed T252, landed the
+  bracket-reads fix RED-proven with a byte-identical restore, re-ran
+  full gates green, and the goal gate ACCEPTED at 21:09:06. Rejection
+  → diagnosis → fix → re-gate → accept: the quality floor end-to-end,
+  with the lane call (gates-only, d1791320759-16) mechanical.
+- **T251's doctrine was practiced by its own filing cycle BEFORE it
+  merged.** The cycle-130 kimi orchestrator, mid-eval at 116,156 live
+  tokens, ran a DELIBERATE LIVE_CTX compaction (19:10:54Z:
+  116,156 → 17,717, turns 3–118 spliced) with all state already on
+  disk — the mutation-checkpoint discipline its own eval was filing
+  that hour — and it was the FIRST edit accepted, ZERO rejections
+  (contrast: the cycle-128 glm stream's 9-rejection format fight —
+  the fight is glm-specific, not format-inherent; I4 census note).
+- **The doctrine+needle-leg pipeline ran first-try end-to-end.** glm
+  impl 52/80 goal-accepted in 24m02s (+25 doctrine / +457 needle-pin
+  lines); kimi validator PASS 26/60 in 11m18s with 3 T79-parallel
+  mutants all killed by designed assert messages and a byte-clean
+  restore; zero fix-up arcs, zero budget deaths. The T251 validator's
+  calibration note (doctrine+needle-leg filings on the carrier price
+  ~400–500 all-in) is already load-bearing — it prices this eval's
+  T253 estimate.
+- **T242's background-window doctrine absorbed both cold-scale legs
+  it faced.** The wrap's post-version-bump clippy (dev, 12m42s) and
+  t251-impl's dev clippy (7m44s) both ran in bounded windows with zero
+  wedge — the rule works where it's followed; §2 files the two
+  surfaces where its letter permitted an inline run anyway.
+- **Release machinery second tag of the day, clean.** v0.17.7 tagged
+  at 3 items since v0.17.6 (patch, no feature), ancestor-verified per
+  T245, pairing ok; `git describe` now `v0.17.7-2-g7aa1287`.
+- **T246 backfill doctrine debt-free a SIXTH consecutive cycle** (the
+  cycle's 3 routing/verdict ids outcome-backfilled at flip time,
+  pre-audit; malformed d1791264594-4 standing historical; duplicates
+  0) — and T252's wrap-close arc logged its own routing + outcome
+  (d1791320759-16 / d1791320784-17) inside the same wrap.
 - **Routing and pacing probes verified live at every surface:**
-  `./loopd.sh routing` → `eval kimi` (26-for-26 — this stream IS the
-  predicted kimi), `./loopd.sh sleep-ok` → `60 0` (TRUE 0 = machine
-  0 through TWO real-work wraps; T248 quote discipline held),
-  `git describe` → `v0.17.6-18-g77eec09` (T245 ancestor sanity).
+  `./loopd.sh routing` → `eval kimi` (28-for-28), `./loopd.sh
+  sleep-ok` → `60 0` (TRUE 0 = machine 0 through THREE real-work
+  wraps; T248 quote discipline held), `git describe` ancestor sanity
+  clean.
 
 ## 2. Incidents worth fixing
 
-### I1 — the ctx-edit casualty: an accepted 99% collapse fired mid-bookkeeping after an irreversible merge (1 fire — T251 FILED)
+### I1 — the profile-blind warmth doctrine: same-HEAD paradox kills two legs in one delta (2 fires this delta, census TRIPS at 4 — T253 FILED)
 
-Cycle-128's glm orchestrator fast-forwarded main bd66e31→c982efa
-(the T249 landing), wrote three bookkeeping files dirty (TODO flip,
-Outcomes, DEPENDENCIES), and then — under the T230 occupancy nudge at
-~102–108k live tokens — fought NINE rejected LIVE_CTX edits (iters
-93–102: mirror-format, pinned-content, pair-intact, turn-existence
-rejections) before a TENTH edit was ACCEPTED at iter 103: turns 0–175
-deleted wholesale, 108,645 → 1,004 tokens, the model's own surviving
-handoff line reading "[compacted at turn 183: … all load-bearing
-state lives in LEDGER.md + on-disk files]". The collapse amputated the
-turns where it had merged and started bookkeeping. The model then
-spent ~45 iterations (~22 min, iters 103–148) rediscovering its own
-state from the reflog and the dirty files — which it correctly
-treated as load-bearing (read-first, verbatim recovery cfef97f).
-Evidence: events-20261006-182121.jsonl (11 ctx_edit events),
-.chug/loopd/cycle-20261006-152144.log:354–366 (the recovery
-narrative), the cycle-128 goal summary ("a lost segment — ctx-edit
-casualty ~13:36"). Root cause: NOT collapse depth — fleet-wide, deep
-single-edit collapses are ROUTINE and harmless (8 of 10 accepted
-ctx-edits cut >75%; four cut 89–99%) — the hazard is collapse TIMING:
-mid-mutation, with uncommitted bookkeeping and an irreversible FF
-already landed. The near-miss path: a recovering model that
-reflexively `git checkout --`/`git clean`s "foreign" dirty files
-destroys the bookkeeping — this model read first; nothing doctrine
-required it to. **T251 filed** (pri 2, doctrine SOLO, kimi REQUIRED,
-est ~70): the mutation-checkpoint ordering clause (bookkeeping edits
-on disk BEFORE / committed IMMEDIATELY after an irreversible mutation;
-no further dispatch between mutation and bookkeeping commit) + the
-read-first recovery rule (unremembered dirty state is load-bearing:
-read, reflog, reconstruct — never checkout/clean/reset against
-unremembered state; the cycle-61 kill rule's self-state sibling),
-pinned as needle legs in tests/loop_spec_recovery.rs. WEIGHED AND
-REJECTED the driver-side alternative (a collapse-ratio/shrink-floor
-gate in live_ctx.rs): 8/10 accepted edits fleet-wide are >75%
-collapses — a ratio cap fights the feature's primary use pattern, and
-the T192 guards (pinned/pair/shrink) already reject malformed edits
-(15 rejections fleet-wide, 9 this stream). The fix is WHERE the
-loop's state lives at mutation time (doctrine), not HOW deep the
-model may cut (feature).
+The fleet's warmth is RELEASE (T78/T82: release warm builds, release
+gates, release post-merge/final legs), but the guard-floor and clippy
+templates — and T242's known-warm clause itself — name the dev
+profile or no profile. Fire 1 (orchestrator, main-dedicated): the
+cycle-130 wrap's guard leg `cargo test --test todo_consistency --test
+eval_outcomes_carry --test internal_info_lint` (NO `--release`) in
+`target-shared-main` was killed at the 300s bash cap (duration
+300,136ms; 20:26:22Z, .chug/events-20261006-211733.jsonl) — the first
+dev-profile leg after the f24ba45 merge moved HEAD (build.rs watches
+`.git/HEAD`), minutes after the release post-merge gates ran green at
+the SAME HEAD (the T242 window had exited, PROC-GONE — no lock
+contention; verified against the transcript, the timeout command and
+its `--release` recovery both read back). T242's letter PERMITTED the
+inline run ("a same-HEAD cargo leg already completed THIS cycle…
+(e.g. this step's todo_consistency guard run)") — the clause's own
+example is a cross-profile counterexample. The identical legs re-run
+WITH `--release` passed instantly (4+8+21). Fire 2 (impl child,
+worktree shared dir): t251-impl's dev clippy
+(`cargo clippy --all-targets -- -D warnings`) killed at 300s inline
+(19:39:08Z), re-run windowed: 7m44s dev-cold vs 51s release (harvested
+LEDGER-t251-impl). Standing census (cycle-130 eval I3): cycle-122 +
+cycle-128 worktree-gate inline cold-scale kills, re-file at 3 — the
+orchestrator's fire is the third, the impl's the fourth; TRIPPED, with
+the new mechanism named (profile-invalidation joins
+HEAD/mtime-invalidation as a cold-scale trigger). Root cause: the
+templates never name a profile (guard invocation LOOP-SPEC.md:644,
+"(seconds)" claim :636, docs-only floor :390, clippy surfaces
+:211/:348/:581/:904) and the known-warm clause (:605, restated :902)
+is profile-blind — warmth is per-profile and the doctrine's inference
+rule is wrong whenever the leg's profile differs from the dir's warm
+one. **T253 filed** (pri 3, doctrine SOLO, kimi REQUIRED, est ~300):
+profile-exact known-warm at both T242 surfaces + `--release` on the
+main-dedicated guard invocation, the docs-only floor, and all four
+clippy surfaces + T235/FLOOR needle updates + a new
+loop_spec_cold_gates leg pinning the profile-exact phrasing and the
+cycle-130 evidence tokens. WEIGHED AND REJECTED: a warm-both-profiles
+policy (double every warm build's cost to insurance against a
+doctrine-text gap — the fix is naming the profile, not buying two);
+and doing nothing on the strength of the T242 window's absorption
+(the window is the mitigation for KNOWN cold legs; these two fires
+were legs the doctrine told the runner were warm).
 
-### I2 — glm tool-schema conformance slips: 8 fires this delta (escalation NAMED; WEIGHED, no row)
+### I2 — goal-gate loadavg double-read flake (1 fire; instance FIXED in-cycle as T252; class census STARTED at 1)
 
-vs 1 fire last delta (the outcome-choice enum slip). This delta:
-decision_log `options`-missing ×5 in ONE stream (the cycle-128 glm
-orchestrator — the corrective error names all six required fields
-every time; the stream eventually logged 15 clean records), decision_log
-`confidence`-as-string ×1 (t249-validate — kimi, one fire),
-edit_file wrong param names ×2 (t249-impl: `old_string`/`new_string`
-for `old`/`new`). PLUS one literal-placeholder edit_file path
-(`specs/tN-internal-info-lint.md` — the T210 class's orchestrator-side
-variant: the pre-launch placeholder check guards launch goals, not
-mid-stream edits; absorbed in one retry). WEIGHED AND REJECTED: the
-schema, the tool description ("Required in every call: class,
-subject, inputs, options, choice, confidence — with no field
-omitted"), and the corrective errors are all already maximal — zero
-malformed records entered the corpus, both wrap audits clean, every
-fire absorbed in ~1 retry. There is no remedy headroom short of
-weakening the corpus schema (rejected on its face). Re-file trigger:
-a malformed record ENTERING `.chug/decisions.jsonl`, or a wrap-audit
-unbackfilled id traceable to a dropped record.
+`t214_live_deadline_stays_within_base_and_4x` read the 1-minute
+loadavg twice (inside `load_scaled_deadline` and again for the
+expected composition) and false-red when the average updated mid-test
+under cold-compile + 42-binary startup churn (goal-gate fire:
+left 98.95s, right 94.6s). Fixed in-cycle (T252, 7aa1287): the live
+call is bracketed by before/after reads and the composition equality
+asserts only when they coincide; the [base, 4x] invariant legs carry
+churn-window runs; RED-proven (load+50 perturbation failed at the
+assert_eq, restore shasum-verified). Census carried verbatim from the
+cycle-130 wrap: **a second fire of the loadavg-double-read class in
+any load-scaled test files the shared-seam-read row** (a loadavg read
+behind a test seam, read once and injected). Standing: 1.
 
-### I3 — child-side 300s cargo-kill census: FIRST ≥2/2 delta (trigger armed at 1-of-2)
+### I3 — standing-watch resolutions and counts
 
-t249-impl ×1 (a Compiling leg) + t249-validate ×1 — the first delta
-with ≥2 kills across ≥2 children since the census began (three prior
-consecutive deltas at 1/2). The re-file trigger (≥2/2 in EACH of two
-consecutive deltas, OR a budget death naming cargo-kill waste) is now
-ARMED AT 1-of-2. Separately: the cycle-128 glm orchestrator took ONE
-inline 300s kill on a worktree-gate clippy leg (6m47s cold-scale
-after the T195 touch — the T242 class biting worktree gates, exactly
-as its own Outcomes named), self-corrected to a bounded bg window;
-worktree-gate inline cold-scale census: 2 standing (cycle-122,
-cycle-128), re-file at 3.
-
-### I4 — glm ctx-edit format fight: 9 consecutive rejections before the accepted edit (~9 min in ONE stream; census STARTED)
-
-Iters 93–102 of the cycle-128 glm stream are nine straight LIVE_CTX
-edit rejections (mirror-format parse errors, "turn 0 body is not a
-valid message", pinned-content modification, "turn 208 does not
-exist", tool-pair loss) before iter 103's accepted collapse — the
-mirror format is glm-hostile on first contact under occupancy
-pressure. WEIGHED AND REJECTED as a row today: the rejections are the
-guards working as designed (15/25 fleet ctx-edit events are
-rejections), the fight self-corrected, and the evidence base is one
-stream. Census STARTED: an orchestrator stream burning >10 iterations
-on ctx-edit rejections re-files a mirror-format guidance row.
-
-### I5 — eval-authoring path-escape trigger TRIPS on chronicity; re-adjudicated REJECTED (remedy space exhausted)
-
-The cycle-126 eval's census (2 eval streams: cycles 122, 123) reaches
-4: the cycle-126 kimi segments show `/tmp/cN-eval-body.md` ×2 and
-`/tmp/cN-oneline.txt` ×1 write_file refusals (the digest's per-file
-failure classes). >3 eval streams = the named re-file trigger —
-TRIPPED. Re-adjudicated and REJECTED anyway: the remedy space is
-exhausted — the refusal already carries the directive ("cross-tree
-paths go through bash"), the cwd confinement is the security boundary
-(untouchable), the cost is bounded at ~1 iteration per eval stream,
-and a META-META-SPEC line would restate what the error teaches at the
-moment of need (doctrine-bloat guard). The trip is recorded; the
-trigger is RESET to cost-based: >3 iterations burned on the class in
-ONE stream re-files.
-
-### I6 — standing-watch resolutions and counts
-
-- **`deps.wedged-t242`: RESOLVED (operator cleaned, cycle 127) —
-  standing naming CLOSED after seven namings.** Discharged from the
-  watch list.
-- **Multi-segment-wrap trigger: stays DISARMED** — cycles 127, 128,
-  129 are the 6th/7th/8th consecutive one-segment wraps.
-- **Child bg-window orphans: 0 this delta** (t249 children left zero
-  cargo/sh orphans — verified live this eval; the only cargo process
-  on the host is the operator's own unrelated build). Trigger stays
-  ARMED at 1.
-- **process-substitution-under-sh: 1 fire** (t249-validate, one
-  retry) — threshold >2/cycle untripped.
-- **glm-impl minutes: t249-impl wall 55m38s vs the 50-min budget,
-  goal-accepted** — the goal-gate check tail runs past the
-  inter-iteration budget check (correct: killing an accepting check
-  mid-run is strictly worse). Minutes-DEATH census: zero, third
-  consecutive delta.
-- **Validator silent-exit: 0** (t249 validator wrote verdict-t249-r1
-  first, exited announced 50/60). Standing count: 1 (cycle-115).
-- **Known-flaky preview output-length legs: 1 sighting** — t249-impl's
-  full-suite legs went 1242/1243 and 1241/1243 on
-  `driver::tests::preview` output-length legs (green solo 6/6; code
-  untouched by the diff — the child's own commit message names it).
-  A second delta with a sighting re-files the isolation row.
-- **check-tag-version is_error oddity: 0 fires** (standing 1).
-- **awk-redirect same-file truncation: 0 fires** (second fire files
-  the clause). **BSD-sed GNU-range: 1 fire** (cycle-126 kimi segment —
-  prior-delta stream, counted here for the census: 1).
-- **edit_file stale-anchor: 2 fires** (cycle-128 glm: EVALUATION.md +
-  spec) — absorbed.
-- **T236/T243/T233 fix efficacies: zero re-fires** (1700/1700 green
-  on every gate surface this delta).
+- **Child-side 300s cargo-kill census: 1/2 this delta (t251-impl ×1,
+  the dev clippy — SUBSUMED by I1's root class; t251-validate ×0).**
+  The ≥2/2-in-two-consecutive-deltas re-file trigger (armed 1-of-2 at
+  the cycle-130 eval) BREAKS its streak — disarmed to 0-of-2.
+- **glm tool-schema conformance slips: 0 fires this delta** (kimi
+  orchestrator, one glm impl child, one kimi validator — all clean;
+  the I2-of-cycle-130 trigger stays disarmed; re-file conditions
+  unchanged).
+- **ctx-edit format fights: 0** — the kimi orchestrator's one
+  compaction accepted first-try (§1). The >10-rejection-iterations
+  census stays at 1 stream (cycle-128 glm).
+- **Child bg-window orphans: 0** (verified live this eval: zero cargo/
+  rustc processes on the host besides none; t251 children reaped
+  clean).
+- **process-substitution-under-sh: 0 fires this delta** (the t251
+  validator's one failure was a sed paren slip, absorbed in 1 retry).
+- **glm-impl minutes headroom: t251-impl wall 24m02s of 50 — ample.**
+  Minutes-death census: zero, FOURTH consecutive delta. The 50-min
+  template stands.
+- **Validator silent-exit: 0** (t251 validator wrote verdict-t251-r1
+  first, exited announced 26/60). Standing count: 1 (cycle-115).
+- **Known-flaky preview output-length legs: 0 sightings this delta**
+  (standing 1 from the t249-impl delta; a second delta with a sighting
+  re-files the isolation row).
+- **eval-authoring path-escapes: 0 fires this delta** (this eval
+  authored via bash heredocs per the reset cost-based trigger's
+  spirit); trigger stays cost-based (>3 iterations in one stream).
+- **edit_file stale-anchor: 0 fires. awk-redirect same-file
+  truncation: 0. BSD-sed GNU-range: 0.** One orchestrator shell slip
+  (`sh: m…`, 19:06:27Z) absorbed in 1 retry — no class.
+- **check-tag-version is_error oddity: 0** (standing 1).
+- **T236/T243/T233/T249/T252 fix efficacies: zero re-fires** —
+  1702/1702 green on every gate surface this delta, and the T252 fix
+  held through the post-fix goal-gate accept.
 - **Untracked `com.tampajohn.chug-loopd.plist` in the repo root** —
-  operator-personal (T250 ruling), invisible to the tracked-files
-  lint, no `git add -A` sweep doctrine exists that would catch it.
-  OPERATOR NOTE (no row): move it under `.chug/` or gitignore it if
-  it is not meant to be tracked.
+  STILL present (git status this eval). OPERATOR NOTE carried (no
+  row): move it under `.chug/` or gitignore it if not meant to be
+  tracked.
 
 ## 3. Friction hot spots
 
-**One stream carries the delta's tax.** Cycle-128's glm orchestrator
-burned ~9 iterations on the I4 ctx-edit format fight, ~45 iterations
-on the I1 recovery, and ~6 retries on the I2 schema slips — inside a
-148-iteration / 2h56m single-item cycle whose child waits alone were
-~100 min. Everything else ran the fast path: cycle 127 (26 iters /
-9 min), cycle 129 (41 iters / ~29 min), t249 children first-try. No
-new class beyond I2/I4; the I1 doctrine row is the only friction that
-reached the filing bar.
+The delta's tax is I1's two 300s kills (~10 min combined: one
+orchestrator guard re-run, one impl-child leg that absorbed into a
+T242 window) plus the ~19-minute goal-gate rejection detour — the
+latter being the floor working, not waste. Everything else ran the
+fast path: eval authoring with zero path-escape/schema fires, t251
+children 24m + 11m first-try, a 19-minute wrap-close fix arc. No new
+friction class beyond I1; no re-file of any prior class (all
+efficacies zero re-fires).
 
 ## 4. Capability gaps — ROADMAP PULL
 
-**Pull SKIPPED with written reason — the THIRTEENTH consecutive
-eval.** Corpus now **1,242 records / 322 outcome records / ~292
-labeled joins** (+27 / +9 / ~+9 across the three-cycle delta) vs
-T208's ~2,570 GO precondition (measured NO-GO at 858 records / 216
-labeled; GO ≈ 3× corpus). Label growth tracks worked cycles and stays
-non-zero on them (+3, +4, now ~+9) — the queue drained twice this
-delta and growth followed the work, not the calendar. The GO horizon
-sits ~1,330 records away. This remains the sanctioned skip kind
-(measured dependency, not neglect). F16 stays PARKED (operator call;
-un-park precondition is the F13 distilled-judge landing). F3-2 stands
-(Laya stop-hook consumer needs the daemon's F13 routing endpoint).
-F2-2b stands (chat-only UX, no loop consumer). **F14's
-summarization-quality deferral is REAFFIRMED BY EVIDENCE, not just
-carried:** the first ctx-edit casualty (I1) was absorbed by the
-driver-managed window + disk-is-truth state — the model's own 1k-token
-handoff sufficed for a verbatim recovery — and the hazard was edit
-TIMING (filed as doctrine T251), not summary quality. A
-summarization pass would have addressed neither. **New capability
-finds: NONE** — the delta's two items are repo-hygiene tooling plus
-a policy ruling; every friction point is schema- or doctrine-enforced
-already (I2), guard-mediated (I4), or filed (I1).
+**Pull SKIPPED with written reason — the FOURTEENTH consecutive
+eval.** Corpus now **1,259 records / 326 outcome records / 298
+labeled joins** (+17 / +4 / +6 across the one-cycle delta) vs T208's
+~2,570 GO precondition (measured NO-GO at 858 records / 216 labeled;
+GO ≈ 3× corpus). Label growth tracks worked cycles (+6 this delta —
+the fourth consecutive non-zero growth on worked stretches); the GO
+horizon sits ~1,311 records away. This remains the sanctioned skip
+kind (measured dependency, not neglect). F16 stays PARKED (operator
+call; un-park precondition is the F13 distilled-judge landing).
+F3-2 stands (Laya stop-hook consumer needs the daemon's F13 routing
+endpoint). F2-2b stands (chat-only UX, no loop consumer). **New
+capability finds: NONE** — the delta is doctrine-hardening plus a
+test-side flake fix; the one systemic gap it exposed (I1) is
+doctrine-text, not capability.
 
 ## 5. Top 3 priorities
 
-1. **T251 — the ctx-edit casualty doctrine (the only row).** Pri 2,
-   doctrine SOLO, kimi REQUIRED, est ~70 (needle-leg pins on the
-   existing tests/loop_spec_recovery.rs — the 1.3–1.5x calibration
-   band for that kind prices the all-in near the estimate). Next
-   cycle's predicate HOLDS at launch (todo row + same-day eval) →
-   routine glm routing → works T251.
+1. **T253 — the profile-blind warmth doctrine (the only row).** Pri 3,
+   doctrine SOLO, kimi REQUIRED, est ~300 (six LOOP-SPEC surfaces +
+   T235/FLOOR needle updates + a new cold_gates leg; the
+   doctrine+needle-leg calibration band prices it under the ~500
+   ceiling). Worked THIS cycle after the eval commit (the cycle-130
+   precedent: eval + same-cycle landing of its filing).
 2. **Wrap truthfulness per the T246/T248 machinery** — this cycle's
-   records (1 eval-routing + the triage set) are all
-   out-of-backfill-scope classes → zero owed at audit; the wrap
-   subject writes around the pacing token per T248 (this cycle RAN
-   the real eval — the token does not bind; `sleep-ok` probed
-   POST-commit); release check counts this eval's filings (T251
-   unworked → 2 items since v0.17.6 → NO TAG unless T251 lands this
-   cycle, which it must not — Phase-1-only cycle).
-3. **Operator items** — the untracked `com.tampajohn.chug-loopd.plist`
-   (I6 note: move or gitignore); laya HF hosting checklist (carried);
-   F13-3 GO precondition (visibility only — §4's growth color:
-   ~+9/delta on worked stretches). `deps.wedged-t242` DISCHARGED
-   (resolved cycle 127).
+   records (1 eval-triage filing + the reject set + the T253 arc's
+   routing/verdict ids) backfilled at flip time per doctrine; the wrap
+   subject writes around the pacing token (this cycle RAN the real
+   eval — the token does not bind; `sleep-ok` probed POST-commit);
+   release check: T252 landed since v0.17.7 (1 item; +1 if T253 lands
+   = 2 < 3-item trigger) → NO TAG expected.
+3. **Operator items** — the untracked
+   `com.tampajohn.chug-loopd.plist` (I3 note: STILL present —
+   move/gitignore); laya HF hosting checklist (carried); F13-3 GO
+   precondition (visibility only — §4's growth color: +6 labeled this
+   delta, ~1,311 to go).
 
-**Estimate re-calibration:** T249 filed at ~150 → landed 673 all-in
-(+633/−40 across 7 files: the 524-line lint + the 121-line spec
-amendment + LOOP-SPEC clause + in-arc redactions) = **4.5x** — a
-marginal HIGH-side overshoot of the new-pin-file band's 2.5–4x
-guidance: the lint kind prices like a new-pin-file row, and its
-derivation doc-comments (the auditability surface, req 1's
-single-source clause) ran denser than a plain pin file's. The band
-absorbs it (0.4x–6.7x observed across kinds); no threshold edit.
-T250 filed at ~10–60 → landed 24 all-in (docs-only, orchestrator
-direct) = in-band low end. Filing guidance refined: pattern-list +
-derivation-doc lint rows price ~4–5x the src-only estimate; price the
-doc-comment mass explicitly at filing.
+**Estimate re-calibration:** T251 filed at ~70 → landed 482 all-in
+(+25 doctrine / +457 needle pins) = **6.9x** — OUTSIDE the 0.4x–6.7x
+observed band's top by a hair, and the cycle-130 validator already
+named the corrective (doctrine+needle-leg filings on the
+loop_spec_recovery carrier price ~400–500 all-in, not ~70): the
+carrier's needle-leg idiom (exactly-once/windowed/ordered legs of
+12+ needles each) dominates the doctrine text by ~18x. Filing
+guidance ADOPTED for this eval: T253's estimate is set from the band
+(~300), not from its ±30 doctrine lines. T252 filed at wrap-close
+with no estimate (orchestrator-direct flake fix) → landed ~40 all-in;
+no signal. The ~500 dispatch ceiling stands untested this delta (no
+row approached it).
 
 ## 6. README audit (usability)
 
 Delta-aware pass: ZERO README.md edits in the delta (`git log
-c56218b..HEAD -- README.md` empty — T249 is repo-hygiene tooling
-documented in DEPENDENCIES.md; T250 is a policy ruling inside a test
-file's comments). (a) Reading order stands (1109 lines: install →
-quickstart → runbooks → chat → run → forks → plan → TUI → tools →
-risk gate → hooks → permissions → MCP → mcp-serve → langfuse →
-self-hosting → loopd → development — the newcomer path is intact).
-(b) Redundancy: none new. (c) Staleness: none spotted — the loopd
-routing, T237 backoff, and release machinery the README documents
-behaved exactly as written through this delta (probes reverified
-live, §1). (d) Balance: no new accretion. (e) Quickstart truth:
-probes verified live (`./loopd.sh routing` → `eval
-anthropic-system.ai.kimi-k3`; `./loopd.sh sleep-ok` → `60 0`;
-`git describe` → `v0.17.6-18-g77eec09`). No docs row filed.
+5422753..HEAD -- README.md` empty — T251 is LOOP-SPEC doctrine + test
+pins; T252 is test-side; v0.17.7's release notes live in the tag). (a)
+Reading order stands. (b) Redundancy: none new. (c) Staleness: none
+spotted — the routing, backoff, release, and gate machinery the
+README documents behaved exactly as written through this delta
+(probes reverified live, §1). (d) Balance: no new accretion. (e)
+Quickstart truth: probes verified live (`./loopd.sh routing` →
+`eval anthropic-system.ai.kimi-k3`; `./loopd.sh sleep-ok` → `60 0`;
+`git describe` → `v0.17.7-2-g7aa1287`). No docs row filed.
 
 ## Handoff — recommended execution order
 
-Queue state: **T251 (pri 2, doctrine SOLO, kimi REQUIRED, est ~70,
-spec ready)** — the only filing. Next cycle: predicate HOLDS at
-launch (todo row + EVALUATION.md same UTC day) → loopd routes routine
-glm → works T251 (a doctrine item NEVER overlaps: solo arc). This
-cycle (eval-only): T246 audit step (zero owed — all records
-out-of-scope classes), release check (2 items since v0.17.6 < 3 + no
-FEATURES check-off → NO TAG; v0.17.6 ancestor-verified), final gates
-at the eval HEAD in `target-shared-main` via the T242 bg window,
-wrap-notes commit per the T248 discipline (NOT a disposition — write
-around the token; `sleep-ok` probed POST-commit), push. **T237 watch:
-this cycle RAN the real eval on a worked delta — the token does not
-bind, TRUE streak STAYS 0.** To SELF-SPEC: none. META-SPEC fan-out:
-none. Human-decision items: (1) the untracked
-`com.tampajohn.chug-loopd.plist` (move/gitignore — I6); (2) laya HF
-hosting operator checklist — carried; (3) F13-3 GO precondition —
-visibility only.
+Queue state: **T253 (pri 3, doctrine SOLO, kimi REQUIRED, est ~300,
+spec ready)** — the only filing. This cycle: work T253 in-cycle after
+the eval commit (doctrine item → SOLO arc, no overlap; glm impl →
+gates → kimi REQUIRED → merge/flip/push per-item). Next cycle: if
+T253 landed, queue EMPTY + a WORKED delta → the T247 skip refuses a
+FIFTH time and the fresh eval runs (kimi routed); if T253 is unworked,
+the predicate HOLDS (todo row + same-day eval) → routine glm works it.
+To SELF-SPEC: none. META-SPEC fan-out: none. Human-decision items:
+(1) the untracked `com.tampajohn.chug-loopd.plist` (move/gitignore —
+I3, second naming); (2) laya HF hosting operator checklist — carried;
+(3) F13-3 GO precondition — visibility only.
 
-Watch list handed to the next eval: **child-side 300s cargo kills
-(ARMED 1-of-2 — first ≥2/2 delta this eval, I3)**; child bg-window
-orphans (1 fire standing — re-fire trigger); worktree-gate inline
-cold-scale kills (2 standing, re-file at 3 — I3); ctx-edit rejection
-fights (census STARTED — >10 orchestrator iterations in one stream
-re-files, I4); eval-authoring path-escapes (trigger RESET cost-based:
->3 iterations in one stream — I5); decision_log/edit_file schema
-slips (8 fires this delta — re-file only on corpus entry or audit
-debt, I2); process-substitution-under-sh >2/cycle (1 this delta);
-glm-impl minutes headroom (55m38s wall vs 50 budget, goal-accepted —
-death census zero ×3); validator silent-exit (1 standing);
-known-flaky preview output-length legs (1 sighting — a second delta
-re-files the isolation row, I6); check-tag-version is_error oddity
-(1 standing); awk-redirect same-file truncation (0 fires — second
-fire files); edit_file stale-anchor >6/cycle (2 this delta);
-BSD-sed GNU-range (1); T236/T243/T233 fix efficacies (zero re-fires);
-orchestrator segment-death absorption (standing re-file trigger —
-I1's casualty was the context-loss SIBLING, now doctrine-filed);
-multi-segment-wrap trigger DISARMED (closed, 8 consecutive
-one-segment). DISCHARGED this eval: deps.wedged-t242 (RESOLVED cycle
-127 — operator cleaned, seven namings closed).
+Watch list handed to the next eval: **loadavg double-read class
+(census 1 — a second fire in any load-scaled test files the
+shared-seam-read row, I2)**; child-side 300s cargo kills (DISARMED to
+0-of-2 — the streak broke this delta, I3); worktree-gate/main-gate
+inline cold-scale kills (CENSUS TRIPPED at 4 — became T253; any NEW
+fire after T253 lands restarts the count, I1); ctx-edit rejection
+fights (census 1 stream — >10 in one stream re-files, I3); glm
+tool-schema slips (0 this delta — re-file on corpus entry or audit
+debt); eval-authoring path-escapes (cost-based trigger: >3 iterations
+in one stream, 0 this delta); process-substitution-under-sh (>2/cycle;
+0 this delta); glm-impl minutes (24m02s — death census zero ×4);
+validator silent-exit (1 standing); known-flaky preview output-length
+legs (1 standing — a second delta re-files); check-tag-version
+is_error oddity (1 standing); awk-redirect same-file truncation
+(0 — second fire files); edit_file stale-anchor (>6/cycle; 0);
+BSD-sed GNU-range (1 standing); T236/T243/T233/T249/T252 fix
+efficacies (zero re-fires); orchestrator segment-death absorption
+(standing re-file trigger); multi-segment-wrap trigger DISARMED
+(closed — 9 consecutive one-segment wraps). DISCHARGED this eval: the
+inline-cold-scale re-file trigger (TRIPPED → T253 filed).
+
 ## Outcomes (filled at cycle wrap — LOOP-SPEC Phase 3)
 
 ### Cycle 130 (2026-10-06, ~19:00 UTC–) — fresh-eval cycle on a WORKED delta (the T249+T250 arcs; kimi routed per T81, 26-for-26); ONE row filed (T251) and landed in-cycle — the ctx-edit casualty doctrine
