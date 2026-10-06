@@ -752,47 +752,115 @@ readme_quickstart() { # outfile
 # deterministic — fenced code -> pre.code (HTML-escaped verbatim), ATX
 # headings -> h(level+OFFSET) clamped to 2..6 (a runbook's H1 becomes the
 # section's h2), flat lists -> ul/ol (indented lines continue the item, a
-# blank line closes the list), markdown tables -> pre.code verbatim (the
-# laya runbook's one table — zero information loss, zero new markup),
-# paragraphs soft-joined like markdown. Inline, per the T99 text rules:
-# HTML-escape FIRST, ~~strikethrough~~ markers stripped, backtick pairs
-# parked on sentinels then -> <code>, **bold** -> <b>, [text](url) links
-# with relative URLs rewritten onto the GitHub blob base (REL-BASE, e.g.
-# runbooks/) so nothing on the rendered page dangles.
+# blank line closes the list), GFM pipe tables -> <table> (T244: a |-led
+# run whose SECOND line is a |-only delimiter row renders as thead+tbody,
+# th header cells and td body cells; a run with no delimiter keeps the
+# pre.code fallback — zero information loss), paragraphs soft-joined like
+# markdown. Table cells split on UNESCAPED pipes only: a markdown-escaped
+# \| parks on a sentinel before the split and restores as a literal pipe
+# INSIDE its cell (the T216 rule — a cell is never split on its own
+# escapes). Inline, per the T99 text rules: HTML-escape FIRST, ~~
+# strikethrough~~ markers stripped, backtick pairs parked OPAQUELY (T244:
+# content moves to an indexed sentinel, so no later pass matches inside a
+# code span — `*` globs never italicize, `a**b` never bolds), **bold** ->
+# <strong>, *italic* -> <em>, [text](url) links — relative URLs rewrite
+# onto the GitHub blob base (REL-BASE, e.g. runbooks/) so nothing on the
+# rendered page dangles, and only https (same-page #anchors and
+# site-absolute paths included) becomes an href: any other absolute URL
+# degrades to its link text (the canvas serves https only).
 docs_md() { # file mode hoff relbase
   awk -v mode="$2" -v hoff="$3" -v relbase="$4" -v ghref="$DOCS_GH_BLOB" '
     function esc(s) { gsub(/&/, "\\&amp;", s); gsub(/</, "\\&lt;", s); gsub(/>/, "\\&gt;", s); return s }
-    function inline(s,   k, seg, j, out, b, m, p, txt, url, href) {
+    function inline(s,   k, seg, j, out, b, m, p, txt, url, href, nc, idx, cspan) {
       s = esc(s)
       gsub(/~~/, "", s)
+      # code spans park OPAQUELY (T244): content -> cspan[n], text carries
+      # \001n\002 — no emphasis/link pass can match across the sentinels,
+      # so span content is never re-scanned and never corrupts output.
       k = split(s, seg, "`")
+      nc = 0
       if (k >= 3) {
         out = seg[1]
-        for (j = 2; j + 1 <= k; j += 2) out = out "\001" seg[j] "\002" seg[j + 1]
+        for (j = 2; j + 1 <= k; j += 2) {
+          nc++
+          cspan[nc] = seg[j]
+          out = out "\001" nc "\002" seg[j + 1]
+        }
         if (k % 2 == 0) out = out "`" seg[k]
         s = out
       }
       while (match(s, /\*\*[^*]+\*\*/)) {
         b = substr(s, RSTART + 2, RLENGTH - 4)
-        s = substr(s, 1, RSTART - 1) "<b>" b "</b>" substr(s, RSTART + RLENGTH)
+        s = substr(s, 1, RSTART - 1) "<strong>" b "</strong>" substr(s, RSTART + RLENGTH)
+      }
+      while (match(s, /\*[^*[:space:]][^*]*\*/)) {
+        b = substr(s, RSTART + 1, RLENGTH - 2)
+        s = substr(s, 1, RSTART - 1) "<em>" b "</em>" substr(s, RSTART + RLENGTH)
       }
       while (match(s, /\[[^]]+\]\([^)]+\)/)) {
         m = substr(s, RSTART, RLENGTH)
         p = index(m, "](")
         txt = substr(m, 2, p - 2)
         url = substr(m, p + 2); sub(/\)$/, "", url)
-        href = url
-        if (url !~ /^https?:\/\// && url !~ /^\// && url !~ /^#/) href = ghref relbase url
-        s = substr(s, 1, RSTART - 1) "<a href=\"" href "\">" txt "</a>" substr(s, RSTART + RLENGTH)
+        href = ""
+        if (url ~ /^https:\/\// || url ~ /^\// || url ~ /^#/) href = url
+        else if (url !~ /^[a-zA-Z][a-zA-Z0-9+.-]*:/) href = ghref relbase url
+        if (href != "") {
+          s = substr(s, 1, RSTART - 1) "<a href=\"" href "\">" txt "</a>" substr(s, RSTART + RLENGTH)
+        } else {
+          # not an https-grade href: the text stays, the markup goes
+          s = substr(s, 1, RSTART - 1) txt substr(s, RSTART + RLENGTH)
+        }
       }
-      gsub(/\001/, "<code>", s); gsub(/\002/, "</code>", s)
+      while (match(s, /\001[0-9]+\002/)) {
+        idx = substr(s, RSTART + 1, RLENGTH - 2) + 0
+        s = substr(s, 1, RSTART - 1) "<code>" cspan[idx] "</code>" substr(s, RSTART + RLENGTH)
+      }
       return s
+    }
+    function is_delim(s) { # a GFM delimiter row: only | - : and blanks, at least one dash
+      if (s !~ /^[[:space:]]*\|[-:|[:space:]]*$/) return 0
+      return s ~ /-/
+    }
+    function trow(s, tag,   line, ph, m, cells, j, out, c, lo, hi) {
+      ph = "\003"                          # \001/\002 belong to the inline() code parking
+      line = s
+      gsub(/\\[|]/, ph, line)              # T216: a markdown-escaped pipe is CELL CONTENT
+      m = split(line, cells, "|")
+      lo = 1; hi = m
+      if (cells[1] == "") lo = 2           # drop the empty field of an optional leading pipe
+      if (cells[m] == "") hi = m - 1       # drop the empty field of an optional trailing pipe
+      out = ""
+      for (j = lo; j <= hi; j++) {
+        c = cells[j]
+        gsub(ph, "|", c)                   # the escape restores INSIDE its cell
+        gsub(/^[[:space:]]+/, "", c); gsub(/[[:space:]]+$/, "", c)
+        out = out "<" tag ">" inline(c) "</" tag ">"
+      }
+      return out
+    }
+    function flushrun(   n, rl, i) {
+      if (run == "") return
+      n = split(run, rl, "\n")             # rl[n] is "" — run carries one \n per line
+      if (n >= 3 && is_delim(rl[2])) {     # header, then a delimiter row: a real table
+        print "<table>"
+        print "<thead><tr>" trow(rl[1], "th") "</tr></thead>"
+        print "<tbody>"
+        for (i = 3; i <= n - 1; i++) print "<tr>" trow(rl[i], "td") "</tr>"
+        print "</tbody>"
+        print "</table>"
+      } else {                             # no separator -> the verbatim pre.code fallback
+        print "<pre class=\"code\">"
+        printf "%s", esc(run)
+        print "</pre>"
+      }
+      run = ""
     }
     function flushpara() { if (para) { print "<p>" inline(ptxt) "</p>"; para = 0; ptxt = "" } }
     function flushli()   { if (inli) { print "<li>" inline(li) "</li>"; inli = 0; li = "" } }
     function closelist() { flushli(); if (inlist != "") { print (inlist == "ul" ? "</ul>" : "</ol>"); inlist = "" } }
     function closeall()  { flushpara(); closelist() }
-    BEGIN { infence = 0; intable = 0; inlist = ""; para = 0; inli = 0; done = 0 }
+    BEGIN { infence = 0; inlist = ""; para = 0; inli = 0; done = 0; run = "" }
     mode == "title" {
       if (!done && infence == 0 && $0 ~ /^#[[:space:]]/) {
         t = $0; sub(/^#[[:space:]]+/, "", t); sub(/[[:space:]]+$/, "", t)
@@ -803,19 +871,18 @@ docs_md() { # file mode hoff relbase
     }
     {
       if ($0 ~ /^[[:space:]]*```/) {
+        flushrun()
         closeall()
-        if (intable) { print "</pre>"; intable = 0 }
         if (infence) { infence = 0; print "</pre>" } else { infence = 1; print "<pre class=\"code\">" }
         next
       }
       if (infence) { print esc($0); next }
       if ($0 ~ /^[[:space:]]*\|/) {
         closeall()
-        if (!intable) { intable = 1; print "<pre class=\"code\">" }
-        print esc($0)
-        next
+        run = run $0 "\n"                  # buffer the |-led run; the table decision
+        next                               # happens once the run ends (flushrun)
       }
-      if (intable) { print "</pre>"; intable = 0 }
+      flushrun()                           # any non-| line ends the run
       if ($0 ~ /^#{1,6}[[:space:]]/) {
         closeall()
         h = $0; n = 0
@@ -848,7 +915,7 @@ docs_md() { # file mode hoff relbase
     }
     END {
       if (mode != "title") {
-        if (intable) print "</pre>"
+        flushrun()
         if (infence) print "</pre>"
         closeall()
       }
@@ -926,15 +993,19 @@ docs_generate() {
 /* docs.html additions (T241) — the block above is index.html's own <style>,
    verbatim, and is never modified here; these few rules cover only the shapes
    the runbook corpus renders that the base does not style (prose
-   sub-headings, list bodies, the on-this-page index). */
+   sub-headings, list bodies, tables + strong/em — T244 — the on-this-page
+   index). */
 .doctext h3,.doctext h4{font-family:var(--mono);color:var(--text);line-height:1.4}
 .doctext h3{font-size:15px;margin:26px 0 8px}
 .doctext h4{font-size:13px;margin:20px 0 6px;color:var(--muted)}
 .doctext ul,.doctext ol{color:var(--muted);max-width:var(--measure);margin:0 0 14px;padding-left:22px}
 .doctext li{line-height:1.7;margin:0 0 6px}
-.doctext li b{color:var(--text)}
-.doctext p code,.doctext li code{font-size:.88em;color:var(--text);background:var(--bg2);border:1px solid var(--border);border-radius:4px;padding:0 4px}
+.doctext li b,.doctext li strong{color:var(--text)}
+.doctext p code,.doctext li code,.doctext td code{font-size:.88em;color:var(--text);background:var(--bg2);border:1px solid var(--border);border-radius:4px;padding:0 4px}
 .doctext pre.code{margin:0 0 14px;max-width:var(--content)}
+.doctext table{border-collapse:collapse;margin:0 0 14px;max-width:var(--measure);font-size:13.5px;line-height:1.6}
+.doctext th,.doctext td{border:1px solid var(--border);padding:5px 9px;text-align:left;vertical-align:top}
+.doctext th{color:var(--text);font-family:var(--mono);font-size:12px}
 .docs-index{margin:26px 0 0;max-width:var(--content)}
 .docs-index p{font-family:var(--mono);font-size:12px;letter-spacing:.16em;text-transform:uppercase;color:var(--accent);margin:0 0 10px}
 .docs-index ul{list-style:none;margin:0;padding:0;max-width:none}
