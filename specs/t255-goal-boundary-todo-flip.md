@@ -1,6 +1,6 @@
 # T255 — LOOP-SPEC doctrine: the final todo flips BEFORE goal_complete; a completed-recovery cycle PROCEEDS, never re-claims (zombie-todo no-op class, 2nd fire)
 
-check: touch src/*.rs tests/*.rs; export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared; cargo test --release
+check: touch src/*.rs tests/*.rs; export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-validate-a; cargo test --release
 
 ## repo-context
 
