@@ -163,6 +163,13 @@ impl Sandbox {
     }
 
     fn run_loopd(&self) -> Child {
+        self.run_loopd_with_env(&[])
+    }
+
+    /// Spawn the sandbox supervisor with the harness's standard env plus the
+    /// caller's overrides (a `Command::env` set AFTER the default wins — the
+    /// explicit-env-wins shape the sleep seams pin).
+    fn run_loopd_with_env(&self, extra_env: &[(&str, &str)]) -> Child {
         let mut cmd = Command::new("bash");
         cmd.arg("loopd.sh").arg("run").current_dir(&self.root);
         // Sandbox bin first: ps/cargo stubs shadow the host's.
@@ -179,6 +186,18 @@ impl Sandbox {
         // loop at its verdict anyway; these only bound a missed kill.
         cmd.env("LOOPD_SLEEP_OK", "1");
         cmd.env("LOOPD_SLEEP_FAIL", "1");
+        // T254 — the fixture-leak fail-safe: every spawn of `loopd.sh run`
+        // exports LOOPD_MAX_LOOPS so the supervisor self-terminates if THIS
+        // harness dies (an outer bounded cap killing a nextest leg mid-test,
+        // a crash) and orphans the fixture to launchd — the cycle-168 leak
+        // was exactly such a fixture, immortal-but-inert on its probe-fail
+        // skip path. 50 sits comfortably above the observed iteration need
+        // (every test here completes in ≤ a dozen fast iterations), so the
+        // bound only ever fires on a leaked fixture, never on a live one.
+        cmd.env("LOOPD_MAX_LOOPS", "50");
+        for (k, v) in extra_env {
+            cmd.env(k, v);
+        }
         cmd.stdout(Stdio::null()).stderr(Stdio::null());
         cmd.spawn().expect("spawn bash loopd.sh run")
     }
@@ -358,6 +377,10 @@ exit 0
         cmd.env("CHUG_SITE_SYNC_NO_PUSH", "1");
         cmd.env("LOOPD_SLEEP_OK", "1");
         cmd.env("LOOPD_SLEEP_FAIL", "1");
+        // T254 — the fixture-leak fail-safe (the run_loopd_with_env seam):
+        // this test builds its own Command, so the knob export rides here
+        // too — every `loopd.sh run` spawn site carries the bound.
+        cmd.env("LOOPD_MAX_LOOPS", "50");
         cmd.env("CARGO_TARGET_DIR", &inherited);
         cmd.stdout(Stdio::null()).stderr(Stdio::null());
         cmd.spawn().expect("spawn bash loopd.sh run")
@@ -542,6 +565,114 @@ fn a_failing_driver_probe_must_fail_closed_not_open() {
         sandbox.cycle_logs().is_empty(),
         "no cycle may be logged when the driver enumeration failed: {:?}",
         sandbox.cycle_logs()
+    );
+    });
+}
+
+/// The cycle child for the T254 bound test: completes a cycle (rc 0, the
+/// goal-complete block on stdout — the shape the verdict gate requires for
+/// a recorded `cycle OK`) but NEVER touches STOP-LOOP — the leak shape,
+/// where nothing but the iteration bound ends the loop.
+const NON_STOPPING_CHUG: &str = concat!(
+    "#!/bin/sh\n",
+    "printf 'chug: goal complete\\nsummary: a cycle that never stops the loop\\n'\n",
+    "exit 0\n",
+);
+
+/// T254 — the fixture-leak fail-safe, behaviorally. Launched with
+/// `LOOPD_MAX_LOOPS=3` the supervisor runs exactly 3 fast cycles and then
+/// exits ON ITS OWN — never killed by the harness — logging one line naming
+/// the knob, with exit status 0 and the pidfile removed (the EXIT trap's
+/// record of a clean self-termination). The cycle child here never touches
+/// STOP-LOOP, so nothing but the bound ends the loop: the leak shape of the
+/// cycle-168 indictment (a `bash loopd.sh run` orphaned to launchd for six
+/// days, immortal-but-inert on its probe-fail skip path — the skip paths
+/// `continue` past any bottom-of-body counter, so the bound must count at
+/// the TOP of the body).
+///
+/// Mutation leg (the RED proof): with the bound check removed from loopd.sh
+/// the loop never ends, so the poll's OVER-RUN detector — a FOURTH recorded
+/// `cycle OK:` inside the window — fails fast in seconds, un-retried (a
+/// wrong outcome is a code-under-test failure, not a fixture stretch). The
+/// 30s deadline is only the hang backstop and carries the T158 invalidation
+/// marker like every deadline in this file.
+#[test]
+fn a_leaked_supervisor_self_terminates_at_loopd_max_loops() {
+    // T172: FIRST acquisition — hold the cross-binary load lock across
+    // the whole invalidation-retry span (all attempts) and the sandbox
+    // spawn → assertion → cleanup, so sibling sandbox tests (own
+    // processes under nextest) can no longer manufacture scheduler
+    // stretch inside this test's clocked verdict window.
+    let _t172_load = t172_load_lock::family_guard("loopd-stale-binary");
+    // T158: the fixture's 30s verdict deadline is a liveness fence, not a load
+    // assumption — a deadline blow invalidates the attempt and the WHOLE test
+    // retries with a fresh sandbox (bounded); a wrong verdict still panics
+    // un-retried.
+    loopd_attempt_with_invalidation_retry(|| {
+    const BOUND: usize = 3;
+    let sandbox = Sandbox::new("#!/bin/sh\nexit 0\n");
+    // The cycle child completes but never stops the loop.
+    stub(&sandbox.root.join("target/release/chug"), NON_STOPPING_CHUG);
+    // The harness's own bound stays at 50 (run_loopd_with_env); the scenario
+    // overrides it down to 3 so the self-termination lands inside the window.
+    let mut child = sandbox.run_loopd_with_env(&[("LOOPD_MAX_LOOPS", "3")]);
+    let exit_needle = "LOOPD_MAX_LOOPS=3 reached — self-terminating";
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let log = loop {
+        let content = sandbox.read_log();
+        if content.contains(exit_needle) {
+            break content;
+        }
+        // The mutation detector: MORE than BOUND recorded cycles means the
+        // bound did not fire — the code under test is wrong, so fail FAST
+        // and un-retried (the RED leg of the mutation, ~seconds, no hang).
+        let oks = content.lines().filter(|l| l.contains("cycle OK:")).count();
+        assert!(
+            oks <= BOUND,
+            "LOOPD_MAX_LOOPS={BOUND} did not bound the supervisor: {oks} cycles \
+             already completed and no self-termination — the iteration bound is \
+             broken (T254; mutation leg: with the bound check removed from \
+             loopd.sh this assertion is the RED that fires in seconds)"
+        );
+        if let Some(status) = child.try_wait().expect("poll the supervisor") {
+            panic!(
+                "the supervisor exited on its own ({status}) BEFORE logging the \
+                 self-termination line — the bound must announce itself in \
+                 .chug/loopd/loopd.log before exiting (T254):\n{content}"
+            );
+        }
+        if Instant::now() > deadline {
+            panic!(
+                "loopd never reached {exit_needle:?} in 30s with \
+                 LOOPD_MAX_LOOPS={BOUND} — the supervisor did not self-terminate \
+                 (the T158 invalidation class: fixture deadline blow under load, \
+                 retrying with a fresh sandbox):\n{content}"
+            );
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    };
+    // The exit line is in the log: the process must have terminated ON ITS
+    // OWN (never killed by this harness) and cleanly.
+    let status = child.wait().expect("wait for the self-terminated supervisor");
+    assert_eq!(
+        status.code(),
+        Some(0),
+        "the self-termination must be exit 0 — a fixture supervisor reaching \
+         its bound has done nothing wrong and must leave no failure residue \
+         (a HALT would page an operator nobody is watching):\n{log}"
+    );
+    assert_eq!(
+        log.lines().filter(|l| l.contains("cycle OK:")).count(),
+        BOUND,
+        "exactly N cycles run before the bound fires: the Nth full iteration \
+         still runs its cycle, and the pass after it self-terminates — an \
+         early exit would strand work, a late one is not a bound (T254):\n{log}"
+    );
+    assert!(
+        !sandbox.root.join(".chug/loopd/loopd.pid").exists(),
+        "a self-termination must be a CLEAN exit — the EXIT trap removes the \
+         pidfile, so a stale loopd.pid would read as a live supervisor to \
+         `loopd.sh status` (T254):\n{log}"
     );
     });
 }
