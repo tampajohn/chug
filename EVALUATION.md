@@ -1,172 +1,184 @@
-# EVALUATION — chug, assessed by chug-loop (2026-10-07, cycle 215)
+# EVALUATION — chug, assessed by chug-loop (2026-10-07, cycle 219)
 
-**TRIP-eval cycle — the T247 valve's TWENTY-SECOND live trip;
+**TRIP-eval cycle — the T247 valve's TWENTY-THIRD live trip;
 the chain converted itself into its own evaluation on
 schedule, and this trip carries the cadence re-arm
-verification the cycle-211 discharge scheduled for trip 22
+verification the cycle-215 discharge scheduled for trip 23
 (discharged §Handoff — HOLDS).** The freshness predicate
 failed on the todo-rows half (queue EMPTY — 251/251 rows
-done, max id T256), and the delta since the cycle-211 eval
-(066eea1) IS bookkeeping-only — FOUR `eval:` commits (3843fe2
-the cycle-211 real-eval wrap + cdfe056 / f7b5f5f / 97f3f9a
+done, max id T256), and the delta since the cycle-215 eval
+(94a26f2) IS bookkeeping-only — FOUR `eval:` commits (28a4b03
+the cycle-215 real-eval wrap + 484b967 / a8d1758 / 6e428e7
 the three disposition wraps), files touched EVALUATION.md
-only (+24/−15), ZERO children launched (the live stream's
-only run_start is this orchestrator's, 21:39:29Z), ZERO items
-landed, ZERO registered worktrees beyond main,
-`main == origin/main` at 97f3f9a, single-driver verified
-pre-work (sole `chug run` pid 35327, this cycle) — so the
-chain ran three dispositions (TRUE streak 0→1→2→3, cycles
-212/213/214) and the cycle-214 wrap handed forward "TRIP
-BINDS — cycle 215 is the 4th consecutive empty cycle and
-RUNS the real evaluation." This is that evaluation: the
-chain converted itself into its own evaluation at the trip
-point for the TWENTY-SECOND time, exactly as the valve is
-designed to do (212=1st, 213=2nd, 214=3rd, 215=4th — count,
-don't add; the TRUE streak is HUMAN-counted from the
-wrap-notes chain and the machine walk AGREES at entry: live
-probe `480 3`). loopd routed kimi on the queue-empty
-predicate (`routing: todo_rows=0 eval_fresh=yes -> eval
-cycle on anthropic-system.ai.kimi-k3`, loopd.log
-21:39:28Z; this stream IS kimi; disposition record
-d1791409227-1, class `eval-routing` — the majority class
+only (+24/−16), ZERO children launched (each stream's only
+run_start its own orchestrator's), ZERO items landed, ZERO
+registered worktrees beyond main, `main == origin/main` at
+6e428e7, single-driver verified pre-work (sole `chug run`
+pid 35316, this cycle) — so the chain ran three dispositions
+(TRUE streak 0→1→2→3, cycles 216/217/218) and the cycle-218
+wrap handed forward "TRIP BINDS — cycle 219 is the 4th
+consecutive empty cycle and RUNS the real evaluation." This
+is that evaluation: the chain converted itself into its own
+evaluation at the trip point for the TWENTY-THIRD time,
+exactly as the valve is designed to do (216=1st, 217=2nd,
+218=3rd, 219=4th — count, don't add; the TRUE streak is
+HUMAN-counted from the wrap-notes chain and the machine walk
+AGREES at entry: live probe `480 3`). loopd routed kimi on
+the queue-empty predicate (`routing: todo_rows=0
+eval_fresh=yes -> eval cycle on anthropic-system.ai.kimi-k3`,
+loopd.log 22:39:27Z; this stream IS kimi; disposition record
+d1791412813-1, class `eval-routing` — the majority class
 held: this chain's routings run 4/4 majority-class with the
 trip's own, §2.2). Delta evidence: THREE disposition streams
-(events-20261007-210925 cycle 212 — 17 iters / 7m16s, ONE
-failed tool result, §2.1(a); -212159 cycle 213 — 22 iters /
-5m10s, ONE failed tool result, §2.1(b); -213929 cycle 214 —
-23 iters / 6m5s, ZERO failed tool results), goal accepted on
+(events-20261007-220948 cycle 216 — 26 iters / 6m40s, ZERO
+failed tool results; -222208 cycle 217 — 20 iters / 5m24s,
+ZERO failed tool results; -223929 cycle 218 — 24 iters /
+6m5s, TWO failed tool results, §2.1(a)/(b)), goal accepted on
 every stream, ZERO aborts, ZERO budget-low fires, ZERO
 ctx-edit fires, ZERO trim fires across all three disposition
-streams; the cycle-211 trip stream (events-20261007-205652)
-contributes ONE post-corpus failed tool result to this read
-(§2.1(c)); suite 1705 (unchanged — no src/tests delta; green
-at every wrap per the wrap-notes record — final gates re-run
-this cycle's own wrap); `.chug/decisions.jsonl` 1,510 →
-1,521 (+11 — the cycle-211 eval's 7 post-corpus triage
-records + the three disposition routings d1791406675-1 /
-d1791407382-1 / d1791408169-1 + this cycle's routing);
-outcomes 336 (+0 — the zero-label-growth streak advances to
-6 of the new run post the cycle-190 break: labels accrue
-from worked cycles; this delta worked none); T256's named
-verification surface HOLDS POSITIVE (§1); operator delta
-static (plist sha1-8 ad4f343e reverified live, carried
-since cycle 132; loopd census the daemon + its caffeinate
-wrapper + this cycle's supervisor — zero leaked supervisors,
-the T254 production census holds through a thirteenth eval);
-the live T237 probe reads `480 3` (machine = TRUE = 3 at
-entry — no divergence to adjudicate; exactly three token
-carriers cdfe056/f7b5f5f/97f3f9a, 3843fe2 token-free — T248
-held mechanically, re-verified live this eval); digest FRESH
-at launch (generated 21:38:44Z, ~45s before the 21:39:28Z
-routing; the mechanical staleness check reverified live
-FRESH — only this cycle's own live stream postdates it).
+streams; the cycle-215 trip stream (events-20261007-215750)
+contributes TWO post-corpus failed tool results to this read
+(§2.1(a)/(c), the ride-forward convention); suite 1705
+(unchanged — no src/tests delta; green at every wrap per the
+wrap-notes record — final gates re-run this cycle's own
+wrap); `.chug/decisions.jsonl` 1,521 → 1,533 (+12 — the
+cycle-215 eval's 9 records + the three disposition routings
+d1791410312-1 / d1791411036-1 / d1791411799-1 + this cycle's
+routing); outcomes 336 (+0 — the zero-label-growth streak
+advances to 7 of the new run post the cycle-190 break:
+labels accrue from worked cycles; this delta worked none);
+operator delta static (plist sha1-8 ad4f343e reverified
+live, carried since cycle 132; loopd census the daemon +
+its caffeinate wrapper + this cycle's supervisor — zero
+leaked supervisors, the T254 production census holds through
+a fourteenth eval); the live T237 probe reads `480 3`
+(machine = TRUE = 3 at entry — no divergence to adjudicate;
+exactly three token carriers 484b967/a8d1758/6e428e7,
+28a4b03 token-free — T248 held mechanically, re-grepped
+live); digest FRESH at launch (generated 22:38:42Z, ~45s
+before the 22:39:27Z routing; the mechanical staleness check
+reverified live FRESH — only this cycle's own live stream
+postdates it).
 
 ## 1. What chug does well
 
-- **The T247 valve fired on schedule for the twenty-second
-  time — twenty-two trips, twenty-two on-schedule
-  conversions.** The cycle-214 wrap handed forward the
-  binding, the corpus prescription ("cycles 212-214
+- **The T247 valve fired on schedule for the twenty-third
+  time — twenty-three trips, twenty-three on-schedule
+  conversions.** The cycle-218 wrap handed forward the
+  binding, the corpus prescription ("cycles 216-218
   dispositions + this wrap + any operator delta with
-  baseline 066eea1"), and the chain math; this cold cycle
+  baseline 94a26f2"), and the chain math; this cold cycle
   read the TRUE streak (3) from the newest wrap subject,
   verified it against the git record (4 bookkeeping commits,
   EVALUATION.md only, agreed), reverified the machine walk
   live (`480 3`), and ran the evaluation — zero archaeology
   needed to route.
 - **Chain healthy by every mechanical surface.** TRUE
-  streak = machine walk at every probe (`60 0` → `120 1` →
-  `240 2` → `480 3` per the loopd cycle-OK lines at
-  20:54:40/21:05:20/21:15:50/21:29:24Z, `480 3` reverified
-  live pre-eval); T248 held ×3 mechanically (exactly three
-  token carriers cdfe056/f7b5f5f/97f3f9a, 3843fe2
-  token-free — re-grepped live); T237 rungs logged exact
-  (60/120/240/480, cap 1800); gates 1705/1705 ×4 per the
-  wrap record; audits clean ×3 (re-verified live at this
-  cycle's wrap: buckets, the standing malformed, duplicates
-  0); pushes first-retry at every wrap; routings 4/4
-  majority-class kimi.
+  streak = machine walk at every probe (`60 0` post-215 →
+  `120 1` post-216 → `240 2` post-217 → `480 3` post-218 per
+  the loopd cycle-OK lines at 21:54:48/22:05:44/22:16:18/
+  22:29:20Z, `480 3` reverified live pre-eval); T248 held ×3
+  mechanically (exactly three token carriers
+  484b967/a8d1758/6e428e7, 28a4b03 token-free — re-grepped
+  live); T237 rungs logged exact (60/120/240/480, cap 1800);
+  gates 1705/1705 ×3 per the wrap record (46.172s / 47.827s
+  / 47.259s); audits clean ×3 (buckets 62/91/82, the
+  standing malformed, duplicates 0 — re-verified live at
+  this cycle's wrap); pushes first-retry at every wrap;
+  routings 4/4 majority-class kimi.
 - **Site-sync's best-effort leg stayed green through every
-  wrap.** Three disposition wraps plus the cycle-211
-  real-eval wrap, four site rewrites + commits + pushes
-  (site cycles 200→203, items 251/251 stable, tests 1705)
-  with zero warns in the post-20:30Z window (windowed grep:
-  0) — the T256 verification surface's consecutive positive
-  reads extend through this chain.
-- **The disposition shape held, and the fleet read its own
-  Outcomes.** 17–23 iterations and 5m10s–7m16s walls per
-  disposition cycle (prior chain 20–28 / 5m1s–6m13s), goal
-  accepted ×3 — and cycle 214's orchestrator sidestepped
-  the `&&`-into-`&` shell-var-slip trap BY CONSTRUCTION (a
-  cycle-fixed log name, no foreground TS expansion) after
-  the class fired back-to-back on cycles 212 and 213: the
-  avoidance pattern propagated through the Outcomes ledger
-  without a doctrine edit (§2.1(a)).
+  wrap.** Three disposition wraps, three site rewrites +
+  commits + pushes (site cycles 205→207, items 251/251
+  stable, tests 1705, commits 3a59544/c995be2 in window)
+  with zero `site-sync: WARN` lines in the log (count: 0 of
+  171 pushes) — the T256 verification surface's consecutive
+  positive reads extend through this chain.
+- **The disposition shape held — tighter than the prior
+  chain.** 20–26 iterations and 5m24s–6m40s walls per
+  disposition cycle (prior chain 17–23 / 5m10s–7m16s), goal
+  accepted ×3 — and the shell-var-slip class logged ZERO
+  fires for the FIFTH consecutive wrap (214–218): the
+  cycle-fixed log-name avoidance pattern that cycle 214
+  introduced propagated through five launches without a
+  doctrine edit, the Outcomes ledger carrying the pattern
+  (§2.1(d)).
 
 ## 2. Incidents worth fixing
 
-### 2.1 Three absorbed failures, every one benign and self-corrected
+### 2.1 Four absorbed failures reach this read, every one benign and self-corrected
 
 Zero aborts, zero budget-low fires, zero placeholder fires,
-zero ctx-edit fires, zero trim fires across the delta. Three
-absorbed tool failures reach this read — one per stream
-212/213 plus the cycle-211 trip stream's post-corpus leg —
+zero ctx-edit fires, zero trim fires across the delta. Four
+absorbed tool failures reach this read — two in the cycle-218
+stream, two riding forward from the cycle-215 trip stream —
 all recovered in-window:
 
-- **(a) shell-var-slip re-fires ×2 (census 3→5) — the
-  closest call of this eval, filing REJECTED with the
-  trigger sharpened.** Cycles 212 AND 213, back-to-back:
-  the T242 wrap-gates launch compound's `&&`-chain-into-`&`
-  backgrounding parse emptied the foreground TS both times
-  (212: `pid 16848 log /tmp/wrap-gates-.log` rendered;
-  213: `pid=89245 ts=` rendered) — PROVEN the same way both
-  times by the next probe's `ls: /tmp/wrap-gates-.log: No
-  such file or directory`; both recovered in-window by
-  ls-glob readback naming the real logs
-  (`/tmp/wrap-gates-20261007-205814.log` /
-  `-20261007-210957.log` — the background subshell held its
-  own TS, gates green both), zero cost, no kill fired —
-  verify-then-act held. Cycle 214 then sidestepped the
-  class by construction (fixed log name, census 5 flat
-  there). The census is now FIVE with 3 of the last 4
-  TS-pattern launches firing — a genuine rate uptick,
-  weighed hard at this trip and still REJECTED: five fires,
-  ZERO casualties; the failure is self-announcing (the
-  empty-TS path in the very next probe) and the readback is
-  trivial; the avoidance pattern propagated in-flight
-  without doctrine (214); and a doctrine row runs the SOLO
-  arc with REQUIRED kimi validation — a ~2-hour fleet cost
-  against a ~1-iteration recovery cost, the asymmetry the
-  22-zero-row absorb doctrine has priced every time.
-  **Sharpened trigger, named: the NEXT (6th) fire of this
-  class files the one-clause T242 template row immediately
-  (the launch shown as `TS=$(date …); nohup … &` with the
-  `;` separator load-bearing and the parse trap named with
-  its 5-fire census) — and any fire producing a casualty
-  (a wrap misdiagnosis, a killed live window) files it
-  regardless of count.**
-- **(b) paren-slip re-fire (census 2→3).** Cycle-213
-  stream: a T248 token-carrier probe used `<(git log …)`
-  process substitution under `sh -c` (dash — no process
-  substitution) — `syntax error near unexpected token '('`;
-  recovered in-window with the pipe form. Benign; the
-  teaching stands (sh -c ≠ bash; pipes, not `<(...)`).
-  Reject; trigger: any casualty or two fires in one chain.
-- **(c) grep-exit-1/poll-leg re-fire (census 8→9).** The
-  cycle-211 trip stream's post-corpus leg: the T242
-  gates-window poll printed the finished green log
-  (`Summary [45.410s] 1705 tests run: 1705 passed` — the
-  exact wrap-notes numbers) and the compound exited 1 on
-  the trailing liveness leg (`43964 done`) — a monitoring
-  artifact, the payload fully green. Benign; absorb.
+- **(a) grep-exit-1/poll-leg re-fires ×2 (census 9→11) —
+  the same benign shape, twice.** Cycle-215 stream
+  @21:50:13 (post-corpus): the T242 gates-window poll
+  printed the finished green log (`Summary [45.932s] 1705
+  tests run: 1705 passed`, `=== GATES DONE ===`) and the
+  compound exited 1 on the trailing liveness leg (`39204
+  done`) — the identical shape to the cycle-211 §2.1(c)
+  re-fire. Cycle-218 stream @22:24:47: the T242
+  gates-window readback printed the FULL GREEN payload
+  (build 2.27s + clippy 9.08s + nextest 1705/1705 in
+  47.259s + `GATES DONE rc=0` + `warning line count 0`) and
+  the compound exited 1 on its trailing leg — payload fully
+  green, exit code a monitoring artifact. Both recovered
+  in-window (the payload IS the verdict; the exit code is
+  decoration). Census 9→11. Reject; the trigger stands:
+  any CASUALTY (a wrap that misreads a red window as green
+  on the payload's strength, or a green window abandoned on
+  the exit code's) files the compound-template row; twelve
+  fires with zero casualties is the absorb doctrine's
+  priced asymmetry.
+- **(b) decision_log arg-slip — NEW class, census 1.**
+  Cycle-218 stream @22:23:14: a `decision_log` call arrived
+  with `options` missing — tool error `invalid decision_log
+  call: options must be a string, got missing; one record
+  per call; required: class, subject, inputs, options,
+  choice, confidence` — retried successfully in-window (the
+  routing record d1791411799-1 landed). Zero cost; the
+  error message is self-describing (it names the required
+  fields), so the recovery is trivial by construction. NEW
+  census 1. Reject; trigger: the 3rd fire files a
+  prompt-side note, any casualty files immediately.
+- **(c) grep-exit-1 umbrella leg (census 11→12).** The
+  cycle-215 stream @21:40:42 (in-window for trip 22,
+  uncensused there): the plist-verify compound printed the
+  plist payload in full and exited 1 on a trailing grep
+  no-match — same umbrella class (a compound's trailing
+  leg, payload intact). Benign; absorbed into the §2.1(a)
+  census (9→12 across the three re-fires this read).
+- **(d) shell-var-slip — ZERO fires (census 5 flat, fifth
+  consecutive clean launch).** The cycle-fixed log-name
+  pattern (`/tmp/wrap-gates-<cycle>.log`, no foreground TS
+  expansion) held through cycles 214–218 — the avoidance
+  propagated five launches with no doctrine edit and the
+  class's `&&`-into-`&` parse trap never got a surface.
+  The sharpened trigger from trip 22 stands UNCHANGED: the
+  NEXT (6th) fire files the one-clause T242 template row
+  immediately; any casualty files it regardless of count.
+- **Wrap-notes color miss, named for the record (not
+  filed).** Cycle-218's wrap notes claimed "Zero benign
+  failures fired this cycle" against a stream holding TWO
+  (the §2.1(a) gates-readback exit-1 and the §2.1(b)
+  decision_log arg-slip). Both were benign and
+  self-corrected in-window, and the wrap's NUMBERS were
+  unaffected — the miss is observation color, not
+  consequence; the stream, not the wrap prose, is the
+  record of truth, and this trip read the stream. Reject;
+  trigger: a second miss or any casualty files the
+  stream-verification clause.
 
 Watch censuses: **zombie-todo no-op** — ZERO re-fires
 (post-fix census 0 against 3 historical: t289 c146, t356
 c169, t428 c186-repaired-c187); **stale husks** — 10
-`/tmp/chug-loop-t*` dirs re-censused live: present, hollow
-(files=0 ×10), unregistered (`git worktree list` = main
-only) — the adjudicated operator reclaim surface (rides
-d1791358040-5; re-census logged §Handoff);
+`/tmp/chug-loop-t*` dirs re-censused live: present, hollow,
+unregistered (`git worktree list` = main only) — the
+adjudicated operator reclaim surface (rides d1791358040-5;
+re-census logged §Handoff);
 **infra-push-block** — zero fires this delta (every wrap
 pushed first-retry), census stays 1;
 **target-dir-inventory-nonzero** — zero re-fires, census
@@ -176,22 +188,23 @@ census stays 5 (no re-fire in the delta streams; this
 eval's own post-corpus legs ride to the next read per
 convention); **git-add-ignored-path** — census stays 1;
 **ctx-edit interlock** — zero fires this delta, census
-stays 2 fires / 0 casualties; **guess-filename** — 0. The
-child-performance watches (loadavg / commit-ceremony /
-target-dir-stall / segment-death / glm ceremony-burn) have
-NO observation surface this delta — zero children
-dispatched. The merged `loop-t250` local branch rides as
-operator surface (merged into main; not a worktree, not a
-leak). The untracked `com.tampajohn.chug-loopd.plist`
-rides (adjudicated operator file, sha1-8 ad4f343e
-reverified live, unchanged since cycle 132).
+stays 2 fires / 0 casualties; **paren-slip** — census
+stays 3; **guess-filename** — 0. The child-performance
+watches (loadavg / commit-ceremony / target-dir-stall /
+segment-death / glm ceremony-burn) have NO observation
+surface this delta — zero children dispatched. The merged
+`loop-t250` local branch rides as operator surface (merged
+into main; not a worktree, not a leak). The untracked
+`com.tampajohn.chug-loopd.plist` rides (adjudicated
+operator file, sha1-8 ad4f343e reverified live, unchanged
+since cycle 132).
 
 ### 2.2 eval-routing class-drift discharge: HOLDS (logged §Handoff)
 
 Every routing since the discharge is majority-class: this
-chain runs 4/4 — cycle 212 d1791406675-1, cycle 213
-d1791407382-1, cycle 214 d1791408169-1, this trip
-d1791409227-1 (all `eval-routing`). The named-drift census
+chain runs 4/4 — cycle 216 d1791410312-1, cycle 217
+d1791411036-1, cycle 218 d1791411799-1, this trip
+d1791412813-1 (all `eval-routing`). The named-drift census
 stays at its 2 historical (d1791332962-1, d1791374497-1 —
 both immutable per T70, carried in every wrap audit line).
 No row.
@@ -206,96 +219,95 @@ No row.
   out of band (re-calibration recorded cycle 174); T254
   ~80 → 187 = 2.3× in band. No threshold edit (the re-check
   re-calibrates in text, never edits the number in passing).
-- **Inter-cycle link overhead — SECOND consecutive
+- **Inter-cycle link overhead — THIRD consecutive
   all-four-below-band read; the watch stays CLOSED.** Four
   links (wrap cycle-OK → next-launch routing), decomposed
-  with the adjudicated leg structure: 202s (rung 60:
-  exit→sleep 72 + rung 60 + post-sleep 70) / 315s (rung
-  120: 72 + 120 + 123) / 442s (rung 240: 75 + 240 + 127) /
-  684s (rung 480: 80 + 480 + 124). Non-rung totals
-  142/195/202/204 raw, and ~125/~179/~186/~188 adjudicated
-  (the ~16.5s launch rebuild present at every link removed)
+  with the adjudicated leg structure: 253s (rung 60:
+  exit→sleep 73 + rung 60 + post-sleep 120) / 316s (rung
+  120: 74 + 120 + 122) / 414s (rung 240: 65 + 240 + 109) /
+  674s (rung 480: 67 + 480 + 127). Non-rung totals
+  193/196/174/194 raw, and ~177/~180/~158/~178 adjudicated
+  (the ~16s launch rebuild present at every link removed)
   — ALL FOUR BELOW the re-anchored ~300–385s baseline
-  (cycle-186 eval), the second consecutive below-band read
-  after the prior chain's first. The exit→sleep leg reads
-  72/72/75/80 — the tightened shape the prior chain found
-  (73/73/72/105) is HOLDING, and it is a real tightening,
-  not skipped work: site-sync ran at all four wraps (four
-  rewrites + commits + pushes, site cycles 200→203) and
-  every wrap pushed first-retry. Post-sleep legs read
-  70/123/127/124 against the ~116–125s nominal band — links
-  2–4 inside (each carrying its named launch rebuild +
-  eval-digest refresh + orphan-reaper sweep; reaper
-  examined=64 killed=0 skipped=11 on this launch's logged
-  sweep); link 1's 70 is the cycle-211 real-eval wrap's
-  launch leg, light and explained (the digest refresh ran
-  inside the eval cycle's own window). The refined re-fire
-  trigger (an overhead leg >2× its rung after subtracting
-  the adjudicated components, or any link >10 min
-  UNEXPLAINED) is NOT tripped — link 4 raw 684s > 10 min =
-  rung 480 + named components 80 + 124, explained; zero
-  unexplained residual. Assessment: WATCH CLOSED, second
-  favorable read logged — the re-anchor trigger fires on
-  elevation only, so a below-band read changes no number;
-  the ~300–385s baseline stands. Logged §Handoff.
+  (cycle-186 eval), the third consecutive below-band read.
+  The exit→sleep leg reads 73/74/65/67 — the tightened
+  shape holding for a second chain (prior 72/72/75/80), and
+  it is a real tightening, not skipped work: site-sync ran
+  at all three disposition wraps (three rewrites + commits
+  + pushes, site cycles 205→207) and every wrap pushed
+  first-retry. Post-sleep legs read 120/122/109/127 against
+  the ~116–125s nominal band — all four inside or at edge
+  (each carrying its named launch rebuild + eval-digest
+  refresh + orphan-reaper sweep; reaper examined=64
+  killed=0 on this launch's logged sweeps). The refined
+  re-fire trigger (an overhead leg >2× its rung after
+  subtracting the adjudicated components, or any link >10
+  min UNEXPLAINED) is NOT tripped — link 4 raw 674s > 10
+  min = rung 480 + named components 67 + 127, explained;
+  zero unexplained residual. Assessment: WATCH CLOSED,
+  third favorable read logged — the re-anchor trigger fires
+  on elevation only, so a below-band read changes no
+  number; the ~300–385s baseline stands. Logged §Handoff.
 - **Trip-cost leg of the cadence discharge:** this Phase 1
   lands inside the 35–51-iteration band (projection at
   write; the final count lands in the wrap notes — the (b)
-  re-arm trips only at >2×, i.e. >102 iterations). Band-edge
-  note for the drift watch: trip 21's ACTUAL final count
-  was 53 (digest) — +2 over the band top, nowhere near 2×;
-  noted, no consequence.
+  re-arm trips only at >2×, i.e. >102 iterations). Trip
+  22's whole-stream actual was 40 (digest — Phase 1 inside
+  it); trip 21's 53 remains the band-edge note, nowhere
+  near 2×.
 
 ## 4. Capability gaps — ROADMAP PULL
 
-Skipped, 38th consecutive (logged §Handoff). The top
+Skipped, 39th consecutive (logged §Handoff). The top
 unworked roadmap surface remains F13 phase 2b→3 (T208's
 measure-first distillation experiment, then routing wiring),
 gated on T208's GO precondition (~3× records / held-out
-n≥60, rendered ~2,570 total). The corpus reads **1,521
-total / +11 this delta / 336 outcome labels (+0)** —
-~1.69× short on the binding total-corpus leg; labels accrue
+n≥60, rendered ~2,570 total). The corpus reads **1,533
+total / +12 this delta / 336 outcome labels (+0)** —
+~1.68× short on the binding total-corpus leg; labels accrue
 only from worked cycles and this delta added zero (the
-zero-label-growth streak advances to 6 of the new run post
+zero-label-growth streak advances to 7 of the new run post
 the cycle-190 break). F16 stays parked on the same
 precondition. No new capability finds this delta — an empty
 chain exercises no model-visible surface beyond the
-orchestrator's own tooling, which absorbed three benign
-failures and self-corrected each (§2.1); the shell-var-slip
-weighing produced a sharpened doctrine-row trigger (a
-process fix), not a capability gap.
+orchestrator's own tooling, which absorbed four benign
+failures and self-corrected each (§2.1); the one NEW class
+(decision_log arg-slip) is a tool-call-shape slip whose
+self-describing error makes recovery trivial — a DX
+observation with a named trigger, not a capability gap.
 
 ## 5. Top 3 priorities
 
-1. **Nothing filed — the 23rd zero-row eval** (123/126/
+1. **Nothing filed — the 24th zero-row eval** (123/126/
    132/136/140/144/148/152/156/160/164/169/174/178/182/
-   186/191/195/199/203/207/211 precedents; the streak-16
-   break at cycle 190 restarts the count — this is streak 7
-   of the new run). Every candidate is an absorb-class with
-   a named re-fire trigger (§2), the chain ran green on
-   every mechanical surface (§1), the closest call
-   (shell-var-slip at 5 censused fires, back-to-back this
-   chain) is rejected with its trigger sharpened to the 6th
-   fire (§2.1(a)), and the roadmap pull's precondition is
-   measurably short (§4).
+   186/191/195/199/203/207/211/215 precedents; the
+   streak-16 break at cycle 190 restarts the count — this
+   is streak 8 of the new run). Every candidate is an
+   absorb-class with a named re-fire trigger (§2), the
+   chain ran green on every mechanical surface (§1), the
+   closest call (grep-exit-1/poll-leg at 12 censused fires,
+   three re-fires this read) is rejected with its casualty
+   trigger standing (§2.1(a)), and the roadmap pull's
+   precondition is measurably short (§4).
 2. The watch list rides: stale-husk census 10/10,
-   absorbed-failure censuses (grep-exit-1/poll-leg 9,
+   absorbed-failure censuses (grep-exit-1/poll-leg 12,
    path-escapes 5, shell-var-slip 5, stale-anchor 2,
    paren-slip 3, unscoped-grep 2, git-add-ignored-path 1,
-   infra-push-block 1, target-dir-inventory-nonzero 1),
-   ctx-edit casualty watch (2 fires / 0 casualties),
-   zombie-todo watch (0 post-fix vs 3 historical). The
-   link-overhead watch stays CLOSED with a second
-   consecutive below-band read (§3).
+   infra-push-block 1, target-dir-inventory-nonzero 1,
+   decision_log-arg-slip 1), ctx-edit casualty watch (2
+   fires / 0 casualties), zombie-todo watch (0 post-fix vs
+   3 historical), wrap-notes-color watch (1 miss / 0
+   casualties). The link-overhead watch stays CLOSED with a
+   third consecutive below-band read (§3).
 3. The F13 corpus accrues organically (+0 outcome labels
-   this delta — streak 6 of the new run) — T208's
+   this delta — streak 7 of the new run) — T208's
    measurement governs the pull; no forced filing.
 
 ## 6. README audit
 
-Structure and content unchanged since the cycle-211 audit
+Structure and content unchanged since the cycle-215 audit
 (README untouched in the delta — verified
-`git diff --name-only 066eea1..HEAD` → EVALUATION.md only;
+`git diff --name-only 94a26f2..HEAD` → EVALUATION.md only;
 README last touched e1d7d46, 2026-10-05, T237). The delta's
 only docs edits were the three dispositions' Outcomes
 sections, which exercise no README surface; quickstart
@@ -314,11 +326,11 @@ filed.
   chain at TRUE 0→1 next cycle (kimi routed on the
   queue-empty predicate regardless — loopd's mechanical
   route), "3 empties away" handed forward, the trip
-  re-arming at 4 binding ~cycle 219 on the TRUE count
-  (216=1st, 217=2nd, 218=3rd, 219=4th — count, don't add;
+  re-arming at 4 binding ~cycle 223 on the TRUE count
+  (220=1st, 221=2nd, 222=3rd, 223=4th — count, don't add;
   cadence question SETTLED per the cycle-152 conditional
-  discharge, re-arm verified at trip 22 — this trip, below
-  — next verification at trip 23, ~cycle 219 on the new
+  discharge, re-arm verified at trip 23 — this trip, below
+  — next verification at trip 24, ~cycle 223 on the new
   chain math); any operator-landed work mid-chain breaks
   the bookkeeping-only delta and forces a fresh eval
   instead (the T247 letter).
@@ -326,39 +338,41 @@ filed.
   `com.tampajohn.chug-loopd.plist` rides — adjudicated
   operator file carried since cycle 132, sha1-8 ad4f343e
   reverified; F13-3 GO precondition — visibility only, §4's
-  growth color: labels +0, streak 6 of the new run; the
+  growth color: labels +0, streak 7 of the new run; the
   merged `loop-t250` local branch rides as operator
   surface).
 - **Cadence question: SETTLED** per the cycle-152
-  conditional discharge — re-arm check verified at trip 22
+  conditional discharge — re-arm check verified at trip 23
   (this trip, logged §records): (a) chain UNHEALTHY on any
   mechanical surface? NO — TRUE=machine at every probe
   (`60 0` → `120 1` → `240 2` → `480 3` per the loopd
-  cycle-OK lines at 20:54:40/21:05:20/21:15:50/21:29:24Z,
+  cycle-OK lines at 21:54:48/22:05:44/22:16:18/22:29:20Z,
   `480 3` reverified live), T248 held ×3 mechanically
-  (exactly three token carriers cdfe056/f7b5f5f/97f3f9a,
-  3843fe2 token-free — re-grepped live), T237 rungs logged
-  exact (60/120/240/480), gates 1705/1705 ×4 per the wrap
+  (exactly three token carriers 484b967/a8d1758/6e428e7,
+  28a4b03 token-free — re-grepped live), T237 rungs logged
+  exact (60/120/240/480), gates 1705/1705 ×3 per the wrap
   record, audits clean ×3 (live re-verify at this wrap),
-  and the chain absorbed THREE benign failures (cycles
-  211/212/213, one per stream, all self-corrected
-  in-window — absorb-and-recover is the health bar, not
+  and the chain absorbed FOUR benign failures (cycles
+  215×2/218×2, all self-corrected in-window —
+  absorb-and-recover is the health bar, not
   zero-absorbed); (b) measured trip cost >2× the
   35–51-iteration band (>102)? NO — this Phase 1 lands in
-  band (final count in the wrap notes; trip 21's actual 53
-  noted as band-edge, no trigger); (c) operator asks? NO —
-  operator delta static (plist sha reverified). All three
-  negative → the discharge holds; the next scheduled
-  verification is trip 23 (~cycle 219).
-- **Decision records this eval:** routing d1791409227-1 +
-  8 triage (absorbed-failure-censuses-updated-reject
-  d1791409605-2, shell-var-slip-5-reject-trigger-sharpened
-  d1791409605-3, paren-slip-3-reject d1791409605-4,
-  husk-recensus-10-reject d1791409605-5, class-drift-holds
-  d1791409612-6,
-  link-overhead-below-band-second-read-reject
-  d1791409612-7, roadmap-skip-38th d1791409612-8,
-  cadence-rearm-HOLDS-trip-22 d1791409612-9) — all
+  band (final count in the wrap notes; trip 22's
+  whole-stream actual 40, trip 21's 53 the band-edge note,
+  neither near 2×); (c) operator asks? NO — operator delta
+  static (plist sha reverified). All three negative → the
+  discharge holds; the next scheduled verification is trip
+  24 (~cycle 223).
+- **Decision records this eval:** routing d1791412813-1 +
+  9 triage (grep-exit-1-census-9→12-reject d1791413134-2,
+  decision-log-arg-slip-NEW-1-reject d1791413136-3,
+  wrap-notes-color-miss-reject d1791413139-4,
+  shell-var-slip-flat-fifth-launch-reject d1791413141-5,
+  husk-recensus-10-reject d1791413143-6,
+  class-drift-holds d1791413145-7,
+  link-overhead-below-band-third-read-reject
+  d1791413148-8, roadmap-skip-39th d1791413151-9,
+  cadence-rearm-HOLDS-trip-23 d1791413154-10) — all
   out-of-backfill-scope classes.
 
 ## Outcomes (filled at cycle wrap — LOOP-SPEC Phase 3)
