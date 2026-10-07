@@ -4494,3 +4494,377 @@ fn read_first_recovery_rule_exactly_once_inside_hard_rules() {
          payloads {payloads}, imperative {imperative})"
     );
 }
+
+// ---- T255 — the goal-boundary race + the recovery-PROCEEDS completion directive ----
+//
+// The zombie-todo no-op class fired TWICE. (1) Cycle 146's orchestrator
+// exited goal-accepted with its final todo t289 ("goal_complete with the
+// cycle-146 summary") un-flipped — a todo whose completion condition IS
+// the `goal_complete` call can never be flipped, because acceptance ends
+// the run before the queued flip lands — and the next cold launch read the
+// un-flipped todo as open bookkeeping and re-claimed the finished cycle
+// (watch-listed at the cycle-148 eval, trigger d1791339250-2). (2) Cycle
+// 169's first segment exited goal-accepted with its final wrap todo t356
+// un-flipped (07:36:09Z), and the 07:40:19Z cold launch re-verified the
+// already-complete wrap, retitled t356, and goal-completed in 5 iterations
+// re-claiming cycle 169 (stream events-20261007-074553.jsonl) — one cycle
+// slot burned on a no-op. The second fire executed the standing re-file
+// trigger, so the fix is doctrine, two clauses riding LOOP-SPEC.md:
+// (a) Phase 3's wrap final-steps area gains the goal-boundary race
+// paragraph — the final todo flip MUST land BEFORE the `goal_complete`
+// call, and a todo whose completion condition IS `goal_complete` itself
+// must NEVER be filed; (b) the T251 read-first recovery hard rule gains a
+// completion directive — a cold cycle whose reconstruction finds the
+// previous cycle's books CLOSED repairs the stale bookkeeping and then
+// PROCEEDS into its own Phase-1 disposition (or Phase-2 work) in the SAME
+// run (cycle-150's recovery-then-full-disposition, the mandated shape), it
+// never `goal_complete`s on the verification alone (the cycle-169 echo,
+// the counter-example). Leg (aq) pins both clauses in the T48/T64 pattern:
+// every needle exactly-once file-wide, clause (a) inside the Phase-3
+// window (`## Phase 3` through `## Hard rules`) AFTER the final-gates
+// bullet and BEFORE the T100 tag paragraph, clause (b) inside the
+// Hard-rules window AFTER the read-first rule's closing imperative
+// ("reconstruct, then act.") and BEFORE the Children-never-edit bullet.
+// Deleting either clause drops its needles to 0 (the RED leg was proven
+// against the pre-T255 LOOP-SPEC.md before the doctrine landed); a
+// duplicate fires the count-2 leg; moving either out of its window (or
+// against its anchors) dies on the ordering asserts. Additive only: no
+// existing pinned sentence is edited, no section renumbered.
+
+/// Clause (a)'s lead — the bolded paragraph name + T-number. Must occur
+/// EXACTLY once in LOOP-SPEC.md.
+const GOAL_BOUNDARY_LEAD: &str = "final todo flip lands BEFORE `goal_complete` (T255";
+
+/// The MUST commitment — the flip precedes the call. Must occur EXACTLY
+/// once.
+const FLIP_MUST_PRECEDE_CALL: &str = "MUST land BEFORE the `goal_complete` call";
+
+/// The mechanism — acceptance ends the run, so the queued flip never
+/// executes. Must occur EXACTLY once.
+const ACCEPTANCE_ENDS_RUN: &str = "acceptance ends the run the instant the call lands";
+
+/// The NEVER-file ban's object — a todo whose completion condition IS the
+/// call. Must occur EXACTLY once.
+const NEVER_FILE_GOAL_COMPLETE_TODO: &str = "completion condition IS `goal_complete` itself";
+
+/// The consequence — the next cold cycle re-closes a closed wrap. Must
+/// occur EXACTLY once.
+const RE_CLOSES_CLOSED_WRAP: &str = "re-closes an already-closed wrap";
+
+/// The class name. Must occur EXACTLY once.
+const ZOMBIE_TODO_CLASS: &str = "zombie-todo no-op class";
+
+/// Fire 1's evidence anchor — todo id included. Must occur EXACTLY once.
+const FIRE1_ANCHOR: &str = "cycle-146 t289";
+
+/// Fire 2's evidence anchor — todo id included. Must occur EXACTLY once.
+const FIRE2_ANCHOR: &str = "cycle-169 t356";
+
+/// Clause (a)'s closing imperative. Must occur EXACTLY once.
+const FLIP_FIRST_THEN_CALL: &str = "Flip first, then call.";
+
+/// Clause (b)'s lead — the completion directive's name + T-number. Must
+/// occur EXACTLY once.
+const COMPLETION_DIRECTIVE_LEAD: &str = "Completion directive (T255";
+
+/// The PROCEEDS-never-re-claims commitment. Must occur EXACTLY once.
+const PROCEEDS_NEVER_RECLAIMS: &str = "completed-recovery cycle PROCEEDS, never re-claims";
+
+/// The closed-books test's subject leg. Must occur EXACTLY once.
+const BOOKS_CLOSED: &str = "finds the previous cycle's books CLOSED";
+
+/// The closed-books test's evidence leg — wrap pushed + main==origin/main
+/// + probes/audit green, contiguous as written. Must occur EXACTLY once.
+const BOOKS_CLOSED_EVIDENCE: &str = "`main == origin/main`, probes/audit green";
+
+/// The repair step — stale bookkeeping is repaired, not re-verified forever.
+/// Must occur EXACTLY once.
+const REPAIRS_STALE_BOOKKEEPING: &str = "repairs the stale bookkeeping it inherited";
+
+/// The repair's form — flip/retitle the inherited todo. Must occur EXACTLY
+/// once.
+const FLIP_OR_RETITLE: &str = "flip or retitle the un-flipped todo";
+
+/// The SAME-run disposition commitment — the cold cycle proceeds into its
+/// own Phase-1 disposition (Phase-2 work included) in the SAME run. Must
+/// occur EXACTLY once.
+const OWN_DISPOSITION_SAME_RUN: &str =
+    "own Phase-1 disposition (or Phase-2 work) in the SAME run";
+
+/// The never-completes ban — no goal_complete on the verification alone.
+/// Must occur EXACTLY once.
+const NEVER_COMPLETES_ON_VERIFICATION: &str =
+    "`goal_complete`s on the verification alone";
+
+/// The mandated shape — cycle-150's recovery-then-full-disposition. Must
+/// occur EXACTLY once.
+const MANDATED_SHAPE: &str = "recovery-then-full-disposition is the mandated shape";
+
+/// The counter-example — the cycle-169 5-iteration echo. Must occur
+/// EXACTLY once.
+const COUNTER_EXAMPLE_ECHO: &str = "5-iteration echo";
+
+/// The counter-example's close — the class's second fire. Must occur
+/// EXACTLY once.
+const SECOND_FIRE_CLOSE: &str = "is the counter-example and the class's second fire";
+
+/// Clause (a)'s Phase-3 neighbors: the final-gates bullet (the
+/// `goal_complete` mention) it sits AFTER, and the T100 tag paragraph it
+/// precedes.
+const TAG_AT_WRAP_ANCHOR: &str = "Tag at wrap (T100";
+
+/// (aq) T255 — the goal-boundary race clause (a, Phase 3's wrap
+/// final-steps area) + the recovery-PROCEEDS completion directive (clause
+/// b, appended to the T251 read-first rule): every load-bearing needle
+/// occurs EXACTLY once in LOOP-SPEC.md, clause (a) sits inside the
+/// Phase-3 window AFTER the final-gates bullet and BEFORE the T100 tag
+/// paragraph, and clause (b) sits inside the Hard-rules window AFTER the
+/// read-first rule's closing imperative and BEFORE the Children-never-edit
+/// bullet. Delete either clause and its needles go red at count 0;
+/// duplicate any needle and this fires at count 2; move either clause out
+/// of its window (or against its anchors) and the ordering assert dies.
+#[test]
+fn goal_boundary_race_and_recovery_proceeds_clauses_pinned() {
+    // Needle self-checks (T48 idiom): a mangled needle must not let this
+    // pin pass silently.
+    assert!(
+        GOAL_BOUNDARY_LEAD.starts_with("final todo flip")
+            && GOAL_BOUNDARY_LEAD.ends_with("(T255"),
+        "clause (a)'s lead needle must carry the flip-before-call language \
+         + the T-number verbatim"
+    );
+    assert!(
+        FLIP_MUST_PRECEDE_CALL.starts_with("MUST land BEFORE")
+            && FLIP_MUST_PRECEDE_CALL.ends_with("call"),
+        "the MUST needle must carry the flip-precedes-call commitment verbatim"
+    );
+    assert!(
+        NEVER_FILE_GOAL_COMPLETE_TODO.starts_with("completion condition IS")
+            && NEVER_FILE_GOAL_COMPLETE_TODO.ends_with("itself"),
+        "the NEVER-file needle must carry the banned todo shape verbatim"
+    );
+    assert!(
+        FIRE1_ANCHOR.starts_with("cycle-146") && FIRE1_ANCHOR.ends_with("t289"),
+        "fire 1's anchor must name the cycle AND the todo id (t289)"
+    );
+    assert!(
+        FIRE2_ANCHOR.starts_with("cycle-169") && FIRE2_ANCHOR.ends_with("t356"),
+        "fire 2's anchor must name the cycle AND the todo id (t356)"
+    );
+    assert!(
+        PROCEEDS_NEVER_RECLAIMS.contains("PROCEEDS")
+            && PROCEEDS_NEVER_RECLAIMS.ends_with("never re-claims"),
+        "clause (b)'s commitment needle must carry PROCEEDS + never \
+         re-claims verbatim"
+    );
+    assert!(
+        BOOKS_CLOSED.starts_with("finds the previous")
+            && BOOKS_CLOSED.ends_with("books CLOSED"),
+        "the closed-books needle must carry the reconstruction verdict \
+         verbatim"
+    );
+    assert!(
+        BOOKS_CLOSED_EVIDENCE.contains("`main == origin/main`")
+            && BOOKS_CLOSED_EVIDENCE.ends_with("probes/audit green"),
+        "the closed-books evidence needle must carry all three probes \
+         (wrap pushed named by its lead, main==origin/main, probes/audit) \
+         verbatim"
+    );
+    assert!(
+        MANDATED_SHAPE.starts_with("recovery-then-full-disposition")
+            && MANDATED_SHAPE.ends_with("mandated shape"),
+        "the mandated-shape needle must name cycle-150's shape verbatim"
+    );
+    assert!(
+        !BOOKS_CLOSED.contains("reconstruct, then act."),
+        "the closed-books needle must NOT re-quote the T251 rule's pinned \
+         closing imperative (leg (ap) holds it exactly-once)"
+    );
+    let spec = loop_spec();
+    for (needle, what) in [
+        (GOAL_BOUNDARY_LEAD, "clause (a)'s bolded lead"),
+        (FLIP_MUST_PRECEDE_CALL, "the flip-precedes-call commitment"),
+        (ACCEPTANCE_ENDS_RUN, "the acceptance-ends-the-run mechanism"),
+        (NEVER_FILE_GOAL_COMPLETE_TODO, "the NEVER-file ban"),
+        (RE_CLOSES_CLOSED_WRAP, "the re-closes-a-closed-wrap consequence"),
+        (ZOMBIE_TODO_CLASS, "the class name"),
+        (FIRE1_ANCHOR, "fire 1's cycle-146 t289 anchor"),
+        (FIRE2_ANCHOR, "fire 2's cycle-169 t356 anchor"),
+        (FLIP_FIRST_THEN_CALL, "clause (a)'s closing imperative"),
+        (COMPLETION_DIRECTIVE_LEAD, "clause (b)'s directive lead"),
+        (PROCEEDS_NEVER_RECLAIMS, "the PROCEEDS-never-re-claims commitment"),
+        (BOOKS_CLOSED, "the closed-books verdict"),
+        (BOOKS_CLOSED_EVIDENCE, "the closed-books evidence probes"),
+        (REPAIRS_STALE_BOOKKEEPING, "the repair step"),
+        (FLIP_OR_RETITLE, "the flip/retitle repair form"),
+        (OWN_DISPOSITION_SAME_RUN, "the SAME-run disposition commitment"),
+        (NEVER_COMPLETES_ON_VERIFICATION, "the never-completes ban"),
+        (MANDATED_SHAPE, "cycle-150's mandated shape"),
+        (COUNTER_EXAMPLE_ECHO, "the cycle-169 echo counter-example"),
+        (SECOND_FIRE_CLOSE, "the second-fire close"),
+    ] {
+        assert_eq!(
+            spec.matches(needle).count(),
+            1,
+            "LOOP-SPEC must state {what} exactly once — zero means the T255 \
+             clause was deleted (or a needle was rewrapped across a line \
+             break), more than one means it is stated twice"
+        );
+    }
+    // Clause (a): inside Phase 3, AFTER the final-gates bullet (the
+    // `goal_complete` mention) and BEFORE the T100 tag paragraph.
+    let p3 = spec
+        .find(PHASE3_HEADING)
+        .expect("Phase-3 heading (`## Phase 3`) present");
+    let p3_end = p3
+        + spec[p3..]
+            .find(HARD_RULES_HEADING)
+            .expect("Hard-rules heading present after Phase 3");
+    let phase3 = &spec[p3..p3_end];
+    let final_gates = phase3.find(FINAL_GATES_BULLET).expect(
+        "the Phase-3 window must carry the final-gates bullet (clause (a)'s \
+         preceding anchor)",
+    );
+    let lead = phase3.find(GOAL_BOUNDARY_LEAD).unwrap_or_else(|| {
+        panic!(
+            "the Phase-3 window must carry the goal-boundary race clause — \
+             it was deleted, or moved out of Phase 3"
+        )
+    });
+    let must = phase3.find(FLIP_MUST_PRECEDE_CALL).expect(
+        "the flip-precedes-call commitment must sit inside the Phase-3 \
+         window (rewrapped across a line break?)",
+    );
+    let acceptance = phase3.find(ACCEPTANCE_ENDS_RUN).expect(
+        "the acceptance-ends-the-run mechanism must sit inside the Phase-3 \
+         window (rewrapped?)",
+    );
+    let never_file = phase3.find(NEVER_FILE_GOAL_COMPLETE_TODO).expect(
+        "the NEVER-file ban must sit inside the Phase-3 window (rewrapped?)",
+    );
+    let re_closes = phase3.find(RE_CLOSES_CLOSED_WRAP).expect(
+        "the re-closes consequence must sit inside the Phase-3 window \
+         (rewrapped?)",
+    );
+    let class = phase3.find(ZOMBIE_TODO_CLASS).expect(
+        "the class name must sit inside the Phase-3 window (rewrapped?)",
+    );
+    let fire1 = phase3.find(FIRE1_ANCHOR).expect(
+        "fire 1's anchor must sit inside the Phase-3 window (rewrapped?)",
+    );
+    let fire2 = phase3.find(FIRE2_ANCHOR).expect(
+        "fire 2's anchor must sit inside the Phase-3 window (rewrapped?)",
+    );
+    let flip_first = phase3.find(FLIP_FIRST_THEN_CALL).expect(
+        "clause (a)'s closing imperative must sit inside the Phase-3 \
+         window (rewrapped?)",
+    );
+    let tag = phase3.find(TAG_AT_WRAP_ANCHOR).expect(
+        "the Phase-3 window must carry the T100 tag paragraph (clause (a)'s \
+         following anchor)",
+    );
+    assert!(
+        final_gates < lead
+            && lead < must
+            && must < acceptance
+            && acceptance < re_closes
+            && re_closes < never_file
+            && never_file < class
+            && class < fire1
+            && fire1 < fire2
+            && fire2 < flip_first
+            && flip_first < tag,
+        "the goal-boundary race clause must sit INSIDE the Phase-3 window — \
+         AFTER the final-gates bullet ({final_gates}) and BEFORE the T100 \
+         tag paragraph ({tag}) — and read in its own written order (lead \
+         {lead}, MUST {must}, acceptance {acceptance}, re-closes \
+         {re_closes}, NEVER-file {never_file}, class {class}, fire1 \
+         {fire1}, fire2 {fire2}, flip-first {flip_first})"
+    );
+    // Clause (b): inside the Hard-rules window (the spec's LAST section),
+    // appended to the read-first recovery rule — AFTER its closing
+    // imperative ("reconstruct, then act.") and BEFORE the
+    // Children-never-edit bullet.
+    let hr = spec
+        .find(HARD_RULES_HEADING)
+        .expect("Hard-rules heading (`## Hard rules`) present");
+    let hard_rules = &spec[hr..];
+    let imperative = hard_rules.find(READ_RECONSTRUCT_ACT).expect(
+        "the Hard-rules window must carry the read-first rule's closing \
+         imperative (clause (b)'s preceding anchor)",
+    );
+    let directive = hard_rules.find(COMPLETION_DIRECTIVE_LEAD).unwrap_or_else(
+        || {
+            panic!(
+                "the Hard-rules window must carry the recovery-PROCEEDS \
+                 completion directive — it was deleted, or moved out of \
+                 the read-first rule"
+            )
+        },
+    );
+    let proceeds = hard_rules.find(PROCEEDS_NEVER_RECLAIMS).expect(
+        "the PROCEEDS-never-re-claims commitment must sit inside the \
+         Hard-rules window (rewrapped?)",
+    );
+    let books = hard_rules.find(BOOKS_CLOSED).expect(
+        "the closed-books verdict must sit inside the Hard-rules window \
+         (rewrapped?)",
+    );
+    let probes = hard_rules.find(BOOKS_CLOSED_EVIDENCE).expect(
+        "the closed-books evidence probes must sit inside the Hard-rules \
+         window (rewrapped?)",
+    );
+    let repairs = hard_rules.find(REPAIRS_STALE_BOOKKEEPING).expect(
+        "the repair step must sit inside the Hard-rules window (rewrapped?)",
+    );
+    let flip_retitle = hard_rules.find(FLIP_OR_RETITLE).expect(
+        "the flip/retitle repair form must sit inside the Hard-rules \
+         window (rewrapped?)",
+    );
+    let own_disposition = hard_rules.find(OWN_DISPOSITION_SAME_RUN).expect(
+        "the SAME-run disposition commitment must sit inside the \
+         Hard-rules window (rewrapped?)",
+    );
+    let never_completes = hard_rules.find(NEVER_COMPLETES_ON_VERIFICATION).expect(
+        "the never-completes ban must sit inside the Hard-rules window \
+         (rewrapped?)",
+    );
+    let mandated = hard_rules.find(MANDATED_SHAPE).expect(
+        "cycle-150's mandated shape must sit inside the Hard-rules window \
+         (rewrapped?)",
+    );
+    let echo = hard_rules.find(COUNTER_EXAMPLE_ECHO).expect(
+        "the cycle-169 echo counter-example must sit inside the Hard-rules \
+         window (rewrapped?)",
+    );
+    let second_fire = hard_rules.find(SECOND_FIRE_CLOSE).expect(
+        "the second-fire close must sit inside the Hard-rules window \
+         (rewrapped?)",
+    );
+    let children = hard_rules.find(CHILDREN_NEVER_EDIT).expect(
+        "the Hard-rules window must carry the Children-never-edit bullet \
+         (the directive's following anchor)",
+    );
+    assert!(
+        imperative < directive
+            && directive < proceeds
+            && proceeds < books
+            && books < probes
+            && probes < repairs
+            && repairs < flip_retitle
+            && flip_retitle < own_disposition
+            && own_disposition < never_completes
+            && never_completes < mandated
+            && mandated < echo
+            && echo < second_fire
+            && second_fire < children,
+        "the completion directive must sit INSIDE the Hard-rules window — \
+         AFTER the read-first rule's closing imperative ({imperative}) and \
+         BEFORE the Children-never-edit bullet ({children}) — and read in \
+         its own written order (lead {directive}, PROCEEDS {proceeds}, \
+         books {books}, probes {probes}, repairs {repairs}, flip/retitle \
+         {flip_retitle}, own disposition {own_disposition}, \
+         never-completes {never_completes}, mandated {mandated}, echo \
+         {echo}, second-fire {second_fire})"
+    );
+}

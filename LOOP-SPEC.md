@@ -920,6 +920,20 @@ alike) has been harvested.
   but never lints it). Never force-push; a
   rejected push means the remote moved — stop
   and note it, don't reconcile mid-cycle.
+- **The wrap's final todo flip lands BEFORE `goal_complete` (T255 — the
+  goal-boundary race).** The wrap's LAST bookkeeping act is the final
+  todo flip, and it MUST land BEFORE the `goal_complete` call:
+  acceptance ends the run the instant the call lands, so a flip queued
+  after it never executes — the todo ships un-flipped, and the next
+  cold cycle reads it as open bookkeeping and
+  re-closes an already-closed wrap. For the same reason, NEVER file a
+  todo whose completion condition IS `goal_complete` itself — name the
+  flip's own completion (the wrap duties above) instead. Two fires of
+  the zombie-todo no-op class: cycle-146 t289 (the first fire — the
+  run exited goal-accepted with its final todo un-flipped and the next
+  launch re-claimed cycle 146) and cycle-169 t356 (the second — the
+  echo re-verified the already-complete wrap and goal-completed in 5
+  iterations re-claiming cycle 169). Flip first, then call.
 - **Tag at wrap (T100 — operator override 2026-09-28, reversing the earlier
   never-self-tag guardrail).** After final gates are green at HEAD, the
   orchestrator cuts ONE release tag per wrap max: when ≥3 items landed
@@ -1020,7 +1034,17 @@ alike) has been harvested.
   reason this rule exists: context amputation makes the orchestrator a
   stranger to its own work — the same verify-then-act discipline as the
   cycle-61 kill rule, payloads there, repo state here. Read first,
-  reconstruct, then act.
+  reconstruct, then act. Completion directive (T255 — a
+  completed-recovery cycle PROCEEDS, never re-claims): when the
+  reconstruction finds the previous cycle's books CLOSED (wrap pushed,
+  `main == origin/main`, probes/audit green), the cold cycle
+  repairs the stale bookkeeping it inherited
+  (flip or retitle the un-flipped todo) and then PROCEEDS into
+  its own Phase-1 disposition (or Phase-2 work) in the SAME run — it
+  never `goal_complete`s on the verification alone. Cycle-150's
+  recovery-then-full-disposition is the mandated shape; the cycle-169
+  5-iteration echo (reconstruct the closed wrap, retitle the stale
+  todo, stop) is the counter-example and the class's second fire.
 - Children never edit TODO.md or LEDGER.md in the main tree.
 - README gate before `goal_complete`: it must document everything the cycle
   landed — INTEGRATED into the existing structure, not a bullet appended to
