@@ -1,6 +1,6 @@
 # T254 — loopd test fixtures self-terminate: `LOOPD_MAX_LOOPS` honored by loopd.sh, exported by every fixture harness
 
-check: touch src/*.rs tests/*.rs; export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared; cargo test --release
+check: touch src/*.rs tests/*.rs; export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-validate-a; cargo test --release
 
 ## repo-context
 

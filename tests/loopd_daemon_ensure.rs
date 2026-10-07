@@ -277,6 +277,12 @@ impl Sandbox {
         // loop at its predicate anyway; these only bound a missed kill.
         cmd.env("LOOPD_SLEEP_OK", "1");
         cmd.env("LOOPD_SLEEP_FAIL", "1");
+        // T254 — the fixture-leak fail-safe: every spawn of `loopd.sh run`
+        // exports LOOPD_MAX_LOOPS so the supervisor self-terminates if this
+        // harness dies and orphans the fixture (the cycle-168 leak). 50 sits
+        // comfortably above the observed iteration need, so the bound only
+        // ever fires on a leaked fixture, never on a live one.
+        cmd.env("LOOPD_MAX_LOOPS", "50");
         // The stub-chug contract's log: who probed/ensured, how often.
         cmd.env("CHUG_DAEMON_TEST_LOG", self.root.join("daemon-test.log"));
         // The (a) leg or its explicit absence — the outer env must never leak

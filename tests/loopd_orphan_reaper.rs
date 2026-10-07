@@ -478,6 +478,12 @@ impl Sandbox {
         // missed kill so a stuck loop cannot park the test.
         cmd.env("LOOPD_SLEEP_OK", "1");
         cmd.env("LOOPD_SLEEP_FAIL", "1");
+        // T254 — the fixture-leak fail-safe: every spawn of `loopd.sh run`
+        // exports LOOPD_MAX_LOOPS so the supervisor self-terminates if this
+        // harness dies and orphans the fixture (the cycle-168 leak). 50 sits
+        // comfortably above the observed iteration need, so the bound only
+        // ever fires on a leaked fixture, never on a live one.
+        cmd.env("LOOPD_MAX_LOOPS", "50");
         for (k, v) in envs {
             cmd.env(k, v);
         }

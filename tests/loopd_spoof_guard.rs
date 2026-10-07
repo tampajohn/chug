@@ -163,6 +163,12 @@ impl Sandbox {
         cmd.env("PATH", path);
         cmd.env("CHUG_SITE_DIR", self.root.join("NO-SUCH-SITE"));
         cmd.env("CHUG_SITE_SYNC_NO_PUSH", "1");
+        // T254 — the fixture-leak fail-safe: every spawn of `loopd.sh run`
+        // exports LOOPD_MAX_LOOPS so the supervisor self-terminates if this
+        // harness dies and orphans the fixture (the cycle-168 leak). 50 sits
+        // comfortably above the observed iteration need, so the bound only
+        // ever fires on a leaked fixture, never on a live one.
+        cmd.env("LOOPD_MAX_LOOPS", "50");
         cmd.stdout(Stdio::null()).stderr(Stdio::null());
         cmd.spawn().expect("spawn bash loopd.sh run")
     }

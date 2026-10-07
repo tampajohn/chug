@@ -361,6 +361,31 @@ fi
 # change does.
 SELF_CKSUM="$(cksum "$ROOT/loopd.sh")"
 fails=0
+# T254 — the fixture-leak fail-safe. LOOPD_MAX_LOOPS, when set to a positive
+# integer, bounds the supervisor's main-loop iterations: after N full passes
+# the supervisor logs one line naming the knob and exits 0 (clean — the EXIT
+# trap removes the pidfile). Production never sets it: unset, empty, zero, or
+# any non-numeric value leaves today's unbounded loop byte-identical (the
+# T137 LOOPD_SLEEP_OK seam is the precedent — a knob production never sets).
+# Why a knob and not a reaper leg: the T152 orphan reaper matches argv
+# needles (/tmp/chug-loop-t*, /tmp/chug-mut-*) and must NEVER kill an
+# unresolved identity — a needle broad enough to see `bash loopd.sh run`
+# would risk the production supervisor. The cure is fixture-side
+# self-termination (fail-safe by construction): every test harness that
+# spawns `loopd.sh run` exports a bound comfortably above its observed
+# iteration need, so the bound only fires when the HARNESS died and the
+# fixture leaked — the cycle-168 instance (a `bash loopd.sh run` orphaned to
+# launchd for six days, immortal-but-inert on its probe-fail skip path,
+# which never reaches the 3-strike HALT) is the indictment. The arming is
+# resolved ONCE here, not per iteration (the T47 lesson: no env reads whose
+# failure could surprise inside the loop), and a malformed value degrades to
+# unbounded — the knob must never break production.
+LOOPD_MAX_LOOPS_N=0
+case "${LOOPD_MAX_LOOPS:-}" in
+  ''|0|*[!0-9]*) ;;                       # unset/empty/zero/non-numeric: unbounded (today)
+  *) LOOPD_MAX_LOOPS_N=$LOOPD_MAX_LOOPS ;; # a positive integer arms the bound
+esac
+loops=0
 while [ ! -f "$STOP" ]; do
   # T50: re-exec self when this script changed on disk. FIRST statement in
   # the body, so a re-exec only ever happens BETWEEN cycles, never
@@ -380,6 +405,18 @@ while [ ! -f "$STOP" ]; do
   if [ "$(cksum "$ROOT/loopd.sh")" != "$SELF_CKSUM" ]; then
     echo "$(ts) loopd: script changed on disk — re-exec (pid $$)" >> "$LOG"
     exec "$ROOT/loopd.sh" run
+  fi
+  # T254 — the iteration bound (armed above the loop): N full body passes
+  # run, and the pass AFTER the Nth logs the knob by name and exits 0. The
+  # counter sits at the TOP of the body — after the T50 re-exec block (which
+  # stays FIRST) and before every `continue` — so every path counts toward
+  # it: the cycle launch AND the skip paths (the driver-active and probe-
+  # fail skips `continue` past a bottom-of-body counter, and the probe-fail
+  # skip is exactly where the cycle-168 leaked fixture sat, immortal).
+  loops=$((loops + 1))
+  if [ "$LOOPD_MAX_LOOPS_N" -gt 0 ] && [ "$loops" -gt "$LOOPD_MAX_LOOPS_N" ]; then
+    echo "$(ts) LOOPD_MAX_LOOPS=$LOOPD_MAX_LOOPS_N reached — self-terminating after $((loops - 1)) main-loop iterations (T254 fixture-leak fail-safe)" >> "$LOG"
+    exit 0
   fi
   # Single-driver: never overlap another LOOP-SPEC run (e.g. a manual one).
   # ps, never pgrep: on this host pgrep persistently fails to enumerate the
