@@ -1,184 +1,219 @@
-# EVALUATION — chug, assessed by chug-loop (2026-10-07, cycle 168)
+# EVALUATION — chug, assessed by chug-loop (2026-10-07, cycle 169)
 
-**TRIP eval — the T247 valve's ELEVENTH live trip (cycles
-113/122/136/140/144/148/152/156/160/164 precedents).** The freshness
-predicate failed on the todo-rows half (queue EMPTY since the cycle-164
-zero-row trip eval — eleventh zero-row eval), and the delta since the
-baseline eval (a7c099c) is bookkeeping-only: 4 commits
-1fcbf88+59787d4+bdeb42c+8782cfe, EVALUATION.md only +24/-16, zero
-children, zero items, main==origin/main. But the TRUE streak
-human-counted from the wrap-notes chain reads 165=1st, 166=2nd,
-167=3rd — so this 4th consecutive empty cycle RUNS the real evaluation
-(the valve; the chain converts itself into its own evaluation at the
-trip point). Routing d1791352575-1 (eval-routing, the majority class
-held). Corpus: the full empty chain (cycles 165–167 disposition streams
-+ the cycle-167 wrap) + the loopd log + the decisions corpus + the
-operator delta, baseline a7c099c.
+**Fresh eval on a WORKED delta — the T247 chain rule refused the skip
+for the 3rd time (cycles 122→123 "first live routing test PASSED",
+125→126 "refused a skip for the 2nd time" precedents).** The freshness
+predicate failed on the todo-rows half (queue EMPTY — T254, the
+cycle-168 eval's only filing, landed in-cycle); EVALUATION.md was
+fresh (same UTC day). The empty-delta clause was checked anyway: the
+delta since the cycle-168 eval (20f0e37) is the T254 arc — 6 commits
+(38e5548 impl + d553068 re-key + 93414ad merge + f079de8 flip +
+8278663 release v0.17.8 + c7ff3e9 wrap), TWO children launched, ONE
+item landed, loopd.sh/tests/Cargo touched → NOT bookkeeping-only by
+the clause's letter ("zero children launched, zero items landed"), so
+the clause does not authorize the skip and this cycle RUNS the real
+evaluation on the worked delta (the cycles-113→114/122→123/125→126
+shape). The cycle-168 wrap's handoff had adjudicated otherwise
+("delta bookkeeping-only by construction (this wrap + the tag) →
+FIRST disposition authorized at TRUE 0") and predicted glm routing;
+loopd's mechanical predicate disagreed at launch (`.chug/loopd/loopd.log`
+07:18:01Z: `routing: todo_rows=0 eval_fresh=yes -> eval cycle on
+anthropic-system.ai.kimi-k3`) — the todo-rows half fails on an empty
+queue, the handoff elided the in-cycle arc, and the T247 letter
+governs. Routing d1791357761-1 (eval-routing, the majority class
+held). TRUE streak STAYS 0 (the cycle-168 real-eval+worked wrap reset
+it; no disposition token binds this cycle). Corpus: the T254 arc
+(cycle-168 orchestrator stream events-20261007-071803.jsonl, 127
+iters/1h17m, goal accepted; t254 impl + validator harvests) + the git
+record + the decisions corpus (1,371→1,384) + the loopd log + the
+operator delta (plist byte-identical ad4f343e sha1-8, loopd pid 25297
+ppid 1 16h+), baseline 20f0e37. Digest fresh (07:17:14Z, mechanical
+check FRESH).
 
 ## 1. What chug does well
 
-- The self-pacing machinery (T237/T247/T248) ran its ELEVENTH chain
-  cleanly: rungs 60/120/240/480 logged exact by the supervisor
-  (streaks 0→3), the post-trip reset leg 480→60 observed, TRUE=machine
-  at every probe (60 0→120 1→240 2→480 3, reverified live at eval
-  time), the pacing token verbatim exactly once per disposition subject
-  with the real-eval wrap writing around it (ninth clean chain).
-- **The T137 fail-closed probe design proved itself in production,
-  4,465 times.** The leaked fixture supervisor (§2.1) spent SIX DAYS
-  reading `ps rc=7` as an unknown enumeration and refusing to launch
-  rather than risk a duplicate driver — the exact fail-closed semantics
-  T137 designed, observed live at 120s cadence for the leak's entire
-  life. The one process that should never have existed is also the
-  longest-running proof of the guard that matters most.
-- The disposition chain stayed cheap: 14/23/26 iterations,
-  4m11s/5m7s/4m9s walls, zero aborts, zero budget-lows, goals accepted
-  first-try ×3, gates 1703/1703 ×3, wrap audits clean ×3, routing
-  majority-class ×4 (three dispositions + this trip).
+- **The ctx-edit protections held live under fire, mid-arc.** The
+  cycle-168 orchestrator stream crossed its 100k ctx-warn threshold
+  during the T254 arc (input curve 91.8k@32 → 445.8k@64). The
+  LIVE_CTX editor's first proposal would have removed pinned turn 0 —
+  the driver REJECTED it (`ctx_edit accepted:false, before/after
+  101,649, reason "pinned turn 0 was removed"`, 06:38:39Z); the retry
+  collapsed 102,140 → 6,489 tokens (`accepted:true`, 06:39:04Z); and
+  the cycle then closed its books flawlessly (validator launched and
+  harvested, merge/flip/backfills, v0.17.8 tag on green gates, wrap
+  probes). The cycle-128 casualty class (T251's reason for existing)
+  fired twice in one stream and left zero casualties — the turn-0 pin
+  guard, the event telemetry, and the read-first bookkeeping doctrine
+  each did exactly what they were built to do.
+- **The T254 arc is the pipeline working end-to-end at its best.** A
+  trip eval found a real production defect (the 6-day leaked fixture
+  supervisor, 4,465 fail-closed skips), filed ONE precisely-scoped
+  row, and the same cycle worked it: glm impl goal-accepted in-budget
+  (66/80 iters, 30m49s, 691.9k in / 28k out), kimi validator PASS
+  first round (43/60, 18m54s) with 3 parallel mutants 0 survivors
+  (M1 bound-removal RED 13.1s via the over-run detector, M2
+  bottom-increment RED placement-sensitive, M3 green-by-design with
+  the sweep re-performed), worktree + post-merge gates 1704/1704 +
+  clippy zero, release v0.17.8 tagged on the 3-item trigger with the
+  T245 ancestor check. Spot-verified this eval: the LOOPD_MAX_LOOPS
+  arming block + top-of-loop counter sit in loopd.sh (lines 364–418)
+  as narrated, and the production process census is clean — exactly
+  two `loopd.sh run` processes (daemon 25297 ppid 1 + this cycle's
+  supervisor 98624), zero leaked supervisors.
+- **The routing switch is mechanical and agreed with the doctrine.**
+  loopd read `todo_rows=0` and launched kimi (the eval model) while
+  the previous handoff prose predicted glm — T81's "never by model
+  judgment" working as designed; the handoff prose is advisory, the
+  predicate is authoritative (§2.1).
 
 ## 2. Incidents worth fixing
 
-### 2.1 Leaked hermetic loopd-fixture supervisor lived 6 days → **filed as T254 (pri 3)**
+### 2.1 Cycle-168 orchestrator narrative drift ×3 (weighed → REJECTED, d1791358039-2)
 
-**What happened.** A `bash loopd.sh run` process (pid 81393, ppid 1,
-spawned 2026-10-01T00:38:52Z) survived its test harness by six days.
-Its cwd is the hermetic fixture `$TMPDIR/.tmpjJMhXR`
-(tests/loopd_stale_binary.rs: the NO-SUCH-SITE sentinel written at line
-161, spawn sites at lines ~166/~349, fixture-spin.rs, bin/ PATH stubs,
-target-shared-mut-1). Its fixture log (544 KB) is `loopd start (pid
-81393)` plus **4,465 identical** `driver probe FAILED (ps rc=7) —
-enumeration unknown; refusing to risk a duplicate driver, skipping`
-lines at ~120s cadence — the T137 fail-closed loop, forever. The
-fixture's ps stub fails rc=7 once the harness is gone; the probe-fail
-skip path never reaches the build leg's 3-strike HALT, and the
-supervisor has no other self-termination path: immortal-but-inert by
-construction. Discovered via the cycle's routine ps census (a second
-`loopd.sh run` pid beside the supervisor of record, 25297 ppid 1).
+Three factual drifts in the cycle-168 eval/wrap narrative, each
+against a mechanically-checkable reference:
 
-**Why the reaper never caught it.** scripts/orphan-reaper.sh's identity
-legs match argv needles `/tmp/chug-loop-t*` / `/tmp/chug-mut-*` (line
-222) — a fixture supervisor's argv is plain `bash loopd.sh run` with
-cwd under `$TMPDIR/.tmp*`, which no leg matches. The T152 reaper was
-built for loop-artifact orphans; hermetic-test fixture supervisors are
-the same shape (a loop process whose parent died) from a different
-parent class, structurally invisible to it.
+1. **"glm impl 15/80"** (the eval's landed-entry AND the wrap-notes
+   subject) vs the harvested stream's mechanical count **66/80**
+   (events-t254-impl-20261007-064003.jsonl: 66 iteration events, 1
+   run, wall 30m49s; the child's own goal summary makes no iteration
+   claim). The 15 is most plausibly a mid-flight status-poll snapshot
+   written into the permanent record.
+2. **"6 decision records"** in the eval text while listing SEVEN ids
+   (routing -1 + triage -2..-7); the measured corpus delta is
+   1,371→1,384 = 12 cycle-168 records (-1..-12).
+3. **The handoff adjudication** ("predicate HOLDS, glm routed; delta
+   bookkeeping-only by construction → first disposition authorized")
+   — falsified on both halves: loopd routed kimi on `todo_rows=0`
+   (the predicate's todo-rows half fails on an empty queue), and the
+   delta held the T254 arc (2 children, 1 item), which is not
+   bookkeeping-only by the T247 letter. This cycle re-derived the
+   disposition from the record and ran this eval.
 
-**Mechanism (HYPOTHESIS per the indictment doctrine — the fixture is
-evidence; the harness-death instant is not directly observed).** The
-harness kill contract (`wait_for_any`, tests/loopd_stale_binary.rs
-lines 202–213) kills the fixture child when its log needle appears —
-correct when the harness lives. The leak requires the harness to have
-died between spawn (00:38:52Z) and the first poll match (~34s later):
-an outer bounded cap (a gates leg's `alarm 280`/bash-cap killing a
-nextest run mid-test) or a harness crash, orphaning the grandchild to
-launchd. Which cycle ran that suite leg is unverified; the row fixes
-the CLASS (harness dies → grandchild fixture leaks), not the one
-instance.
+**Consequence: zero.** Loopd's routing switch is mechanical; the
+wrap's load-bearing numbers (gates 1704/1704, tag v0.17.8, TRUE
+streak reset, probes) were all correct; the T247 letter plus the
+123/126 precedents made this cycle's routing unambiguous regardless
+of the handoff prose. **Root cause:** narrative written from
+memory/poll snapshots instead of the harvest data + the fresh digest;
+the handoff disposition not re-derived from the mechanical predicate.
+**Weighed → REJECTED (no row).** The digest is regenerated
+pre-launch and is the reference of record for exactly this class; the
+drift self-corrects at the next read (this eval is the proof).
+Re-fire trigger: a drift that falsifies a GATE, STREAK, TAG, or
+ROUTING claim (not a child-stream statistic) — that instance files a
+doctrine row requiring jq/digest verification of wrap-narrative
+numerics.
 
-**Disposition.** The evaluator verified the payload by read-back across
-separate completed steps (fixture dir, 544 KB log, process identity,
-fail-closed behavior), then SIGTERM'd pid 81393 at eval time per the
-verify-then-kill doctrine — the instance was operational, not
-evidentiary (log and fixture dir persist). **Row filed: T254** —
-loopd.sh honors `LOOPD_MAX_LOOPS` (unset = infinite, production
-byte-identical), every loopd fixture harness exports a generous bound,
-RED-proven exit test. First row filed in twelve evals: the zero-row
-streak ends at 11 because a real, evidenced defect finally surfaced.
+### 2.2 Placeholder literalization fire ×1 (weighed → REJECTED, d1791358040-3)
 
-### 2.2 Absorbed tool errors (census — no rows)
+The cycle-168 orchestrator stream absorbed `grep:
+specs/tN-loopd-max-loops.md: No such file or directory` ×1 — the T210
+class (a literal `tN` typed into a command), at a bare read-only
+grep, not a delegate launch. Absorbed (grep miss → corrected
+re-grep). Corpus census via the digest: ~10 historical fires,
+overwhelmingly pre-T210 (cycle-94-era streams); first recent
+orchestrator-stream fire. The t254 impl child absorbed a second
+same-class fire (`/tmp/tN-commit-msg.txt` path-escape ×1). T210's
+pre-launch placeholder check covers delegate goals/cwd/spec args —
+the load-bearing surface; ad-hoc bash reads are outside it by design.
+**REJECTED** — single absorbed fires, class trending down. Re-fire
+trigger: a 2nd orchestrator-stream fire in one cycle, or any fire
+reaching a mutating command.
 
-The chain's three disposition streams plus the trip-10 stream absorbed
-four single-instance nonzeros, all known classes: cycle-166 a `git
-add` touching `.chug` (gitignore hint, self-corrected in-stream);
-cycle-167 a T242 gates-window liveness poll's informational nonzero
-(the expected-done signal); trip-10 a `grep -c` zero-match exit-1
-("0\n0"); this stream zero so far. No class repeats across streams →
-no census trigger.
+### 2.3 Everything else absorbed, nothing repeated
+
+Arc streams otherwise clean: impl 3 single-instance absorbed tool
+errors (unmatched-quote heredoc ×1, a bounded-cap timeout ×1, the
+§2.2 path-escape ×1), validator 1 (`mN applied` informational), the
+orchestrator 2 more known-class single-instances (the `.chug`
+gitignore git-add hint — cycle-166 precedent, self-corrected — and a
+`total N` ls-output first-line read). Zero aborts, zero budget-lows,
+zero resumes across the arc. The LIVE_CTX editor's turn-0-removal
+proposal (§1) weighed-and-rejected as a row candidate (d1791358040-4):
+the rejection path IS the guard's designed verdict. The 10 stale
+hollow /tmp/chug-loop-* dirs re-verified hollow and left as the
+operator reclaim surface (d1791358040-5, never-automatic-clean rule).
 
 ## 3. Friction hot spots
 
-- **Inter-link overhead shifted +22s, uniformly.** This chain's four
-  links measured ~76–77s each (launch-to-launch minus stream wall) vs
-  the ~53–55s historical band held across six chains. The shift is
-  uniform, not jitter — consistent with fixed per-link cost growth
-  (eval-digest regeneration now walks 659 files / 598 KB; the repo and
-  target dirs grow). The T237 rungs logged exact (60/120/240/480), so
-  pacing semantics are intact; the overhead rides on top.
-  Weighed-and-rejected as a row (watch recorded): trips when per-link
-  overhead exceeds ~120s (2× the base rung) or grows chain-over-chain
-  for three consecutive chains.
-- **Trip-band drift watch CLOSED, mean-reverted.** The series stood
-  51-top→58→66 (slope +8, ~4–5 trips from the 2× trigger) at trips
-  8–9. Trip-10's actual: **41 iterations / 9m6s**
-  (events-20261007-052425.jsonl) — back IN-BAND below the 51 top, the
-  +8 slope broken. The watch's premise (monotonic drift) is
-  contradicted by measurement; closed with evidence, no row.
-- glm ceremony-burn / target-dir I/O stall standing watch: zero glm
-  children this chain (empty delta) — no new evidence, rides.
+- **Post-release launch-link anatomy (observation, not friction —
+  d1791358040-6 weighed-reject).** The cycle-168→169 link measured
+  ~4m36s goal-accept→launch (07:13:25→07:18:01) on a 60s rung:
+  pre-launch checks + eval-digest regen carrying a version-bump
+  rebuild (`Compiling chug v0.17.8 … 31.81s` — the v0.17.8 bump
+  staled the cached binary, by design the digest builds the shipped
+  binary) + judge-daemon probe + orphan-reaper page (64 rows, 17
+  unresolved skips). The T237 rung logged exact (60s); the overhead
+  rides on top. The cycle-168 eval's +22s uniform overhead-shift
+  watch RIDES — this link is not an empty-chain link, so no chain
+  evidence either way this cycle.
+- **glm ceremony-burn / target-dir I/O stall standing watch:** one
+  glm child this delta (t254 impl, 66 iters / 30m49s — ~2.1
+  iters/min, healthy; no stall signature) → no new evidence, rides.
+- **Estimate calibration (the META-META re-check):** T254 filed ~80 →
+  landed 187 all-in (2.3×, doctrine-comment + fixture-export density)
+  — inside the 1.5–3× feature/test band; no threshold edit.
 
 ## 4. Capability gaps — ROADMAP PULL
 
-Skipped, 24th consecutive. The top unworked roadmap item remains F13
-phase 2b (T208's measure-first distillation experiment — LANDED as a
-measured NO-GO with its GO precondition recorded on the done-row: ~3×
-records / held-out n≥60, rendered ~2,570 total). The corpus reads
-1,372 total / 329 raw outcome records / **301 joined labels — the
-NINTH consecutive zero-label-growth delta** (flat since before cycle
-160; +11 records this delta, all routing/triage classes). At ~11
-records per cycle of which ~0 are labels, the GO threshold stays out
-of reach and the pull stays gated on measurement, exactly as T208's
-done-row prescribes. No new capability finds this delta — the cycle's
-one finding (§2.1) is robustness, not capability.
+Skipped, 25th consecutive. The top unworked roadmap surface remains
+F13 phase 3 (routing wiring), gated on T208's done-row GO precondition
+(measured NO-GO: ~3× records / held-out n≥60, rendered ~2,570 total).
+The corpus reads **1,384 total / +13 this delta (12 cycle-168 + this
+cycle's routing) / 3 new outcome labels** — the zero-label-growth
+streak BROKE at 9 because a worked cycle mechanically adds labels
+(triage + routing + verdict all backfilled at the flip). At ~1.86×
+short of the GO threshold the pull stays gated on measurement,
+exactly as T208 prescribes; F16 stays parked on the same
+precondition. No new capability finds this delta — the cycle's one
+finding was robustness (T254), landed in-cycle.
 
 ## 5. Top 3 priorities
 
-1. **T254 (pri 3)** — the fixture-supervisor self-termination bound:
-   small, mechanical, closes the one live defect class this eval
-   surfaced. Work next cycle (solo arc — loopd.sh is on the
-   doctrine-items list — kimi validation REQUIRED).
-2. The inter-link-overhead watch (§3) — rides; no action unless the
-   trip condition fires.
-3. Nothing else — the queue otherwise stays empty; the cadence
-   question stays SETTLED (§7).
+1. Nothing filed — the queue is EMPTY (12th zero-row eval;
+   123/126/132/136/140/144/148/152/156/160/164 precedents). The one
+   live defect class the trip eval surfaced (T254) landed this delta.
+2. The §2.1/§2.2 watches (narrative drift, placeholder census) and
+   the §3 overhead-shift watch ride with their named re-fire
+   triggers.
+3. The F13 corpus accrues organically (~13 records/cycle, labels only
+   from worked cycles) — no forced filing; the T208 measurement
+   governs the pull.
 
 ## 6. README audit
 
-Structure unchanged since the last full audit: 1,109 lines, reading
-order Install → Quickstart → Runbooks → chat → autonomous run → forks
-→ plan → TUI → Tools → risk gate → hooks → permissions → MCP →
-Langfuse → specs → loopd → Development — the newcomer path holds.
-README's last content change is e1d7d46 (T237, the continuous-mode
-backoff clause): no accretion during the zero-row chain, no redundancy
-or staleness deltas against the current behavior surface (the
-delegate/wait_secs/tools sections match the shipped tools; quickstart
-commands unchanged and previously verified end-to-end). No docs row
+Structure and content unchanged since the cycle-168 audit: 1,109
+lines, reading order Install → Quickstart → Runbooks → chat →
+autonomous run → forks → plan → TUI → Tools → risk gate → hooks →
+permissions → MCP → Langfuse → specs → loopd → Development — the
+newcomer path holds. The delta is user-invisible (T254 is
+loopd-test-fixture hygiene; LOOPD_MAX_LOOPS is exported by fixture
+harnesses only, production never sets it) → no README change this
+cycle, no accretion, no redundancy or staleness deltas. Quickstart
+commands unchanged and previously verified end-to-end. No docs row
 filed.
-
-## 7. Cadence discharge — re-arm check (trip 11)
-
-The cycle-167 handoff carries the inheritance: trip 11 inherits the
-discharged re-arm check — no default re-weigh absent the named
-re-arms. Verified against this chain anyway: (a) unhealthy chain — NO
-(14/23/26 iters, 0 aborts, absorbed errors all known-class
-single-instance, TRUE=machine at every probe, rungs exact); (b) trip
-cost >2× — NO (trip-10 actual 41 iters/9m6s IN-BAND; trip-11 trending
-in-band at drafting time); (c) operator ask — NO. → discharged by
-inheritance verification; the cadence question stays SETTLED per the
-cycle-152 conditional discharge. Trip 12 re-arms at ~cycle 172 on the
-TRUE count.
 
 ## Handoff
 
-- **To the next cycle (SELF/META fan-out):** T254 (spec
-  `specs/t254-loopd-fixture-max-loops.md`) — solo arc, glm implements,
-  kimi validates (loopd.sh is a doctrine item → REQUIRED), then
-  merge/flip/push per the standing arc.
+- **To the next cycle:** queue EMPTY + this eval commit + the
+  wrap-notes commit = the delta since THIS eval is bookkeeping-only
+  by construction (zero children, zero items — unless the operator
+  lands work mid-cycle) → the T247 clause authorizes the FIRST
+  disposition of a NEW chain at TRUE 0→1 next cycle (kimi routed on
+  the queue-empty predicate regardless), "3 empties away" handed
+  forward, the trip re-arming at 4 (~cycle 173 on the TRUE count —
+  count, don't add). Any operator-landed work mid-chain breaks the
+  bookkeeping-only delta and forces a fresh eval instead (the T247
+  letter).
 - **Human-decision items:** none.
-- Queue at handoff: ONE todo row (T254) + EVALUATION.md fresh (same
-  UTC day) → the freshness predicate holds on both halves next cycle
-  (todo rows present AND eval fresh) → loopd routes the routine model
-  per T81 and Phase 1 skips straight to Phase 2 to work T254. The
-  T237 chain resets with this real-eval wrap (TRUE streak 0 handed
-  forward).
+- Cadence question: SETTLED per the cycle-152 conditional discharge
+  (trip 11 discharged the re-arm check; no default re-weigh absent
+  the named re-arms).
+- Decision records this eval: routing d1791357761-1 + 5 weighed-reject
+  triage (d1791358039-2, d1791358040-3/-4/-5/-6), zero filed — all
+  out-of-backfill-scope classes.
+
 ## Outcomes (filled at cycle wrap — LOOP-SPEC Phase 3)
 
 ### Cycle 168 (2026-10-07, ~06:00 UTC–) — TRIP-eval cycle (T247 valve's ELEVENTH live trip; kimi, queue-empty predicate) + T254 LANDED (first row filed AND worked in 12 evals)
