@@ -1,6 +1,6 @@
 # T263 — loopd `laya_backfill` must mint a FRESH id for the outcome record (never the triage id)
 
-check: cd "$(git rev-parse --show-toplevel)" && export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared && touch src/*.rs tests/*.rs && cargo test --release --test loopd_laya_triage
+check: cd "$(git rev-parse --show-toplevel)" && export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-validate-a && touch src/*.rs tests/*.rs && cargo test --release --test loopd_laya_triage
 
 ## Repo context
 
