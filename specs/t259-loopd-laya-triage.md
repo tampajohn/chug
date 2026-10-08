@@ -1,6 +1,6 @@
 # T259 — loopd Laya triage: the judge daemon gates non-trip eval launches
 
-check: cargo test
+check: cd "$(git rev-parse --show-toplevel)" && export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared && touch src/*.rs tests/*.rs && cargo test --release
 
 estimate: ~350 lines (triage call + state-pack + thresholds + records + pins)
 
