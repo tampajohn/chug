@@ -183,6 +183,154 @@ ok_sleep_seconds() {
   echo "$s"
 }
 
+# T258 — the eval-cycle gate: the disposition predicate, computed by the
+# supervisor BEFORE any launch so an empty delta costs zero LLM calls. The
+# T247 chain rule decides when a skipped-eval chain must STOP (the valve);
+# this gate decides whether a would-be eval cycle needs to LAUNCH at all.
+# Four mechanical inputs, every one supervisor-computed (the T237 streak
+# and the T247 valve read the same git/loopd.log record — never an LLM's
+# say-so):
+#   new rows — TODO.md row ids gained since the baseline commit (the newest
+#              commit touching EVALUATION.md: the last examination of loop
+#              state, a real eval or a disposition alike — both examined);
+#   deaths   — cycles that ended WITHOUT goal complete in loopd.log after
+#              the baseline commit time: the child runs THIS supervisor
+#              owns, the one death record loopd holds without an LLM;
+#   delta    — bookkeeping-only since the baseline: every commit an `eval:`
+#              commit AND the endpoint diff touching nothing outside the
+#              bookkeeping pair {EVALUATION.md, TODO.md};
+#   fresh    — EVALUATION.md fresh (same UTC day), the eval_fresh input the
+#              T81 routing already reads.
+# THE SAFE-SIDE RULE: the skip is the only decision that requires PROOF —
+# every unknown (a non-git cwd, a missing baseline, a failed git probe)
+# degrades to a launch, never to a skip. The gate can only ever add
+# launches over the T81 routing, never suppress evidence from a real eval.
+last_eval_commit() { # newest commit touching EVALUATION.md; empty = unknown
+  git log -1 --format=%H -- EVALUATION.md 2>/dev/null || true
+}
+new_todo_rows() { # TODO.md row ids present now, absent from the $1 baseline
+  local base=$1 rc=0
+  [ -n "$base" ] || { echo 0; return 0; }
+  [ -f TODO.md ] || { echo 0; return 0; }
+  git show "$base:TODO.md" > "$STATE/predicate-baseline-TODO.md" 2>/dev/null || rc=$?
+  if [ "$rc" -ne 0 ]; then echo 0; return 0; fi
+  # (a TODO.md absent at the baseline degrades to 0 here; the bookkeeping
+  # leg catches that shape anyway — the commits that added the file are
+  # not `eval:` commits, so the delta reads dirty and the cycle launches.)
+  awk -F'|' '
+    NR == FNR {
+      id = $2; gsub(/[ \t]/, "", id)
+      if (id ~ /^T[0-9]+$/) seen[id] = 1
+      next
+    }
+    {
+      id = $2; gsub(/[ \t]/, "", id)
+      if (id ~ /^T[0-9]+$/ && !(id in seen)) n++
+    }
+    END { print n + 0 }
+  ' "$STATE/predicate-baseline-TODO.md" TODO.md
+}
+cycle_deaths() { # dead cycles in loopd.log strictly after the $1 baseline time
+  local base=$1 epoch="" since=""
+  if [ -n "$base" ]; then
+    epoch=$(git log -1 --format=%ct "$base" 2>/dev/null) || epoch=""
+  fi
+  if [ -n "$epoch" ]; then
+    # the log stamps UTC (date -u); the commit epoch converts the same way
+    # (the eval_fresh dual-form pattern: BSD -r, GNU -d @)
+    since=$(date -u -r "$epoch" +%Y-%m-%dT%H:%M:%S 2>/dev/null \
+      || date -u -d "@$epoch" +%Y-%m-%dT%H:%M:%S 2>/dev/null \
+      || true)
+  fi
+  [ -f "$LOG" ] || { echo 0; return 0; }
+  if [ -n "$since" ]; then
+    # same-second reads as a death (>=): the dangerous direction is the
+    # false-negative skip over a real death, never the phantom launch
+    awk -v since="$since" '
+      /cycle ended WITHOUT goal complete/ {
+        if (substr($1, 1, 19) >= since) n++
+      }
+      END { print n + 0 }
+    ' "$LOG"
+  else
+    # no comparable baseline time: count every recorded death — an unknown
+    # window never reads as quiet (the safe-side rule)
+    awk '/cycle ended WITHOUT goal complete/ { n++ } END { print n + 0 }' "$LOG"
+  fi
+}
+delta_bookkeeping_only() { # every commit since the $1 baseline is eval-bookkeeping
+  local base=$1 rc=0 subjects files f
+  if [ -z "$base" ]; then return 1; fi
+  subjects=$(git log --format=%s "$base..HEAD" 2>/dev/null) || rc=$?
+  if [ "$rc" -ne 0 ]; then return 1; fi
+  # T137 de-pipelined shape: captured above, then walked — no
+  # printf-to-grep pipe whose writer leg could SIGPIPE-flip under pipefail.
+  if [ -n "$subjects" ]; then
+    while IFS= read -r f; do
+      case "$f" in eval:*) ;; *) return 1 ;; esac
+    done <<EOF
+$subjects
+EOF
+  fi
+  files=$(git diff --name-only "$base" HEAD 2>/dev/null) || rc=$?
+  if [ "$rc" -ne 0 ]; then return 1; fi
+  if [ -n "$files" ]; then
+    while IFS= read -r f; do
+      case "$f" in EVALUATION.md|TODO.md) ;; *) return 1 ;; esac
+    done <<EOF
+$files
+EOF
+  fi
+  return 0
+}
+eval_gate() { # the T258 decision for a would-be eval cycle, one line:
+  #   skip <fields>            — the cheap exit: launch skipped, loopd
+  #                              writes the disposition itself (no LLM)
+  #   launch <glm|kimi> <fields>
+  # fields: rows= new= deaths= bookkeeping= fresh= base= streak=
+  local base new deaths book fresh streak verb model
+  base=$(last_eval_commit)
+  new=$(new_todo_rows "$base")
+  deaths=$(cycle_deaths "$base")
+  if delta_bookkeeping_only "$base"; then book=yes; else book=no; fi
+  if eval_fresh EVALUATION.md; then fresh=yes; else fresh=no; fi
+  streak=$(empty_wrap_streak)
+  # the valve FIRST (T247): the 4th consecutive empty cycle runs the real
+  # evaluation whatever the delta says — the chain converts itself
+  if [ "$streak" -ge 3 ]; then
+    verb=launch; model=kimi
+  elif [ "$new" -eq 0 ] && [ "$deaths" -eq 0 ] && [ "$book" = yes ] && [ "$fresh" = yes ]; then
+    verb=skip; model=-
+  elif [ "$book" = yes ] && [ "$fresh" = yes ]; then
+    # borderline (T258 req 2): non-empty only through deaths or new rows,
+    # over a bookkeeping-only delta with a fresh evaluation — the cheap
+    # model runs the bounded eval; the corpus is unchanged and today's
+    # evaluation already current, so no fresh-evaluation judgment is due
+    verb=launch; model=glm
+  else
+    # a non-bookkeeping delta (source/spec/doctrine work landed) or a
+    # stale evaluation: the fresh-evaluation boundary stays kimi (T81)
+    verb=launch; model=kimi
+  fi
+  echo "$verb $model rows=$(todo_rows TODO.md) new=$new deaths=$deaths bookkeeping=$book fresh=$fresh base=${base:-none} streak=$streak"
+}
+loopd_write_disposition() { # T258 — the supervisor writes the one-line
+  # disposition ITSELF (the cheap exit, no LLM): an empty commit whose
+  # subject carries the T237 token (so the streak walk and the valve count
+  # it), the TRUE streak handoff, and the gate's input fields. The token is
+  # assembled from halves so this source keeps EXACTLY ONE contiguous
+  # occurrence of it (the awk needle — a second literal in this template
+  # would mask a needle-removal mutant under the T237 count pin).
+  local t1="empty-delta" t2="disposition" streak snext fields rc=0
+  # strip "skip - " (the verb + the no-model placeholder) — the fields line
+  # in the subject starts at the predicate inputs
+  fields=${1#skip - }
+  streak=$(empty_wrap_streak)
+  snext=$((streak + 1))
+  git commit --allow-empty -m "eval: loopd cheap-exit ${t1} ${t2} (T258 mechanical: predicate empty, launch skipped) — TRUE streak ${streak}→${snext}; ${fields}; next cycle re-checks, the T247 valve still binds on the TRUE count" >/dev/null 2>&1 || rc=$?
+  return "$rc"
+}
+
 case "${1:-run}" in
   stop)
     touch "$STOP"
@@ -204,6 +352,18 @@ case "${1:-run}" in
     # for the empty-delta backoff; tests/loopd_empty_backoff.rs runs
     # this mode against fixture git repos).
     echo "$(ok_sleep_seconds) $(empty_wrap_streak)"
+    exit 0
+    ;;
+  predicate)
+    # T258: print the eval-cycle gate decision for a WOULD-BE eval cycle,
+    # launching nothing and writing nothing — the routing/sleep-ok probe
+    # pattern and the operator's + tests' behavioral surface for the
+    # cheap exit (req 5): "<verb> <model> rows=... new=... deaths=...
+    # bookkeeping=... fresh=... base=... streak=...". skip = the launch
+    # is skipped and loopd writes the disposition itself; launch names
+    # the routed orchestrator model. Meaningful in eval mode (the T81
+    # routing decided eval); routine cycles never reach the gate.
+    eval_gate
     exit 0
     ;;
   status)
@@ -233,7 +393,7 @@ case "${1:-run}" in
     exit 0
     ;;
   run) ;;
-  *) echo "usage: loopd.sh [run|stop|status|routing] [sleep-ok]" >&2; exit 2 ;;
+  *) echo "usage: loopd.sh [run|stop|status|routing] [sleep-ok] [predicate]" >&2; exit 2 ;;
 esac
 
 # T50: same-pid pass. `exec` preserves the pid, so a re-exec'd self finds its
@@ -558,9 +718,39 @@ while [ ! -f "$STOP" ]; do
   # mode, the mode picks the orchestrator model. Logged to loopd.log so it
   # always explains a model change (the T50 re-exec-log rule) and echoed as
   # the cycle log's first line, so every cycle record names who ran it.
+  # T258: in eval mode the gate below may re-route the model (borderline
+  # non-trip evals to glm) or skip the launch entirely (the cheap exit), so
+  # the routing line is logged AFTER the gate and names the FINAL model.
   routing="$(route TODO.md EVALUATION.md)"
   mode=${routing%% *}
   orch_model=${routing#* }
+  if [ "$mode" = eval ]; then
+    gate="$(eval_gate)"
+    gate_verb=${gate%% *}
+    gate_rest=${gate#* }
+    gate_model=${gate_rest%% *}
+    if [ "$gate_verb" = skip ]; then
+      echo "$(ts) cheap-exit disposition (T258): ${gate#skip } — launch skipped" >> "$LOG"
+      if loopd_write_disposition "$gate"; then
+        fails=0
+        skip_secs=$(ok_sleep_seconds)
+        echo "$(ts) cheap-exit pacing: sleeping ${skip_secs}s (empty streak $(empty_wrap_streak))" >> "$LOG"
+        sleep "$skip_secs"
+        continue
+      fi
+      # The disposition commit failed (identity, hook, read-only fs) — the
+      # safe side is the launch: a skip whose git record never landed would
+      # be invisible to the T237 streak walk and the T247 valve, and the
+      # chain would cheap-exit forever unpaced.
+      echo "$(ts) cheap-exit disposition commit FAILED — falling through to a real $LOOP_ORCH_MODEL eval" >> "$LOG"
+      orch_model=$LOOP_ORCH_MODEL
+    elif [ "$gate_model" != kimi ]; then
+      # the borderline re-route (req 2): launch glm — explained here, the
+      # routing line below names the final model (the T50 log rule)
+      echo "$(ts) eval gate (T258): ${gate#launch } -> $gate_model orchestrator" >> "$LOG"
+      orch_model=$gate_model
+    fi
+  fi
   echo "$(ts) routing: todo_rows=$(todo_rows TODO.md) eval_fresh=$(eval_fresh EVALUATION.md && echo yes || echo no) -> $mode cycle on $orch_model" >> "$LOG"
   echo "$(ts) cycle start -> $cycle_log ($mode cycle, orchestrator $orch_model)" >> "$LOG"
   echo "[loopd $(ts)] T81 routing: $mode cycle — orchestrator model $orch_model" > "$cycle_log"

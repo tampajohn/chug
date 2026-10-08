@@ -67,6 +67,33 @@ consequence-free for the backoff (a bounded over-sleep, self-correcting;
 adjudication d1791277274-2), but the trip threshold reads the TRUE count
 only.
 
+**The cheap exit (T258).** The same predicate is mechanical, and the
+supervisor computes it BEFORE any launch: no new TODO rows since the
+last evaluation, no child deaths since the last evaluation, a
+bookkeeping-only delta since the last evaluation (every commit an
+`eval:` commit touching nothing outside EVALUATION.md and TODO.md), and
+EVALUATION.md fresh (same UTC day). When all four hold and the valve
+has not tripped, `loopd.sh` writes the one-line disposition itself — an
+empty commit whose subject carries the T237 token, the TRUE streak, and
+the predicate inputs — and skips the cycle launch entirely: no LLM
+call. Who may write the disposition: the supervisor, mechanically, on
+an empty predicate (this rule), or the orchestrator under the chain
+rule above — never a third path. Any single non-empty input forces the
+launch instead, and the valve still converts the 4th consecutive empty
+cycle into the real evaluation. A launched non-trip eval routes by the
+delta, never by judgment: non-empty only through deaths or new rows,
+over a bookkeeping-only delta with a fresh evaluation, is borderline
+and launches `LOOP_ROUTINE_MODEL` (glm) for a bounded evaluation — the
+one carved exception to the glm-never-evaluates boundary above, safe
+because the evaluation is already fresh and the corpus unchanged. kimi
+keeps everything else: any non-bookkeeping delta (source, spec, or
+doctrine work landed), a stale EVALUATION.md (the fresh evaluation
+itself), every valve trip, and all validation (family independence
+unchanged). The supervisor's disposition line records the predicate
+inputs (row count, last-change hash, freshness) in loopd.log — the
+streak math (T237) and the valve (T247) read the same git/loopd.log
+record, never an LLM's say-so.
+
 Commit the evaluation artifacts (`eval: ...`) before
 dispatching.
 

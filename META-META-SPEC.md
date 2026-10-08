@@ -7,6 +7,18 @@ prompt-generator for the self-improvement loop.
 
 check: test -f EVALUATION.md && grep -q "specs/t" TODO.md
 
+**When the full checklist applies (T258).** This spec is the FULL
+evaluation, and it is not free: the loop's cheap exit (LOOP-SPEC
+Phase 1) skips the launch entirely when the mechanical disposition
+predicate is empty — no new TODO rows, no child deaths, a
+bookkeeping-only delta since the last evaluation, EVALUATION.md fresh —
+so a quiet cycle never reaches this spec at all. The full checklist
+below applies only when that predicate is non-empty or the T247 valve
+trips the real evaluation. A borderline non-trip eval (non-empty only
+through deaths or new rows, over a bookkeeping-only delta, evaluation
+fresh) re-runs this checklist on glm against an unchanged corpus;
+source/spec/doctrine deltas and stale evaluations stay kimi (T81).
+
 ## Read first (the evaluation corpus)
 
 1. `.chug/eval-digest.md` FIRST — the mechanical pre-digest of this corpus
