@@ -59,13 +59,49 @@ not self-sustaining — the valve: after ~3 consecutive empty-delta
 dispositions, the next (4th) empty cycle RUNS the real evaluation; the
 chain converts itself into its own evaluation at the trip point (cycles
 113 and 122, the two on-schedule trips). The trip binds on the TRUE
-streak, HUMAN-counted from the wrap-notes chain, NEVER on loopd's
-machine streak: the machine walk substring-matches the token in `eval:`
-subjects and counts NEGATED mentions too (the cycle-118 false positive —
-machine read 4 vs TRUE 3 at the cycle-122 trip). That divergence is
-consequence-free for the backoff (a bounded over-sleep, self-correcting;
-adjudication d1791277274-2), but the trip threshold reads the TRUE count
-only.
+streak, HUMAN-counted from the wrap-notes chain — and since T258 the
+count authority is scoped by who acts. The supervisor's gate and its
+valve read the machine streak (`empty_wrap_streak`, loopd's git walk):
+every supervisor-written disposition carries the token by construction
+and pin, and the Phase-3 quote discipline keeps orchestrator-written
+mentions clean, so machine == TRUE on any disciplined chain — the
+mechanical trip is an authorized reading of the TRUE count. The
+HUMAN-counted rule stays binding for orchestrator-side chain
+adjudication and for contested divergences: the machine walk
+substring-matches the token in `eval:` subjects and counts NEGATED
+mentions too (the cycle-118 false positive — machine read 4 vs TRUE 3 at
+the cycle-122 trip), and an orchestrator who finds such a divergence
+adjudicates the chain by hand and records the correction while the
+divergence stays consequence-free for the backoff (a bounded
+over-sleep, self-correcting; adjudication d1791277274-2) — but the
+supervisor's valve still trips on its own mechanical record.
+
+**The cheap exit (T258).** The same predicate is mechanical, and the
+supervisor computes it BEFORE any launch: no new TODO rows since the
+last evaluation, no child deaths since the last evaluation, a
+bookkeeping-only delta since the last evaluation (every commit an
+`eval:` commit touching nothing outside EVALUATION.md and TODO.md), and
+EVALUATION.md fresh (same UTC day). When all four hold and the valve
+has not tripped, `loopd.sh` writes the one-line disposition itself — an
+empty commit whose subject carries the T237 token, the TRUE streak, and
+the predicate inputs — and skips the cycle launch entirely: no LLM
+call. Who may write the disposition: the supervisor, mechanically, on
+an empty predicate (this rule), or the orchestrator under the chain
+rule above — never a third path. Any single non-empty input forces the
+launch instead, and the valve still converts the 4th consecutive empty
+cycle into the real evaluation. A launched non-trip eval routes by the
+delta, never by judgment: non-empty only through deaths or new rows,
+over a bookkeeping-only delta with a fresh evaluation, is borderline
+and launches `LOOP_ROUTINE_MODEL` (glm) for a bounded evaluation — the
+one carved exception to the glm-never-evaluates boundary above, safe
+because the evaluation is already fresh and the corpus unchanged. kimi
+keeps everything else: any non-bookkeeping delta (source, spec, or
+doctrine work landed), a stale EVALUATION.md (the fresh evaluation
+itself), every valve trip, and all validation (family independence
+unchanged). The supervisor's disposition line records the predicate
+inputs (row count, last-change hash, freshness) in loopd.log — the
+streak math (T237) and the valve (T247) read the same git/loopd.log
+record, never an LLM's say-so.
 
 Commit the evaluation artifacts (`eval: ...`) before
 dispatching.
