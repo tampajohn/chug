@@ -387,6 +387,73 @@ fn fixture_decisions(f: &Fixture) -> Vec<String> {
     }
 }
 
+// --- T263 helpers: record-field parse, id convention, frozen clock ------------
+
+/// The value of one TOP-LEVEL string field in a decision record line. The
+/// writer's jq object order (id, ts, class, subject, inputs, options,
+/// choice, confidence) puts every top-level field BEFORE the free-text
+/// inputs, so the first occurrence of `"key":"` is the record's own field,
+/// never an escaped copy inside the state pack (those carry `\"`).
+fn record_field(line: &str, key: &str) -> Option<String> {
+    let needle = format!("\"{key}\":\"");
+    line.split(&needle)
+        .nth(1)
+        .and_then(|s| s.split('"').next())
+        .map(String::from)
+}
+
+/// The `^d[0-9]+-loopd[0-9]+$` id convention both corpus writers mint off
+/// the shared LAYA_SEQ counter — checked shape-wise, no regex dependency.
+fn is_loopd_minted_id(id: &str) -> bool {
+    match id.strip_prefix('d').and_then(|rest| rest.split_once("-loopd")) {
+        Some((epoch, seq)) => {
+            !epoch.is_empty()
+                && !seq.is_empty()
+                && epoch.bytes().all(|b| b.is_ascii_digit())
+                && seq.bytes().all(|b| b.is_ascii_digit())
+        }
+        None => false,
+    }
+}
+
+/// Pin `date -u +%s` — the corpus writers' epoch source — to a FIXED epoch
+/// for the fixture: a stub `date` ahead of PATH that passes everything else
+/// through to /bin/date. With the clock frozen, the id a fresh supervisor
+/// process mints is fully determined (`d<epoch>-loopd<SEQ>`, LAYA_SEQ
+/// starting at 0 each run — the documented per-run uniqueness seam), so the
+/// tripwire leg can FORCE the id==subject shape instead of racing the real
+/// clock across a process boundary.
+fn pin_fake_clock(f: &Fixture, epoch: u64) {
+    let bin = f.path().join("bin");
+    std::fs::create_dir_all(&bin).expect("fixture stub bin dir");
+    write_exec(
+        &bin.join("date"),
+        &format!(
+            "#!/bin/sh\nif [ \"$2\" = \"+%s\" ]; then\n  echo {epoch}\nelse\n  exec /bin/date \"$@\"\nfi\n"
+        ),
+    );
+}
+
+fn ids_of(decisions: &[String]) -> Vec<String> {
+    decisions.iter().filter_map(|d| record_field(d, "id")).collect()
+}
+
+/// Every id in the written corpus is distinct — the duplicate-id audit
+/// count stays at zero for anything this supervisor writes.
+fn assert_ids_unique(decisions: &[String]) {
+    let ids = ids_of(decisions);
+    assert_eq!(
+        ids.len(),
+        decisions.len(),
+        "every record carries an id: {decisions:?}"
+    );
+    for (i, a) in ids.iter().enumerate() {
+        for b in ids.iter().skip(i + 1) {
+            assert_ne!(a, b, "duplicate id {a} in the written corpus: {decisions:?}");
+        }
+    }
+}
+
 // --- req 2: the confidence-gated cascade routes the borderline eval -----------
 
 /// Confident-empty (no, 0.93 >= 0.85): the borderline eval SKIPS and the
@@ -1298,4 +1365,176 @@ fn a_trip_cancel_records_valve_tripped_yes_in_the_record() {
         "the state pack's valve leg reads yes on a trip (streak 3): {}",
         decisions[0]
     );
+}
+
+// --- T263: the outcome record mints its OWN id, never the triage id -----------
+
+/// T263 req 1 + req 4a: the outcome backfill's OWN id is a FRESH mint —
+/// the triage writer's exact convention (d<epoch>-loopd<SEQ>, the shared
+/// LAYA_SEQ counter) — and the parked triage id stays the record's
+/// SUBJECT. Two consecutive triaged cycles: the corpus holds triage₁ (id
+/// X), the outcome naming X as its subject, and triage₂ — and the
+/// outcome's id differs from X and from EVERY other id in the written
+/// corpus. The pre-fix writer passed the triage id as the outcome's own
+/// id (arg 1 AND arg 4): a duplicate id and a self-subject record,
+/// malformed on its face — measured on the live corpus as duplicate ids
+/// 0→1 and malformed chain 1→3. RED-PROOF LEG: this test fails against
+/// the pre-fix loopd.sh (the duplicate id) and passes on the fixed one.
+#[test]
+fn an_outcome_record_mints_its_own_id_never_the_parked_triage_id() {
+    let f = borderline_fixture();
+    let sock = f.path().join(".chug/daemon.sock");
+    serve_judge(&sock, judge_answer("no", 0.93));
+    // Pass 1: the triaged skip parks triage id X.
+    let out = run_one_pass(&f, &sock);
+    assert!(
+        out.status.success(),
+        "pass 1 exits clean: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let decisions = fixture_decisions(&f);
+    assert_eq!(decisions.len(), 1, "pass 1 recorded its triage: {decisions:?}");
+    let x_id = record_field(&decisions[0], "id").expect("the triage record has an id");
+
+    // Pass 2: the gate triages again (the delta is still borderline — the
+    // production quiet-day rhythm) and the parked X gets its outcome
+    // backfill before triage₂ lands. Corpus order: triage₁, outcome₁,
+    // triage₂.
+    let out = run_one_pass(&f, &sock);
+    assert!(
+        out.status.success(),
+        "pass 2 exits clean: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let decisions = fixture_decisions(&f);
+    assert_eq!(decisions.len(), 3, "triage₁, outcome₁, triage₂: {decisions:?}");
+    assert!(
+        decisions[1].contains("\"class\":\"outcome\""),
+        "the middle record is the outcome: {}",
+        decisions[1]
+    );
+    assert_eq!(
+        record_field(&decisions[1], "subject").as_deref(),
+        Some(x_id.as_str()),
+        "the outcome's subject is STILL the parked triage id: {}",
+        decisions[1]
+    );
+    let o_id = record_field(&decisions[1], "id").expect("the outcome record has an id");
+    assert_ne!(
+        o_id, x_id,
+        "the outcome's OWN id is never the triage id it backfills: {decisions:?}"
+    );
+    assert_ids_unique(&decisions);
+}
+
+/// T263 req 2 + req 4b: the self-subject tripwire. With the clock frozen,
+/// a fresh supervisor run mints the SAME id the previous run's triage
+/// parked (`d<epoch>-loopd1` both times — LAYA_SEQ restarts at 0 per run,
+/// the documented per-run uniqueness seam): the id==subject shape exactly,
+/// forced deterministically instead of raced. The real end-to-end backfill
+/// must log ONE WARN line to loopd.log naming the id and SKIP the corpus
+/// write — the write stays best-effort, never blocking the cycle — and the
+/// park is still consumed exactly once (the rm flow untouched): triage₂
+/// proceeds and re-parks its own (different) id. RED pre-fix: the writer
+/// happily wrote the duplicate instead of warning.
+#[test]
+fn a_self_subject_backfill_warns_and_writes_nothing() {
+    let f = borderline_fixture();
+    pin_fake_clock(&f, FRESH_EPOCH);
+    let sock = f.path().join(".chug/daemon.sock");
+    serve_judge(&sock, judge_answer("no", 0.93));
+    // Pass 1: the triage mints d<epoch>-loopd1 and parks it.
+    let out = run_one_pass(&f, &sock);
+    assert!(
+        out.status.success(),
+        "pass 1 exits clean: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let decisions = fixture_decisions(&f);
+    assert_eq!(decisions.len(), 1, "pass 1 recorded its triage: {decisions:?}");
+    let x_id = record_field(&decisions[0], "id").expect("the triage record has an id");
+    assert_eq!(
+        x_id,
+        format!("d{FRESH_EPOCH}-loopd1"),
+        "the frozen clock pins the mint: {x_id}"
+    );
+    assert!(
+        f.path().join(".chug/loopd/triage-pending.json").exists(),
+        "X is parked for the next look"
+    );
+
+    // Pass 2: the backfill's own mint lands on d<epoch>-loopd1 — the
+    // parked id exactly. The tripwire warns and skips; the cycle still
+    // completes and triage₂ mints the NEXT sequence value.
+    let out = run_one_pass(&f, &sock);
+    assert!(
+        out.status.success(),
+        "pass 2 exits clean (the corpus write never blocks the cycle): {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let log = fixture_log(&f);
+    assert_eq!(
+        log.matches(&format!("WARN outcome id == subject ({x_id})")).count(),
+        1,
+        "ONE WARN line naming the colliding id: {log}"
+    );
+    let decisions = fixture_decisions(&f);
+    assert_eq!(decisions.len(), 2, "triage₁ and triage₂, NO outcome record: {decisions:?}");
+    assert!(
+        !decisions.iter().any(|d| d.contains("\"class\":\"outcome\"")),
+        "the self-subject write was SKIPPED — no outcome line in the corpus: {decisions:?}"
+    );
+    assert_ids_unique(&decisions);
+    // The park was consumed exactly once even on the skipped look: triage₂
+    // re-parked its own id (never X's — X can never double-backfill).
+    assert!(
+        f.path().join(".chug/loopd/triage-pending.json").exists(),
+        "the skipped look still consumed X's park and triage₂ re-parked its own id"
+    );
+    let parked =
+        std::fs::read_to_string(f.path().join(".chug/loopd/triage-pending.json"))
+            .expect("read the parked record");
+    let triage2_id = record_field(&decisions[1], "id").expect("triage₂ has an id");
+    assert!(
+        parked.contains(&triage2_id),
+        "the surviving park names triage₂, not the skipped X: {parked}"
+    );
+}
+
+/// T263 req 4c: the minted outcome id follows the SAME convention as the
+/// triage ids — `^d[0-9]+-loopd[0-9]+$`, minted off the shared LAYA_SEQ
+/// counter — so the corpus stays one id shape and the audit's id→class map
+/// stays well-formed. Every id in a two-cycle corpus (triage₁, outcome₁,
+/// triage₂) is checked.
+#[test]
+fn the_minted_outcome_id_follows_the_triage_id_convention() {
+    let f = borderline_fixture();
+    let sock = f.path().join(".chug/daemon.sock");
+    serve_judge(&sock, judge_answer("no", 0.93));
+    let out = run_one_pass(&f, &sock);
+    assert!(
+        out.status.success(),
+        "pass 1 exits clean: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let out = run_one_pass(&f, &sock);
+    assert!(
+        out.status.success(),
+        "pass 2 exits clean: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let decisions = fixture_decisions(&f);
+    assert_eq!(decisions.len(), 3, "triage₁, outcome₁, triage₂: {decisions:?}");
+    assert!(
+        decisions[1].contains("\"class\":\"outcome\""),
+        "the middle record is the outcome whose minted id is under test: {}",
+        decisions[1]
+    );
+    for d in &decisions {
+        let id = record_field(d, "id").unwrap_or_default();
+        assert!(
+            is_loopd_minted_id(&id),
+            "every minted id matches ^d[0-9]+-loopd[0-9]+$: {id:?} in {d}"
+        );
+    }
 }

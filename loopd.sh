@@ -403,13 +403,21 @@ laya_backfill() { # $1 = the parked pending record, $2 = THIS cycle's gate
   # evaluation landed the artifacts (the baseline moved) and did not when
   # the next look still finds the baseline unchanged. `reverted` is never
   # emitted: the supervisor has no revert path.
+  # T263 — the outcome record mints its OWN id, the triage writer's exact
+  # convention (d<epoch>-loopd<SEQ> off the shared LAYA_SEQ counter), and
+  # carries the parked triage id as its SUBJECT only. The pre-fix writer
+  # passed the triage id as the outcome's own id too: the corpus then held
+  # a laya-triage and an outcome with the SAME id, the outcome's subject
+  # naming itself (duplicate ids + a malformed chain, measured on the live
+  # corpus) — the id collision secondarily mis-flagged correctly-targeted
+  # outcomes through the audit's last-wins id→class map.
   # ONE outcome per triage id, ever: the pending park is consumed exactly
   # once (the rm in laya_record, right after this backfill) — a look that
   # backfills but parks nothing (a mechanical skip, a fail-open) leaves no
   # stale record behind, so no later look can ever double-backfill the same
   # id (pinned by a_pending_surviving_an_intervening_non_triage_cycle_
   # backfills_exactly_once).
-  local pend=$1 gate=$2 id route pbase cur_base cur_book choice what
+  local pend=$1 gate=$2 id out_id now route pbase cur_base cur_book choice what
   id=$(jq -r '.id // ""' "$pend" 2>/dev/null) || id=""
   if [ -z "$id" ]; then
     echo "$(ts) laya triage (T259): unreadable pending record — backfill skipped" >> "$LOG"
@@ -432,10 +440,23 @@ laya_backfill() { # $1 = the parked pending record, $2 = THIS cycle's gate
       choice="fixed-up"; what="no evaluation artifacts since the launch (the baseline is unchanged)"
     fi
   fi
-  if laya_record_write "$id" "$(date -u +%s)" "outcome" "$id" \
+  now=$(date -u +%s)
+  LAYA_SEQ=$((LAYA_SEQ + 1))
+  out_id="d${now}-loopd${LAYA_SEQ}"
+  # T263 self-subject tripwire: should the id about to be written ever
+  # equal its subject again (a future regression of this exact class), log
+  # ONE WARN naming the collision and skip the write — the corpus write
+  # stays best-effort and never blocks the cycle. The sequence counter has
+  # already advanced (the skipped mint still consumed it), so the cycle's
+  # own triage id below can never collide with anything already written.
+  if [ "$out_id" = "$id" ]; then
+    echo "$(ts) laya triage (T259): WARN outcome id == subject ($out_id) — record write SKIPPED" >> "$LOG"
+    return 0
+  fi
+  if laya_record_write "$out_id" "$now" "outcome" "$id" \
       "what the loop found when it looked: $what; bookkeeping=$cur_book base=${cur_base:-none}" \
       "landed-clean | fixed-up | reverted" "$choice" 1; then
-    echo "$(ts) laya triage (T259): outcome backfill $id -> $choice ($what)" >> "$LOG"
+    echo "$(ts) laya triage (T259): outcome backfill $id -> $choice ($what) [outcome id $out_id]" >> "$LOG"
   else
     echo "$(ts) laya triage (T259): outcome backfill write FAILED — continuing" >> "$LOG"
   fi
@@ -733,7 +754,9 @@ loopd_write_disposition() { # T258 — the supervisor writes the one-line
 # T259 — the triage layer's per-run state: the record-sequence suffix
 # (ids stay unique per supervisor run) and the quiet flag (the predicate
 # probe sets it — the probe writes nothing; run mode leaves it empty so
-# each cycle notes its one triage line).
+# each cycle notes its one triage line). T263: the outcome backfill mints
+# from the SAME counter, so the outcome's own id and the triage id it
+# names as subject can never collide.
 LAYA_SEQ=0
 LAYA_TRIAGE_QUIET=""
 
