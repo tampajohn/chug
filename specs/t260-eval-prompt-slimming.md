@@ -1,6 +1,6 @@
 # T260 — eval prompt slimming: LIVE_CTX state + delta replaces the 1.7M re-read
 
-check: cd "$(git rev-parse --show-toplevel)" && export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-validate-a && touch src/*.rs tests/*.rs && cargo test --release
+check: cd "$(git rev-parse --show-toplevel)" && export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared && touch src/*.rs tests/*.rs && cargo test --release
 
 estimate: ~400 lines (state file + delta builder + doctrine + pins)
 
