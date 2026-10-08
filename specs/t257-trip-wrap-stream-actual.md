@@ -1,6 +1,6 @@
 # T257 — LOOP-SPEC doctrine: a real-eval (TRIP) wrap's notes carry the trip stream's whole-stream iteration actual (wrap-notes color gap; adjudicated 2nd-omission trigger fired)
 
-check: touch src/*.rs tests/*.rs; export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared; cargo test --release
+check: touch src/*.rs tests/*.rs; export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-validate-a; cargo test --release
 
 ## repo-context
 
