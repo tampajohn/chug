@@ -97,6 +97,17 @@ metric, measured per cycle from those numbers (the cycle-195-198 baseline:
    the EVALUATION.md section list below) runs on the T261 UTC-week
    trigger — §6's marker rule governs.
 
+**Scoped drills (T264).** Every ad-hoc filesystem walk an evaluation drill
+runs is SCOPED — never `find` from `$HOME` and never `grep -r` from the
+repo root: the walk itself is unbounded (`target/`, `.git/`, `~/Library`),
+the 300s bash cap kills it mid-eval, and a trailing `| grep -v … | head`
+pipe filters AFTER the walk so it bounds nothing (two fires: the cycle-241
+home-tree `find` 300s kill, the cycle-245 repo-root `grep -rln … .` 300s
+kill). The scoped alternatives a drill reaches for FIRST: `git grep`
+(index-bounded), `grep -r --exclude-dir=target --exclude-dir=.git`, `find`
+under a bounded root with `-prune` for the big dirs, or the digest/delta's
+mechanical surfaces before any raw walk.
+
 ## Write `EVALUATION.md`
 
 Honest, specific, evidence-linked (transcript/ledger/code line refs where
