@@ -242,7 +242,17 @@ cycle_deaths() { # dead cycles in loopd.log strictly after the $1 baseline time
       || date -u -d "@$epoch" +%Y-%m-%dT%H:%M:%S 2>/dev/null \
       || true)
   fi
-  [ -f "$LOG" ] || { echo 0; return 0; }
+  [ -f "$LOG" ] || {
+    # T258 fix-up (validator F3d): a MISSING log is an UNKNOWN record, not a
+    # quiet one — the old `echo 0` was the one exception to the gate's own
+    # every-unknown-degrades-to-launch rule (a removed or never-written log
+    # would read as "no deaths ever" and cheap-exit over a real death the
+    # record cannot show). The safe side: the caller sees `unknown`, the
+    # skip arm's `deaths = 0` never fires, and the gate launches — on the
+    # orchestrator model, since an unknown count is not borderline either.
+    echo unknown
+    return 0
+  }
   if [ -n "$since" ]; then
     # same-second reads as a death (>=): the dangerous direction is the
     # false-negative skip over a real death, never the phantom launch
@@ -286,7 +296,13 @@ EOF
 eval_gate() { # the T258 decision for a would-be eval cycle, one line:
   #   skip <fields>            — the cheap exit: launch skipped, loopd
   #                              writes the disposition itself (no LLM)
-  #   launch <glm|kimi> <fields>
+  #   launch <model> <fields>  — launch the eval on <model>: the FULL
+  #                              provider-routed id resolved from the T81
+  #                              env, NEVER a bare shorthand (model ids go
+  #                              verbatim into the API request body —
+  #                              src/api.rs body.insert("model", ...) — and
+  #                              there is no alias layer, so `--model glm`
+  #                              would die at the first call)
   # fields: rows= new= deaths= bookkeeping= fresh= base= streak=
   local base new deaths book fresh streak verb model
   base=$(last_eval_commit)
@@ -296,21 +312,29 @@ eval_gate() { # the T258 decision for a would-be eval cycle, one line:
   if eval_fresh EVALUATION.md; then fresh=yes; else fresh=no; fi
   streak=$(empty_wrap_streak)
   # the valve FIRST (T247): the 4th consecutive empty cycle runs the real
-  # evaluation whatever the delta says — the chain converts itself
+  # evaluation whatever the delta says — the chain converts itself. A trip
+  # is a REAL evaluation: the orchestrator model (the full $LOOP_ORCH_MODEL
+  # id), never the cheap routine model.
   if [ "$streak" -ge 3 ]; then
-    verb=launch; model=kimi
-  elif [ "$new" -eq 0 ] && [ "$deaths" -eq 0 ] && [ "$book" = yes ] && [ "$fresh" = yes ]; then
+    verb=launch; model=$LOOP_ORCH_MODEL
+  elif [ "$new" = 0 ] && [ "$deaths" = 0 ] && [ "$book" = yes ] && [ "$fresh" = yes ]; then
     verb=skip; model=-
-  elif [ "$book" = yes ] && [ "$fresh" = yes ]; then
+  elif [ "$book" = yes ] && [ "$fresh" = yes ] && [ "$deaths" != unknown ]; then
     # borderline (T258 req 2): non-empty only through deaths or new rows,
-    # over a bookkeeping-only delta with a fresh evaluation — the cheap
+    # over a bookkeeping-only delta with a fresh evaluation — the routine
     # model runs the bounded eval; the corpus is unchanged and today's
-    # evaluation already current, so no fresh-evaluation judgment is due
-    verb=launch; model=glm
+    # evaluation already current, so no fresh-evaluation judgment is due.
+    # $LOOP_ROUTINE_MODEL is the full id (glm by default), and the T81
+    # rollback knob rides along: LOOP_ROUTINE_MODEL set to the kimi id
+    # routes borderline evals to kimi too — single-model operation. A
+    # deaths=unknown is NOT borderline: an unreadable record may hide a real
+    # death, and the safe side never cheapens out on an unknown.
+    verb=launch; model=$LOOP_ROUTINE_MODEL
   else
-    # a non-bookkeeping delta (source/spec/doctrine work landed) or a
-    # stale evaluation: the fresh-evaluation boundary stays kimi (T81)
-    verb=launch; model=kimi
+    # a non-bookkeeping delta (source/spec/doctrine work landed), a stale
+    # evaluation, or an unknown deaths count: the fresh-evaluation boundary
+    # stays on the orchestrator model (T81)
+    verb=launch; model=$LOOP_ORCH_MODEL
   fi
   echo "$verb $model rows=$(todo_rows TODO.md) new=$new deaths=$deaths bookkeeping=$book fresh=$fresh base=${base:-none} streak=$streak"
 }
@@ -719,8 +743,9 @@ while [ ! -f "$STOP" ]; do
   # always explains a model change (the T50 re-exec-log rule) and echoed as
   # the cycle log's first line, so every cycle record names who ran it.
   # T258: in eval mode the gate below may re-route the model (borderline
-  # non-trip evals to glm) or skip the launch entirely (the cheap exit), so
-  # the routing line is logged AFTER the gate and names the FINAL model.
+  # non-trip evals to $LOOP_ROUTINE_MODEL) or skip the launch entirely (the
+  # cheap exit), so the routing line is logged AFTER the gate and names the
+  # FINAL model.
   routing="$(route TODO.md EVALUATION.md)"
   mode=${routing%% *}
   orch_model=${routing#* }
@@ -744,9 +769,13 @@ while [ ! -f "$STOP" ]; do
       # chain would cheap-exit forever unpaced.
       echo "$(ts) cheap-exit disposition commit FAILED — falling through to a real $LOOP_ORCH_MODEL eval" >> "$LOG"
       orch_model=$LOOP_ORCH_MODEL
-    elif [ "$gate_model" != kimi ]; then
-      # the borderline re-route (req 2): launch glm — explained here, the
-      # routing line below names the final model (the T50 log rule)
+    elif [ "$gate_model" != "$LOOP_ORCH_MODEL" ]; then
+      # the borderline re-route (req 2): the gate resolved $LOOP_ROUTINE_MODEL
+      # (the full id) and it differs from the orchestrator model — launch it.
+      # Under the T81 rollback (LOOP_ROUTINE_MODEL = the kimi id) the two are
+      # equal: the re-route line stays silent and single-model operation
+      # holds. The comparison keys on the env, never a bare literal — a
+      # literal `kimi` here would log a phantom re-route on every kimi arm.
       echo "$(ts) eval gate (T258): ${gate#launch } -> $gate_model orchestrator" >> "$LOG"
       orch_model=$gate_model
     fi

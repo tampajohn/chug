@@ -59,13 +59,22 @@ not self-sustaining — the valve: after ~3 consecutive empty-delta
 dispositions, the next (4th) empty cycle RUNS the real evaluation; the
 chain converts itself into its own evaluation at the trip point (cycles
 113 and 122, the two on-schedule trips). The trip binds on the TRUE
-streak, HUMAN-counted from the wrap-notes chain, NEVER on loopd's
-machine streak: the machine walk substring-matches the token in `eval:`
-subjects and counts NEGATED mentions too (the cycle-118 false positive —
-machine read 4 vs TRUE 3 at the cycle-122 trip). That divergence is
-consequence-free for the backoff (a bounded over-sleep, self-correcting;
-adjudication d1791277274-2), but the trip threshold reads the TRUE count
-only.
+streak, HUMAN-counted from the wrap-notes chain — and since T258 the
+count authority is scoped by who acts. The supervisor's gate and its
+valve read the machine streak (`empty_wrap_streak`, loopd's git walk):
+every supervisor-written disposition carries the token by construction
+and pin, and the Phase-3 quote discipline keeps orchestrator-written
+mentions clean, so machine == TRUE on any disciplined chain — the
+mechanical trip is an authorized reading of the TRUE count. The
+HUMAN-counted rule stays binding for orchestrator-side chain
+adjudication and for contested divergences: the machine walk
+substring-matches the token in `eval:` subjects and counts NEGATED
+mentions too (the cycle-118 false positive — machine read 4 vs TRUE 3 at
+the cycle-122 trip), and an orchestrator who finds such a divergence
+adjudicates the chain by hand and records the correction while the
+divergence stays consequence-free for the backoff (a bounded
+over-sleep, self-correcting; adjudication d1791277274-2) — but the
+supervisor's valve still trips on its own mechanical record.
 
 **The cheap exit (T258).** The same predicate is mechanical, and the
 supervisor computes it BEFORE any launch: no new TODO rows since the
