@@ -21,6 +21,55 @@ source/spec/doctrine deltas and stale evaluations stay kimi (T81).
 
 ## Read first (the evaluation corpus)
 
+**The state+delta read path (T260) — decides HOW MUCH of this list you read.**
+Before the corpus list, read `.chug/eval-delta.md` (loopd rebuilds it before
+every cycle, mechanically). Its `read-path:` verdict is the read-path switch:
+
+- `read-path: STATE-HIT` — you are a non-trip eval with a verified state.
+  Read `.chug/eval-state.md` (your own maintained state: current health, open
+  threads, the last 12 decisions with refs, pacing streak, the last-eval
+  marker) plus the delta, INSTEAD of items 1–3 and the wholesale TODO /
+  EVALUATION / code re-read below. The delta carries the mechanical
+  since-the-marker facts — rows added/closed, child deaths with reason
+  classes, changed files by class (bookkeeping vs work), cycle summaries,
+  FEATURES.md movement, and the T184 fresh-input/cache-read telemetry — so
+  the evaluation input is ~2 small files, not the 1.7M-token corpus re-read.
+  If the delta shows FEATURES.md changed since the marker, re-read its Tier-1
+  section only (the §4 roadmap pull still binds on every evaluation).
+- `read-path: FULL-READ REQUIRED (<reason>)` — the state is stale or invalid
+  (missing, schema change, marker behind > 3 evals, the state itself flagged
+  drift, a failed verbatim-splice check, git unavailable). The full corpus
+  list below applies, unchanged. A missing or failed delta file is also a
+  full read (fail-closed).
+- **A trip eval is ALWAYS a full read, regardless of the verdict** — the T247
+  valve, a stale/due daily evaluation, any routing that launches the real
+  judgment: the state file is never a trip eval's only input. The slim path
+  exists for the quiet non-trip cycles, never for the ones that decide
+  something big.
+
+**Rewriting the state at wrap (every evaluation does this, hit or full).**
+`.chug/eval-state.md` is schema-pinned (schema v1) — the delta validator is
+the schema's enforcer, and its fields are: `schema:`, `eval-commit:` (the
+wrap commit this state was computed from — the staleness marker),
+`eval-at:`, `state-drift:` (`none` | `flagged` — you flag your own drift
+when the state looks wrong; a flagged state forces the next eval full),
+`fresh-input-last-eval:` / `cache-read-last-eval:` (T184 cumulative token
+totals of your own stream), one-line `health:`, `open-threads:`,
+`pacing-streak:`, and the `## decisions` ring. Rewrite it after your wrap
+commit (the `eval-commit:` marker is that commit's hash) with
+the T192 LIVE_CTX discipline: **verbatim splice, never summarization** — the
+`## decisions` ring is append-only history (last 12, oldest first): carried
+lines byte-identical, rotation only from the oldest end once the ring is
+full, new decisions appended; if this eval made more decisions than the ring
+has room for, rotate at most 11 so one prior line always survives verbatim.
+The next eval's delta run splice-checks your
+rewrite against the previous bytes; a paraphrased or dropped middle entry
+fails the check and forces the next eval full. Record in the wrap's Outcomes
+the fresh-input before/after —
+the >= 5x fresh-input drop on state-hit cycles is the item's acceptance
+metric, measured per cycle from those numbers (the cycle-195-198 baseline:
+~134k fresh + ~1.7M cache-read per orchestrator iteration).
+
 1. `.chug/eval-digest.md` FIRST — the mechanical pre-digest of this corpus
    (`scripts/eval-digest.sh`, refreshed by loopd before every cycle): per
    events-file iterations, wall time, tool distribution, error classes with

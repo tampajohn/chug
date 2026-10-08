@@ -13,7 +13,9 @@
 //! ledger.
 //!
 //! Three legs: (a) the sentence's load-bearing tokens occur exactly-once —
-//! `carry forward` and `verbatim` whole-file, `Outcomes` with the census the
+//! `carry forward` whole-file and `verbatim` window-scoped (the T260
+//! Read-first block reuses the word for the eval-state splice discipline),
+//! `Outcomes` with the census the
 //! required sentence dictates, window-scoped (see the test's doc comment);
 //! (b) non-vacuousness: deleting the sentence drops every needle's count to
 //! zero and the red message says so — the deletion hand-check (GREEN →
@@ -64,7 +66,12 @@ const CARRY_CORE: &str = "MUST carry forward every existing `## Outcomes` conten
 const CARRY_FORWARD: &str = "carry forward";
 
 /// The verbatim-ness token: the Outcomes content is carried UNCHANGED, not
-/// summarized or regenerated. Must occur EXACTLY once (whole file).
+/// summarized or regenerated. Window-scoped to the Write-EVALUATION section
+/// (exactly once there) — the same collision rationale as the OUTCOMES
+/// census: T260's Read-first block legitimately reuses the word for the
+/// eval-state splice discipline ("verbatim splice"), so the whole-file
+/// count is no longer 1; the sentence's own occurrence stays exactly-one
+/// inside the window, which is what this pin protects.
 const VERBATIM: &str = "verbatim";
 
 /// The pre-commit verification clause — the sentence's enforcement half:
@@ -129,9 +136,12 @@ fn carry_forward_tokens_occur_exactly_once() {
     assert_eq!(OUTCOMES, "Outcomes", "the token needle must be the bare token");
     let spec_text = meta_meta_spec();
     let spec = flat(&spec_text);
+    // `carry forward` and the verification clause are unique multi-word
+    // phrases — whole-file exactly-once. `verbatim` is WINDOW-scoped (the
+    // T260 Read-first block reuses the word for the eval-state splice
+    // discipline; the sentence's own occurrence must stay exactly one).
     for (needle, what) in [
         (CARRY_FORWARD, "the carry-forward verb phrase"),
-        (VERBATIM, "the verbatim-ness token"),
         (VERIFY_CLAUSE, "the pre-commit verification clause"),
     ] {
         assert_eq!(
@@ -143,6 +153,14 @@ fn carry_forward_tokens_occur_exactly_once() {
         );
     }
     let window = flat(write_eval_window(&spec_text));
+    assert_eq!(
+        window.matches(VERBATIM).count(),
+        1,
+        "the Write-EVALUATION section must state the verbatim-ness token \
+         ({VERBATIM:?}) exactly once — zero means the carry-forward \
+         sentence was dropped or reworded, more than one means it is \
+         stated twice"
+    );
     assert_eq!(
         window.matches(OUTCOMES).count(),
         2,

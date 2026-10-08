@@ -1121,6 +1121,14 @@ while [ ! -f "$STOP" ]; do
   # the cycle degrades to reading the previous digest.
   scripts/eval-digest.sh >> "$LOG" 2>&1 \
     || echo "$(ts) eval-digest: nonzero exit (best-effort, ignored — the cycle reads the previous digest)" >> "$LOG"
+  # T260: build the state+delta read-path input beside the digest — the
+  # read-path verdict (.chug/eval-delta.md) + the mechanical delta since the
+  # eval-state marker, so a state-hit evaluation reads ~2 small files instead
+  # of the full corpus. Best-effort like the digest: a nonzero exit must not
+  # kill the supervisor under set -e, and the fail-closed default is a
+  # FULL-READ cycle (a missing/failed delta never enables the slim path).
+  scripts/eval-delta.sh >> "$LOG" 2>&1 \
+    || echo "$(ts) eval-delta: nonzero exit (best-effort, ignored — the cycle full-reads)" >> "$LOG"
   cycle_log="$STATE/cycle-$(date -u +%Y%m%d-%H%M%S).log"
   # T81: route THIS cycle before launch — the freshness predicate (the same
   # mechanical rule LOOP-SPEC Phase 1 gives the orchestrator) picks the
