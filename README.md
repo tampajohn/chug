@@ -978,6 +978,34 @@ nohup ./loopd.sh > /dev/null 2>&1 &   # start (detached)
 ./loopd.sh stop                       # exits after the current cycle
 ```
 
+Before any launch the supervisor decides whether the cycle needs an
+orchestrator at all — the T258/T259 gate runs first, so an empty day
+costs $0. It computes the mechanical predicate from records it can read
+itself (new TODO.md rows since the last evaluation's commit, child
+deaths in loopd.log, a bookkeeping-only delta, EVALUATION.md freshness),
+and on an empty predicate with no T247 valve trip takes the cheap exit:
+the supervisor writes the one-line empty-delta disposition itself — an
+empty commit carrying the T237 token, the TRUE streak handoff, and the
+predicate inputs, with the same disposition line in
+`.chug/loopd/loopd.log` — and skips the launch entirely, no LLM call.
+Any single non-empty input forces the launch instead. Would-be launches
+the mechanical layer cannot settle — a borderline eval (a
+bookkeeping-only delta carrying deaths or new rows) or a valve trip —
+consult the Laya triage (T259): the judge daemon (T204) answers ONE
+classification question (needs-eval: yes/no + confidence) over a
+compact, supervisor-computed state pack, and the confidence-gated
+cascade (`TRIAGE_HIGH` = 0.85 in loopd.sh) routes it — a confident `no`
+on a fresh evaluation skips the launch ($0), `yes` sends the borderline
+eval to the routine model (glm), confidence below the threshold
+escalates to the orchestrator model (kimi; a valve trip still runs the
+real evaluation unless the confident `no` lands on a fresh one), and
+fail-open — the daemon absent, any error, a >2s timeout — falls back to
+exactly the T258 routing with one note per cycle in loopd.log. Every
+triage verdict is recorded to `.chug/decisions.jsonl` (class
+`laya-triage`, outcome backfilled on the next look for the F13
+distillation corpus). These layers sit above the per-phase routing
+below: they can skip or re-route what it would have launched.
+
 Per cycle: the orchestrator's model is per-phase (T81) — kimi-k3
 orchestrates fresh-eval cycles, glm-5-3-flash routine ones, decided by
 `loopd.sh` before launch from LOOP-SPEC's freshness rule (a non-empty queue
@@ -1059,23 +1087,24 @@ the baked-in judge daemon (T204/F15) serves the risk gate's `/judge` only;
 the `/hook/*` surface stays with external layad until a phase-2 migration,
 and a `layad` sink with no layad on the network degrades to a `notify_error`
 event (never a run failure).
-The supervisor creates five gitignored build caches, one per cargo-consumer
-role, warm after first use: `target-shared/` (implementation children and
-worktree-review gates), `target-shared-validate-a/` and
-`target-shared-validate-b/` (validators — one dir per validator slot, T194:
-two validators sharing one dir would serialize on cargo's build lock),
-`target-shared-gates/` (overlap-window gates), and `target-shared-main/`
-(post-merge and final main gates). Validation rounds that mutation-test in
-parallel (T79) add per-leg caches `target-shared-mut-<k>/` — one per mutant
-leg, cap 3, gitignored by glob, created on demand in the repo root and
-never shared across legs (the same role-keying, one level down).
-Two-impl overlap (T161) adds two impl-child slots, `target-shared-impl-a/`
-and `target-shared-impl-b/` — the impl launched into an overlap takes the
-slot no flying impl holds, so two concurrent implementation children never
-share one artifact dir (the T52 role-keying, widened); T194's 3-child
-fleet adds a third impl slot, `target-shared-impl-c/`, and the second
-validator slot `target-shared-validate-b/` (a second validator flies only
-when two items are simultaneously past gates — never two on one item).
+The supervisor creates eight gitignored build caches, one per
+cargo-consumer role, warm after first use: `target-shared/`
+(implementation children and worktree-review gates),
+`target-shared-validate-a/` and `target-shared-validate-b/` (validators —
+one dir per validator slot, T194: two validators sharing one dir would
+serialize on cargo's build lock), `target-shared-gates/` (overlap-window
+gates), `target-shared-main/` (post-merge and final main gates), and the
+impl-child slots `target-shared-impl-a/`, `target-shared-impl-b/`, and
+`target-shared-impl-c/` (two-impl overlap, T161: the impl launched into
+an overlap takes the slot no flying impl holds, so two concurrent
+implementation children never share one artifact dir — the T52
+role-keying, widened — with T194's 3-child fleet adding the third slot).
+Validation rounds that mutation-test in parallel (T79) add per-leg caches
+`target-shared-mut-<k>/` — one per mutant leg, cap 3, gitignored by glob,
+created on demand in the repo root and never shared across legs (the same
+role-keying, one level down). The second validator slot,
+`target-shared-validate-b/`, flies only when two items are simultaneously
+past gates — never two on one item.
 The supervisor hands `CARGO_TARGET_DIR`
 to each cycle as a per-invocation env prefix; loopd.sh carries the
 rationale. Why role-keyed: cargo's artifact filename excludes the checkout
