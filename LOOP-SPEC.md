@@ -898,6 +898,24 @@ alike) has been harvested.
   produces, never a pre-commit read reported as the post-commit
   machine streak (the cycle-123 miss: `60 0` probed at the pre-wrap
   HEAD, `120 1` post-commit).
+- **A real-eval (trip) wrap's notes carry the trip stream's whole-stream
+  iteration actual (T257).** A trip wrap's notes commit MUST carry the
+  trip stream's whole-stream iteration actual (iterations + wall, read
+  from the eval digest's own-stream entry or the stream itself) — the
+  cadence re-arm check's (b) trip-cost input, so a cold trip cycle reads
+  it from the newest wrap notes without digest archaeology. Disposition
+  wraps are exempt (their streams are short and the digest backstops;
+  the color binds trip wraps, whose stream actual the (b) leg quotes).
+  Firing evidence: the wrap-notes color gap was adjudicated a single
+  omission at the cycle-223 trip eval (d1791416867-11 — the cycle-219
+  wrap 56cbbaf dropped it, trigger: a second omission files the
+  wrap-template row); the second omission was cycle-223's own wrap
+  40717de, and the census counted trips 18–24 (d1d7508 / 659ae88 /
+  0934c6b / 3843fe2 / 28a4b03 / 56cbbaf / 40717de) carrying NONE — seven
+  consecutive omissions vs the c135–c152-era carriers (d21f21b /
+  a5aa255 / 44fe71b / c27bc79); zero casualty to date — the digest
+  backstops every (b) read (trips 21–24 discharged on digest numbers
+  53/40/54/44).
 - Final gates green in main (build + clippy + step 5's T82 gate runner —
   `cargo nextest run --release` when `cargo nextest` is on PATH, else
   `cargo test --release`) → push anything
