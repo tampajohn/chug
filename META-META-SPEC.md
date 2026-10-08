@@ -92,15 +92,17 @@ metric, measured per cycle from those numbers (the cycle-195-198 baseline:
 5. The code: `src/` layout + `wc -l` per file; skim `api.rs`, `driver.rs`,
    `tools.rs`, `chat.rs` for structural smells (don't deep-read everything —
    this is an evaluation, not an implementation).
-6. `README.md` — docs-vs-reality drift AND a full cold-read usability
-   audit (see §6 in the EVALUATION.md section list below).
+6. `README.md` — docs-vs-reality drift every eval (the digest/delta
+   surfaces it mechanically); the full cold-read usability audit (§6 in
+   the EVALUATION.md section list below) runs on the T261 UTC-week
+   trigger — §6's marker rule governs.
 
 ## Write `EVALUATION.md`
 
 Honest, specific, evidence-linked (transcript/ledger/code line refs where
 you can). A regenerated EVALUATION.md MUST carry forward every existing
-`## Outcomes` content verbatim (per-cycle sections and per-item entries) —
-the eval rewrites the assessment body only, never the Outcomes ledger;
+`## Outcomes` content verbatim (the per-cycle sections and their wrap
+item tables) — the eval rewrites the assessment body only, never the Outcomes ledger;
 before committing, verify the newest pre-existing cycle's section is still
 present. Sections:
 
@@ -123,7 +125,14 @@ present. Sections:
    the roadmap — new finds are APPENDED to FEATURES.md, then worked in
    order. Features are not the bottom of the priority stack (LOOP-SPEC §2).
 5. **Top 3 priorities** — what you'd fix FIRST and why.
-6. **README audit (usability, not just accuracy)** — read the README top to
+6. **README audit (usability, not just accuracy) — WEEKLY, not per-eval
+   (T261; the mechanical trigger is the UTC week).** The full cold-read
+   below runs when the current UTC week (ISO-8601, `date -u +%G-W%V`)
+   differs from the `README-audit:` marker line in EVALUATION.md (the
+   eval header block); a same-week eval SKIPS the cold-read — the marker
+   names the week it last ran, and a same-week second audit writes
+   nothing. When the week is new: update the marker to the current week,
+   then do the full read — read the README top to
    bottom as someone who has never seen chug. Report: (a) reading order —
    does the structure guide a newcomer (what it is → install → run →
    features → internals), or is it append-only accretion where each cycle
@@ -133,7 +142,10 @@ present. Sections:
    sections carrying detail that belongs in a spec file; (e) quickstart
    truth — do the commands work as written, in the order given? File a docs
    row (`t<N>-readme-*`) when the audit finds structural debt. A README
-   that grows by accretion is a bug class, not a style choice.
+   that grows by accretion is a bug class, not a style choice. The
+   per-eval half that NEVER skips: docs-vs-reality drift — the
+   digest/delta surfaces it every cycle, and a drift finding files a row
+   regardless of the week.
 
 ## Extend `TODO.md`
 

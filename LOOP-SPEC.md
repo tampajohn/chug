@@ -30,9 +30,17 @@ upgrade: **prefer `.chug/events.jsonl` over transcripts** — it is
 jq-mineable and untrimmed (`jq -r '.type' .chug/events.jsonl | sort | uniq -c`
 is a good first look). Write/refresh `EVALUATION.md`, extend `TODO.md` with
 new rows (numbering continues from the max existing id) each with its own
-`specs/t<N>-<slug>.md`. Every filed row AND every weighed-and-rejected
-candidate gets an `eval-triage` record via `decision_log` (the reject half
-is what teaches a future classifier the negative class).
+`specs/t<N>-<slug>.md`. **Triage records ride disposition CHANGE, not the
+calendar (T261)**: the mechanical trigger is change-detection — one
+`eval-triage` record via `decision_log` per candidate whose disposition
+CHANGED since the last eval, judged against the previous eval's recorded
+dispositions (EVALUATION.md's candidate list is that record), and the
+record NAMES the change (prior → new in its `inputs`: a new reject, a
+reject→file, a file→abandon, a first sighting). A quiet eval — every
+candidate's disposition unchanged, nothing new weighed — writes ZERO
+triage records; a changed disposition writes exactly ONE `eval-triage`
+record. The reject half still teaches a future classifier the negative
+class — once per change, never re-written per eval.
 
 Skip straight to Phase 2 if TODO.md already has `todo` rows AND
 EVALUATION.md is fresh (same UTC day) — re-evaluating for its own sake burns
@@ -705,9 +713,13 @@ simultaneously past gates — T194 amends T161's 2-child cap):
    the TODO row to `done` **with the merge commit ref in the same commit**
    (or an immediately following `todo:` commit; bundled rows may share one
    such `todo:` commit naming every row + its ref — Trivial-row bundling).
-   The row-flip commit appends an `outcome` record via `decision_log` per
-   decision id logged for the item — `landed-clean`, or `fixed-up` when a
-   fix-up arc ran; a later revert appends `reverted`.
+   The item's `outcome` backfills are NOT written here — they batch at
+   the wrap (T261; the wrap-boundary trigger): the Phase-3 audit step
+   appends ONE record per still-unlabeled decision id in ONE pass per
+   cycle — `landed-clean`, or `fixed-up` when a fix-up arc ran; a later
+   revert appends `reverted` — each with a provenance note naming the
+   flip it labels. Still one record per id (the F13 id→label join is
+   unchanged); only the timing moved, from per-flip scatter to the wrap.
    When editing TODO.md (row flips, notes annotations), the notes cell
    must contain no `|` — the T8 guard splits every row on it, so a stray
    pipe splits one cell into two and fails the guard (cycle-16's
@@ -743,15 +755,16 @@ simultaneously past gates — T194 amends T161's 2-child cap):
    `edit_file` (which errors on no-match) for repo files, and when sed
    is necessary, assert.
    Update README.md in the
-   merge commit when the item is user-visible. **Outcomes are per-item
-   too**: in the same commit as the row flip (or an immediately following
-   `eval:` commit), append the item's Outcomes entry to EVALUATION.md —
-   what landed, what the validators caught — so a mid-cycle death loses
-   no narrative. The cycle-12 bite: it deferred the narrative to wrap,
-   died mid-arc at budget, and cycle-13's wrap had to reconstruct the
-   entry from the git record ("RECONSTRUCTED at cycle-13 wrap"; eval
-   commit `697a6b6` records the lesson: "deferred-wrap loss lesson:
-   write Outcomes per-item"). This ordering is the fix
+   merge commit when the item is user-visible. **Outcomes batch at the
+   wrap (T261; the wrap-boundary trigger)**: ONE Outcomes entry per
+   cycle, written at wrap — the wrap's table, one row per item listing
+   what landed, its refs, what the validators caught; the cycle-79-style
+   one-line backfills become the wrap's table, and per-item Outcomes
+   entries scattered at each landing are gone. What still lands per-item,
+   in the row-flip commit: the TODO done row with its merge ref (and the
+   harvest) — the mechanical record the wrap table cites, so a mid-arc
+   death costs prose, never refs, and the cycle-12 bite's reconstruction
+   is a mechanical cite from the git record. This ordering is the fix
    for the T10/T12 failure mode: children die between the code commit and
    the row flip, so children never own the row. **Push after each item
    lands green** (`git push` once the todo: commit is in) — the operator
@@ -903,9 +916,13 @@ alike) has been harvested.
   `LEDGER-t<N>-<role>-*.md` where non-trivial) — nothing died with a
   removed worktree.
 - `.chug/decisions.jsonl` carries the cycle's records — `eval-triage` at
-  eval time (filed rows AND rejected candidates), `recovery-routing` /
+  eval time (ONE per candidate whose disposition changed since the last
+  eval, the T261 change-detection trigger — a quiet eval writes none),
+  `recovery-routing` /
   `model-fallback` at dispatch, `validation-routing` +
-  `validation-verdict` per item, `outcome` backfills at row flips;
+  `validation-verdict` per item, `outcome` backfills batched at the wrap
+  (one pass per cycle, one record per id — never scattered at row
+  flips);
   a cycle that worked items with zero `decision_log` records
   is an incomplete wrap (the T23→T24 zero-calls lesson; cycles 34+35
   shipped nine routing/verdict decisions with none recorded). The wrap
@@ -933,8 +950,10 @@ alike) has been harvested.
   with gates green at HEAD; ONE tag per wrap; tag message = generated
   notes since the previous tag. A failed release workflow files a row —
   never delete a published tag.
-- EVALUATION.md's **Outcomes** section is complete and truthful — per-item
-  entries were written at each landing (§2 step 5); wrap adds the
+- EVALUATION.md's **Outcomes** section is complete and truthful — the
+  cycle's ONE entry is the wrap's item table (§2 step 5's T261 batching:
+  one Outcomes entry per cycle, written at the wrap boundary; per-item
+  scattered entries are gone); wrap adds the
   skipped/deferred rows, the cycle-level notes (what the validators
   caught, final state), and fills any gap a mid-arc death left.
   Outcomes keeps the last 6 cycles in full; older entries are compacted
