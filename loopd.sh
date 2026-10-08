@@ -183,6 +183,309 @@ ok_sleep_seconds() {
   echo "$s"
 }
 
+# T259 — the Laya triage layer: the judge daemon (T204, the host-scoped 0600
+# unix socket) gates the would-be eval launches the mechanical layer cannot
+# settle. Three layers, the routing LOOP-SPEC Phase 1 names (mechanical ->
+# Laya -> System Two): the cheap exit below settles an empty predicate at
+# $0; when the predicate is non-empty the supervisor asks the daemon ONE
+# classification question — needs-eval: yes/no — over a compact state pack
+# every field of which is supervisor-computed (the same git/loopd.log
+# record the gate and the valve read, never an LLM's say-so); the launched
+# evaluation stays System Two. SPEC-3 constraint (quoted): laya does text
+# classification ONLY — no counting, negation, or completion judgments —
+# and "does this delta need a full eval" is a routing classification,
+# never a quality verdict. FAIL-OPEN everywhere (req 3): the daemon
+# absent, any error, or a >2s timeout falls back to EXACTLY the T258
+# routing — one note per cycle in loopd.log, never a storm. Every triage
+# is recorded to the decision corpus (.chug/decisions.jsonl, class
+# laya-triage: the state pack verbatim, the verdict, the confidence, the
+# route taken) and the next look backfills the outcome — the F13
+# distillation corpus (scripts/decisions-export.sh joins them).
+# The confidence threshold lives HERE, the one place (the LOOP-SPEC
+# triage-layer paragraph points back at this constant):
+TRIAGE_HIGH=0.85
+
+triage_route() { # the pure cascade: <choice> <confidence> -> skip | glm | kimi
+  # Confidence < TRIAGE_HIGH is unsure — the hard judgment escalates to
+  # kimi whatever the choice says. At/above it the choice decides:
+  # no -> skip ($0), yes -> glm (~$0.05). An unreadable confidence and an
+  # unreadable choice are the same kind of unknown: kimi (the safe side —
+  # a fail-open router must never fabricate a cheap skip).
+  awk -v c="$1" -v conf="$2" -v high="$TRIAGE_HIGH" 'BEGIN {
+    if (conf !~ /^[0-9]*\.?[0-9]+([eE][+-]?[0-9]+)?$/ || conf + 0 < high) { print "kimi"; exit }
+    if (c == "no") print "skip"
+    else if (c == "yes") print "glm"
+    else print "kimi"
+  }'
+}
+
+closed_todo_rows() { # baseline `todo` rows no longer `todo` (closed,
+  # re-statused, or removed) — the pack's rows-closed half. Same shape as
+  # new_todo_rows: the baseline copy from git, an unknown baseline
+  # degrading to 0 (the bookkeeping leg catches the dirty-delta shape).
+  local base=$1 rc=0
+  [ -n "$base" ] || { echo 0; return 0; }
+  [ -f TODO.md ] || { echo 0; return 0; }
+  git show "$base:TODO.md" > "$STATE/triage-baseline-TODO.md" 2>/dev/null || { echo 0; return 0; }
+  awk -F'|' '
+    NR == FNR {
+      id = $2; gsub(/[ \t]/, "", id)
+      if (id ~ /^T[0-9]+$/) { s = $6; gsub(/[ \t]/, "", s); if (s == "todo") was[id] = 1 }
+      next
+    }
+    {
+      id = $2; gsub(/[ \t]/, "", id)
+      if (id in was) seen[id] = 1
+    }
+    END { for (id in was) if (!(id in seen)) n++; print n + 0 }
+  ' "$STATE/triage-baseline-TODO.md" TODO.md
+}
+
+changed_files_by_class() { # files changed since the $1 baseline, counted by
+  # class — the pack's delta shape (where the changes landed, not just that
+  # they did). An unknown baseline degrades to `unknown` (never a quiet 0).
+  local base=$1 files f rc=0 src=0 tests=0 specs=0 docs=0 book=0 other=0
+  [ -n "$base" ] || { echo unknown; return 0; }
+  files=$(git diff --name-only "$base" HEAD 2>/dev/null) || rc=$?
+  if [ "$rc" -ne 0 ]; then echo unknown; return 0; fi
+  # T137 de-pipelined shape: captured above, then walked — no
+  # printf-to-while pipe whose writer leg could SIGPIPE-flip under pipefail.
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    case "$f" in
+      EVALUATION.md|TODO.md) book=$((book + 1)) ;;
+      src/*) src=$((src + 1)) ;;
+      tests/*) tests=$((tests + 1)) ;;
+      specs/*) specs=$((specs + 1)) ;;
+      docs/*|runbooks/*|*.md) docs=$((docs + 1)) ;;
+      *) other=$((other + 1)) ;;
+    esac
+  done <<EOF
+$files
+EOF
+  echo "src=$src tests=$tests specs=$specs docs=$docs book=$book other=$other"
+}
+
+digest_stats() { # the T46 digest's corpus stats, compact — the pack's
+  # digest half. A missing or unreadable digest degrades to `missing`
+  # fields (never an error: the pack stays sendable, the judge sees the
+  # degradation).
+  local d=".chug/eval-digest.md" headln counts days
+  [ -f "$d" ] || { echo missing; return 0; }
+  headln=$(awk 'NR == 3 {
+    for (i = 1; i <= NF; i++) {
+      if ($i == "files:") f = $(i + 1)
+      if ($i == "iterations:") t = $(i + 1)
+    }
+    print "files=" f + 0 " iters=" t + 0; exit
+  }' "$d")
+  counts=$(awk '/^- TODO\.md status counts: / { sub(/^- TODO\.md status counts: /, ""); print; exit }' "$d")
+  days=$(awk '/^- days since last EVALUATION\.md write: / { sub(/^- days since last EVALUATION\.md write: /, ""); sub(/ .*/, ""); print; exit }' "$d")
+  echo "${headln:-files=0 iters=0} ${counts:-statuses=unknown} days_since_eval=${days:-unknown}"
+}
+
+triage_request_body() { # the /judge request: the compact state pack + the
+  # ONE needs-eval question. jq builds it — valid JSON or the triage fails
+  # open (req 3); the field order here is the wire order the judge reads.
+  command -v jq >/dev/null 2>&1 || return 1
+  jq -cn \
+    --arg rows_added "$1" --arg rows_closed "$2" --arg child_deaths "$3" \
+    --arg files "$4" --arg digest "$5" --arg streak "$6" \
+    --arg bookkeeping "$7" --arg fresh "$8" --arg tripped "$9" \
+    '{
+      state: {
+        context: "A coding-loop supervisor (loopd) must decide, before every evaluation cycle, whether the delta since the last evaluation needs a full LLM evaluation launch or can be skipped at zero cost. Every input below is supervisor-computed from the git record and the loop log.",
+        rows_added: $rows_added,
+        rows_closed: $rows_closed,
+        child_deaths: $child_deaths,
+        files_changed: $files,
+        digest_stats: $digest,
+        empty_streak: $streak,
+        bookkeeping_only_delta: $bookkeeping,
+        evaluation_fresh: $fresh,
+        valve_tripped: $tripped
+      },
+      questions: {
+        needs_eval: {
+          type: "choice",
+          instructions: "Routing classification only, never a quality verdict: does the delta since the last evaluation need a full evaluation launch now? Bookkeeping-only deltas (dispositions, wrap notes, digest refreshes) are noise; landed work, queue movement, or child deaths are signal.",
+          criteria: {
+            no: "effectively empty - nothing a full evaluation would need to examine right now; skipping costs nothing",
+            yes: "real signal - landed changes, queue movement, or child deaths that a full evaluation should examine"
+          }
+        }
+      }
+    }'
+}
+
+laya_gate_field() { # the value of one "<key>=" field in a gate line (empty
+  # when absent) — the record writer and the disposition tag read the gate
+  # line's fields back out of the one decision string. $1 carries its own
+  # "=" (e.g. `laya=`): appending another would double it and never match.
+  awk -v key="$1" '{
+    for (i = 1; i <= NF; i++)
+      if (index($i, key) == 1) { print substr($i, length(key) + 1); exit }
+  }' <<<"$2"
+}
+
+laya_failopen() { # req 3: one note per cycle, never a storm — T258
+  # behavior stands. The predicate probe sets LAYA_TRIAGE_QUIET (it writes
+  # nothing); run mode notes once per cycle, which is once per triage.
+  LAYA_VERDICT=""; LAYA_CONF=""; LAYA_ROUTE=""
+  if [ -z "${LAYA_TRIAGE_QUIET:-}" ]; then
+    echo "$(ts) laya triage (T259): FAIL-OPEN ($1) — T258 routing stands" >> "$LOG"
+  fi
+}
+
+laya_triage() { # the System One triage call: the state pack -> ONE
+  # needs-eval answer + confidence over the existing daemon socket (the
+  # T204 resolution: $CHUG_DAEMON_SOCK, then $CHUG_HOME, then ~/.chug).
+  # Sets LAYA_VERDICT/LAYA_CONF/LAYA_ROUTE — an empty route means
+  # FAIL-OPEN and the caller keeps the T258 arm verbatim. Bounded at 2s
+  # (req 3); the answer's confidence is normalized to a number (an
+  # unreadable one IS zero confidence, and zero routes kimi).
+  LAYA_VERDICT=""; LAYA_CONF=""; LAYA_ROUTE=""
+  local sock="${CHUG_DAEMON_SOCK:-${CHUG_HOME:-$HOME/.chug}/daemon.sock}"
+  local body resp status answer choice conf
+  body=$(triage_request_body "$@") || { laya_failopen "state pack build failed (jq?)"; return 0; }
+  resp=$(curl --unix-socket "$sock" --max-time 2 -s -w '\n%{http_code}' \
+    -X POST -H 'Content-Type: application/json' -d "$body" \
+    http://localhost/judge 2>/dev/null) || { laya_failopen "daemon unreachable at $sock"; return 0; }
+  status=${resp##*$'\n'}
+  resp=${resp%$'\n'*}
+  [ "$status" = "200" ] || { laya_failopen "daemon HTTP $status"; return 0; }
+  answer=$(printf '%s' "$resp" | jq -r '.answers.needs_eval | ((.choice // "?") + " " + ((.confidence // 0) | tostring))' 2>/dev/null) || answer=""
+  choice=${answer%% *}
+  conf=${answer#* }
+  if [ -z "$choice" ] || [ "$choice" = "$answer" ]; then
+    laya_failopen "unparsable judge answer"
+    return 0
+  fi
+  conf=$(awk -v c="$conf" 'BEGIN {
+    print (c ~ /^[0-9]*\.?[0-9]+([eE][+-]?[0-9]+)?$/) ? c + 0 : 0
+  }')
+  LAYA_VERDICT=$choice
+  LAYA_CONF=$conf
+  LAYA_ROUTE=$(triage_route "$choice" "$conf")
+  if [ -z "${LAYA_TRIAGE_QUIET:-}" ]; then
+    echo "$(ts) laya triage (T259): needs_eval=$LAYA_VERDICT conf=$LAYA_CONF (HIGH=$TRIAGE_HIGH) -> route=$LAYA_ROUTE" >> "$LOG"
+  fi
+}
+
+laya_fields() { # the gate line's triage fields for the verdict laya_triage
+  # left behind — one shape at both call sites (a real verdict carries
+  # laya/conf/route; a fail-open reads laya=down).
+  if [ -n "$LAYA_ROUTE" ]; then
+    echo "laya=$LAYA_VERDICT conf=$LAYA_CONF route=$LAYA_ROUTE"
+  else
+    echo "laya=down conf=- route=-"
+  fi
+}
+
+laya_record_write() { # append ONE decision record — jq builds it, so the
+  # line is valid JSON or nothing lands (the corpus stays parseable, the
+  # T199/T200 tooling never sees a torn line from this writer).
+  jq -cn \
+    --arg id "$1" --argjson ts "$2" --arg class "$3" --arg subject "$4" \
+    --arg inputs "$5" --arg options "$6" --arg choice "$7" --argjson confidence "$8" \
+    '{id: $id, ts: $ts, class: $class, subject: $subject, inputs: $inputs,
+      options: $options, choice: $choice, confidence: $confidence}' \
+    >> .chug/decisions.jsonl
+}
+
+laya_backfill() { # $1 = the parked pending record, $2 = THIS cycle's gate
+  # line — the outcome label for the parked triage id (req 4: what the
+  # loop found when it looked, backfilled next cycle; the T200 export
+  # joins them into the accuracy census). Labels, supervisor-observable
+  # only, documented in LOOP-SPEC: a skip held (landed-clean) while the
+  # delta stayed bookkeeping-only; a skip overtaken by real work (the
+  # delta went non-bookkeeping) did not (fixed-up); a launch held when its
+  # evaluation landed the artifacts (the baseline moved) and did not when
+  # the next look still finds the baseline unchanged. `reverted` is never
+  # emitted: the supervisor has no revert path.
+  local pend=$1 gate=$2 id route pbase cur_base cur_book choice what
+  id=$(jq -r '.id // ""' "$pend" 2>/dev/null) || id=""
+  if [ -z "$id" ]; then
+    echo "$(ts) laya triage (T259): unreadable pending record — backfill skipped" >> "$LOG"
+    return 0
+  fi
+  route=$(jq -r '.route // ""' "$pend" 2>/dev/null) || route=""
+  pbase=$(jq -r '.base // ""' "$pend" 2>/dev/null) || pbase=""
+  cur_base=$(laya_gate_field base= "$gate")
+  cur_book=$(laya_gate_field bookkeeping= "$gate")
+  if [ "$route" = skip ]; then
+    if [ "$cur_book" = no ]; then
+      choice="fixed-up"; what="the delta went non-bookkeeping after the skip"
+    else
+      choice="landed-clean"; what="the delta stayed bookkeeping-only through the next look"
+    fi
+  else
+    if [ -n "$cur_base" ] && [ "$cur_base" != "$pbase" ]; then
+      choice="landed-clean"; what="the launched evaluation landed its artifacts (the baseline moved)"
+    else
+      choice="fixed-up"; what="no evaluation artifacts since the launch (the baseline is unchanged)"
+    fi
+  fi
+  if laya_record_write "$id" "$(date -u +%s)" "outcome" "$id" \
+      "what the loop found when it looked: $what; bookkeeping=$cur_book base=${cur_base:-none}" \
+      "landed-clean | fixed-up | reverted" "$choice" 1; then
+    echo "$(ts) laya triage (T259): outcome backfill $id -> $choice ($what)" >> "$LOG"
+  else
+    echo "$(ts) laya triage (T259): outcome backfill write FAILED — continuing" >> "$LOG"
+  fi
+}
+
+laya_record() { # T259 req 4 — the decision_log record per triage + the
+  # previous triage's outcome backfill. RUN MODE ONLY (the predicate probe
+  # never writes), best-effort throughout: a jq-less or unwritable host
+  # skips the corpus, never the cycle.
+  local gate=$1 pending="$STATE/triage-pending.json"
+  command -v jq >/dev/null 2>&1 || return 0
+  if [ -f "$pending" ]; then
+    laya_backfill "$pending" "$gate"
+    rm -f "$pending"
+  fi
+  local verdict conf route streak tripped new closed deaths book fresh
+  verdict=$(laya_gate_field laya= "$gate")
+  case "$verdict" in
+    yes|no) ;;
+    *) return 0 ;; # laya=none (the mechanical layer settled it) or laya=down (fail-open)
+  esac
+  conf=$(laya_gate_field conf= "$gate")
+  route=$(laya_gate_field route= "$gate")
+  streak=$(laya_gate_field streak= "$gate")
+  new=$(laya_gate_field new= "$gate")
+  closed=$(laya_gate_field closed= "$gate")
+  deaths=$(laya_gate_field deaths= "$gate")
+  book=$(laya_gate_field bookkeeping= "$gate")
+  fresh=$(laya_gate_field fresh= "$gate")
+  if [ "$streak" -ge 3 ]; then tripped=yes; else tripped=no; fi
+  # The pack verbatim, re-derived from the SAME inputs the gate just sent
+  # (pure functions of the gate line + the repo state; the record carries
+  # byte-for-byte what the judge answered about).
+  local pack
+  pack=$(triage_request_body "$new" "$closed" "$deaths" \
+    "$(changed_files_by_class "$(laya_gate_field base= "$gate")")" \
+    "$(digest_stats)" "$streak" "$book" "$fresh" "$tripped" | jq -c '.state' 2>/dev/null) || pack="{}"
+  local now id
+  now=$(date -u +%s)
+  LAYA_SEQ=$((LAYA_SEQ + 1))
+  id="d${now}-loopd${LAYA_SEQ}"
+  if laya_record_write "$id" "$now" "laya-triage" \
+      "cycle-$(date -u +%Y%m%d-%H%M%S) eval triage (T259)" \
+      "${pack:-{}} | verdict=needs_eval:$verdict conf=$conf route=$route" \
+      "skip | glm | kimi" "$route" "$conf"; then
+    # park the id for the next look's outcome backfill
+    jq -cn --arg id "$id" --arg route "$route" \
+      --arg base "$(laya_gate_field base= "$gate")" \
+      --arg deaths "$deaths" \
+      '{id: $id, route: $route, base: $base, deaths: $deaths}' > "$pending" 2>/dev/null \
+      || rm -f "$pending"
+  else
+    echo "$(ts) laya triage (T259): decision record write FAILED — continuing" >> "$LOG"
+  fi
+}
+
 # T258 — the eval-cycle gate: the disposition predicate, computed by the
 # supervisor BEFORE any launch so an empty delta costs zero LLM calls. The
 # T247 chain rule decides when a skipped-eval chain must STOP (the valve);
@@ -293,9 +596,12 @@ EOF
   fi
   return 0
 }
-eval_gate() { # the T258 decision for a would-be eval cycle, one line:
+eval_gate() { # the T258/T259 decision for a would-be eval cycle, one line:
   #   skip <fields>            — the cheap exit: launch skipped, loopd
-  #                              writes the disposition itself (no LLM)
+  #                              writes the disposition itself (no LLM) —
+  #                              either the mechanical predicate is empty
+  #                              (T258) or the Laya triage is confidently
+  #                              empty (T259)
   #   launch <model> <fields>  — launch the eval on <model>: the FULL
   #                              provider-routed id resolved from the T81
   #                              env, NEVER a bare shorthand (model ids go
@@ -304,6 +610,13 @@ eval_gate() { # the T258 decision for a would-be eval cycle, one line:
   #                              there is no alias layer, so `--model glm`
   #                              would die at the first call)
   # fields: rows= new= deaths= bookkeeping= fresh= base= streak=
+  #         closed= laya= conf= route=
+  #   laya=none          the triage layer did not run (the mechanical layer
+  #                      settled the cycle, or a stale evaluation is due)
+  #   laya=down          fail-open (daemon absent/error/timeout) — T258
+  #                      routing stands verbatim
+  #   laya=yes|no conf=<c> route=skip|glm|kimi — the triage verdict, its
+  #                      confidence, and the route TAKEN
   local base new deaths book fresh streak verb model
   base=$(last_eval_commit)
   new=$(new_todo_rows "$base")
@@ -311,12 +624,37 @@ eval_gate() { # the T258 decision for a would-be eval cycle, one line:
   if delta_bookkeeping_only "$base"; then book=yes; else book=no; fi
   if eval_fresh EVALUATION.md; then fresh=yes; else fresh=no; fi
   streak=$(empty_wrap_streak)
+  local closed laya="laya=none"
+  closed=$(closed_todo_rows "$base")
   # the valve FIRST (T247): the 4th consecutive empty cycle runs the real
   # evaluation whatever the delta says — the chain converts itself. A trip
   # is a REAL evaluation: the orchestrator model (the full $LOOP_ORCH_MODEL
   # id), never the cheap routine model.
+  # T259: the trip consults the SAME triage before it launches — only a
+  # confident-empty (needs-eval=no at/above $TRIAGE_HIGH) on a FRESH
+  # evaluation cancels it (the trip disposition records the verdict, no
+  # kimi stream). A confident-empty on a STALE evaluation cannot cancel:
+  # the daily full evaluation is due, and the T258 doctrine keeps it on
+  # the orchestrator model — the verdict is still recorded, the taken
+  # route reads kimi. Every other answer, and a fail-open, launches.
   if [ "$streak" -ge 3 ]; then
     verb=launch; model=$LOOP_ORCH_MODEL
+    laya_triage "$new" "$closed" "$deaths" "$(changed_files_by_class "$base")" "$(digest_stats)" "$streak" "$book" "$fresh" yes
+    laya="$(laya_fields)"
+    if [ "$LAYA_ROUTE" = skip ]; then
+      if [ "$fresh" = yes ]; then
+        verb=skip; model=-
+      else
+        # the daily full evaluation is due — the confident-empty cannot
+        # cancel it; the verdict is recorded, the taken route reads kimi
+        laya="laya=$LAYA_VERDICT conf=$LAYA_CONF route=kimi"
+      fi
+    elif [ -n "$LAYA_ROUTE" ]; then
+      # the trip launches the real evaluation whatever the triage answered
+      # (yes, unsure, anything) — the taken route reads kimi, the verdict
+      # and confidence stay in the line and the record
+      laya="laya=$LAYA_VERDICT conf=$LAYA_CONF route=kimi"
+    fi
   elif [ "$new" = 0 ] && [ "$deaths" = 0 ] && [ "$book" = yes ] && [ "$fresh" = yes ]; then
     verb=skip; model=-
   elif [ "$book" = yes ] && [ "$fresh" = yes ] && [ "$deaths" != unknown ]; then
@@ -329,14 +667,29 @@ eval_gate() { # the T258 decision for a would-be eval cycle, one line:
     # routes borderline evals to kimi too — single-model operation. A
     # deaths=unknown is NOT borderline: an unreadable record may hide a real
     # death, and the safe side never cheapens out on an unknown.
+    # T259: the triage layer routes this would-be launch — the mechanical
+    # inputs say "maybe nothing"; Laya asks the ONE question and the
+    # confidence-gated cascade routes it: confident-empty -> the cheap
+    # disposition ($0), yes -> glm, unsure (below $TRIAGE_HIGH) -> kimi
+    # (the hard judgment stays System Two). Fail-open (an empty route)
+    # keeps T258 exactly: glm.
+    laya_triage "$new" "$closed" "$deaths" "$(changed_files_by_class "$base")" "$(digest_stats)" "$streak" "$book" "$fresh" no
+    laya="$(laya_fields)"
     verb=launch; model=$LOOP_ROUTINE_MODEL
+    case "$LAYA_ROUTE" in
+      skip) verb=skip; model=- ;;
+      kimi) verb=launch
+            model=$LOOP_ORCH_MODEL ;; # the unsure escalation — System Two, full id never a shorthand
+      *) ;;
+    esac
   else
     # a non-bookkeeping delta (source/spec/doctrine work landed), a stale
     # evaluation, or an unknown deaths count: the fresh-evaluation boundary
-    # stays on the orchestrator model (T81)
+    # stays on the orchestrator model (T81). System Two, no triage: these
+    # are the shapes the T258 routing already decided mechanically.
     verb=launch; model=$LOOP_ORCH_MODEL
   fi
-  echo "$verb $model rows=$(todo_rows TODO.md) new=$new deaths=$deaths bookkeeping=$book fresh=$fresh base=${base:-none} streak=$streak"
+  echo "$verb $model rows=$(todo_rows TODO.md) new=$new deaths=$deaths bookkeeping=$book fresh=$fresh base=${base:-none} streak=$streak closed=$closed $laya"
 }
 loopd_write_disposition() { # T258 — the supervisor writes the one-line
   # disposition ITSELF (the cheap exit, no LLM): an empty commit whose
@@ -345,15 +698,38 @@ loopd_write_disposition() { # T258 — the supervisor writes the one-line
   # assembled from halves so this source keeps EXACTLY ONE contiguous
   # occurrence of it (the awk needle — a second literal in this template
   # would mask a needle-removal mutant under the T237 count pin).
-  local t1="empty-delta" t2="disposition" streak snext fields rc=0
+  # T259: a triaged skip names its verdict in the subject — the layer that
+  # cancelled the launch (the triage on a borderline cycle, or the triage
+  # on a valve trip) must be legible in the git record; a mechanical skip
+  # keeps the T258 subject byte-identical.
+  local t1="empty-delta" t2="disposition" streak snext fields rc=0 verdict conf reason
   # strip "skip - " (the verb + the no-model placeholder) — the fields line
   # in the subject starts at the predicate inputs
   fields=${1#skip - }
+  verdict=$(laya_gate_field laya= "$fields")
+  conf=$(laya_gate_field conf= "$fields")
   streak=$(empty_wrap_streak)
+  reason="(T258 mechanical: predicate empty, launch skipped)"
+  case "$verdict" in
+    yes|no)
+      if [ "$streak" -ge 3 ]; then
+        reason="(T259 laya trip: needs-eval=$verdict conf=$conf — the valve's launch cancelled)"
+      else
+        reason="(T259 laya triage: needs-eval=$verdict conf=$conf — launch skipped)"
+      fi
+      ;;
+  esac
   snext=$((streak + 1))
-  git commit --allow-empty -m "eval: loopd cheap-exit ${t1} ${t2} (T258 mechanical: predicate empty, launch skipped) — TRUE streak ${streak}→${snext}; ${fields}; next cycle re-checks, the T247 valve still binds on the TRUE count" >/dev/null 2>&1 || rc=$?
+  git commit --allow-empty -m "eval: loopd cheap-exit ${t1} ${t2} ${reason} — TRUE streak ${streak}→${snext}; ${fields}; next cycle re-checks, the T247 valve still binds on the TRUE count" >/dev/null 2>&1 || rc=$?
   return "$rc"
 }
+
+# T259 — the triage layer's per-run state: the record-sequence suffix
+# (ids stay unique per supervisor run) and the quiet flag (the predicate
+# probe sets it — the probe writes nothing; run mode leaves it empty so
+# each cycle notes its one triage line).
+LAYA_SEQ=0
+LAYA_TRIAGE_QUIET=""
 
 case "${1:-run}" in
   stop)
@@ -383,10 +759,13 @@ case "${1:-run}" in
     # launching nothing and writing nothing — the routing/sleep-ok probe
     # pattern and the operator's + tests' behavioral surface for the
     # cheap exit (req 5): "<verb> <model> rows=... new=... deaths=...
-    # bookkeeping=... fresh=... base=... streak=...". skip = the launch
-    # is skipped and loopd writes the disposition itself; launch names
-    # the routed orchestrator model. Meaningful in eval mode (the T81
-    # routing decided eval); routine cycles never reach the gate.
+    # bookkeeping=... fresh=... base=... streak=... closed=... laya=...".
+    # skip = the launch is skipped and loopd writes the disposition itself;
+    # launch names the routed orchestrator model. Meaningful in eval mode
+    # (the T81 routing decided eval); routine cycles never reach the gate.
+    # T259: the triage call stays reachable from the probe (the operator's
+    # dry-run surface), but QUIET — a probe notes nothing into loopd.log.
+    LAYA_TRIAGE_QUIET=1
     eval_gate
     exit 0
     ;;
@@ -754,6 +1133,11 @@ while [ ! -f "$STOP" ]; do
     gate_verb=${gate%% *}
     gate_rest=${gate#* }
     gate_model=${gate_rest%% *}
+    # T259: the triage's decision record (the state pack verbatim, the
+    # verdict, the confidence, the route taken) + the previous triage's
+    # outcome backfill — run mode only, best-effort, before the skip or
+    # launch the record describes.
+    laya_record "$gate"
     if [ "$gate_verb" = skip ]; then
       echo "$(ts) cheap-exit disposition (T258): ${gate#skip } — launch skipped" >> "$LOG"
       if loopd_write_disposition "$gate"; then

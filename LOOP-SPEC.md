@@ -103,6 +103,41 @@ inputs (row count, last-change hash, freshness) in loopd.log — the
 streak math (T237) and the valve (T247) read the same git/loopd.log
 record, never an LLM's say-so.
 
+**The triage layer (T259).** Between those two sits the confidence-gated
+cascade — three layers, in order: the **mechanical** predicate (the
+cheap exit above, $0), the **Laya triage** (the T204 judge daemon's
+System One: a compact state pack — rows added and closed, child deaths,
+files changed by class, digest stats, streak position — sent over the
+host-scoped 0600 daemon socket with ONE classification question,
+needs-eval: yes/no, plus its confidence), and **System Two** (the
+launched evaluation). Laya gates only the would-be launches the
+mechanical layer cannot settle: the borderline non-trip eval and the
+valve trip. Its question — "does this delta need a full eval" — is a
+routing classification, never a quality verdict (the SPEC-3 constraint
+quoted: laya does text classification ONLY — no counting, negation, or
+completion judgments). The thresholds live in ONE place —
+loopd.sh's `TRIAGE_HIGH` (0.85), whose comment points back here — and
+the cascade is: confidence >= HIGH and `no` skips the launch, loopd
+writes the disposition with the verdict recorded ($0); `yes` routes the
+borderline eval to glm; confidence < HIGH escalates to kimi (the hard
+judgment stays System Two). A valve trip consults the SAME triage, and
+only a confident-empty on a FRESH evaluation cancels it (the trip
+disposition records the verdict, no kimi stream); a confident-empty on
+a stale evaluation cannot cancel the due daily full evaluation, and any
+other trip answer launches the real evaluation on the orchestrator
+model — the taken route reads kimi in every launch case. Fail-open
+everywhere: the daemon absent, any error, or a >2s timeout falls back
+to exactly the T258 routing — one note per cycle in loopd.log, never a
+storm. Every triage is recorded to the decision corpus
+(`.chug/decisions.jsonl`, class `laya-triage`: the state pack verbatim,
+the verdict, the confidence, the route taken) and the next look
+backfills the outcome (class `outcome`, naming the triage id): a skip
+held (landed-clean) while the delta stayed bookkeeping-only, was
+overtaken (fixed-up) when real work landed; a launch held when its
+evaluation landed the artifacts and did not when the next look still
+finds the baseline unchanged — the F13 distillation corpus, joined by
+scripts/decisions-export.sh.
+
 Commit the evaluation artifacts (`eval: ...`) before
 dispatching.
 
