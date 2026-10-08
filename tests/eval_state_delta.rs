@@ -31,9 +31,16 @@
 //!    (best-effort, fail-closed) and META-META-SPEC carries the state+delta
 //!    read path, the trip=full rule, the splice discipline and the >= 5x
 //!    fresh-input acceptance metric.
+//! 5. the production invocation contract (the aa755fb fix-up pins): loopd
+//!    DIRECT-EXECS its scripts, so every loopd-invoked script must be
+//!    committed 100755 — a `bash scripts/x.sh` test never sees a missing
+//!    exec bit, execve in production does (EACCES, exit 126). Plus: the
+//!    empty-previous-ring splice leg, newest-last chronology, and the
+//!    explicit `features-md:` fact META-META-SPEC's read path keys on.
 
 #![cfg(unix)]
 
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -732,6 +739,11 @@ fn doctrine_carries_the_state_delta_read_path() {
             ">= 5x fresh-input drop on state-hit cycles",
             "the acceptance metric (req 3)",
         ),
+        (
+            "features-md: changed|unchanged",
+            "the explicit FEATURES.md movement line the delta emits (req: the \
+             read path's Tier-1 re-read is keyed on it)",
+        ),
         ("eval-commit:", "the schema's marker field"),
         ("state-drift:", "the schema's drift field"),
     ] {
@@ -740,4 +752,273 @@ fn doctrine_carries_the_state_delta_read_path() {
             "META-META-SPEC must state {what} ({needle:?})"
         );
     }
+}
+
+// ---- the aa755fb fix-up pins (F1–F4) ------------------------------------
+
+/// The `  - ` item lines under the delta's `- <header_needle>` list header,
+/// in printed order (until the first non-item line).
+fn listed_lines_after(delta: &str, header_needle: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut in_list = false;
+    for line in delta.lines() {
+        if !in_list {
+            if line.starts_with("- ") && line.contains(header_needle) {
+                in_list = true;
+            }
+            continue;
+        }
+        match line.strip_prefix("  - ") {
+            Some(rest) => out.push(rest.to_string()),
+            None => break,
+        }
+    }
+    out
+}
+
+fn committed_mode(rel: &str) -> String {
+    let out = Command::new("git")
+        .args(["ls-files", "-s", rel])
+        .current_dir(repo_root())
+        .output()
+        .unwrap_or_else(|e| panic!("git ls-files {rel}: {e}"));
+    assert!(
+        out.status.success(),
+        "git ls-files {rel} failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8_lossy(&out.stdout)
+        .split_whitespace()
+        .next()
+        .unwrap_or("(untracked)")
+        .to_string()
+}
+
+/// F1 — the production invocation contract. loopd.sh direct-execs the delta
+/// (`scripts/eval-delta.sh >> "$LOG" 2>&1`, execve, no bash prefix), so the
+/// committed mode MUST be 100755 like every sibling loopd script. A 100644
+/// commit passes every `bash scripts/eval-delta.sh` test — which is exactly
+/// how the F1 regression shipped — while production execve fails EACCES
+/// (exit 126) and .chug/eval-delta.md is never built (fail-closed full
+/// reads forever).
+#[test]
+fn eval_delta_is_committed_100755_like_every_sibling_loopd_script() {
+    let mode = committed_mode("scripts/eval-delta.sh");
+    assert_eq!(
+        mode, "100755",
+        "scripts/eval-delta.sh is committed {mode}; loopd.sh direct-execs it, \
+         so execve fails EACCES (exit 126) on a fresh checkout and the whole \
+         T260 read path is silently inert"
+    );
+    // The working tree must carry the bit too (the direct-exec test proves
+    // the run itself, not just the index).
+    let meta = std::fs::metadata(script_path()).expect("stat scripts/eval-delta.sh");
+    assert!(
+        meta.permissions().mode() & 0o111 != 0,
+        "scripts/eval-delta.sh lost its exec bit in the working tree"
+    );
+}
+
+/// F1 — the run itself, under the production invocation (direct execve, no
+/// `bash` prefix). This is the contract the old tests could not see.
+#[test]
+fn eval_delta_runs_when_directly_executed_like_loopd_does() {
+    let f = Fixture::new("direct-exec");
+    let marker = f.head();
+    f.set_state(&state_text(&marker, "none", &refs(&ring(1))), true);
+    let out = Command::new(script_path())
+        .arg(&f.dir)
+        .env("CHUG_DELTA_NOW", PINNED_NOW)
+        .output()
+        .expect(
+            "direct execve of scripts/eval-delta.sh failed — loopd.sh invokes \
+             it WITHOUT a bash prefix, so a missing exec bit (committed 100644) \
+             fails EACCES here exactly as in production",
+        );
+    assert!(
+        out.status.success(),
+        "direct exec failed {:?}: {}",
+        out.status.code(),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let delta =
+        std::fs::read_to_string(f.dir.join(".chug/eval-delta.md")).expect("delta written");
+    assert_eq!(verdict(&delta), "STATE-HIT", "{delta}");
+}
+
+/// F1's CLASS sweep (cycle-33 rule): the finding names a class —
+/// production-invocation-contract gaps the test harness cannot see. Sweep
+/// EVERY script loopd.sh direct-execs (not just eval-delta.sh): each must be
+/// committed 100755 and carry the exec bit. The one sourced script
+/// (`. scripts/loopd_env_loader.sh`) needs no exec bit and is excluded.
+#[test]
+fn every_loopd_invoked_script_is_committed_100755() {
+    let loopd =
+        std::fs::read_to_string(repo_root().join("loopd.sh")).expect("reading loopd.sh");
+    let mut invoked: Vec<String> = Vec::new();
+    for line in loopd.lines() {
+        let trimmed = line.trim_start();
+        // Comments are not invocations; `.` sources the loader (no execve,
+        // no exec bit needed) and is deliberately out of the sweep.
+        if trimmed.starts_with('#') || trimmed.starts_with(". ") {
+            continue;
+        }
+        let mut rest = trimmed;
+        while let Some(i) = rest.find("scripts/") {
+            let after = &rest[i + "scripts/".len()..];
+            let name: String = after
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+                .collect();
+            if name.len() > 3 && name.ends_with(".sh") {
+                invoked.push(name.clone());
+            }
+            let advance = if name.is_empty() { 1 } else { name.len() };
+            rest = &after[advance..];
+        }
+    }
+    invoked.sort();
+    invoked.dedup();
+    assert!(
+        invoked.contains(&"eval-delta.sh".to_string()),
+        "the scanner must find the T260 delta invocation: {invoked:?}"
+    );
+    assert!(
+        invoked.len() >= 4,
+        "the sweep must cover every loopd-invoked script (eval-digest, \
+         eval-delta, orphan-reaper, site-sync), found: {invoked:?}"
+    );
+    for name in &invoked {
+        let rel = format!("scripts/{name}");
+        let mode = committed_mode(&rel);
+        assert_eq!(
+            mode, "100755",
+            "{rel} is committed {mode}: loopd.sh direct-execs it, so execve \
+             fails EACCES (exit 126) in production while every `bash {rel}` \
+             test stays green — the exact F1 class"
+        );
+        let meta = std::fs::metadata(repo_root().join(&rel))
+            .unwrap_or_else(|e| panic!("stat {rel}: {e}"));
+        assert!(
+            meta.permissions().mode() & 0o111 != 0,
+            "{rel} lost its exec bit in the working tree"
+        );
+    }
+}
+
+/// F2 — the splice verifier's file split used the `NR==FNR` idiom, which
+/// breaks when the FIRST file is empty: NR==FNR stays true through the
+/// second file, every current line lands in the previous set, and a legal
+/// append onto an empty previous ring read as a spurious violation (spurious
+/// FULL-READ). An empty previous ring + a non-empty current ring must
+/// splice-verify as a plain append.
+#[test]
+fn splice_empty_previous_ring_with_nonempty_current_is_a_legal_append() {
+    let f = Fixture::new("empty-prev-ring");
+    let marker = f.head();
+    // The previous state's decisions ring is EMPTY (the bootstrap wrap's
+    // state); this run's ring appends three decisions onto it.
+    f.write(".chug/eval-state.prev.md", &state_text(&marker, "none", &[]));
+    f.set_state(&state_text(&marker, "none", &refs(&ring(3))), false);
+    let (_, delta) = run_delta(&f.dir);
+    assert_eq!(
+        verdict(&delta),
+        "STATE-HIT",
+        "an empty previous ring + a non-empty current ring is a legal append: {delta}"
+    );
+    assert!(
+        delta.contains("splice-check: ok (carried 0, rotated 0, appended 3)"),
+        "{delta}"
+    );
+}
+
+/// F3 — the delta labels its cycle-summary list "newest last", but `git log`
+/// emits newest-FIRST: the output must be reversed (or the label corrected).
+/// The chronology is pinned: the OLDEST wrap first, the NEWEST last.
+#[test]
+fn cycle_summaries_are_newest_last() {
+    let f = Fixture::new("cycle-order");
+    let marker = f.head();
+    f.eval_wrap("eval: cycle 2 older wrap", "2026-10-07T10:00:00Z");
+    f.eval_wrap("eval: cycle 3 newer wrap", "2026-10-07T11:00:00Z");
+    f.set_state(&state_text(&marker, "none", &refs(&ring(1))), true);
+    let (_, delta) = run_delta(&f.dir);
+    let lines = listed_lines_after(&delta, "cycle summaries");
+    assert_eq!(lines.len(), 2, "both wraps are listed: {delta}");
+    let older = lines
+        .iter()
+        .position(|l| l.contains("cycle 2 older wrap"))
+        .expect("older wrap listed");
+    let newer = lines
+        .iter()
+        .position(|l| l.contains("cycle 3 newer wrap"))
+        .expect("newer wrap listed");
+    assert!(
+        older < newer,
+        "the label says 'newest last' — the NEWEST wrap must print LAST: {lines:?}"
+    );
+}
+
+/// F3's second instance — the T184 telemetry list says "newest last" while
+/// its collection order is `ls -t` (newest-FIRST): the printed lines must be
+/// reversed so the newest stream is last.
+#[test]
+fn t184_telemetry_lines_are_newest_last() {
+    let f = Fixture::new("telem-order");
+    let marker = f.head();
+    f.loop_spec_events("events-20261006-090000.jsonl", 120_000, 1_500_000, 20_000);
+    f.loop_spec_events("events-20261008-090000.jsonl", 130_000, 1_600_000, 21_000);
+    // Older stream: 2026-10-08 09:00 local; newer: 2026-10-10 09:00 local
+    // (both after the pinned 2026-10-07T09:00Z marker, for any sane TZ).
+    f.stamp(".chug/events-20261006-090000.jsonl", "202610080900");
+    f.stamp(".chug/events-20261008-090000.jsonl", "202610100900");
+    f.set_state(&state_text(&marker, "none", &refs(&ring(1))), true);
+    let (_, delta) = run_delta(&f.dir);
+    let lines = listed_lines_after(&delta, "T184 fresh-input telemetry");
+    assert_eq!(lines.len(), 2, "both LOOP-SPEC streams are listed: {delta}");
+    let older = lines
+        .iter()
+        .position(|l| l.contains("events-20261006-090000.jsonl"))
+        .expect("older stream listed");
+    let newer = lines
+        .iter()
+        .position(|l| l.contains("events-20261008-090000.jsonl"))
+        .expect("newer stream listed");
+    assert!(
+        older < newer,
+        "the label says 'newest last' — the NEWEST stream must print LAST: {lines:?}"
+    );
+}
+
+/// F4 — META-META-SPEC's T260 block keys a conditional Tier-1 re-read on
+/// FEATURES.md movement, but the delta never computed a FEATURES.md fact.
+/// The fix: an explicit `features-md: changed|unchanged` line (which keeps
+/// the doctrine sentence true), pinned here.
+#[test]
+fn delta_reports_features_md_movement() {
+    let f = Fixture::new("features-md");
+    let marker = f.head();
+    f.set_state(&state_text(&marker, "none", &refs(&ring(1))), true);
+    let (_, delta) = run_delta(&f.dir);
+    assert!(
+        delta.contains("- features-md: unchanged"),
+        "an unchanged FEATURES.md must be EXPLICIT, not merely absent: {delta}"
+    );
+    // A roadmap append after the marker flips the fact to changed.
+    f.write(
+        "FEATURES.md",
+        "# FEATURES.md — roadmap\n\n| F1 | a | b | c |\n| F2 | d | e | f |\n",
+    );
+    f.git(&["add", "."]);
+    f.commit_dated("features: append F2", "2026-10-07T10:00:00Z");
+    let (_, delta) = run_delta(&f.dir);
+    assert_eq!(
+        verdict(&delta),
+        "STATE-HIT",
+        "a features commit is not an eval wrap (no EVALUATION.md touch): {delta}"
+    );
+    assert!(
+        delta.contains("- features-md: changed"),
+        "FEATURES.md movement must reach the delta explicitly: {delta}"
+    );
 }

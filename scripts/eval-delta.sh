@@ -107,9 +107,14 @@ state_decisions() {
 #     one line must survive verbatim (a rewrite that carries nothing reads as
 #     summarization and forces the next eval full).
 # Anything else prints `violated: ...`.
+#
+# (The file split uses FILENAME == ARGV[1], never the NR==FNR idiom: that
+# idiom breaks when the FIRST file is empty — NR==FNR stays true through the
+# second file, every current line lands in the previous set, and a legal
+# append onto an empty previous ring reads as a spurious violation.)
 splice_verdict() {
   awk -v maxd="$MAX_DECISIONS" '
-    NR==FNR { p[++m] = $0; next }
+    FILENAME == ARGV[1] { p[++m] = $0; next }
     { c[++k] = $0 }
     END {
       if (k > maxd) { printf "violated: decisions %d > %d (ring overfull)\n", k, maxd; exit }
@@ -250,6 +255,14 @@ if [ "$git_ok" = yes ]; then
     work_more_txt=""
     if [ "$work_n" -gt 12 ]; then work_more_txt=" (+$((work_n - 12)) more)"; fi
 
+    # FEATURES.md movement (META-META-SPEC's read-path block keys a
+    # conditional Tier-1 re-read on it — so the fact must be explicit):
+    # changed|unchanged since the marker.
+    features_md="unchanged"
+    if [ -n "$(g diff --name-only "$MARKER" HEAD -- FEATURES.md 2>/dev/null)" ]; then
+      features_md="changed"
+    fi
+
     # TODO rows since the marker: id+status set diff (added/closed/removed).
     # Two-file awk (never -v) so row text with backslashes survives verbatim;
     # a missing old TODO.md yields an empty old set (everything "added").
@@ -279,8 +292,10 @@ if [ "$git_ok" = yes ]; then
       }
     ' <(printf '%s' "$OLD_TODO") <(cat "$ROOT/TODO.md" 2>/dev/null || true) </dev/null 2>/dev/null) || rows_line="added ? | closed ? | removed ?"
 
-    # cycle summaries: the wrap commits since the marker (newest last)
-    cycles=$(g log --format='  - %h %s' --no-decorate "${MARKER}..HEAD" -- EVALUATION.md | head -8)
+    # cycle summaries: the wrap commits since the marker, NEWEST LAST —
+    # git log emits newest-first, so the newest 8 are reversed for output.
+    cycles=$(g log --format='  - %h %s' --no-decorate "${MARKER}..HEAD" -- EVALUATION.md | head -8 \
+      | awk '{ l[NR] = $0 } END { for (i = NR; i >= 1; i--) print l[i] }')
     [ -n "$cycles" ] || cycles="  - (none)"
 
     # deaths + goal rejects in events files newer than the marker
@@ -304,8 +319,9 @@ if [ "$git_ok" = yes ]; then
     # T184 telemetry: the last cumulative token line of each LOOP-SPEC
     # stream (the orchestrator runs LOOP-SPEC every cycle; children carry
     # specs/t*.md), newest 3, so the fresh-input before/after the wrap
-    # records in Outcomes is mechanically at hand.
-    telem=""
+    # records in Outcomes is mechanically at hand. Collected in `ls -t`
+    # order (newest-first), printed NEWEST LAST below.
+    telem_nf=""
     loops_n=0
     for f in $(ls -t "$CHUG"/events*.jsonl 2>/dev/null | head -40); do
       is_loop=$(jq -Rr 'fromjson? | select(.type=="run_start") | (.spec // "") | select(endswith("LOOP-SPEC.md"))' "$f" 2>/dev/null | head -1)
@@ -316,17 +332,25 @@ if [ "$git_ok" = yes ]; then
       since=no
       [ "$(mtime_of "$f")" -gt "$marker_epoch" ] && since=yes
       name=$(basename "$f")
-      telem="${telem}  - ${name}: fresh-input $(printf '%s' "$toks" | cut -f1) | cache-read $(printf '%s' "$toks" | cut -f3) | out $(printf '%s' "$toks" | cut -f2) | since-marker ${since}
+      telem_nf="${telem_nf}  - ${name}: fresh-input $(printf '%s' "$toks" | cut -f1) | cache-read $(printf '%s' "$toks" | cut -f3) | out $(printf '%s' "$toks" | cut -f2) | since-marker ${since}
 "
       loops_n=$((loops_n + 1))
       [ "$loops_n" -ge 3 ] && break
     done
+    # `ls -t` is newest-first; the delta's label (and reading order) is
+    # newest LAST — reverse the collected lines verbatim.
+    if [ -n "$telem_nf" ]; then
+      telem=$(printf '%s' "$telem_nf" | awk '{ l[NR] = $0 } END { for (i = NR; i >= 1; i--) print l[i] }')
+    else
+      telem=""
+    fi
 
     DELTA_BODY="## Delta since ${marker_short} (${marker_subj})
 
 - commits since marker: ${commits_since}
 - changed files: work ${work_n} / bookkeeping ${book_n}
 - work files: ${work_list}${work_more_txt}
+- features-md: ${features_md}
 - TODO rows since marker: ${rows_line}
 - child deaths since marker: ${deaths_total}${death_classes:+ — ${death_classes}}
 - goal rejects since marker: ${rejects_total}

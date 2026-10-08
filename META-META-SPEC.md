@@ -32,7 +32,8 @@ every cycle, mechanically). Its `read-path:` verdict is the read-path switch:
   EVALUATION / code re-read below. The delta carries the mechanical
   since-the-marker facts — rows added/closed, child deaths with reason
   classes, changed files by class (bookkeeping vs work), cycle summaries,
-  FEATURES.md movement, and the T184 fresh-input/cache-read telemetry — so
+  FEATURES.md movement (the delta's `features-md: changed|unchanged` line),
+  and the T184 fresh-input/cache-read telemetry — so
   the evaluation input is ~2 small files, not the 1.7M-token corpus re-read.
   If the delta shows FEATURES.md changed since the marker, re-read its Tier-1
   section only (the §4 roadmap pull still binds on every evaluation).
