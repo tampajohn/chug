@@ -403,6 +403,12 @@ laya_backfill() { # $1 = the parked pending record, $2 = THIS cycle's gate
   # evaluation landed the artifacts (the baseline moved) and did not when
   # the next look still finds the baseline unchanged. `reverted` is never
   # emitted: the supervisor has no revert path.
+  # ONE outcome per triage id, ever: the pending park is consumed exactly
+  # once (the rm in laya_record, right after this backfill) — a look that
+  # backfills but parks nothing (a mechanical skip, a fail-open) leaves no
+  # stale record behind, so no later look can ever double-backfill the same
+  # id (pinned by a_pending_surviving_an_intervening_non_triage_cycle_
+  # backfills_exactly_once).
   local pend=$1 gate=$2 id route pbase cur_base cur_book choice what
   id=$(jq -r '.id // ""' "$pend" 2>/dev/null) || id=""
   if [ -z "$id" ]; then

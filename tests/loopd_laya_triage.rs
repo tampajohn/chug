@@ -917,3 +917,382 @@ fn the_triage_threshold_lives_in_one_place_with_a_pointer() {
         "the probe's quiet flag, set at exactly one site",
     );
 }
+
+// --- T259 fix-up F2: the four mutation survivors, each with its killer ---------
+
+/// Extract one top-level shell function's source from loopd.sh — the textual
+/// pins scope to the function so a needle count can never be satisfied by an
+/// unrelated site.
+fn loopd_fn_src(fn_name: &str) -> String {
+    let loopd = std::fs::read_to_string(repo_root().join("loopd.sh")).expect("loopd.sh");
+    let start = format!("{fn_name}() {{");
+    let at = loopd
+        .find(&start)
+        .unwrap_or_else(|| panic!("loopd.sh defines {fn_name}"));
+    let rest = &loopd[at..];
+    let end = rest.find("\n}").expect("the function body closes");
+    rest[..end].to_string()
+}
+
+/// A judge daemon that accepts the connection and answers only after
+/// `delay` — the slow-socket fixture for the 2s fail-open bound: with the
+/// bound the probe gives up first (fail-open), without it the answer lands.
+fn serve_judge_delayed(sock: &Path, answer: String, delay: Duration) {
+    let _ = std::fs::remove_file(sock);
+    let listener = UnixListener::bind(sock).expect("bind the slow fixture judge socket");
+    std::thread::spawn(move || {
+        for stream in listener.incoming().flatten() {
+            let mut stream = stream;
+            let mut buf = Vec::new();
+            let mut chunk = [0u8; 16384];
+            loop {
+                match stream.read(&mut chunk) {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => buf.extend_from_slice(&chunk[..n]),
+                }
+                let text = String::from_utf8_lossy(&buf).to_string();
+                let Some(head_end) = text.find("\r\n\r\n") else {
+                    continue;
+                };
+                let want = text
+                    .lines()
+                    .find_map(|l| {
+                        l.to_ascii_lowercase()
+                            .strip_prefix("content-length:")
+                            .map(|v| v.trim().parse::<usize>().ok())
+                    })
+                    .flatten()
+                    .unwrap_or(0);
+                if buf.len() >= head_end + 4 + want {
+                    break;
+                }
+            }
+            std::thread::sleep(delay);
+            let resp = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                answer.len(),
+                answer
+            );
+            let _ = stream.write_all(resp.as_bytes());
+            let _ = stream.flush();
+        }
+    });
+}
+
+/// m3-timeout-unbounded: the >2s timeout leg of req 3 is BEHAVIORAL, not
+/// just documented. The fixture judge accepts, then answers the
+/// confident-empty verdict only after 6s — long past the bound. The probe
+/// must give up at 2s, fail open to the T258 glm routing, and return BEFORE
+/// the late answer could influence the decision. A mutant that removes or
+/// loosens `--max-time 2` lets the 6s answer land: route=skip — the very
+/// decision the bound exists to prevent — and the pin fails (the late
+/// answer's route reads skip, and the elapsed floor busts 4.5s).
+#[test]
+fn a_slow_judge_answer_past_two_seconds_fails_open_bounded() {
+    let f = borderline_fixture();
+    let sock = f.path().join(".chug/daemon.sock");
+    serve_judge_delayed(&sock, judge_answer("no", 0.93), Duration::from_secs(6));
+    let start = std::time::Instant::now();
+    let gate = run_predicate(
+        f.path(),
+        &[
+            ("CHUG_ROUTINE_TODAY", FRESH_DAY),
+            ("CHUG_DAEMON_SOCK", sock.to_string_lossy().as_ref()),
+        ],
+    );
+    let elapsed = start.elapsed();
+    assert_eq!(
+        field_of(&gate, "laya="),
+        "down",
+        "the 6s answer is past the bound — the triage failed open: {gate}"
+    );
+    assert_eq!(
+        model_of(&gate),
+        GLM_ID,
+        "the fail-open keeps the T258 glm routing: {gate}"
+    );
+    assert!(
+        elapsed < Duration::from_millis(4500),
+        "the probe returned in {elapsed:?} — bounded well before the 6s answer landed"
+    );
+}
+
+/// m3, textual half: the bound lives in laya_triage at exactly one site —
+/// `--max-time 2` — so a removal or a loosened value cannot survive the pin.
+#[test]
+fn the_laya_triage_curl_is_bounded_at_two_seconds() {
+    let body = loopd_fn_src("laya_triage");
+    count_eq(&body, "--max-time 2", 1, "the triage call's fail-open bound");
+}
+
+/// m7-launch-backfill-flip, held side: a LAUNCHED triage (route=glm) whose
+/// evaluation lands its artifacts — the baseline MOVES — backfills
+/// landed-clean on the next look. Run mode end to end: pass 1 triages
+/// yes/0.9, launches glm (the fixture's launch fails, a verdict death — the
+/// record and the pending park regardless), the test then commits a fresh
+/// EVALUATION.md (an `eval:` bookkeeping commit) so the next look's baseline
+/// differs from the parked one.
+#[test]
+fn a_launched_triage_backfills_landed_clean_when_the_baseline_moved() {
+    let f = borderline_fixture();
+    let sock = f.path().join(".chug/daemon.sock");
+    serve_judge(&sock, judge_answer("yes", 0.9));
+    let out = run_one_pass(&f, &sock);
+    assert!(
+        out.status.success(),
+        "pass 1 exits clean: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let decisions = fixture_decisions(&f);
+    assert_eq!(decisions.len(), 1, "pass 1 recorded its triage: {decisions:?}");
+    assert!(
+        decisions[0].contains("\"choice\":\"glm\""),
+        "the triage took the glm launch route: {}",
+        decisions[0]
+    );
+    let first_id: String = decisions[0]
+        .split("\"id\":\"")
+        .nth(1)
+        .and_then(|s| s.split('"').next())
+        .map(String::from)
+        .expect("the triage record has an id");
+    assert!(
+        f.path().join(".chug/loopd/triage-pending.json").exists(),
+        "the launch-side triage id is parked too"
+    );
+
+    // The evaluation's artifacts land: an `eval:` commit touching
+    // EVALUATION.md — the baseline moves.
+    f.commit_tree(
+        "eval: cycle-102 fresh eval — the launched evaluation's artifacts",
+        None,
+        Some("# eval — artifacts landed\n"),
+    );
+
+    // Pass 2: the backfill reads the parked record against the MOVED
+    // baseline -> landed-clean, before the cycle's own decision.
+    let out = run_one_pass(&f, &sock);
+    assert!(
+        out.status.success(),
+        "pass 2 exits clean: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let log = fixture_log(&f);
+    assert!(
+        log.contains(&format!("outcome backfill {first_id} -> landed-clean")),
+        "the launch-side backfill names the id and the held label: {log}"
+    );
+    let decisions = fixture_decisions(&f);
+    assert_eq!(decisions.len(), 2, "triage then its outcome: {decisions:?}");
+    for needle in [
+        "\"class\":\"outcome\"",
+        &format!("\"subject\":\"{first_id}\""),
+        "\"choice\":\"landed-clean\"",
+        "the baseline moved",
+    ] {
+        assert!(
+            decisions[1].contains(needle),
+            "the outcome record carries {needle}: {}",
+            decisions[1]
+        );
+    }
+}
+
+/// m7, not-held side: the same launch, but the next look still finds the
+/// baseline UNCHANGED (no evaluation artifacts landed) — the launch did not
+/// hold, and the backfill reads fixed-up.
+#[test]
+fn a_launched_triage_backfills_fixed_up_when_the_baseline_did_not_move() {
+    let f = borderline_fixture();
+    let sock = f.path().join(".chug/daemon.sock");
+    serve_judge(&sock, judge_answer("yes", 0.9));
+    let out = run_one_pass(&f, &sock);
+    assert!(out.status.success(), "pass 1 exits clean");
+    let decisions = fixture_decisions(&f);
+    assert_eq!(decisions.len(), 1, "pass 1 recorded its triage: {decisions:?}");
+    let first_id: String = decisions[0]
+        .split("\"id\":\"")
+        .nth(1)
+        .and_then(|s| s.split('"').next())
+        .map(String::from)
+        .expect("the triage record has an id");
+
+    // Pass 2, no baseline move: the delta is still borderline (T2 new, the
+    // pass-1 death after the baseline), the gate triages again — and the
+    // parked launch triage backfills fixed-up first.
+    let out = run_one_pass(&f, &sock);
+    assert!(out.status.success(), "pass 2 exits clean");
+    let log = fixture_log(&f);
+    assert!(
+        log.contains(&format!("outcome backfill {first_id} -> fixed-up")),
+        "the launch-side backfill reads the not-held label: {log}"
+    );
+    let decisions = fixture_decisions(&f);
+    assert_eq!(decisions.len(), 3, "triage, outcome, triage: {decisions:?}");
+    assert!(
+        decisions[1].contains("\"class\":\"outcome\"")
+            && decisions[1].contains("\"choice\":\"fixed-up\"")
+            && decisions[1].contains("the baseline is unchanged"),
+        "the outcome record carries the not-held label: {}",
+        decisions[1]
+    );
+    assert!(
+        decisions[2].contains("\"class\":\"laya-triage\""),
+        "the second cycle recorded its own triage: {}",
+        decisions[2]
+    );
+}
+
+/// A TODO.md whose single row is still `todo` — the mode=routine shape the
+/// m9 dedup scenario needs (a non-triage cycle between two looks).
+const TODO_ONE_TODO: &str = "| id | title | spec | pri | status | notes |\n\
+     |----|-------|------|-----|--------|-------|\n\
+     | T1 | title | specs/T1-slug.md | 2 | todo | notes |\n";
+
+/// m9-pending-never-removed: ONE outcome per triage id, ever. The pending
+/// park survives an intervening NON-triage cycle (a routine-mode cycle never
+/// calls laya_record), and the next EVAL look consumes it exactly once — the
+/// rm after the backfill means a look that backfills but parks NOTHING (a
+/// mechanical skip: laya=none) leaves no stale park behind, so a fourth look
+/// can never double-backfill the same id. Four bounded passes:
+///   1. borderline triaged skip -> parks id X;
+///   2. routine mode (a `todo` row + fresh eval, a green stub cycle) — no
+///      laya_record, X survives;
+///   3. MECHANICAL skip (predicate empty, laya=none) — the look still
+///      backfills X once, and parks nothing: the pending file is GONE;
+///   4. mechanical skip again — nothing left to backfill.
+/// A mutant that drops the rm re-backfills X on pass 4 — a second outcome
+/// record naming X and a surviving pending file — and both pins fail.
+#[test]
+fn a_pending_surviving_an_intervening_non_triage_cycle_backfills_exactly_once() {
+    let f = borderline_fixture();
+    let sock = f.path().join(".chug/daemon.sock");
+    serve_judge(&sock, judge_answer("no", 0.93));
+    // Pass 1: the triaged skip parks X.
+    let out = run_one_pass(&f, &sock);
+    assert!(out.status.success(), "pass 1 exits clean");
+    let decisions = fixture_decisions(&f);
+    assert_eq!(decisions.len(), 1, "pass 1 recorded its triage: {decisions:?}");
+    let x_id: String = decisions[0]
+        .split("\"id\":\"")
+        .nth(1)
+        .and_then(|s| s.split('"').next())
+        .map(String::from)
+        .expect("the triage record has an id");
+
+    // Pass 2: ROUTINE mode — a `todo` row plus the fresh evaluation; the
+    // stubbed cycle child exits green (no death line, no commits). The
+    // gate/laya_record never run; the parked X survives untouched.
+    f.commit_tree(
+        "eval: cycle-103 fresh eval — a row lands, the queue works",
+        Some(TODO_ONE_TODO),
+        None,
+    );
+    std::fs::create_dir_all(f.path().join("target/release")).expect("fixture chug dir");
+    // The stub cycle child: green verdict shape (rc 0 + the goal-complete
+    // marker the supervisor's verdict grep reads) — no death line, no
+    // commits, no wrap writes.
+    write_exec(
+        &f.path().join("target/release/chug"),
+        "#!/bin/sh\necho \"chug: goal complete\"\nexit 0\n",
+    );
+    let out = run_one_pass(&f, &sock);
+    assert!(out.status.success(), "pass 2 (routine) exits clean");
+    let log = fixture_log(&f);
+    assert!(
+        !log.contains("cycle ended WITHOUT goal complete"),
+        "the stub cycle exits green — no death line reshapes pass 3's gate: {log}"
+    );
+    let decisions = fixture_decisions(&f);
+    assert_eq!(
+        decisions.len(),
+        1,
+        "a routine cycle records no triage and no outcome: {decisions:?}"
+    );
+    assert!(
+        f.path().join(".chug/loopd/triage-pending.json").exists(),
+        "the park survives the intervening non-triage cycle"
+    );
+
+    // Pass 3: eval again, predicate EMPTY (the row re-drained, no deaths) —
+    // the mechanical skip arm, laya=none. The look still consumes the park:
+    // X backfills exactly once, and NOTHING is parked after it.
+    f.commit_tree(
+        "eval: cycle-104 fresh eval — the queue re-drained",
+        Some(TODO_ONE_DONE),
+        None,
+    );
+    let out = run_one_pass(&f, &sock);
+    assert!(out.status.success(), "pass 3 exits clean");
+    let decisions = fixture_decisions(&f);
+    assert_eq!(decisions.len(), 2, "triage X, outcome X: {decisions:?}");
+    assert_eq!(
+        decisions[1]
+            .split("\"subject\":\"")
+            .nth(1)
+            .and_then(|s| s.split('"').next()),
+        Some(x_id.as_str()),
+        "the outcome names the parked id: {}",
+        decisions[1]
+    );
+    assert!(
+        !f.path().join(".chug/loopd/triage-pending.json").exists(),
+        "a look that backfills but parks nothing (laya=none) CONSUMES the park — \
+         no stale pending survives it"
+    );
+
+    // Pass 4: the same mechanical skip — nothing left to backfill, and the
+    // parked id X must never be backfilled twice.
+    let out = run_one_pass(&f, &sock);
+    assert!(out.status.success(), "pass 4 exits clean");
+    let decisions = fixture_decisions(&f);
+    let outcomes: Vec<&String> = decisions
+        .iter()
+        .filter(|d| d.contains("\"class\":\"outcome\""))
+        .collect();
+    assert_eq!(outcomes.len(), 1, "one outcome per triage id: {decisions:?}");
+    assert_eq!(
+        outcomes
+            .iter()
+            .filter(|d| d.contains(&format!("\"subject\":\"{x_id}\"")))
+            .count(),
+        1,
+        "the parked id X was backfilled EXACTLY ONCE across four looks: {decisions:?}"
+    );
+}
+
+/// m11-tripped-flag-dead: the record's valve_tripped derivation is live — a
+/// run-mode trip-cancel (streak 3, fresh, confident-empty) records
+/// valve_tripped:"yes" in the triage record's state pack, and the
+/// disposition subject names the trip cancellation.
+#[test]
+fn a_trip_cancel_records_valve_tripped_yes_in_the_record() {
+    let f = fixture();
+    f.disposition_chain(3);
+    f.pin_eval_mtime(FRESH_EPOCH);
+    let sock = f.path().join(".chug/daemon.sock");
+    serve_judge(&sock, judge_answer("no", 0.95));
+    let out = run_one_pass(&f, &sock);
+    assert!(
+        out.status.success(),
+        "the bounded pass exits clean: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let subject = git_out(f.path(), &["log", "-1", "--format=%s"]);
+    assert!(
+        subject.contains("T259 laya trip: needs-eval=no conf=0.95"),
+        "the cancelled trip's disposition names the trip reason: {subject}"
+    );
+    let decisions = fixture_decisions(&f);
+    assert_eq!(decisions.len(), 1, "one triage record: {decisions:?}");
+    assert!(
+        decisions[0].contains("\"choice\":\"skip\""),
+        "the cancelled trip took the skip route: {}",
+        decisions[0]
+    );
+    assert!(
+        decisions[0].contains("valve_tripped\\\":\\\"yes\\\""),
+        "the state pack's valve leg reads yes on a trip (streak 3): {}",
+        decisions[0]
+    );
+}
