@@ -59,6 +59,8 @@
 
 #![cfg(unix)]
 
+use std::io::{Read, Write};
+use std::os::unix::net::UnixListener;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
@@ -306,6 +308,20 @@ impl Fixture {
 /// Run the copied script's `predicate` probe with the env CLEARED of the
 /// routing knobs (and the git vars that could redirect the walk), then the
 /// caller's overrides applied. Prints the gate's one decision line.
+///
+/// T259 fix-up (F1, the hermeticity class): since the triage moved inside
+/// eval_gate, the probe consults the judge daemon's socket — resolved
+/// $CHUG_DAEMON_SOCK, then $CHUG_HOME, then $HOME/.chug/daemon.sock. A probe
+/// run must NEVER reach the host's LIVE daemon (an operator answer — e.g.
+/// needs-eval=yes conf=0.0103 -> route=kimi — would re-route the borderline
+/// arms and flip these pins green-by-load under full-parallel contention,
+/// failing deterministically under --test-threads=1), so the runner scrubs
+/// the daemon vars AFTER the caller's overrides (no outer-env value AND no
+/// caller override may leak a socket back in — the leak legs the hermeticity
+/// pin below binds live fixture daemons on) and pins HOME to the fixture
+/// root — the same hermetic shape the T259 harness achieves with its
+/// explicit fixture sockets. The fixture HOME also kills the
+/// $HOME/.chug/loopd.env env-file load.
 fn run_predicate(root: &Path, envs: &[(&str, &str)]) -> String {
     let mut cmd = Command::new("bash");
     cmd.arg(root.join("loopd.sh"))
@@ -320,6 +336,15 @@ fn run_predicate(root: &Path, envs: &[(&str, &str)]) -> String {
     for (k, v) in envs {
         cmd.env(k, v);
     }
+    // T259 fix-up (F1), after the overrides: the daemon vars die here — the
+    // triage consults its socket resolved $CHUG_DAEMON_SOCK, $CHUG_HOME,
+    // $HOME/.chug/daemon.sock, and a probe run must resolve that INSIDE the
+    // fixture or nowhere.
+    cmd.env_remove("CHUG_DAEMON_SOCK").env_remove("CHUG_HOME");
+    // Hermetic HOME, last: the daemon socket resolves $HOME/.chug/daemon.sock
+    // — inside the fixture, where nothing listens unless a test binds its own
+    // (see the_probe_runner_never_consults_a_daemon_outside_the_fixture).
+    cmd.env("HOME", root);
     let out = cmd.output().expect("spawn loopd.sh predicate");
     assert!(
         out.status.success(),
@@ -340,6 +365,15 @@ fn verb_of(gate: &str) -> &str {
 /// `$LOOP_ORCH_MODEL` for the kimi arms, never a bare shorthand (F1).
 fn model_of(gate: &str) -> &str {
     gate.split_whitespace().nth(1).expect("gate line has a model")
+}
+
+/// The value of one `<key>=` field in the gate line (empty when absent) —
+/// the triage fields (laya/conf/route) ride the line the T259 harness reads.
+fn field_of(gate: &str, key: &str) -> String {
+    gate.split_whitespace()
+        .find(|f| f.starts_with(key))
+        .map(|f| f[key.len()..].to_string())
+        .unwrap_or_default()
 }
 
 // --- pin 1: the cheap exit skips the launch when inputs are empty -------------
@@ -728,6 +762,119 @@ fn the_disposition_decision_carries_rows_hash_and_freshness() {
     assert!(
         base.chars().all(|c| c.is_ascii_hexdigit()),
         "the last-change hash is a git object id: {gate}"
+    );
+}
+
+// --- T259 fix-up F1: the probe runner is hermetic against the live daemon ------
+
+/// Serve ONE canned /judge answer on `sock` until the process exits — the
+/// T259 fixture-daemon shape (a unix-socket HTTP server), inlined: the test
+/// guards the probe runner's hermeticity, not the daemon protocol. The
+/// canned answer is the live host daemon's deterministic borderline verdict
+/// (needs-eval=yes, confidence 0.0103 -> route=kimi) — the exact answer that
+/// flipped the T258 borderline pins before the scrub.
+fn serve_fixture_judge(sock: &Path) {
+    let _ = std::fs::remove_file(sock);
+    let listener = UnixListener::bind(sock).expect("bind the fixture judge socket");
+    let body =
+        "{\"answers\":{\"needs_eval\":{\"choice\":\"yes\",\"confidence\":0.0103}}}".to_string();
+    std::thread::spawn(move || {
+        for stream in listener.incoming().flatten() {
+            let mut stream = stream;
+            let mut buf = Vec::new();
+            let mut chunk = [0u8; 16384];
+            loop {
+                match stream.read(&mut chunk) {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => buf.extend_from_slice(&chunk[..n]),
+                }
+                let text = String::from_utf8_lossy(&buf).to_string();
+                let Some(head_end) = text.find("\r\n\r\n") else { continue };
+                let want = text
+                    .lines()
+                    .find_map(|l| {
+                        l.to_ascii_lowercase()
+                            .strip_prefix("content-length:")
+                            .map(|v| v.trim().parse::<usize>().ok())
+                    })
+                    .flatten()
+                    .unwrap_or(0);
+                if buf.len() >= head_end + 4 + want {
+                    break;
+                }
+            }
+            let resp = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            let _ = stream.write_all(resp.as_bytes());
+            let _ = stream.flush();
+        }
+    });
+}
+
+/// THE hermeticity pin (T259 fix-up F1, the class): the probe runner must
+/// NEVER let a loopd.sh path reach a daemon the test did not place inside
+/// the fixture. Three leak legs, each killed by the runner's scrub: an
+/// explicit $CHUG_DAEMON_SOCK, $CHUG_HOME, and a hostile $HOME (all bound
+/// with LIVE fixture daemons answering the deterministic live-host verdict —
+/// needs-eval=yes conf=0.0103 -> route=kimi). With the scrub the probe
+/// resolves <fixture>/.chug/daemon.sock, finds nothing, fails open, and the
+/// T258 borderline routing stands (glm, laya=down). Remove ANY scrub leg and
+/// this pin fails deterministically — under --test-threads=1 AND
+/// full-parallel — the green-by-load failure the live host daemon produced
+/// before the fix (the three borderline pins' RED).
+#[test]
+fn the_probe_runner_never_consults_a_daemon_outside_the_fixture() {
+    let f = fixture();
+    // The BORDERLINE shape (the T259 target case): a new row over a
+    // bookkeeping-only delta with a fresh evaluation — the arm that consults
+    // the triage layer.
+    f.commit_tree(
+        "eval: cycle-101 fresh eval — one row filed, queue re-drained",
+        Some(TODO_TWO_DONE),
+        None,
+    );
+    // The hostile HOME + CHUG_HOME dirs first — the fixture daemons bind
+    // inside them.
+    let evil_home = f.path().join("evil-home");
+    std::fs::create_dir_all(evil_home.join(".chug")).expect("evil HOME dir");
+    let evil_chug_home = f.path().join("evil-chug-home");
+    std::fs::create_dir_all(&evil_chug_home).expect("evil CHUG_HOME dir");
+    // Leg 1: an explicit daemon socket the caller passes in (the runner must
+    // scrub CHUG_DAEMON_SOCK).
+    let evil_sock = f.path().join("evil-home/sock.sock");
+    serve_fixture_judge(&evil_sock);
+    // Leg 2: a CHUG_HOME-scoped socket (the runner must scrub CHUG_HOME).
+    serve_fixture_judge(&evil_chug_home.join("daemon.sock"));
+    // Leg 3: a hostile HOME (the runner must pin HOME to the fixture root).
+    serve_fixture_judge(&evil_home.join(".chug/daemon.sock"));
+
+    let gate = run_predicate(
+        f.path(),
+        &[
+            ("CHUG_ROUTINE_TODAY", FRESH_DAY),
+            ("CHUG_DAEMON_SOCK", evil_sock.to_string_lossy().as_ref()),
+            ("CHUG_HOME", evil_chug_home.to_string_lossy().as_ref()),
+            ("HOME", evil_home.to_string_lossy().as_ref()),
+        ],
+    );
+    assert_eq!(
+        verb_of(&gate),
+        "launch",
+        "no outside daemon was consulted, so the borderline arm keeps its T258 routing: {gate}"
+    );
+    assert_eq!(
+        model_of(&gate),
+        GLM_ID,
+        "the borderline eval routes glm — never the kimi id a consulted daemon would answer: {gate}"
+    );
+    assert_eq!(
+        field_of(&gate, "laya="),
+        "down",
+        "the probe saw NO daemon (fail-open at the fixture-local resolution) — a live \
+         verdict here would mean an outside socket was consulted: {gate}"
     );
 }
 
