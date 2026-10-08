@@ -1,6 +1,6 @@
 # T261 — doctrine prune: triage-on-change, backfill batching, weekly README audit
 
-check: cargo test
+check: cd "$(git rev-parse --show-toplevel)" && export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared && touch src/*.rs tests/*.rs && cargo test --release
 
 estimate: ~200 lines (three doctrine edits + pins)
 
