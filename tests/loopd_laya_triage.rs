@@ -713,9 +713,11 @@ fn the_state_pack_and_the_one_question_ride_the_judge_request() {
 /// End-to-end: a confident-empty borderline cycle writes the triaged
 /// disposition (the subject names the verdict), records ONE laya-triage
 /// decision (the state pack verbatim + verdict + confidence + route), notes
-/// exactly one triage line, and — on the NEXT look (a mechanical skip, no
-/// triage) — backfills the outcome naming that id (landed-clean: the delta
-/// stayed bookkeeping-only). The F13 corpus, end to end.
+/// exactly one triage line, and — on the NEXT look, which the fixture keeps
+/// BORDERLINE (the production quiet-day rhythm: the T2 row is still new
+/// against the unchanged baseline, so the gate triages AGAIN) — backfills
+/// the outcome naming that id (landed-clean: the delta stayed
+/// bookkeeping-only). The F13 corpus, end to end.
 #[test]
 fn the_triaged_skip_writes_the_disposition_and_the_decision_records_end_to_end() {
     let f = borderline_fixture();
@@ -1161,6 +1163,7 @@ const TODO_ONE_TODO: &str = "| id | title | spec | pri | status | notes |\n\
 ///   3. MECHANICAL skip (predicate empty, laya=none) — the look still
 ///      backfills X once, and parks nothing: the pending file is GONE;
 ///   4. mechanical skip again — nothing left to backfill.
+///
 /// A mutant that drops the rm re-backfills X on pass 4 — a second outcome
 /// record naming X and a surviving pending file — and both pins fail.
 #[test]
