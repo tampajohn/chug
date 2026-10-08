@@ -1,6 +1,6 @@
 # T264 — Scoped-scan pointer: unscoped recursive walks die at the bash cap (META-META-SPEC clause)
 
-check: cd "$(git rev-parse --show-toplevel)" && export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared && touch src/*.rs tests/*.rs && grep -q 'Scoped drills (T264)' META-META-SPEC.md && grep -q -- '--exclude-dir' META-META-SPEC.md && cargo test --release --test todo_consistency --test eval_state_delta --test loop_spec_cheap_exit --test loop_spec_recovery --test eval_outcomes_carry --test loop_spec_validation_lane
+check: cd "$(git rev-parse --show-toplevel)" && export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-validate-a && touch src/*.rs tests/*.rs && grep -q 'Scoped drills (T264)' META-META-SPEC.md && grep -q -- '--exclude-dir' META-META-SPEC.md && cargo test --release --test todo_consistency --test eval_state_delta --test loop_spec_cheap_exit --test loop_spec_recovery --test eval_outcomes_carry --test loop_spec_validation_lane
 
 ## Repo context
 
