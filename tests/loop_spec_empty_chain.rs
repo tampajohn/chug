@@ -31,6 +31,13 @@
 //! tests/loopd_empty_backoff.rs keeps LOOP-SPEC's contiguous occurrence at
 //! exactly the Phase-3 clause), so multi-word needles match
 //! whitespace-collapsed text.
+//!
+//! T257 adds one Phase-3 needle leg for the trip-wrap stream-actual rule
+//! (the token bullet's sibling): a real-eval (trip) wrap's notes commit
+//! MUST carry the trip stream's whole-stream iteration actual — the
+//! cadence re-arm check's (b) trip-cost input — with the paragraph's
+//! firing evidence (the adjudicated trigger, the second omission, the
+//! trips 18–24 census) anchored in the same leg.
 
 fn loop_spec() -> String {
     let root = std::env::current_dir().expect("cargo sets the test cwd to the package root");
@@ -317,4 +324,80 @@ fn probe_timing_needle_occurs_exactly_once() {
          exactly once — zero means the rule was deleted or reworded (the \
          T248 text-revert mutant), more than one means it is stated twice"
     );
+}
+
+// ---- the T257 Phase-3 leg: the trip wrap's stream-actual color ----
+
+/// (f) The trip-wrap stream-actual rule (Phase 3's sibling to the token
+/// bullet) — a real-eval (trip) wrap's notes commit MUST carry the trip
+/// stream's whole-stream iteration actual, the cadence re-arm check's (b)
+/// trip-cost input. Must occur EXACTLY once in LOOP-SPEC.md
+/// (whitespace-collapsed).
+const TRIP_ACTUAL_NEEDLE: &str =
+    "MUST carry the trip stream's whole-stream iteration actual";
+
+/// The firing evidence the paragraph names alongside the rule: the
+/// adjudicated trigger's decision id, the second-omission wrap, the census
+/// shape, and the digest numbers the zero-casualty note cites. Lose any one
+/// (a partial revert that keeps the headline needle) and the anchor leg
+/// goes red, inside the Phase-3 window only.
+const TRIP_ACTUAL_ANCHORS: [(&str, &str); 4] = [
+    ("d1791416867-11", "the adjudicated trigger's decision id"),
+    ("40717de", "the second omission — cycle-223's own wrap"),
+    ("seven consecutive omissions", "the trips 18–24 census shape"),
+    (
+        "53/40/54/44",
+        "the digest numbers the zero-casualty note cites",
+    ),
+];
+
+/// (f) The trip-wrap stream-actual rule occurs EXACTLY once in
+/// LOOP-SPEC.md, inside the Phase-3 window (the paragraph is a sibling of
+/// the token bullet). Delete the paragraph (or reword the needle phrase)
+/// and this goes red at count 0; a duplicate statement of the rule
+/// elsewhere also goes red; rewrapping the phrase cannot save a deletion
+/// (the needle matches whitespace-collapsed text). A partial revert that
+/// keeps the headline needle but drops a firing-evidence anchor also goes
+/// red (the anchor leg, scoped to Phase 3).
+#[test]
+fn trip_wrap_stream_actual_needle_occurs_exactly_once() {
+    // Needle self-check (T48 idiom): a mangled needle must not let this
+    // pin pass silently.
+    assert!(
+        TRIP_ACTUAL_NEEDLE.starts_with("MUST carry")
+            && TRIP_ACTUAL_NEEDLE.ends_with("whole-stream iteration actual"),
+        "the trip-actual needle must carry the wrap-notes color rule — a \
+         trip wrap's notes MUST carry the trip stream's whole-stream \
+         iteration actual"
+    );
+    let spec = flat(&loop_spec());
+    assert_eq!(
+        spec.matches(TRIP_ACTUAL_NEEDLE).count(),
+        1,
+        "LOOP-SPEC must state the trip-wrap stream-actual rule \
+         ({TRIP_ACTUAL_NEEDLE:?}) exactly once — zero means the rule was \
+         deleted or reworded (the T257 text-revert mutant), more than one \
+         means it is stated twice"
+    );
+    let p3 = spec
+        .find("## Phase 3")
+        .expect("LOOP-SPEC carries the `## Phase 3` heading");
+    let hard = p3
+        + spec[p3..]
+            .find("## Hard rules")
+            .expect("the `## Hard rules` heading follows Phase 3");
+    let window = &spec[p3..hard];
+    assert!(
+        window.contains(TRIP_ACTUAL_NEEDLE),
+        "the trip-wrap stream-actual rule sits in Phase 3, the token \
+         bullet's sibling (moved out of Phase 3?)"
+    );
+    for (anchor, what) in TRIP_ACTUAL_ANCHORS {
+        assert!(
+            window.contains(anchor),
+            "the Phase-3 trip-wrap paragraph must carry {what:?} — \
+             {anchor:?} is missing (deleted, reworded, or moved out of \
+             Phase 3)"
+        );
+    }
 }
