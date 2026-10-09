@@ -1,6 +1,6 @@
 # T265 — eval-text corpus-count method clause: mechanical count + shell-derived arithmetic, never mental arithmetic (META-META-SPEC clause)
 
-check: cd "$(git rev-parse --show-toplevel)" && export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared && touch src/*.rs tests/*.rs && grep -q 'Corpus counts (T265)' META-META-SPEC.md && grep -q -- 'wc -l < .chug/decisions.jsonl' META-META-SPEC.md && cargo test --release --test todo_consistency --test eval_outcomes_carry --test eval_state_delta --test loop_spec_cheap_exit --test loop_spec_check_wall --test loop_spec_doctrine_prune --test loop_spec_recovery --test loop_spec_validation_lane
+check: cd "$(git rev-parse --show-toplevel)" && export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-validate-a && touch src/*.rs tests/*.rs && grep -q 'Corpus counts (T265)' META-META-SPEC.md && grep -q -- 'wc -l < .chug/decisions.jsonl' META-META-SPEC.md && cargo test --release --test todo_consistency --test eval_outcomes_carry --test eval_state_delta --test loop_spec_cheap_exit --test loop_spec_check_wall --test loop_spec_doctrine_prune --test loop_spec_recovery --test loop_spec_validation_lane
 
 ## Repo context
 
