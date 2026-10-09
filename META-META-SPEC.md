@@ -115,7 +115,21 @@ you can). A regenerated EVALUATION.md MUST carry forward every existing
 `## Outcomes` content verbatim (the per-cycle sections and their wrap
 item tables) — the eval rewrites the assessment body only, never the Outcomes ledger;
 before committing, verify the newest pre-existing cycle's section is still
-present. Sections:
+present.
+
+**Corpus counts (T265).** The decision-corpus count quoted anywhere in
+EVALUATION.md is `wc -l < .chug/decisions.jsonl` measured at eval-write,
+and the outcome-label count is
+`jq -c 'select(.class=="outcome")' .chug/decisions.jsonl | wc -l` measured
+in the same probe — never an eyeballed or remembered figure.
+Every DERIVED figure (an inclusive-of-pending-records number, a +N delta
+against a prior eval's recording) is computed with shell arithmetic in
+the same probe (`echo $((pre + added))`), never mental arithmetic — the
+trip-40 inclusive slip (1,698 + 3 recorded as 1,700) is the class's
+evidence. The `.chug/eval-state.md` health line's corpus field carries
+the same two `wc -l`-measured numbers.
+
+Sections:
 
 1. **What chug does well** — be brief.
 2. **Incidents worth fixing** — from the corpus: hangs, budget deaths,
