@@ -93,4 +93,4 @@ surface over.
   affected pin files' tests per LOOP-SPEC step 3's docs-only clause; the
   full suite is not required — zero src/ changes).
 
-check: grep -q 'sort -u' LOOP-SPEC.md && grep -q 'never the count authority' LOOP-SPEC.md && export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared && touch src/*.rs tests/*.rs; cargo test --release --test loop_spec_release_count_method --test loop_spec_eval_read_path_pointer --test loop_spec_loopd_log_pointer --test loop_spec_cheap_exit --test loop_spec_empty_chain --test loop_spec_doctrine_prune
+check: grep -q 'sort -u' LOOP-SPEC.md && grep -q 'never the count authority' LOOP-SPEC.md && export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-validate-a && touch src/*.rs tests/*.rs; cargo test --release --test loop_spec_release_count_method --test loop_spec_eval_read_path_pointer --test loop_spec_loopd_log_pointer --test loop_spec_cheap_exit --test loop_spec_empty_chain --test loop_spec_doctrine_prune
