@@ -948,7 +948,22 @@ alike) has been harvested.
   of HEAD — `git merge-base --is-ancestor <tag> HEAD` is the sanity check
   before cutting the next tag; a non-ancestor newest tag (a rebase
   orphaned it, the v0.17.4 lesson) means the count anchors on the
-  previous ancestor tag and the orphan is named in the notes. HARD RULES: tags
+  previous ancestor tag and the orphan is named in the notes. COUNT
+  METHOD (T269): the items-since-tag count is the count of DISTINCT
+  flipped TODO row-ids in the range — the flip-commit subjects
+  (`^todo:`) name every flipped row including bundled rows (Phase 2
+  step 5), so the mechanical count is
+  `git log <tag>..HEAD --format='%s' | grep -E '^todo:' | grep -oE 'T[0-9]+' | sort -u | wc -l`
+  (or an equivalent distinct-id method) against the ancestor-sanitized
+  tag above, recomputed mechanically at EVERY wrap — never quoted
+  forward from a previous wrap's notes. Merge-subject enumeration
+  (`Merge branch` greps) and in-cycle memory are
+  never the count authority — a landing's commit shape varies (the
+  T265 lesson: a lowercase `merge: t265 …` flip fell out of the shape
+  grep one wrap after landing; the T266 lesson: a custom-subject merge
+  commit — topologically a merge, subject `T266: …`, no `Merge branch`
+  token — makes the shape grep undercount, the frozen record said "2
+  items" when 4 rows had flipped since the tag). HARD RULES: tags
   are immutable — never re-tag, never move, never force-push; tag only
   with gates green at HEAD; ONE tag per wrap; tag message = generated
   notes since the previous tag. A failed release workflow files a row —
