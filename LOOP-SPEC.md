@@ -107,9 +107,9 @@ keeps everything else: any non-bookkeeping delta (source, spec, or
 doctrine work landed), a stale EVALUATION.md (the fresh evaluation
 itself), every valve trip, and all validation (family independence
 unchanged). The supervisor's disposition line records the predicate
-inputs (row count, last-change hash, freshness) in loopd.log — the
-streak math (T237) and the valve (T247) read the same git/loopd.log
-record, never an LLM's say-so.
+inputs (row count, last-change hash, freshness) in loopd.log
+(`.chug/loopd/loopd.log`) — the streak math (T237) and the valve (T247)
+read the same git/loopd.log record, never an LLM's say-so.
 
 **The triage layer (T259).** Between those two sits the confidence-gated
 cascade — three layers, in order: the **mechanical** predicate (the
