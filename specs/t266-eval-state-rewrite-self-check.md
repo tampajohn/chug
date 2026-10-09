@@ -65,4 +65,4 @@ META-META-SPEC.md carries the clause (all four requirements, the cycle-305
 fire named); the check line passes; the three pin files plus
 tests/todo_consistency.rs stay green.
 
-check: export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared; touch src/*.rs tests/*.rs; grep -q 'structural self-check' META-META-SPEC.md && grep -q 'LINE-ANCHORED' META-META-SPEC.md && grep -q 'single full-file write' META-META-SPEC.md && cargo test --test eval_state_delta --test eval_outcomes_carry --test loop_spec_doctrine_prune --test todo_consistency
+check: export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-validate-a; touch src/*.rs tests/*.rs; grep -q 'structural self-check' META-META-SPEC.md && grep -q 'LINE-ANCHORED' META-META-SPEC.md && grep -q 'single full-file write' META-META-SPEC.md && cargo test --test eval_state_delta --test eval_outcomes_carry --test loop_spec_doctrine_prune --test todo_consistency

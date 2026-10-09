@@ -71,6 +71,29 @@ the >= 5x fresh-input drop on state-hit cycles is the item's acceptance
 metric, measured per cycle from those numbers (the cycle-195-198 baseline:
 ~134k fresh + ~1.7M cache-read per orchestrator iteration).
 
+**Splice mechanics (T266).** The rewrite above is written ONE of two ways:
+a **single full-file write** (always correct — the cycle-309 wrap's healing
+act) or per-section splices whose anchors are **LINE-ANCHORED** — `^## `
+plus the section's own heading text, matched at line start. A bare-substring
+anchor that can match inside another field's prose is BANNED: the cycle-305
+fire — the wrap's health-section splice anchored on the bare substring
+`## open-threads`, matched INSIDE the bare `open-threads:` field's own
+header cross-reference, and left `.chug/eval-state.md` with a duplicated
+header-tail fragment plus the stale previous-cycle `## health` block, and
+the field-only self-check PASSED because the parser contract
+(`scripts/eval-delta.sh`) reads first-matches plus the ring — first-match
+reads stay fresh over duplicated structure, and the corruption is invisible
+to a STATE-HIT verdict and compounds one generation per repeated splice.
+After ANY rewrite a **structural self-check** runs alongside the existing
+field check, as `grep -c` pins: exactly one `purpose:` line, exactly one
+`## health` header, exactly one `## open-threads (` section header, exactly
+one `## decisions` ring header, and all nine `state_field` extractions
+non-empty (the existing field check, unchanged). A failed structural check
+→ the rewrite is redone as a single full-file write BEFORE the wrap push (a
+malformed state file is never pushed). A wrap that FINDS the file malformed
+on read heals it with the full single write in the same act (the cycle-309
+precedent) and names the healing in the wrap notes.
+
 1. `.chug/eval-digest.md` FIRST — the mechanical pre-digest of this corpus
    (`scripts/eval-digest.sh`, refreshed by loopd before every cycle): per
    events-file iterations, wall time, tool distribution, error classes with
