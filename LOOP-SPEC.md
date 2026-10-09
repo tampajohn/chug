@@ -28,7 +28,10 @@ families, so the validation verdict is still an independent second opinion.
 Follow META-META-SPEC's corpus list and EVALUATION.md format, with one
 upgrade: **prefer `.chug/events.jsonl` over transcripts** — it is
 jq-mineable and untrimmed (`jq -r '.type' .chug/events.jsonl | sort | uniq -c`
-is a good first look). Write/refresh `EVALUATION.md`, extend `TODO.md` with
+is a good first look). The T260 read-path pair is named, not guessed: the
+delta you read is `.chug/eval-delta.md` (loopd rebuilds it before every
+cycle) and the state you maintain is `.chug/eval-state.md` — no `.json`
+variant of either file exists. Write/refresh `EVALUATION.md`, extend `TODO.md` with
 new rows (numbering continues from the max existing id) each with its own
 `specs/t<N>-<slug>.md`. **Triage records ride disposition CHANGE, not the
 calendar (T261)**: the mechanical trigger is change-detection — one
