@@ -347,7 +347,7 @@ dependencies = [
 
 [[package]]
 name = "chug"
-version = "0.17.15"
+version = "0.17.16"
 dependencies = [
  "anyhow",
  "candle-core",
