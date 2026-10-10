@@ -410,8 +410,9 @@ const ITEM6_WEEKLY_TRIGGER: &str = "runs on the T261 UTC-week trigger";
 /// the marker, the same-week skip, the marker semantics, and the
 /// never-skips drift half — inside META-META-SPEC's Write-EVALUATION
 /// window (the corpus item sits before it; both pinned here). The
-/// eval_outcomes_carry.rs census pins (`Outcomes` exactly twice, one
-/// `verbatim` in this window) must hold AROUND this text — this leg
+/// eval_outcomes_carry.rs census pins (`Outcomes` exactly three — the
+/// carry sentence's two plus the T282 bold lead's mandated occurrence —
+/// one `verbatim` in this window) must hold AROUND this text — this leg
 /// asserts the weekly rule carries none of those tokens itself.
 #[test]
 fn readme_cold_read_audit_is_weekly_with_utc_marker_skip() {
@@ -464,10 +465,11 @@ fn readme_cold_read_audit_is_weekly_with_utc_marker_skip() {
     // eval_outcomes_carry census pins it shares the window with.
     assert_eq!(
         wev.matches("Outcomes").count(),
-        2,
+        3,
         "the Write-EVALUATION window must still carry `Outcomes` exactly \
-         twice (the eval_outcomes_carry census) — the T261 weekly rule \
-         drifted an extra copy in"
+         three times (the eval_outcomes_carry census: the carry sentence's \
+         two plus the T282 bold lead) — the T261 weekly rule drifted an \
+         extra copy in"
     );
     assert_eq!(
         wev.matches("verbatim").count(),

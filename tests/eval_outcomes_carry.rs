@@ -83,8 +83,11 @@ const VERIFY_CLAUSE: &str = "verify the newest pre-existing cycle's section is s
 /// spec-quality-bar paragraph already carries one legitimate occurrence
 /// ("the Outcomes records", the T163-era estimate-calibration rule), so the
 /// census is window-scoped to the Write-EVALUATION section, where the
-/// required sentence dictates EXACTLY TWO (the `## Outcomes` heading
-/// reference and "the Outcomes ledger").
+/// required sentence dictates TWO (the `## Outcomes` heading reference and
+/// "the Outcomes ledger") and the T282 bold lead adds the third legitimate
+/// occurrence ("**Outcomes-entry figures (T282).**" — the lead is mandated
+/// capitalized by the T282 check grep, so the census is THREE; its body
+/// text stays lowercase per the T281 census dodge).
 const OUTCOMES: &str = "Outcomes";
 
 /// Section-window markers (the T64 loose-heading pattern): the sentence
@@ -113,9 +116,10 @@ fn write_eval_window(spec: &str) -> &str {
 /// whole-file, the verification clause once whole-file, and `Outcomes` with
 /// the census the required sentence dictates — TWO inside the
 /// Write-EVALUATION window (one pre-existing in the Extend-TODO bar keeps
-/// the whole-file count out of the pin). Delete the sentence and every
-/// count goes red (zero — which also breaks the spec's own line-wise
-/// grep); duplicate it and the counts grow past one/two; reword any one
+/// the whole-file count out of the pin) plus the T282 bold lead's mandated
+/// capitalized occurrence, THREE in the window. Delete the sentence and
+/// every count goes red (zero — which also breaks the spec's own line-wise
+/// grep); duplicate it and the counts grow past one/three; reword any one
 /// instance and the census relation breaks.
 #[test]
 fn carry_forward_tokens_occur_exactly_once() {
@@ -163,12 +167,14 @@ fn carry_forward_tokens_occur_exactly_once() {
     );
     assert_eq!(
         window.matches(OUTCOMES).count(),
-        2,
-        "the Write-EVALUATION section must state {OUTCOMES:?} exactly twice — \
-         the required sentence uses it in the `## Outcomes` heading reference \
-         and in \"never the Outcomes ledger\"; zero means the sentence was \
-         deleted, one means an instance was reworded away, more than two \
-         means a duplicate statement drifted in"
+        3,
+        "the Write-EVALUATION section must state {OUTCOMES:?} exactly three \
+         times — the required sentence uses it in the `## Outcomes` heading \
+         reference and in \"never the Outcomes ledger\", and the T282 bold \
+         lead (\"Outcomes-entry figures (T282)\") is the mandated third; \
+         zero means the sentence was deleted, fewer than three means an \
+         instance was reworded away, more than three means a duplicate \
+         statement drifted in"
     );
 }
 

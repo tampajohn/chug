@@ -283,6 +283,24 @@ pre-append figure (2,047 against the mechanical 2,048 at its own
 composition) — compose the figure after the last append and the slip
 class has no window.
 
+**Outcomes-entry figures (T282).** EVERY figure an outcomes entry or a
+wrap/fill commit records — a release recount or its eval-time preview, a
+timestamp quoted from committed text, a gate tally, a leg count — is
+probed at write time against its mechanical source: `git log` for
+recounts (each window NAMED — the recount window `v<tag>..HEAD` is never
+the chain window), the committed eval text for carried quotes, `wc -l`/`jq`
+for counts, the stream's own flags per T272. A figure is never composed
+from memory, an earlier draft, or a conflated window. The designed
+backstops — the wrap's mechanical recount and the fill's re-read against
+the committed text — are the catch: a figure a backstop catches is
+corrected in the fill with the T70 clause named (the correction rides the
+fill, never history edits). The class's third and fourth fires at the
+cycle-490 wrap are the evidence: the eval preview's ZERO-flip figure
+conflated the chain window with the recount window (the mechanical
+recount read TRUE 1), and the entry's `19:36Z` timestamp against the
+committed eval text's `19:16:12Z` — both zero-casualty because the
+backstops caught them.
+
 Sections:
 
 1. **What chug does well** — be brief.
