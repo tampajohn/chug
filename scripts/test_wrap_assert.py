@@ -122,6 +122,21 @@ class AssertByteCarryTest(unittest.TestCase):
         self.assertIn("'b'", msg)
         self.assertIn("'c'", msg)
 
+    def test_fail_reordered_lines(self):
+        """All carry lines PRESENT but REORDERED still raises (the m6 pin).
+
+        The d1791624468-8 m6 mutant relaxed the positional scan to unordered
+        membership — every line present, so it survived the suite. Under the
+        ordered search the swap still fires: 'a' matches late (offset 1),
+        so the scan for 'b' starts at offset 2, past the end.
+        """
+        with self.assertRaises(AssertionError) as ctx:
+            wrap_assert.assert_byte_carry(["a", "b"], ["b", "a"])
+        msg = str(ctx.exception)
+        self.assertIn("carry line 1", msg)  # the line the ordered scan can't place
+        self.assertIn("'b'", msg)  # probed expected repr
+        self.assertIn("None", msg)  # probed candidate at offset 2: past the end
+
 
 class AssertSubstitutedTest(unittest.TestCase):
     def test_pass_present_and_absent_paths(self):
