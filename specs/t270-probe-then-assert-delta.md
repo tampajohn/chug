@@ -1,4 +1,4 @@
-check: cd "$(git rev-parse --show-toplevel)" && export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared && touch src/*.rs tests/*.rs && grep -q 'probe-then-assert-delta' META-META-SPEC.md && grep -q 'never the hardcoded constant' META-META-SPEC.md && cargo test --release --test todo_consistency --test eval_outcomes_carry --test eval_state_delta --test loop_spec_doctrine_prune --test internal_info_lint
+check: cd "$(git rev-parse --show-toplevel)" && export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-validate-a && touch src/*.rs tests/*.rs && grep -q 'probe-then-assert-delta' META-META-SPEC.md && grep -q 'never the hardcoded constant' META-META-SPEC.md && cargo test --release --test todo_consistency --test eval_outcomes_carry --test eval_state_delta --test loop_spec_doctrine_prune --test internal_info_lint
 
 # T270 — META-META-SPEC verification-helper clause: probe-then-assert-delta, never the hardcoded constant
 
