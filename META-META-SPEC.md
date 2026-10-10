@@ -230,7 +230,18 @@ from schema memory: a guessed accessor (`.content` where the event
 carries `.preview`, or a field the event does not carry at all) exits
 0 printing `null` for every leg, so the slip never trips the ok:false
 flag and only reading the output catches it — the 8-sighting
-jq-probe-slip family is the evidence class. Both classes are a probe
+jq-probe-slip family is the evidence class. jq also fails a guessed
+shape NOISILY — exiting nonzero and naming the mis-shape instead of
+printing `null` (`Cannot index array with string` when a guessed
+object accessor meets an array-shaped file, as the trip-92 stream's
+schema-memory `.todos[].id` on the ARRAY-shaped `.chug/todos.json`
+did at exit 5; `string and number cannot be added` when arithmetic
+rides a string, as the cycle-494 stream's 21:44:04Z leg on a decision
+id did) — and the SAME inspect-first habit (a `type`/`keys:` shape
+probe before the projection) covers both variants, silent and noisy
+alike: the census's two post-landing fires are both this variant
+(family 8→10), the evidence a reader does not pattern-match the
+silent-variant text to the noisy slip. Both classes are a probe
 composed from habit instead of inspection — mask the exit code you
 expect, inspect the shape before you project.
 
