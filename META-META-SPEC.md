@@ -212,6 +212,28 @@ at-commit T257 color (explicitly probe-stamped) is NOT this class —
 the probe stamp IS the scoping; this clause governs whole-stream
 enumerations in wrap text.
 
+**Probe hygiene (T284, exit codes and accessor shapes).** The layer
+beneath the enumeration clause above — the probe itself, composed
+before any of those reads run. **The exit-code root:** an intentional
+emptiness or no-match probe — a `grep -c` that may count zero (0 todo
+rows IS the drained queue; 0 open roadmap items IS the empty roadmap),
+a bare `grep`/`grep -viE` that may match nothing — is never a chain's
+last command unmasked: it carries `|| true` (or the `;`-masked shape),
+because grep's exit 1 on zero-count/no-match turns a correct empty
+answer into an `ok:false` events flag and, at a `&&`-chain's tail,
+into a failing call — trip 91 alone fired three (the TODO table count,
+the roadmap open-scan no-match, the roadmap unchecked-box zero count),
+and the 53-instance grep-exit-1 census is the evidence class. **The
+accessor-shape root:** a jq projection is composed from the event's
+INSPECTED shape — a `keys:` (or equivalent) shape probe first — never
+from schema memory: a guessed accessor (`.content` where the event
+carries `.preview`, or a field the event does not carry at all) exits
+0 printing `null` for every leg, so the slip never trips the ok:false
+flag and only reading the output catches it — the 8-sighting
+jq-probe-slip family is the evidence class. Both classes are a probe
+composed from habit instead of inspection — mask the exit code you
+expect, inspect the shape before you project.
+
 1. `.chug/eval-digest.md` FIRST — the mechanical pre-digest of this corpus
    (`scripts/eval-digest.sh`, refreshed by loopd before every cycle): per
    events-file iterations, wall time, tool distribution, error classes with
