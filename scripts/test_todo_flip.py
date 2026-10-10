@@ -4,13 +4,18 @@
 Per the carried conventions (scripts/test_wrap_assert.py): every assert in
 the helper gets a PASS path and a FAIL path; each fail path asserts the
 AssertionError fires AND names the probed actuals (the T270 reporting
-requirement). The TWO regression pins of THIS row's firing shapes:
+requirement). The THREE regression pins of THIS row's firing shapes:
 
   - d1791632010-15 (the T275 flip): notes containing `|` — the T8 split
     hazard — rejected PRE-WRITE with the file left byte-identical;
   - d1791648496-11 (the T278 flip): notes containing a newline — the
     single-physical-line hazard — rejected PRE-WRITE with the file left
-    byte-identical.
+    byte-identical;
+  - d1791652506-6 (the T280 pin): notes carrying `\u2028` (LINE
+    SEPARATOR) — a `str.splitlines()` boundary OTHER than `\n` — pass
+    the (c) reject and reach the (e) one-physical-line assert, which
+    fires PRE-WRITE with the file left byte-identical (the T279 kimi
+    verdict's documented mut-e survivor, pinned so the mutant dies).
 
 Plus the byte-carry PASS case (one row of a 5-row fixture flips, the other
 four rows provably byte-identical) and the id-count failures (0 and 2)
@@ -329,6 +334,31 @@ class RebuildShapeTest(unittest.TestCase):
                 new_lines[5], "| R2 | second row | specs/r2.md | 2 | done |  |"
             )  # same position (R2 = line 5), notes cell kept
             self.assertIn(R2_OLD, old_lines)  # the old row was line 5
+
+    def test_regression_t280_u2028_notes_reach_one_physical_line_assert(self):
+        # d1791652506-6 finding 1 (the T279 kimi verdict's documented mut-e
+        # survivor, discharged per the T274 precedent): `\u2028` (LINE
+        # SEPARATOR) is a python `str.splitlines()` boundary OTHER than
+        # `\n` — it passes the (c) reject (which names only `|` and `\n`)
+        # and reaches the (e) one-physical-line assert, where `splitlines()`
+        # splits the rebuilt row in two. (e) firing on it is the intended
+        # defense-in-depth — refuse the unicode line separator rather than
+        # write it; this pin documents that behavior and gives the assert
+        # its teeth (the mutant that drops (e) dies HERE).
+        notes = "wrapped clean\u2028second physical line"
+        self.assertIn("\u2028", notes)  # the pin's premise
+        self.assertNotIn("|", notes)  # NOT a (c) reject shape ...
+        self.assertNotIn("\n", notes)  # ... so the payload reaches (e)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = _write(tmp, "TODO.md", FIVE_ROWS)
+            before = _read(path)
+            with self.assertRaises(AssertionError) as ctx:
+                todo_flip.flip(path, "R2", status="done", notes=notes)
+            msg = str(ctx.exception)
+            self.assertIn("not ONE physical line", msg)  # the (e) assert fired
+            self.assertIn("probed 2 line(s)", msg)  # the probed line count
+            self.assertIn("asserted anyway", msg)  # (e)'s by-construction note
+            self.assertEqual(_read(path), before)  # file byte-identical
 
 
 class ByteCarryTest(unittest.TestCase):
