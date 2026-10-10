@@ -270,6 +270,19 @@ trip-40 inclusive slip (1,698 + 3 recorded as 1,700) is the class's
 evidence. The `.chug/eval-state.md` health line's corpus field carries
 the same two `wc -l`-measured numbers.
 
+**Corpus counts at wrap (T281).** The T265 method binds EVERY wrap-side
+recording of the decision-corpus size: an eval/wrap commit message
+(subject or body), an outcomes-ledger entry, and a wrap-notes line quote
+only a mechanical `wc -l` count of `.chug/decisions.jsonl` measured at
+THAT write — composed AFTER the cycle's last decision-corpus append, or
+re-probed `wc -l` at composition — with the derivation enumerated when a
+figure bundles prior recordings (the `2,050 = 2,035 + 15 enumerated`
+shape). The cycle-482 wrap-prep fire is the class's sixth: the commit
+named all three of the cycle's wrap supplements yet recorded the
+pre-append figure (2,047 against the mechanical 2,048 at its own
+composition) — compose the figure after the last append and the slip
+class has no window.
+
 Sections:
 
 1. **What chug does well** — be brief.
