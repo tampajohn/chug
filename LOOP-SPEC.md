@@ -273,6 +273,11 @@ simultaneously past gates — T194 amends T161's 2-child cap):
              you were launched in): if you cd to the main repo for
              read-only checks, cd back before committing —
              never run git add or git commit with the main repo as cwd.
+             NEVER call `decision_log` — routing, verdict, and recovery
+             records are the orchestrator's writes, and your worktree's
+             own `.chug/decisions.jsonl`
+             stays EMPTY so a harvest never re-joins child-side records
+             into the F13 corpus.
              DO NOT touch TODO.md
              or LEDGER.md — bookkeeping is the orchestrator's."
      model:       "anthropic-system.ai.glm-5-3-flash"

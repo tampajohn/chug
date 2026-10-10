@@ -99,7 +99,12 @@ check: cd /Users/jadams/workspace/chug && cargo test
    ```
    cd /tmp/chug-round-N && CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared nohup /Users/jadams/workspace/chug/target/release/chug run \
      --spec <the round's feature spec, e.g. SPEC-N-*.md> \
-     --goal "VALIDATION ONLY — do not implement. Review the uncommitted/committed
+     --goal "VALIDATION ONLY — do not implement.
+             NEVER call `decision_log` — the verdict record is the
+             orchestrator's write from your written verdict file, and
+             your worktree's own `.chug/decisions.jsonl`
+             stays EMPTY so a harvest never re-joins child-side records
+             into the F13 corpus. Review the uncommitted/committed
              diff in this worktree against the spec: correctness bugs, missing
              spec requirements, weak tests. Read worktree files via bash —
              read_file/grep/glob/list_dir/edit_file are cwd-confined and
