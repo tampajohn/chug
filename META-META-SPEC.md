@@ -94,6 +94,31 @@ malformed state file is never pushed). A wrap that FINDS the file malformed
 on read heals it with the full single write in the same act (the cycle-309
 precedent) and names the healing in the wrap notes.
 
+**Verification-helper assertions (T270, probe-then-assert-delta).** Every
+self-check a fill/wrap helper composes asserts PROBED properties — a value
+read back from the artifact at assertion time
+(`line.split(':', 1)[1].strip() != ''` for non-empty, a key-prefix read for
+presence) or a delta computed from the actuals in the same probe
+(`count == pre_existing + added`, the T265 shell-arithmetic discipline
+extended to helper assertions) — never the hardcoded constant: a fixed
+length threshold (`len(line) > len(key) + 2`) or a fixed count (`== (6, 6)`)
+whose expectation mis-calibrates against STRUCTURALLY CORRECT content (a
+legitimate 1-char value, pre-existing deliberate mentions) and fires a
+wrong-expectation abort on a correct artifact. Both fires of this
+sub-class were that shape and both were zero-casualty — the assertion
+fired PRE-WRITE every time and the artifact was untouched by every
+attempt: d1791605730-7 (trip 75) — the entry-write helper's post-write
+count assertion expected a hardcoded `(6, 6)` while the artifact held that
+plus pre-existing textual mentions; d1791611467-5 (the cycle-437 wrap) —
+the state-write helper's non-empty-fields length assertion fired on the
+legitimate 1-char `schema: 1` value across two full-script attempts while
+every other assertion verified the content correct. The class boundary
+recorded at d1791605730-7 stands: fill/wrap-phase verification-helper
+assertions are counted; the anchor-guard's correctly-firing pre-write
+assertions and the ctx-edit pair-violation self-checks are not this class
+— a guard firing on genuinely wrong input is the assertion working, not
+mis-calibrating.
+
 1. `.chug/eval-digest.md` FIRST — the mechanical pre-digest of this corpus
    (`scripts/eval-digest.sh`, refreshed by loopd before every cycle): per
    events-file iterations, wall time, tool distribution, error classes with
