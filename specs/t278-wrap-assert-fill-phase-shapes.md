@@ -1,4 +1,4 @@
-check: cd "$(git rev-parse --show-toplevel)" && export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared && touch src/*.rs tests/*.rs && python3 -m unittest scripts/test_wrap_assert.py -v && cargo test --release --test todo_consistency --test internal_info_lint
+check: cd "$(git rev-parse --show-toplevel)" && export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-validate-a && touch src/*.rs tests/*.rs && python3 -m unittest scripts/test_wrap_assert.py -v && cargo test --release --test todo_consistency --test internal_info_lint
 
 # T278 — wrap_assert fill-phase shapes: window-scoped substitution count + bare-token scan
 
