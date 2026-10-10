@@ -155,6 +155,40 @@ this class; the at-commit T257 color (explicitly probe-stamped) is NOT
 deferred text, not a gate: the digest backstop's whole-stream read is
 the designed net either way, catching every miss one chain later.
 
+**Enumeration by flag, never recall (T272, enumeration-by-flag).** The
+layer beneath the scoping clause above — the same wrap arcs write both.
+Any whole-stream failed-leg or ctx-edit ENUMERATION written into wrap
+text (an Outcomes entry, an `eval-state` `open-threads:`/`health:`
+bullet, a wrap-notes supplement) is produced by a mechanical read of
+the stream's own flags AT the named read time, never from recall of an
+earlier probe: the count, the timestamps, and the previews are quoted
+or paraphrased FROM that read —
+`jq -c 'select(.type=="tool_result" and .ok==false) | {ts, name, preview}' .chug/events.jsonl`
+(plus the rotated segment when the claim spans it; ctx-edit claims read
+`select(.type=="ctx_edit")` the same way) — and a read taken earlier
+MUST be re-run before the write if any tool call intervened between the
+read and the write: the false-at-write shape, where the named read
+already contained legs the recalled enumeration omits. The scoped claim
+names the read's timestamp (and the iteration n where the surface
+carries one). Two firing shapes, one clause: tail-leg timing (true at
+the probe, false at the whole-stream final — the scoping clause above
+covers it) and false-at-write (ONLY a mechanical re-read at write time
+covers it). Five fires, every one caught one chain later by the digest
+backstop — zero casualty by design, the clause is teeth for the
+enumeration surface, not a gate: d1791610441-3 (trip 76, first
+sighting — the deferred two vs digest 3), trip-77's deferred 5 vs
+digest 9, cycle-438's zero-claim vs digest 6, the cycle-442 wrap's
+"all first-try" whole-stream zero-claim falsified by the already-fired
+07:15:12Z jq leg (d1791618563-2, the first false-at-write), and the
+cycle-446 wrap's 08:03Z-scoped "3 ok:false legs" written from recall of
+the 07:5xZ probe while the 08:00:57.960Z ring-carry AssertionError and
+the 08:01:20.531Z FileNotFoundError had already fired inside the named
+window — digest 5 vs claimed 3 (d1791621339-3, the second
+false-at-write). The class boundary carries from T271 unchanged: the
+at-commit T257 color (explicitly probe-stamped) is NOT this class —
+the probe stamp IS the scoping; this clause governs whole-stream
+enumerations in wrap text.
+
 1. `.chug/eval-digest.md` FIRST — the mechanical pre-digest of this corpus
    (`scripts/eval-digest.sh`, refreshed by loopd before every cycle): per
    events-file iterations, wall time, tool distribution, error classes with
