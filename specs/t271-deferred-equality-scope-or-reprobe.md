@@ -1,4 +1,4 @@
-check: cd "$(git rev-parse --show-toplevel)" && export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared && touch src/*.rs tests/*.rs && grep -q 'deferred-equality scope-or-re-probe' META-META-SPEC.md && grep -q 'scope the prediction to the probe' META-META-SPEC.md && cargo test --release --test todo_consistency --test eval_outcomes_carry --test eval_state_delta --test loop_spec_doctrine_prune --test internal_info_lint
+check: cd "$(git rev-parse --show-toplevel)" && export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-validate-a && touch src/*.rs tests/*.rs && grep -q 'deferred-equality scope-or-re-probe' META-META-SPEC.md && grep -q 'scope the prediction to the probe' META-META-SPEC.md && cargo test --release --test todo_consistency --test eval_outcomes_carry --test eval_state_delta --test loop_spec_doctrine_prune --test internal_info_lint
 
 # T271 — META-META-SPEC deferred-equality clause: scope-or-re-probe
 

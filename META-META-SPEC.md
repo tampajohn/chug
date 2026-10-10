@@ -119,6 +119,42 @@ assertions and the ctx-edit pair-violation self-checks are not this class
 — a guard firing on genuinely wrong input is the assertion working, not
 mis-calibrating.
 
+**Deferred digest-final equalities (T271,
+deferred-equality scope-or-re-probe).** A wrap that defers a
+digest-final equality — a prediction of the form "the digest
+whole-stream final backstops at the next eval: failed K == the K
+enumerated legs" — or writes any whole-stream failed-leg/ctx-edit claim
+in wrap text (an Outcomes entry, the state's `open-threads:` header)
+must either (i) **scope the prediction to the probe's coverage** — name
+the probe ("K ok:false legs THROUGH the wrap-notes probe at n=X; the
+tail re-probes at the next eval") — or (ii) **re-probe the failed-leg
+count against the live events at state-write time** before deferring;
+an unscoped whole-stream claim written from a probe-scoped read is the
+class's firing shape — the tail legs that fire between the probe and
+the state write (a tool refusal, a helper traceback the wrap called
+exit-0-masked, a traceback on stderr counted clean) are exactly the
+ones the digest's whole-stream final counts that the deferred equality
+never claimed. Three fires, each caught one chain later by the digest
+backstop — the designed detection path, zero casualty every time:
+d1791610441-3 (trip 76, the class's first sighting) — the wrap deferred
+"failed 2 == the enumerated two" on an enumeration scoped to the
+wrap-notes probe, a tail leg fired between the probe and the state
+write, and the digest read failed=3; the trip-78 eval's seventh
+backstop — trip-77's wrap deferred "FIVE legs == the trip-78 digest's
+failed 5" and the digest reads 9, four tail legs the wrap accounting
+never claimed (a write_file cross-tree refusal, a spec-grep exit, a
+helper traceback the wrap called exit-0-masked that the digest counts
+ok:false, a supplement composite with a traceback on stderr); the
+eighth — cycle-438's open-threads header carried "ZERO ok:false legs
+this stream", true at the wrap-notes probe (n≈47) and false at the
+whole-stream final, the digest reads 6 (the n=53 sh fire plus five
+post-probe state-write helper legs). The class boundary: DEFERRED
+equalities and whole-stream failed-leg/ctx-edit claims in wrap text ARE
+this class; the at-commit T257 color (explicitly probe-stamped) is NOT
+— the color's probe stamp IS the scoping. The clause is hygiene for the
+deferred text, not a gate: the digest backstop's whole-stream read is
+the designed net either way, catching every miss one chain later.
+
 1. `.chug/eval-digest.md` FIRST — the mechanical pre-digest of this corpus
    (`scripts/eval-digest.sh`, refreshed by loopd before every cycle): per
    events-file iterations, wall time, tool distribution, error classes with
