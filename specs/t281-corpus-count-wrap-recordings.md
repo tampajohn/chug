@@ -1,4 +1,5 @@
 # T281 — corpus-count clause extends to wrap-side recordings: wc -l at that write, composed after the last append or re-probed (META-META-SPEC clause)
+estimate: ~30 changed lines (one ~8-line META-META-SPEC.md paragraph; doctrine, md-only)
 
 check: cd "$(git rev-parse --show-toplevel)" && export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared && touch src/*.rs tests/*.rs && grep -q 'Corpus counts at wrap (T281)' META-META-SPEC.md && grep -q -- 'composed AFTER the cycle' META-META-SPEC.md && grep -q 'Corpus counts (T265)' META-META-SPEC.md && cargo test --release --test todo_consistency --test eval_outcomes_carry --test eval_state_delta --test loop_spec_cheap_exit --test loop_spec_check_wall --test loop_spec_doctrine_prune --test loop_spec_recovery --test loop_spec_validation_lane
 
