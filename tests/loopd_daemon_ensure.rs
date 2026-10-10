@@ -199,7 +199,13 @@ impl Sandbox {
         fs::create_dir_all(&scripts).expect("scripts dir");
         for entry in fs::read_dir(repo_root().join("scripts")).expect("scripts dir") {
             let entry = entry.expect("scripts entry");
-            fs::copy(entry.path(), scripts.join(entry.file_name())).expect("copy script");
+            // Regular files only (the loopd_orphan_reaper guard shape): a
+            // `scripts/__pycache__/` (any python unittest import run in the
+            // checkout — the T273 wrap_assert pair's own side effect) is a
+            // DIRECTORY and fs::copy fails the whole sandbox on it.
+            if entry.file_type().expect("scripts entry type").is_file() {
+                fs::copy(entry.path(), scripts.join(entry.file_name())).expect("copy script");
+            }
         }
         // PATH stubs: `ps` reports no processes (the T53 single-driver probe
         // must not see a REAL driver — e.g. the outer run executing this
