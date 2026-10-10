@@ -119,6 +119,29 @@ assertions and the ctx-edit pair-violation self-checks are not this class
 — a guard firing on genuinely wrong input is the assertion working, not
 mis-calibrating.
 
+**The probed-assertion helper (T273, import-don't-re-author).** The teeth
+for the clause above: the helpers it governs are ad-hoc bash/python
+heredocs re-authored at every wrap, and the banned shape re-fired twice
+POST-adoption — so wrap/fill-phase verification helpers IMPORT the shared
+probed-assertion helper `scripts/wrap_assert.py` for the recurring shapes
+(non-empty-field split-reads, count-deltas computed from the actuals in
+the same probe, ring-carry byte-identity, substitution presence,
+enumeration counts) or re-derive the assertion from probed properties per
+the clause above; the inline hardcoded constant is the banned shape, and
+re-authoring it in a fresh heredoc is how the habit re-fires. Both
+post-adoption fires were exactly that re-authoring, each self-caught
+pre-write with zero casualty — the guard shape doing its job:
+d1791616594-11 (the cycle-442 wrap) — the maiden state write's own helper
+re-authored the fixed length threshold (`len(line) > len(key) + 2`), which
+fired on the legitimate 1-char `schema: 1` value across two full-script
+attempts while every other assertion verified the content correct;
+d1791618821-7/d1791619025-10 (the cycle-446 wrap) — the ctx-edit helper
+hardcoded `blocks == 76` against a live-grown transcript (78+ blocks), the
+guard fired pre-write on CORRECT content, the file never touched,
+corrected one leg later to probed counts. The helper's arguments are the
+probed actuals — passing a remembered constant INTO the helper is the
+same banned shape as inlining it.
+
 **Deferred digest-final equalities (T271,
 deferred-equality scope-or-re-probe).** A wrap that defers a
 digest-final equality — a prediction of the form "the digest

@@ -11,3 +11,5 @@ target-shared-validate-a/
 target-shared-validate-b/
 .chug/
 LEDGER.md
+__pycache__/
+*.pyc
