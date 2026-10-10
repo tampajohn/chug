@@ -40,6 +40,8 @@ __all__ = [
     "assert_byte_carry",
     "assert_substituted",
     "assert_count_exact",
+    "assert_window_count",
+    "assert_window_clean",
 ]
 
 
@@ -195,4 +197,137 @@ def assert_count_exact(actual, expected, label="count"):
             f"assert_count_exact({label!r}): probed actual {actual!r} != "
             f"expected {expected!r} — re-probe the live count; a remembered "
             f"constant is the banned shape (T270/d1791618821-7)"
+        )
+
+
+# _resolve_window(lines, start, end, path, who) — INTERNAL; e.g. _resolve_window(lines, "pacing-streak:", "purpose:", path, "assert_window_count")
+def _resolve_window(lines, start, end, path, who):
+    """Locate the shared window; the T278 fill-phase shapes' mechanics.
+
+    The window runs from the FIRST line containing the literal substring
+    *start* (inclusive) through the first SUBSEQUENT line containing the
+    literal substring *end* (exclusive), or to EOF when *end* is None.
+    Returns (lo, hi, start_line, end_line) — the 0-based slice bounds into
+    *lines* plus the 1-based anchor line numbers for reporting (end_line
+    None at EOF). A missing anchor raises AssertionError naming it: a
+    genuinely-wrong input (a typo'd anchor), the guard firing correctly —
+    not a wrong-expectation miscalibration.
+    """
+    start_line = None
+    for i, line in enumerate(lines):
+        if start in line:
+            start_line = i
+            break
+    if start_line is None:
+        raise AssertionError(
+            f"{who}({path!r}): the start anchor {start!r} matches NO line in "
+            f"the probed artifact ({len(lines)} line(s)) — a genuinely-wrong "
+            f"input, the anchor-miss guard firing (not a wrong-expectation "
+            f"miscalibration)"
+        )
+    if end is None:
+        return start_line, len(lines), start_line + 1, None
+    end_line = None
+    for j in range(start_line + 1, len(lines)):
+        if end in lines[j]:
+            end_line = j
+            break
+    if end_line is None:
+        raise AssertionError(
+            f"{who}({path!r}): the end anchor {end!r} matches NO line after "
+            f"the start anchor {start!r} (start line {start_line + 1}, "
+            f"{len(lines)} line(s) total) — a genuinely-wrong input, the "
+            f"anchor-miss guard firing (not a wrong-expectation "
+            f"miscalibration)"
+        )
+    return start_line, end_line, start_line + 1, end_line + 1
+
+
+# _window_desc(start, start_line, end, end_line, lo, hi) — INTERNAL, all probed args; e.g. _window_desc("pacing-streak:", 9, "purpose:", 10, 8, 9)
+def _window_desc(start, start_line, end, end_line, lo, hi):
+    """The window's one-line span description for the failure messages."""
+    if end_line is None:
+        return (
+            f"anchored on {start!r} (line {start_line}) through EOF "
+            f"(lines {start_line}-EOF, {hi - lo} line(s))"
+        )
+    return (
+        f"anchored on {start!r} (line {start_line}) through {end!r} "
+        f"(exclusive, line {end_line}) (lines {start_line}-{end_line - 1}, "
+        f"{hi - lo} line(s))"
+    )
+
+
+# assert_window_count(path, placeholder, start, expected, end=None) — a PATH string + a placeholder substring + 2 anchor substrings + a probed count; e.g. assert_window_count(path, "WRAP_HASH", "pacing-streak:", 1, end="purpose:")
+def assert_window_count(path, placeholder, start, expected, end=None):
+    """The fill substitution's count, WINDOW-SCOPED (the T278 shape).
+
+    Reads the file at *path* and asserts *placeholder*'s occurrence count
+    within the window == *expected*, where the window is the *start*
+    anchor's line (inclusive) through the first subsequent *end*-anchor
+    line (exclusive), or EOF when *end* is None.
+
+    The trip-85 fill misfire (d1791646071-2): the hand-rolled heredoc
+    asserted a FILE-WIDE count == 1 against the state file's TWO legitimate
+    WRAP_HASH mentions — the pacing-line placeholder (the fill target) and
+    the open-threads bullet's PROSE QUOTE of the token name — and fired
+    twice pre-write on structurally correct content. Scoping the count to
+    the fill target's window is the fix: prose that legitimately quotes
+    the token name OUTSIDE the window never miscounts. Failures name the
+    probed actual count, the expected, the placeholder, the anchor, and
+    the window's line span. A window that matches NO line raises naming
+    the missing anchor (the guard firing correctly).
+    """
+    with open(path, "r", encoding="utf-8") as f:
+        lines = f.read().splitlines()
+    lo, hi, start_line, end_line = _resolve_window(
+        lines, start, end, path, "assert_window_count"
+    )
+    count = sum(line.count(placeholder) for line in lines[lo:hi])
+    if count != expected:
+        desc = _window_desc(start, start_line, end, end_line, lo, hi)
+        raise AssertionError(
+            f"assert_window_count({path!r}): probed placeholder {placeholder!r} "
+            f"count {count} in the window != expected {expected!r} — window "
+            f"{desc}; scope the count to the fill target's window — a "
+            f"file-wide count misfires on prose that legitimately quotes "
+            f"the token name (the trip-85 fill misfire, d1791646071-2)"
+        )
+
+
+# assert_window_clean(path, tokens, start, end=None) — a PATH string + a token LIST + an anchor substring; e.g. assert_window_clean(path, ["WRAP_HASH", "PROBE_RESULT"], "### Cycle 470", end="### ")
+def assert_window_clean(path, tokens, start, end=None):
+    """The post-fill bare-placeholder scan, WINDOW-SCOPED (the T278 shape).
+
+    Same window mechanics as assert_window_count; asserts NONE of *tokens*
+    appears within the window — the post-fill check that every placeholder
+    was substituted. Tokens OUTSIDE the window (the carried entries'
+    fill-instruction prose, the state's open-threads bullets) quote the
+    names legitimately and are never scanned. The failure names EVERY
+    found token with its window-relative line number in ONE AssertionError
+    (the all-failures-in-one-error convention), so the wrap fixes every
+    bare token in one pass.
+    """
+    with open(path, "r", encoding="utf-8") as f:
+        lines = f.read().splitlines()
+    lo, hi, start_line, end_line = _resolve_window(
+        lines, start, end, path, "assert_window_clean"
+    )
+    findings = []
+    for token in tokens:
+        hits = [i for i in range(lo, hi) if token in lines[i]]
+        if hits:
+            label = "line" if len(hits) == 1 else "lines"
+            window_lines = ", ".join(str(i - lo + 1) for i in hits)
+            file_lines = ", ".join(str(i + 1) for i in hits)
+            findings.append(
+                f"{token!r} at window {label} {window_lines} "
+                f"(file {label} {file_lines})"
+            )
+    if findings:
+        desc = _window_desc(start, start_line, end, end_line, lo, hi)
+        raise AssertionError(
+            f"assert_window_clean({path!r}): {len(findings)} bare token(s) "
+            f"still in the window ({desc}) — " + "; ".join(findings) +
+            " — every placeholder must be substituted before the write"
         )

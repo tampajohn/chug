@@ -213,5 +213,215 @@ class AssertCountExactTest(unittest.TestCase):
         wrap_assert.assert_count_exact(probed, probed, "ctx-edit blocks")
 
 
+class AssertWindowCountTest(unittest.TestCase):
+    """T278: the window-scoped substitution count (the fill-phase shape)."""
+
+    def test_pass_section_window_counts_within_it(self):
+        # The EVALUATION.md shape: window = the `### Cycle N` section
+        # through the next `### ` heading (exclusive). The carried 469
+        # entry quotes a DIFFERENT token by name; the counted token exists
+        # only in-window, so the window count and a file-wide count agree.
+        with tempfile.TemporaryDirectory() as tmp:
+            path = _write(
+                tmp,
+                "eval.md",
+                "### Cycle 470\n"
+                "- outcome: the fill landed — WRAP_TIME 13:37 UTC + "
+                "PROBE_RESULT `60 0`\n"
+                "### Cycle 469\n"
+                "- carried entry: the fill-instruction prose quotes "
+                "WRAP_HASH by name\n",
+            )
+            wrap_assert.assert_window_count(
+                path, "PROBE_RESULT", "### Cycle 470", 1, end="### "
+            )
+
+    def test_fail_names_actual_expected_placeholder_anchor_and_span(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = _write(
+                tmp,
+                "eval.md",
+                "### Cycle 470\n"
+                "- outcome: PROBE_RESULT `60 0` first-try\n"
+                "- second leg re-read PROBE_RESULT `60 0`\n"
+                "### Cycle 469\n",
+            )
+            with self.assertRaises(AssertionError) as ctx:
+                wrap_assert.assert_window_count(
+                    path, "PROBE_RESULT", "### Cycle 470", 1, end="### "
+                )
+        msg = str(ctx.exception)
+        self.assertIn("probed placeholder 'PROBE_RESULT'", msg)
+        self.assertIn("count 2", msg)  # the probed actual
+        self.assertIn("expected 1", msg)
+        self.assertIn("'### Cycle 470'", msg)  # the anchor
+        self.assertIn("lines 1-3", msg)  # the window's line span (end anchor at line 4)
+
+    def test_fail_start_anchor_miss_names_the_missing_anchor(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = _write(
+                tmp,
+                "eval.md",
+                "### Cycle 470\n- outcome: PROBE_RESULT `60 0`\n",
+            )
+            with self.assertRaises(AssertionError) as ctx:
+                wrap_assert.assert_window_count(
+                    path, "PROBE_RESULT", "### Cycle 999", 1
+                )
+        msg = str(ctx.exception)
+        self.assertIn("'### Cycle 999'", msg)  # the missing anchor named
+        self.assertIn("matches NO line", msg)  # the guard, not a miscount
+
+    def test_fail_end_anchor_miss_names_the_missing_end_anchor(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = _write(
+                tmp,
+                "eval.md",
+                "### Cycle 470\n- outcome: PROBE_RESULT `60 0`\n",
+            )
+            with self.assertRaises(AssertionError) as ctx:
+                wrap_assert.assert_window_count(
+                    path, "PROBE_RESULT", "### Cycle 470", 1, end="### Cycle 999"
+                )
+        msg = str(ctx.exception)
+        self.assertIn("'### Cycle 999'", msg)  # the missing END anchor named
+        self.assertIn("end anchor", msg)  # which anchor missed
+
+    def test_regression_prose_quote_outside_the_window_never_miscounts(self):
+        """The T278 firing shape (trip-85 fill, d1791646071-2), pinned.
+
+        The state file holds WRAP_HASH twice — the pacing-line placeholder
+        (the fill target) and an open-threads bullet's PROSE QUOTE of the
+        token name — and the hand-rolled heredoc asserted a FILE-WIDE
+        count == 1, firing twice pre-write on structurally correct
+        content. The window-scoped count reads 1 in both geometries while
+        the file-wide count reads 2; the end anchor's own line is excluded.
+        """
+        # Geometry 1: the prose quote BEFORE the anchor line — the 4-arg
+        # call (window = the pacing line through EOF) already excludes it.
+        with tempfile.TemporaryDirectory() as tmp:
+            path = _write(
+                tmp,
+                "state.md",
+                "schema: 1\n"
+                "eval-commit: 49a95e5\n"
+                "open-threads: the carried bullet quotes the tokens by "
+                "name — the fill commit's substitutions (WRAP_TIME/"
+                "WRAP_HASH/PROBE_RESULT) run window-scoped count-asserts\n"
+                "pacing-streak: TRUE 0 (reset 2->0): WRAP_HASH + "
+                "PROBE_RESULT `60 0`\n",
+            )
+            wrap_assert.assert_window_count(path, "WRAP_HASH", "pacing-streak:", 1)
+            with open(path, "r", encoding="utf-8") as f:
+                self.assertEqual(f.read().count("WRAP_HASH"), 2)  # the misfire
+        # Geometry 2: the REAL trip-85 shape (the grep probe read lines 9
+        # and 34) — the prose quote AFTER the pacing line, so the window
+        # needs the end anchor to scope the single pacing line.
+        with tempfile.TemporaryDirectory() as tmp:
+            path = _write(
+                tmp,
+                "state.md",
+                "schema: 1\n"
+                "eval-commit: 49a95e5\n"
+                "health: gates GREEN at the wrap\n"
+                "open-threads: 3 open — see the section below\n"
+                "pacing-streak: TRUE 0 (reset 2->0): WRAP_HASH + "
+                "PROBE_RESULT `60 0`\n"
+                "purpose: Cold-cycle entry reads this first\n"
+                "\n"
+                "## open-threads\n"
+                "- wrap-notes placeholder backfill miss: the fill commit's "
+                "substitutions (WRAP_TIME/WRAP_HASH/PROBE_RESULT) run "
+                "window-scoped count-asserts pre-write\n",
+            )
+            wrap_assert.assert_window_count(
+                path, "WRAP_HASH", "pacing-streak:", 1, end="purpose:"
+            )
+            with open(path, "r", encoding="utf-8") as f:
+                self.assertEqual(f.read().count("WRAP_HASH"), 2)  # the misfire
+        # Geometry 3: the end anchor's OWN line is exclusive — a token on
+        # it is never counted (window = lines 1-1, the anchor line excluded).
+        with tempfile.TemporaryDirectory() as tmp:
+            path = _write(
+                tmp,
+                "state.md",
+                "pacing-streak: TRUE 0 (the fill target line)\n"
+                "purpose: Cold-cycle entry — the prose quotes WRAP_HASH\n",
+            )
+            wrap_assert.assert_window_count(
+                path, "WRAP_HASH", "pacing-streak:", 0, end="purpose:"
+            )
+
+
+class AssertWindowCleanTest(unittest.TestCase):
+    """T278: the window-scoped bare-token scan (the fill-phase shape)."""
+
+    def test_pass_tokens_only_outside_the_window(self):
+        # Post-fill: the window is fully substituted; the carried 469
+        # entry's fill-instruction prose quotes the tokens by name
+        # OUTSIDE the window and is never scanned.
+        with tempfile.TemporaryDirectory() as tmp:
+            path = _write(
+                tmp,
+                "eval.md",
+                "### Cycle 470\n"
+                "- outcome: the fill landed — 13:37–13:59 UTC, 49a95e5, "
+                "`60 0`\n"
+                "### Cycle 469\n"
+                "- carried fill instructions quote WRAP_TIME / WRAP_HASH "
+                "by name\n",
+            )
+            wrap_assert.assert_window_clean(
+                path,
+                ["WRAP_TIME", "WRAP_HASH", "PROBE_RESULT"],
+                "### Cycle 470",
+                end="### ",
+            )
+
+    def test_fail_names_the_bare_token_with_its_window_line(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = _write(
+                tmp,
+                "eval.md",
+                "### Cycle 470\n"
+                "- outcome: WRAP_TIME still bare in this line\n"
+                "### Cycle 469\n",
+            )
+            with self.assertRaises(AssertionError) as ctx:
+                wrap_assert.assert_window_clean(
+                    path, ["WRAP_TIME", "WRAP_HASH"], "### Cycle 470", end="### "
+                )
+        msg = str(ctx.exception)
+        self.assertIn("'WRAP_TIME'", msg)  # the found token named
+        self.assertIn("window line 2", msg)  # window-relative line number
+        self.assertIn("file line 2", msg)  # and the file line for the fix
+        self.assertNotIn("'WRAP_HASH'", msg)  # the absent token not reported
+
+    def test_fail_names_every_found_token_in_one_error(self):
+        # The all-failures-in-one-error convention: all three bare tokens
+        # named in ONE AssertionError with their window-relative lines.
+        with tempfile.TemporaryDirectory() as tmp:
+            path = _write(
+                tmp,
+                "eval.md",
+                "### Cycle 470\n"
+                "- WRAP_TIME and PROBE_RESULT both still bare\n"
+                "- WRAP_HASH survives on a later window line\n"
+                "### Cycle 469\n",
+            )
+            with self.assertRaises(AssertionError) as ctx:
+                wrap_assert.assert_window_clean(
+                    path,
+                    ["WRAP_TIME", "WRAP_HASH", "PROBE_RESULT"],
+                    "### Cycle 470",
+                    end="### ",
+                )
+        msg = str(ctx.exception)
+        self.assertIn("3 bare token(s)", msg)  # every finding, one error
+        self.assertIn("'WRAP_TIME' at window line 2", msg)
+        self.assertIn("'PROBE_RESULT' at window line 2", msg)
+        self.assertIn("'WRAP_HASH' at window line 3", msg)
+
+
 if __name__ == "__main__":
     unittest.main()
