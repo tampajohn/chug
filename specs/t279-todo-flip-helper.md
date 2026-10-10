@@ -1,4 +1,4 @@
-check: cd "$(git rev-parse --show-toplevel)" && export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared && touch src/*.rs tests/*.rs && python3 -m unittest scripts.test_todo_flip -v && cargo test --release --test todo_consistency --test internal_info_lint --test shared_target_dir --test loop_spec_recovery
+check: cd "$(git rev-parse --show-toplevel)" && export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-validate-a && touch src/*.rs tests/*.rs && python3 -m unittest scripts.test_todo_flip -v && cargo test --release --test todo_consistency --test internal_info_lint --test shared_target_dir --test loop_spec_recovery
 
 # T279 — checked todo-flip helper: rebuild-from-cells structural flip (scripts/todo_flip.py)
 
