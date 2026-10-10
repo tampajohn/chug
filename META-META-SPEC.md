@@ -436,6 +436,22 @@ re-checks the `estimate:` line at dispatch (LOOP-SPEC §2 step 2's
 dispatch-time spec-size gate) — filing-time honesty is not enforcement
 (the T204 row said "~800" and the arc landed ~3,000+ all-in across
 both halves of its by-component split).
+**Spec pin-surface probe (T285).** Before a spec mandates a needle — a
+check-line grep target, a bold lead, a quoted template sentence — over a
+target file, the author runs the mechanical probe BEFORE finalizing the
+text: `grep -rn 'matches("' tests/*.rs` (the literal-needle census call
+sites) plus a windowed read of the target file's surrounding pins (the
+const-needle and positional pins the grep cannot see) — every exact-count
+census or window-scoped token pin whose window contains the mandated text
+is NAMED in the spec. **The declaration:** every pin the spec's mandated
+text perturbs is declared in the spec with its reconciliation — move the
+count with the pin's own contract-change comment, or reword the mandated
+text to dodge. **The payoff:** a spec that declares the pin surface up
+front never hands the impl child an unsatisfiable pair of requirements
+(the T282 lesson: the spec mandated a case-sensitive bold lead without
+probing the Write-EVALUATION window's `Outcomes` census, and its own "no
+other repo file changes" requirement was unsatisfiable as written — the
+impl child reconciled in-flight, moving both census pins 2→3).
 Priority doctrine: bugs > robustness > features > DX
 friction > performance — features are first-class (LOOP-SPEC §2): at
 equal pri, a credible feature row is worked before a DX-friction row.
