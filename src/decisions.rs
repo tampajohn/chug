@@ -78,11 +78,12 @@ static ID_COUNTER: AtomicU64 = AtomicU64::new(0);
 /// The seed decision classes, named verbatim in the schema description so the
 /// model does not invent synonyms. Free-string classes beyond these are
 /// accepted by design — a new class must not need a code change.
-pub const SEED_CLASSES: [&str; 6] = [
+pub const SEED_CLASSES: [&str; 7] = [
     "validation-routing",
     "validation-verdict",
     "recovery-routing",
     "model-fallback",
+    "eval-routing",
     "eval-triage",
     "outcome",
 ];
@@ -498,7 +499,7 @@ mod tests {
     /// classes verbatim plus the outcome-backfill contract — reverting any
     /// one of these fails the pin.
     #[test]
-    fn decision_log_schema_pins_required_six_and_seed_class_tokens() {
+    fn decision_log_schema_pins_required_seven_and_seed_class_tokens() {
         let schemas = tool_schemas();
         let entries: Vec<&Value> = schemas
             .iter()
@@ -540,11 +541,12 @@ mod tests {
         // because the description and the expectations changed together).
         // Changing a seed class is a contract change: update both lists
         // consciously.
-        const PINNED_SEED_CLASSES: [&str; 6] = [
+        const PINNED_SEED_CLASSES: [&str; 7] = [
             "validation-routing",
             "validation-verdict",
             "recovery-routing",
             "model-fallback",
+            "eval-routing",
             "eval-triage",
             "outcome",
         ];
@@ -556,7 +558,7 @@ mod tests {
         }
         // Exact rendered-list leg, needed because per-token `contains` cannot
         // kill a rename (`"eval-triage-X"` still contains `"eval-triage"`):
-        // the description must carry the six hardcoded tokens joined exactly,
+        // the description must carry the seven hardcoded tokens joined exactly,
         // so a rename OR reorder in SEED_CLASSES breaks this needle.
         let pinned_list = PINNED_SEED_CLASSES.join(", ");
         assert!(
