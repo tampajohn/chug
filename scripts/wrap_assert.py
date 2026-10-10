@@ -43,6 +43,7 @@ __all__ = [
 ]
 
 
+# read_key_values(text) — TEXT, not a path; e.g. read_key_values(open(path).read())
 def read_key_values(text):
     """Split-read every `key: value` line into {key: value} (the T270 shape).
 
@@ -60,8 +61,16 @@ def read_key_values(text):
     return fields
 
 
-def assert_fields_non_empty(path, keys):
-    """Every named `key:` line in *path* has a non-empty split-read value.
+# assert_fields_non_empty(source, keys) — a PATH (str/os.PathLike) or an already-parsed MAPPING; e.g. assert_fields_non_empty(path, ["purpose", "schema"])
+def assert_fields_non_empty(source, keys):
+    """Every named `key:` line in *source* has a non-empty split-read value.
+
+    *source* is EITHER a path (str/os.PathLike — opened and split-read here)
+    OR an already-parsed mapping (a read_key_values result, used directly
+    with no re-read — the T277 shape, after the `expected str ... not dict`
+    slip fired three times). The dispatch is structural (str/__fspath__ vs.
+    keys()+__getitem__; the module stays import-free) — any other shape
+    raises TypeError naming both accepted shapes.
 
     The T270 split-read shape: `line.split(':', 1)[1].strip() != ''` — the
     assertion reads the value back from the artifact, it does not measure
@@ -71,8 +80,19 @@ def assert_fields_non_empty(path, keys):
     in one AssertionError (each named, with its probed actual) so the wrap
     fixes every field in one pass.
     """
-    with open(path, "r", encoding="utf-8") as f:
-        fields = read_key_values(f.read())
+    if isinstance(source, str) or hasattr(source, "__fspath__"):
+        with open(source, "r", encoding="utf-8") as f:
+            fields = read_key_values(f.read())
+    elif callable(getattr(source, "keys", None)) and hasattr(source, "__getitem__"):
+        fields = source  # already parsed — used directly, no re-read
+    else:
+        raise TypeError(
+            f"assert_fields_non_empty(source, keys): source must be a PATH (a "
+            f"str or os.PathLike, opened and split-read here) or an already-"
+            f"parsed MAPPING (a dict / collections.abc.Mapping, used directly, "
+            f"no re-read); probed source {source!r} is neither "
+            f"(type {type(source).__name__})"
+        )
     failures = []
     for key in keys:
         if key not in fields:
@@ -83,11 +103,12 @@ def assert_fields_non_empty(path, keys):
             failures.append(f"empty key {key!r} (the split-read probed '')")
     if failures:
         raise AssertionError(
-            f"assert_fields_non_empty({path!r}): {len(failures)}/{len(keys)} "
+            f"assert_fields_non_empty({source!r}): {len(failures)}/{len(keys)} "
             f"named field(s) failed the split-read — " + "; ".join(failures)
         )
 
 
+# assert_count_delta(before, after, added) — 3 probed values, no path; e.g. assert_count_delta(before=76, after=78, added=2)
 def assert_count_delta(before, after, added):
     """`after == before + added`, computed from the probed actuals (T265).
 
@@ -105,6 +126,7 @@ def assert_count_delta(before, after, added):
         )
 
 
+# assert_byte_carry(prev_lines, new_lines) — 2 line LISTS, no path; e.g. assert_byte_carry(prev.splitlines(), new.splitlines())
 def assert_byte_carry(prev_lines, new_lines):
     """The carried segment is byte-identical (the T262/T266 splice gate).
 
@@ -136,6 +158,7 @@ def assert_byte_carry(prev_lines, new_lines):
         carry_from = pos + 1
 
 
+# assert_substituted(path, needle, expected_present=True) — a PATH string, not text; e.g. assert_substituted(path, "WRAP_HASH")
 def assert_substituted(path, needle, expected_present=True):
     """The fill substitution's probed verification (the T262 token check).
 
@@ -157,6 +180,7 @@ def assert_substituted(path, needle, expected_present=True):
         )
 
 
+# assert_count_exact(actual, expected, label="count") — 2 probed counts, no path; e.g. assert_count_exact(live, probed, "blocks")
 def assert_count_exact(actual, expected, label="count"):
     """The enumeration-count assertion, with the probed actual named (T272).
 

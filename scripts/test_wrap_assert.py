@@ -80,6 +80,32 @@ class AssertFieldsNonEmptyTest(unittest.TestCase):
             wrap_assert.assert_fields_non_empty(path, ["schema"])
 
 
+# T277: the mapping-input shape — `assert_fields_non_empty(read_key_values(text),
+# keys)` raised `expected str ... not dict` three times (trip-81 x2, trip-83 ingress).
+class AssertFieldsNonEmptyMappingInputTest(unittest.TestCase):
+    def test_pass_mapping_input_used_directly(self):
+        # No path involved — a re-open (the pre-T277 shape) would TypeError here.
+        fields = wrap_assert.read_key_values("purpose: carry the ring\nschema: 1\n")
+        wrap_assert.assert_fields_non_empty(fields, ["purpose", "schema"])
+
+    def test_fail_mapping_input_reports_the_missing_key_with_probed_actuals(self):
+        with self.assertRaises(AssertionError) as ctx:
+            wrap_assert.assert_fields_non_empty(
+                {"purpose": "", "schema": "1"}, ["purpose", "health"]
+            )
+        msg = str(ctx.exception)
+        self.assertIn("2/2 named field(s) failed", msg)  # same one-error shape
+        self.assertIn("missing key 'health'", msg)  # the probed absence
+
+    def test_fail_wrong_type_raises_type_error_naming_both_accepted_shapes(self):
+        with self.assertRaises(TypeError) as ctx:
+            wrap_assert.assert_fields_non_empty(7, ["purpose"])
+        msg = str(ctx.exception)
+        self.assertIn("PATH", msg)  # accepted shape 1 named
+        self.assertIn("MAPPING", msg)  # accepted shape 2 named
+        self.assertIn("type int", msg)  # the probed wrong type
+
+
 class AssertCountDeltaTest(unittest.TestCase):
     def test_pass_computes_from_probed_actuals(self):
         wrap_assert.assert_count_delta(before=76, after=78, added=2)
