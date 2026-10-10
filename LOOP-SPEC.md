@@ -958,10 +958,25 @@ alike) has been harvested.
   flipped TODO row-ids in the range — the flip-commit subjects
   (`^todo:`) name every flipped row including bundled rows (Phase 2
   step 5), so the mechanical count is
-  `git log <tag>..HEAD --format='%s' | grep -E '^todo:' | grep -oE 'T[0-9]+' | sort -u | wc -l`
+  `git log <tag>..HEAD --format='%s' | grep -E '^todo:' | sed -E 's/^todo: (file |fix )?(T[0-9]+( *[+,] *T[0-9]+)*).*/\2/' | grep -oE 'T[0-9]+' | sort -u | wc -l`
   (or an equivalent distinct-id method) against the ancestor-sanitized
   tag above, recomputed mechanically at EVERY wrap — never quoted
-  forward from a previous wrap's notes. Merge-subject enumeration
+  forward from a previous wrap's notes. The `sed` anchor exists because a
+  bare `grep -oE 'T[0-9]+'` sweep extracts EVERY T-token in each flip
+  subject, including trailing-prose references that are not flipped rows:
+  the third sighting (d1791632020-16, the cycle-458 wrap) rode the T189
+  lane-name token on the T274 flip's tail and inflated the
+  v0.17.13..HEAD recount to a false 3-vs-2 trigger crossing (the first
+  consequential one, adjudicated TRUE-governs → NO TAG), so the anchor
+  extracts only the flip subject's LEADING id-list — where the flip
+  template puts the flipped row id(s) (`todo: T<a> done …`,
+  `todo: T<a> + T<b> done …` bundled, `todo: file T<a> …` /
+  `todo: fix T<a> …`) — and every bundled `T<a> + T<b>` id survives.
+  FLIP-SUBJECT HYGIENE (T276): a flip subject's tail names no uppercase T-token beyond the flipped row id(s) —
+  record references ride their d-ids (which never match the extraction),
+  and lane or doctrine references write the name, not the id; the
+  anchor is the mechanical guard, the hygiene the authoring rule.
+  Merge-subject enumeration
   (`Merge branch` greps) and in-cycle memory are
   never the count authority — a landing's commit shape varies (the
   T265 lesson: a lowercase `merge: t265 …` flip fell out of the shape

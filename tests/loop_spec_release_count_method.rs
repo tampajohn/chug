@@ -81,19 +81,27 @@ fn window<'a>(spec: &'a str, start_marker: &str, end_marker: &str, what: &str) -
 /// The count-method sentence as the spec writes it: the authority
 /// (DISTINCT flipped TODO row-ids via the flip-commit subjects), the
 /// exact command shape, and the every-wrap recompute rule, in one
-/// sentence.
+/// sentence. The command shape carries the T276 leading id-list anchor
+/// (the `sed` step reduces each flip subject to its LEADING row-id list
+/// before the `-oE` extraction).
 const COUNT_METHOD_CLAUSE: &str = "COUNT METHOD (T269): the items-since-tag count is the count of \
 DISTINCT flipped TODO row-ids in the range — the flip-commit subjects \
 (`^todo:`) name every flipped row including bundled rows (Phase 2 step 5), \
 so the mechanical count is `git log <tag>..HEAD --format='%s' | grep -E \
-'^todo:' | grep -oE 'T[0-9]+' | sort -u | wc -l` (or an equivalent \
-distinct-id method) against the ancestor-sanitized tag above, recomputed \
-mechanically at EVERY wrap — never quoted forward from a previous wrap's \
-notes.";
+'^todo:' | sed -E 's/^todo: (file |fix )?(T[0-9]+( *[+,] \
+*T[0-9]+)*).*/\\2/' | grep -oE 'T[0-9]+' | sort -u | wc -l` (or an \
+equivalent distinct-id method) against the ancestor-sanitized tag above, \
+recomputed mechanically at EVERY wrap — never quoted forward from a \
+previous wrap's notes.";
 
 /// The exact command shape — the mechanical count itself, greppable
 /// end-to-end (the acceptance grep pins `sort -u` out of this shape).
-const COMMAND_SHAPE: &str = "git log <tag>..HEAD --format='%s' | grep -E '^todo:' | grep -oE 'T[0-9]+' | sort -u | wc -l";
+/// The `sed` step is the T276 leading id-list anchor: it extracts the
+/// flip subject's leading row-id list before the `-oE` pass, so stray
+/// trailing-prose T-tokens (the d1791632020-16 third sighting) cannot
+/// inflate the distinct-id recount, while bundled `T<a> + T<b>` shapes
+/// survive (every bundled id sits in the leading list).
+const COMMAND_SHAPE: &str = "git log <tag>..HEAD --format='%s' | grep -E '^todo:' | sed -E 's/^todo: (file |fix )?(T[0-9]+( *[+,] *T[0-9]+)*).*/\\2/' | grep -oE 'T[0-9]+' | sort -u | wc -l";
 
 // ---- the ban sentence (T269 req 1's explicit ban) ----
 
