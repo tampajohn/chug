@@ -721,6 +721,13 @@ simultaneously past gates — T194 amends T161's 2-child cap):
    the TODO row to `done` **with the merge commit ref in the same commit**
    (or an immediately following `todo:` commit; bundled rows may share one
    such `todo:` commit naming every row + its ref — Trivial-row bundling).
+   Row flips go through `python3 scripts/todo_flip.py TODO.md <id>
+   --status done --notes "<notes>"` (or re-derive the same structural
+   asserts from probed properties — the T273 carve-out shape), never a
+   hand-rolled string-splice around the trailing pipe: the helper
+   rebuilds the row from its six cells, rejects `|`/newline notes
+   pre-write, and asserts the single-physical-line + byte-carry
+   invariants before writing (the three-fire todo-flip census, trip 87).
    The item's `outcome` backfills are NOT written here — they batch at
    the wrap (T261; the wrap-boundary trigger): the Phase-3 audit step
    appends ONE record per still-unlabeled decision id in ONE pass per
