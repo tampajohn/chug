@@ -135,6 +135,9 @@ def assert_byte_carry(prev_lines, new_lines):
     When a ring (the decisions ring, the state file) is spliced, every
     carried line must survive BYTE-IDENTICAL and IN ORDER in the new
     lines — at any offset, since the new head prepends above the carry.
+    T287 made that blessing the doctrine's letter: the eval-delta splice
+    gate and the ring discipline now pin the same prepend convention, and
+    this position-free subsequence check is correct under it unchanged.
     Greedy leftmost matching (the standard subsequence check) is exact
     here: any failure means no alignment restores the carry, i.e. a carry
     line was mutated, reordered, or dropped. The failure names the first

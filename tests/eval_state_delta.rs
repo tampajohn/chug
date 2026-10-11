@@ -15,7 +15,8 @@
 //! digest-test pattern). Pinned here:
 //!
 //! 1. the verbatim-splice pin (T192 discipline): a rewrite is legal only as
-//!    an append (or, at a full ring, an oldest-end rotation) with carried
+//!    a prepend (or, at a full ring, a rotation dropping the previous ring's
+//!    tail — the oldest end under newest-first storage) with carried
 //!    decision lines byte-identical — a paraphrased, middle-dropped,
 //!    reordered, overfull or nothing-carried rewrite fails and forces the
 //!    next eval full;
@@ -35,7 +36,7 @@
 //!    DIRECT-EXECS its scripts, so every loopd-invoked script must be
 //!    committed 100755 — a `bash scripts/x.sh` test never sees a missing
 //!    exec bit, execve in production does (EACCES, exit 126). Plus: the
-//!    empty-previous-ring splice leg, newest-last chronology, and the
+//!    empty-previous-ring splice leg, newest-first ring chronology, and the
 //!    explicit `features-md:` fact META-META-SPEC's read path keys on.
 
 #![cfg(unix)]
@@ -102,7 +103,7 @@ fn state_text(eval_commit: &str, drift: &str, decisions: &[&str]) -> String {
          health: green — gates green, no absorbed deaths\n\
          open-threads: none\n\
          pacing-streak: TRUE streak 0 (token-free subject per T248)\n\
-         ## decisions (last 12, oldest first)\n"
+         ## decisions (last 12, newest first)\n"
     );
     for d in decisions {
         s.push_str("- ");
@@ -296,11 +297,13 @@ fn state_hit_verdict_with_verified_state_and_prev() {
 }
 
 #[test]
-fn splice_plain_append_is_legal_below_the_cap() {
-    let f = Fixture::new("append");
+fn splice_plain_prepend_is_legal_below_the_cap() {
+    let f = Fixture::new("prepend");
     let marker = f.head();
-    let mut carried = ring(3);
-    carried.push("2026-10-08 d1791-04 rejected skip".to_string());
+    // The new decision HEADS the ring (prepend storage: newest first), the
+    // carried lines ride below it byte-identical.
+    let mut carried = vec!["2026-10-08 d1791-04 rejected skip".to_string()];
+    carried.extend(ring(3));
     f.write(
         ".chug/eval-state.prev.md",
         &state_text(&marker, "none", &refs(&ring(3))),
@@ -315,12 +318,15 @@ fn splice_plain_append_is_legal_below_the_cap() {
 }
 
 #[test]
-fn splice_full_ring_rotation_from_the_oldest_end_is_legal() {
+fn splice_full_ring_rotation_from_the_tail_is_legal() {
     let f = Fixture::new("rot");
     let marker = f.head();
+    // Under newest-first storage the ring's TAIL is the oldest end: a full
+    // ring rotates by dropping the previous ring's tail line and prepending
+    // the new decision at the head.
     let mut rotated = ring(12);
-    rotated.remove(0);
-    rotated.push("2026-10-08 d1791-13 filed T13".to_string());
+    rotated.pop();
+    rotated.insert(0, "2026-10-08 d1791-13 filed T13".to_string());
     f.write(
         ".chug/eval-state.prev.md",
         &state_text(&marker, "none", &refs(&ring(12))),
@@ -374,6 +380,20 @@ fn splice_violations_force_full_read() {
             "nothing carried from a full ring",
             ring(12).iter().map(|s| format!("{s} (rewritten)")).collect(),
             "nothing carried verbatim",
+        ),
+        (
+            "new decision appended at the tail",
+            // Legal under the old append-at-tail rule; under prepend storage
+            // the new decision must HEAD the ring, so an appended tail breaks
+            // the carry (the current suffix can never equal the previous
+            // prefix) and reads as a reordered history.
+            vec![
+                "2026-10-07 d1791-01 filed T1".to_string(),
+                "2026-10-07 d1791-02 filed T2".to_string(),
+                "2026-10-07 d1791-03 filed T3".to_string(),
+                "2026-10-08 d1791-04 rejected skip".to_string(),
+            ],
+            "reordered",
         ),
     ];
     for (what, current, needle) in cases {

@@ -23,8 +23,9 @@
 # The verbatim-splice pin (T192 discipline): the state's `## decisions` ring
 # is history, not prose. The validator compares this run's state against the
 # snapshot the previous run took (.chug/eval-state.prev.md) and accepts the
-# rewrite only as a FIFO splice — carried decision lines byte-identical,
-# rotation only from the OLDEST end, new entries appended. A paraphrased or
+# rewrite only as a prepend splice — carried decision lines byte-identical,
+# rotation only from the OLDEST end (the previous ring's tail under
+# newest-first storage), new entries prepended. A paraphrased or
 # middle-removed entry (summarization in disguise) fails the check and forces
 # the next eval full. The snapshot is refreshed AFTER validation so each run
 # compares against exactly the pre-rewrite bytes the previous run saw.
@@ -57,7 +58,7 @@ mkdir -p "$CHUG"
 
 # --- constants (the pinned schema + thresholds) ------------------------------
 SCHEMA_VERSION=1
-MAX_DECISIONS=12          # the state's decisions ring: last 12, oldest first
+MAX_DECISIONS=12          # the state's decisions ring: last 12, newest first
 MAX_EVALS_BEHIND=3        # marker behind more than this many evals -> stale
 
 # --- clock (pinnable for reproducible output in tests) ----------------------
@@ -98,14 +99,16 @@ state_decisions() {
 
 # --- the splice verdict (verbatim-splice pin) --------------------------------
 # Compares the current decisions ring against the previous run's snapshot.
-# The ring is append-only history (T192 discipline, never summarization):
-#   * carried lines must be byte-identical, in order, as the new list's prefix
-#     (a suffix of the old list carried forward);
+# The ring is append-only history (T192 discipline, never summarization),
+# stored NEWEST FIRST (the wrap writer's on-disk shape, T287):
+#   * carried lines must be byte-identical, in order, as the new list's suffix
+#     (the previous list's prefix carried below the new head);
 #   * while the ring is below the cap NOTHING may be dropped (there is room —
 #     dropping is rewriting);
-#   * at a full ring, rotation drops from the OLDEST end only, and at least
-#     one line must survive verbatim (a rewrite that carries nothing reads as
-#     summarization and forces the next eval full).
+#   * at a full ring, rotation drops from the previous ring's TAIL (the
+#     oldest end under newest-first storage), and at least one line must
+#     survive verbatim (a rewrite that carries nothing reads as summarization
+#     and forces the next eval full).
 # Anything else prints `violated: ...`.
 #
 # (The file split uses FILENAME == ARGV[1], never the NR==FNR idiom: that
@@ -119,12 +122,12 @@ splice_verdict() {
     END {
       if (k > maxd) { printf "violated: decisions %d > %d (ring overfull)\n", k, maxd; exit }
       if (m == 0) { printf "ok (carried 0, rotated 0, appended %d)\n", k; exit }
-      # largest j with c[1..j] == p[m-j+1..m] (the carried prefix)
+      # largest j with c[k-j+1..k] == p[1..j] (the carried suffix)
       jmax = (m < k ? m : k)
       for (j = jmax; j >= 0; j--) {
         good = 1
         for (x = 1; x <= j; x++) {
-          if (c[x] != p[m - j + x]) { good = 0; break }
+          if (c[k - j + x] != p[x]) { good = 0; break }
         }
         if (good) break
       }
@@ -381,8 +384,9 @@ fi
   printf '## Read-path rules\n\n'
   printf -- '- STATE-HIT (non-trip eval): read .chug/eval-state.md + this delta INSTEAD of the\n'
   printf -- '  full META-META-SPEC corpus; rewrite the state at wrap (verbatim splice: carried\n'
-  printf -- '  decision lines byte-identical — rotate from the oldest end, append new; never\n'
-  printf -- '  summarize) and record the fresh-input before/after in Outcomes (T184 lines above).\n'
+  printf -- '  decision lines byte-identical — rotate from the tail (the oldest end),\n'
+  printf -- '  prepend new; never summarize) and record the fresh-input before/after in\n'
+  printf -- '  Outcomes (T184 lines above).\n'
   printf -- '- FULL-READ REQUIRED: the full META-META-SPEC corpus list applies, unchanged.\n'
   printf -- '- TRIP evals (the T247 valve, a stale/due evaluation) are ALWAYS full reads\n'
   printf -- '  regardless of the verdict above — the state is never a trip eval only input.\n'

@@ -59,10 +59,12 @@ totals of your own stream), one-line `health:`, `open-threads:`,
 `pacing-streak:`, and the `## decisions` ring. Rewrite it after your wrap
 commit (the `eval-commit:` marker is that commit's hash) with
 the T192 LIVE_CTX discipline: **verbatim splice, never summarization** — the
-`## decisions` ring is append-only history (last 12, oldest first): carried
-lines byte-identical, rotation only from the oldest end once the ring is
-full, new decisions appended; if this eval made more decisions than the ring
-has room for, rotate at most 11 so one prior line always survives verbatim.
+`## decisions` ring is append-only history (last 12, NEWEST first): carried
+lines byte-identical, new decision batches PREPENDED at the head, rotation
+drops from the TAIL (the oldest end) once the ring is full; if this eval made
+more decisions than the ring has room for, rotate at most 11 so one prior
+line always survives verbatim; the ring's header reads
+`## decisions ring (last 12, newest first — newest batch at the head)`.
 The next eval's delta run splice-checks your
 rewrite against the previous bytes; a paraphrased or dropped middle entry
 fails the check and forces the next eval full. Record in the wrap's Outcomes
