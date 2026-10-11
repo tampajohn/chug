@@ -202,8 +202,20 @@ this stream", true at the wrap-notes probe (n≈47) and false at the
 whole-stream final, the digest reads 6 (the n=53 sh fire plus five
 post-probe state-write helper legs). The class boundary: DEFERRED
 equalities and whole-stream failed-leg/ctx-edit claims in wrap text ARE
-this class; the at-commit T257 color (explicitly probe-stamped) is NOT
-— the color's probe stamp IS the scoping. The clause is hygiene for the
+this class; the at-commit T257 color (explicitly probe-stamped) is NOT —
+the color's probe stamp IS the scoping — ONLY when the color's
+enumeration is itself a mechanical whole-stream read of the stream's own
+flags taken at the named stamp, every ok:false / ctx-edit leg
+PRESENT at the stamp named (classified or unclassed-minor) enumerated;
+the stamp scopes only TAIL legs (events after the stamp), and a color
+whose enumeration omits a leg present at its named stamp is INSIDE the
+class (the false-at-write shape) — fired twice, each caught one chain
+later by the digest backstop: d1791709463-4 (the first sighting —
+cycle-528's probe-stamped wrap note read "ok:false legs ZERO" with the
+digest's one failed leg inside the stamp window) and d1791717921-2 (the
+second — cycle-541's probe-stamped color claimed "ok:false legs ZERO by
+the stream's own flag" while four ok:false legs were present at the
+stamp, two named and two unnamed). The clause is hygiene for the
 deferred text, not a gate: the digest backstop's whole-stream read is
 the designed net either way, catching every miss one chain later.
 
@@ -237,9 +249,20 @@ the 07:5xZ probe while the 08:00:57.960Z ring-carry AssertionError and
 the 08:01:20.531Z FileNotFoundError had already fired inside the named
 window — digest 5 vs claimed 3 (d1791621339-3, the second
 false-at-write). The class boundary carries from T271 unchanged: the
-at-commit T257 color (explicitly probe-stamped) is NOT this class —
-the probe stamp IS the scoping; this clause governs whole-stream
-enumerations in wrap text.
+at-commit T257 color (explicitly probe-stamped) is NOT this class — the
+probe stamp IS the scoping — ONLY when the color's enumeration is itself
+a mechanical whole-stream read of the stream's own flags taken at the
+named stamp, every ok:false / ctx-edit leg PRESENT at the stamp named
+(classified or unclassed-minor) enumerated; the stamp scopes only TAIL
+legs (events after the stamp), and a color whose enumeration omits a leg
+present at its named stamp is INSIDE this class (the false-at-write
+shape) — fired twice, each caught one chain later by the digest backstop:
+d1791709463-4 (the first sighting — cycle-528's probe-stamped wrap note
+read "ok:false legs ZERO" with the digest's one failed leg inside the
+stamp window) and d1791717921-2 (the second — cycle-541's probe-stamped
+color claimed "ok:false legs ZERO by the stream's own flag" while four
+ok:false legs were present at the stamp, two named and two unnamed); this
+clause governs whole-stream enumerations in wrap text.
 
 **Probe hygiene (T284, exit codes and accessor shapes).** The layer
 beneath the enumeration clause above — the probe itself, composed
