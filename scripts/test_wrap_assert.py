@@ -28,6 +28,19 @@ sub-shapes (both pinned as regression legs):
     now scopes to the `## decisions` ring section (line-anchored per
     T266) and reads 12 on the same bytes.
 
+T289 adds the ring's uniqueness + position-aware splice legs (the
+cycle-520 wrap's corrupted rewrite pinned as regression shapes):
+
+  - the cycle-520 shape (12 ring lines / 8 unique decision ids, the tail
+    4 byte-duplicates of the head 4): FAILS assert_ring_unique naming the
+    duplicated ids and both offsets, while the count-only
+    assert_ring_count and the position-free assert_byte_carry still pass
+    it (the documented gaps the new teeth close).
+  - the well-formed prepend+carry splices (8+4 young-ring growth, and the
+    full-capacity rotation that drops the previous ring's TAIL only)
+    PASS assert_ring_splice; the vacuous-pass shape (the "carried"
+    window a copy of the new batch's own head) fails it positionally.
+
 Run (the check line): python3 -m unittest scripts/test_wrap_assert.py -v
 """
 
@@ -690,6 +703,217 @@ class AssertRingCountTest(unittest.TestCase):
         self.assertIn("PATH", msg)  # accepted shape 1 named
         self.assertIn("LINE LIST", msg)  # accepted shape 2 named
         self.assertIn("type int", msg)  # the probed wrong type
+
+
+# T289 fixtures: the cycle-520 wrap's corrupted ring shape — 12 ring lines,
+# 8 unique decision ids, the tail 4 byte-duplicates of the head 4 (the new
+# batch's own head written twice into the tail). The batch/carried ids are
+# the corrupted ring's own 8 unique decision ids; the "older" lines are what
+# the previous ring's tail held before rotation.
+CYCLE520_BATCH_IDS = [
+    "d1791696920-1",
+    "d1791697568-2",
+    "d1791697568-3",
+    "d1791697575-4",
+]
+CYCLE520_CARRIED_IDS = [
+    "d1791697575-5",
+    "d1791697585-6",
+    "d1791698000-7",
+    "d1791698004-8",
+]
+
+
+def _ring_line(ring_id, tag):
+    return f"- {ring_id}: eval-triage T289 {tag} (a probed ring line)"
+
+
+def _batch_of(count):
+    """A fresh new batch of `count` ring lines (date prefix disjoint from
+    the cycle-520 fixtures' carried ids)."""
+    return [
+        _ring_line(f"d1791699100-{i}", f"new batch {i}")
+        for i in range(1, count + 1)
+    ]
+
+
+def _cycle520_batch():
+    return [
+        _ring_line(ring_id, f"new batch {i}")
+        for i, ring_id in enumerate(CYCLE520_BATCH_IDS)
+    ]
+
+
+def _cycle520_carried():
+    return [
+        _ring_line(ring_id, f"carried {i}")
+        for i, ring_id in enumerate(CYCLE520_CARRIED_IDS)
+    ]
+
+
+def _cycle520_prev_ring():
+    """The previous ring (12 lines): the 4 lines that survive the corruption
+    as its middle block + 8 older lines a legal rotation drops from the
+    TAIL."""
+    older = [_ring_line(f"d1791683736-{i}", f"older {i}") for i in range(9, 17)]
+    return _cycle520_carried() + older
+
+
+def _cycle520_corrupted_ring():
+    """The cycle-520 composed ring: 4 new + 4 carried + 4 byte-duplicates of
+    the new batch's own head — 12 lines, 8 unique decision ids."""
+    batch = _cycle520_batch()
+    return batch + _cycle520_carried() + batch
+
+
+class AssertRingUniqueTest(unittest.TestCase):
+    """T289: the ring's uniqueness contract (the cycle-520 corruption)."""
+
+    def test_fail_cycle520_shape_names_the_duplicated_ids_and_both_offsets(self):
+        # The cycle-520 shape pinned: pre-T289 this helper did not exist and
+        # every existing guard passed the corruption — pinned here with it
+        # (the count gate reads 12 either way).
+        lines = [RING_HEADER] + _cycle520_corrupted_ring()
+        wrap_assert.assert_ring_count(lines)  # the count-only gate: vacuous
+        with self.assertRaises(AssertionError) as ctx:
+            wrap_assert.assert_ring_unique(lines)
+        msg = str(ctx.exception)
+        self.assertIn("8 duplicated ring element(s)", msg)  # 4 lines + 4 ids
+        for ring_id in CYCLE520_BATCH_IDS:  # every duplicated id named
+            self.assertIn(f"duplicated decision id '{ring_id}'", msg)
+        for ring_id in CYCLE520_CARRIED_IDS:  # the carried ids are unique
+            self.assertNotIn(f"duplicated decision id '{ring_id}'", msg)
+        self.assertIn("ring lines 1 and 9", msg)  # BOTH offsets, ring-relative
+        self.assertIn("file lines 2 and 10", msg)  # and file-anchored
+
+    def test_fail_via_path_input_names_the_probed_source(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            text = "\n".join([RING_HEADER] + _cycle520_corrupted_ring()) + "\n"
+            path = _write(tmp, "state.md", text)
+            with self.assertRaises(AssertionError) as ctx:
+                wrap_assert.assert_ring_unique(path)
+        msg = str(ctx.exception)
+        self.assertIn("state.md'", msg)  # the probed source named (repr'd path)
+        self.assertIn("duplicated decision id 'd1791697575-4'", msg)
+
+    def test_fail_prose_quoted_header_never_anchors(self):
+        # The T266 line-anchoring discipline carries over: a bare substring
+        # mention of the ring header in prose is not the ring section (a
+        # substring anchor would extract the bullet and pass vacuously).
+        lines = [
+            "purpose: prose quotes ## decisions ring (last 12) here",
+            "- d1791699999-1: an open-threads bullet BEFORE any ring section",
+        ]
+        with self.assertRaises(AssertionError) as ctx:
+            wrap_assert.assert_ring_unique(lines)
+        msg = str(ctx.exception)
+        self.assertIn("'## decisions ring'", msg)  # the missing anchor named
+        self.assertIn("matches NO line start", msg)
+
+    def test_pass_well_formed_ring_is_unique(self):
+        # (b) the well-formed 12-line ring: 8 prepended + 4 carried, 12
+        # unique ids — the same shape the corrupted fixture fails on.
+        composed = _batch_of(8) + _cycle520_carried()
+        wrap_assert.assert_ring_unique([RING_HEADER] + composed)
+
+    def test_fail_wrong_type_raises_type_error_naming_both_shapes(self):
+        with self.assertRaises(TypeError) as ctx:
+            wrap_assert.assert_ring_unique(7)
+        msg = str(ctx.exception)
+        self.assertIn("PATH", msg)  # accepted shape 1 named
+        self.assertIn("LINE LIST", msg)  # accepted shape 2 named
+        self.assertIn("type int", msg)  # the probed wrong type
+
+
+class AssertRingSpliceTest(unittest.TestCase):
+    """T289: the position-aware ring-splice gate (prepend + carry; rotation
+    drops from the previous ring's TAIL only)."""
+
+    def test_pass_well_formed_12_line_ring_8_prepended_4_carried(self):
+        # (b) 8 prepended + 4 carried from a previous 4-line ring; the
+        # prepend count PROBED from the batch the caller composed.
+        prev = _cycle520_carried()  # the previous ring: 4 lines
+        batch = _batch_of(8)
+        composed = batch + prev
+        prepended = len(batch)  # probed, never a remembered constant
+        self.assertEqual(len(composed), 12)
+        wrap_assert.assert_ring_splice(prev, composed, prepended)
+        wrap_assert.assert_ring_unique([RING_HEADER] + composed)
+
+    def test_pass_full_capacity_rotation_drops_the_prev_tail_only(self):
+        # (d) a legal prepend + tail-rotation splice at full capacity:
+        # previous ring 12, batch 4, keep 8 — prev[8:] (the TAIL) drops,
+        # prev[0:8] carries POSITION-ALIGNED at ring offsets 4-11.
+        prev = _cycle520_prev_ring()
+        self.assertEqual(len(prev), 12)
+        batch = _cycle520_batch()
+        wrap_assert.assert_ring_splice(prev, batch + prev[:8], len(batch))
+
+    def test_fail_vacuous_pass_shape_byte_carry_passes_splice_fails(self):
+        # (c) the cycle-520 gap, pinned end-to-end: the landing call verified
+        # the BATCH's lines appear in the composed ring — the position-free
+        # subsequence check the duplicated tail trivially satisfies — while
+        # the position-aware gate fires at the first misaligned carried
+        # position (ring offset 8: the previous ring's 5th line replaced by
+        # a copy of the batch's own head).
+        prev = _cycle520_prev_ring()
+        batch = _cycle520_batch()
+        composed = batch + _cycle520_carried() + batch
+        wrap_assert.assert_byte_carry(batch, composed)  # the OLD gate: vacuous
+        with self.assertRaises(AssertionError) as ctx:
+            wrap_assert.assert_ring_splice(prev, composed, len(batch))
+        msg = str(ctx.exception)
+        self.assertIn("carried position 4", msg)
+        self.assertIn("ring offset 8", msg)
+        self.assertIn(repr(prev[4]), msg)  # probed expected repr
+        self.assertIn(repr(batch[0]), msg)  # the batch-copy sitting there
+
+    def test_fail_mutated_carried_line_names_both_reprs(self):
+        prev = _cycle520_prev_ring()
+        batch = _cycle520_batch()
+        composed = batch + prev[:8]
+        composed[5] = composed[5] + " (rewritten)"  # a byte-mutation
+        with self.assertRaises(AssertionError) as ctx:
+            wrap_assert.assert_ring_splice(prev, composed, len(batch))
+        msg = str(ctx.exception)
+        self.assertIn("carried position 1", msg)
+        self.assertIn(repr(prev[1]), msg)
+        self.assertIn("rewritten", msg)
+
+    def test_fail_reordered_carry_fires_positionally(self):
+        # Element-wise, never a subsequence: a swapped carried PAIR still
+        # fires (every line present, the ORDER broken).
+        prev = _cycle520_prev_ring()
+        batch = _cycle520_batch()
+        carried = prev[:8]
+        carried[0], carried[1] = carried[1], carried[0]
+        with self.assertRaises(AssertionError) as ctx:
+            wrap_assert.assert_ring_splice(prev, batch + carried, len(batch))
+        msg = str(ctx.exception)
+        self.assertIn("carried position 0", msg)
+        self.assertIn(repr(prev[0]), msg)
+        self.assertIn(repr(prev[1]), msg)  # the swapped-in line probed there
+
+    def test_fail_dropped_carry_names_the_splice_arithmetic(self):
+        # The summarization shape: 11 composed lines where the splice
+        # arithmetic demands 12 (one carried line dropped).
+        prev = _cycle520_prev_ring()
+        batch = _cycle520_batch()
+        with self.assertRaises(AssertionError) as ctx:
+            wrap_assert.assert_ring_splice(prev, batch + prev[:7], len(batch))
+        msg = str(ctx.exception)
+        self.assertIn("probed 11 ring line(s)", msg)  # the composed length
+        self.assertIn("expected 4 + 8", msg)  # the splice arithmetic
+        self.assertIn("previous ring 12 line(s)", msg)
+
+    def test_fail_wrong_type_prepended_count_names_the_probed_arg(self):
+        prev = _cycle520_prev_ring()
+        batch = _cycle520_batch()
+        with self.assertRaises(TypeError) as ctx:
+            wrap_assert.assert_ring_splice(prev, batch + prev[:8], "4")
+        msg = str(ctx.exception)
+        self.assertIn("non-negative int", msg)
+        self.assertIn("probed prepended_count '4'", msg)
 
 
 if __name__ == "__main__":

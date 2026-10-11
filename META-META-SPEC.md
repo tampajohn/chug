@@ -63,7 +63,13 @@ the T192 LIVE_CTX discipline: **verbatim splice, never summarization** — the
 lines byte-identical, new decision batches PREPENDED at the head, rotation
 drops from the TAIL (the oldest end) once the ring is full; if this eval made
 more decisions than the ring has room for, rotate at most 11 so one prior
-line always survives verbatim; the ring's header reads
+line always survives verbatim. The ring holds no duplicated line — a
+duplicated carried line is corruption of the append-only history, never a
+rotation (the cycle-520 wrap's rewrite landed 12 ring lines carrying only
+8 unique decision ids, the new batch's own head written twice into the
+tail, every count/structural guard passing it) — `scripts/wrap_assert.py`'s
+`assert_ring_unique` and position-aware `assert_ring_splice` (T289) are
+the teeth. The ring's header reads
 `## decisions ring (last 12, newest first — newest batch at the head)`.
 The next eval's delta run splice-checks your
 rewrite against the previous bytes; a paraphrased or dropped middle entry
