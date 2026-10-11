@@ -121,4 +121,4 @@ write gate's first post-flip write.)
 estimate: ~140 changed lines (script ±40, tests ±65, META-META-SPEC ±10,
 wrap_assert ±3, spec bookkeeping)
 
-check: touch src/*.rs tests/*.rs; CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared cargo test --release --test eval_state_delta --test eval_outcomes_carry --test todo_consistency
+check: touch src/*.rs tests/*.rs; CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-validate-a cargo test --release --test eval_state_delta --test eval_outcomes_carry --test todo_consistency
