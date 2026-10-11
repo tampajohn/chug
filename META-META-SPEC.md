@@ -158,6 +158,18 @@ header's own `last N` at call time — never a remembered ARG; fires 3
 and 4 (the cycle-512 wrap's 03:02:56Z ring-lines leg, expected 12 vs
 probed 17 where the whole-file `- d` probe counted 5 open-threads bullets
 too) are the citation.
+READER shapes bind the same inspect-first clause as NAMED SECTIONS — the
+6th fire (d1791704581-5, the cycle-528 todos census) composed a python
+probe from an ASSUMED JSONL layout, `for l in open('.chug/todos.json'):
+json.loads(l)['id']` over a file that is a single-doc JSON list, and the
+per-line `except: pass` swallowed the TypeError so the probe printed a
+false `todos 0` answer, caught same-leg by the known-count cross-check
+(~1,014 ids) and corrected via a `head -c 300` shape-inspection plus a
+direct single-doc parse, zero casualty; READ the file's actual layout
+(a head/probe of the shape) BEFORE composing the reader, the same way
+the expectation above derives from the section's own live probe — and a
+bare `except: pass` inside a probe MASKS the layout mismatch instead of
+surfacing it.
 
 **Deferred digest-final equalities (T271,
 deferred-equality scope-or-re-probe).** A wrap that defers a
