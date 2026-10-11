@@ -362,6 +362,17 @@ conflated the chain window with the recount window (the mechanical
 recount read TRUE 1), and the entry's `19:36Z` timestamp against the
 committed eval text's `19:16:12Z` — both zero-casualty because the
 backstops caught them.
+The class's third recorded fire (d1791706040-13, the cycle-528 wrap's fill
+leg) lands the channel half — HOW a probed value enters the fill script:
+the fill script hardcoded the notes commit's cI as `04:09:56` (a
+composed-from-assumption figure) while the same commit's probe (`git show
+-s --format=%cI <ref>`) read `04:06:42` straight off that command's stdout
+— caught pre-commit on the result read-back and corrected to the probed
+value, zero casualty; a fill script's substituted values are PROBED INTO
+SHELL VARIABLES FIRST (the probe's stdout captured into a var) and the
+script reads them from argv or the environment — a probed value is never
+literal-composed into the script text, where an invented or stale figure
+sits indistinguishable from authored prose.
 
 Sections:
 
