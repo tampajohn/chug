@@ -37,6 +37,14 @@ shapes this module's T288 variant closes:
   was right and the artifact correct; the probe's surface was wider than
   the section it named.
 
+T289 closes the ring's duplication tooth-gap (the cycle-520 wrap's
+rewrite): the corrupted 12-line decisions ring (8 unique decision ids,
+the new batch's own head written twice into the tail) passed every
+existing guard — the count gate reads 12 either way, the structural
+self-check reads headers only, and the position-free carry check is
+vacuous for a duplicated tail — so the ring surface learns
+assert_ring_unique plus the position-aware assert_ring_splice.
+
 This module is the teeth (the T273 doctrine pointer in META-META-SPEC.md):
 ONE dependency-free (stdlib-only) helper the wrap/fill arcs IMPORT for the
 recurring shapes instead of re-authoring assertions inline. Every function
@@ -59,6 +67,8 @@ __all__ = [
     "assert_window_clean",
     "ring_section_lines",
     "assert_ring_count",
+    "assert_ring_unique",
+    "assert_ring_splice",
 ]
 
 
@@ -522,3 +532,137 @@ def assert_ring_count(path_or_lines, expected_capacity=12):
             f"leg: expected 12 vs probed 17) and a remembered ARG cannot set "
             f"the expectation (fire 3, d1791684611-3)"
         )
+
+
+# assert_ring_unique(path_or_lines) — a PATH (str/os.PathLike) or a line LIST; e.g. assert_ring_unique("state.md")
+def assert_ring_unique(path_or_lines):
+    """The ring's uniqueness contract (the T289 shape, the cycle-520 fire).
+
+    Extracts the `## decisions` ring section (the T288/T266 LINE-ANCHORED
+    extraction, never a bare substring) and asserts, within it: (a) no
+    duplicated LINE byte-for-byte and (b) no duplicated decision id (the
+    `- d<N>-<seq>:` prefix of each ring bullet). The cycle-520 wrap's
+    rewrite landed a 12-line ring whose tail 4 lines are byte-duplicates
+    of its head 4 (8 unique decision ids) and every existing guard passed
+    it — assert_ring_count reads 12 either way, the structural self-check
+    reads headers only, and the position-free carry check is VACUOUS for a
+    duplicated tail. A duplicated carried line is corruption of the
+    append-only history, never a rotation. The failure names EVERY
+    duplicated id (or line repr) and BOTH offsets — ring-relative and
+    file line numbers, probed from the artifact — in ONE AssertionError.
+    Blank body lines are exempt from (a): they carry no decision content,
+    a doubled blank is formatting noise, not a duplicated carried line.
+    """
+    if isinstance(path_or_lines, str) or hasattr(path_or_lines, "__fspath__"):
+        with open(path_or_lines, "r", encoding="utf-8") as f:
+            lines = f.read().splitlines()
+    elif isinstance(path_or_lines, (list, tuple)):
+        lines = list(path_or_lines)
+    else:
+        raise TypeError(
+            f"assert_ring_unique(path_or_lines): path_or_lines must be a "
+            f"PATH (a str or os.PathLike, opened and split-read here) or an "
+            f"already-split LINE LIST (a list/tuple of str, used directly, "
+            f"no re-read); probed source {path_or_lines!r} is neither "
+            f"(type {type(path_or_lines).__name__})"
+        )
+    _, lo, hi = _ring_section_bounds(
+        lines, "assert_ring_unique", _where(path_or_lines)
+    )
+    failures = []
+    seen_lines = {}
+    seen_ids = {}
+    for i, line in enumerate(lines[lo:hi]):
+        if line:
+            if line in seen_lines:
+                first = seen_lines[line]
+                failures.append(
+                    f"duplicated line {line!r} at ring lines {first + 1} and "
+                    f"{i + 1} (file lines {lo + first + 1} and {lo + i + 1})"
+                )
+            else:
+                seen_lines[line] = i
+        if line.startswith("- d"):
+            ring_id = line[2:].split(":", 1)[0].strip()
+            if ring_id in seen_ids:
+                first = seen_ids[ring_id]
+                failures.append(
+                    f"duplicated decision id {ring_id!r} at ring lines "
+                    f"{first + 1} and {i + 1} (file lines "
+                    f"{lo + first + 1} and {lo + i + 1})"
+                )
+            else:
+                seen_ids[ring_id] = i
+    if failures:
+        raise AssertionError(
+            f"assert_ring_unique({_where(path_or_lines)}): "
+            f"{len(failures)} duplicated ring element(s) in the `## "
+            f"decisions` ring section (lines {lo + 1}-{hi}) — " +
+            "; ".join(failures) +
+            " — a duplicated carried line is corruption of the append-only "
+            "history, never a rotation (the cycle-520 wrap's rewrite: 12 "
+            "ring lines / 8 unique decision ids, every count/structural "
+            "guard passing it)"
+        )
+
+
+# assert_ring_splice(prev_ring_lines, new_ring_lines, prepended_count, capacity=12) — 2 line LISTS + a probed count
+def assert_ring_splice(prev_ring_lines, new_ring_lines, prepended_count, capacity=12):
+    """The position-aware ring-splice gate (the T289 shape).
+
+    The composed ring must be PREPENDED + CARRIED structurally:
+    new_ring_lines[prepended_count:] equals
+    prev_ring_lines[0 : max(0, min(capacity - prepended_count,
+    len(prev_ring_lines)))] BYTE-IDENTICAL and POSITION-ALIGNED —
+    element-wise, never a subsequence (mirroring the eval-delta splice
+    gate's shape: carried = the previous list's prefix below the new head;
+    rotation drops from the previous ring's TAIL only). *prepended_count*
+    is PROBED by the caller from the batch it composed (the T270/T273
+    letter: probed actuals, never a remembered constant). The position-free
+    assert_byte_carry STAYS for non-ring surfaces — its subsequence check
+    is VACUOUS for a duplicated tail (the cycle-520 landing call verified
+    the new batch's lines appear in the composed ring, which duplicates
+    trivially satisfy), so the ring surface upgrades to this gate. The
+    failure names the probed splice arithmetic (prepended, capacity, both
+    lengths) or the first misaligned carried position with BOTH reprs.
+    """
+    if (
+        not isinstance(prepended_count, int)
+        or isinstance(prepended_count, bool)
+        or prepended_count < 0
+    ):
+        raise TypeError(
+            f"assert_ring_splice(prev_ring_lines, new_ring_lines, "
+            f"prepended_count, capacity): prepended_count must be a "
+            f"non-negative int (the count PROBED from the batch the caller "
+            f"composed, never a remembered constant); probed "
+            f"prepended_count {prepended_count!r} is "
+            f"{type(prepended_count).__name__}"
+        )
+    keep = max(0, min(capacity - prepended_count, len(prev_ring_lines)))
+    expected_carried = list(prev_ring_lines[:keep])
+    actual_carried = list(new_ring_lines[prepended_count:])
+    if len(actual_carried) != len(expected_carried):
+        raise AssertionError(
+            f"assert_ring_splice: the composed ring's length broke the "
+            f"splice arithmetic — probed {len(new_ring_lines)} ring line(s) "
+            f"= {prepended_count} prepended + {len(actual_carried)} "
+            f"carried, expected {prepended_count} + {keep} (capacity "
+            f"{capacity!r}, previous ring {len(prev_ring_lines)} line(s), "
+            f"keep = max(0, min(capacity - prepended, len(prev)))) — a "
+            f"dropped or duplicated carried line is corruption of the "
+            f"append-only history, never a rotation"
+        )
+    for offset, (expected, actual) in enumerate(
+        zip(expected_carried, actual_carried)
+    ):
+        if expected != actual:
+            raise AssertionError(
+                f"assert_ring_splice: the composed ring broke at carried "
+                f"position {offset} (ring offset "
+                f"{prepended_count + offset}) — probed expected "
+                f"{expected!r}, probed actual {actual!r} — the carried "
+                f"window must be the previous ring's prefix below the new "
+                f"head, byte-identical and position-aligned; rotation drops "
+                f"from the previous ring's TAIL only"
+            )
