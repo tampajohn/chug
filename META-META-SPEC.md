@@ -142,7 +142,16 @@ hardcoded `blocks == 76` against a live-grown transcript (78+ blocks), the
 guard fired pre-write on CORRECT content, the file never touched,
 corrected one leg later to probed counts. The helper's arguments are the
 probed actuals — passing a remembered constant INTO the helper is the
-same banned shape as inlining it.
+same banned shape as inlining it. Count expectations over a NAMED SECTION
+are the probe-deriving variant (T288): the expectation derives from the
+section-scoped live probe the helper performs — the ring-lines count
+scopes to the `## decisions` ring section, extracted LINE-ANCHORED per
+T266 on the ring's own header, and its capacity is probed from that
+header's own `last N` at call time — never a remembered ARG; fires 3
+(d1791684611-3, the remembered 6 riding the imported expected-count ARG)
+and 4 (the cycle-512 wrap's 03:02:56Z ring-lines leg, expected 12 vs
+probed 17 where the whole-file `- d` probe counted 5 open-threads bullets
+too) are the citation.
 
 **Deferred digest-final equalities (T271,
 deferred-equality scope-or-re-probe).** A wrap that defers a

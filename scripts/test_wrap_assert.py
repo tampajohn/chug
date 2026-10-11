@@ -15,6 +15,19 @@ fires are pinned as regression cases:
     assert_count_exact when the expectation is probed from the same read,
     and the stale-constant fail names the probed actual.
 
+T288 adds the probe-deriving, section-scoped pair for the class's two NEW
+sub-shapes (both pinned as regression legs):
+
+  - d1791684611-3 (the cycle-508 wrap, fire 3): the remembered constant
+    rode the helper's imported expected-count ARG — a stale ARG passed
+    INTO assert_ring_count cannot override the capacity probed from the
+    live header.
+  - the cycle-512 wrap's 03:02:56Z leg (fire 4): the probe split the WHOLE
+    temp file on `startswith('- d')` (17 = 12 ring lines + 5 open-threads
+    bullets) and fired on structurally correct content — the ring count
+    now scopes to the `## decisions` ring section (line-anchored per
+    T266) and reads 12 on the same bytes.
+
 Run (the check line): python3 -m unittest scripts/test_wrap_assert.py -v
 """
 
@@ -421,6 +434,262 @@ class AssertWindowCleanTest(unittest.TestCase):
         self.assertIn("'WRAP_TIME' at window line 2", msg)
         self.assertIn("'PROBE_RESULT' at window line 2", msg)
         self.assertIn("'WRAP_HASH' at window line 3", msg)
+
+
+# T288 fixtures. The ring header is the format's pinned heading text (the
+# live file carries a longer suffix; the anchor is the LINE-ANCHORED prefix).
+RING_HEADER = (
+    "## decisions ring (last 12, newest first — newest batch at the head)"
+)
+
+# The fire-4 open-threads bullets — all five start `- d`, which is exactly
+# why the OLD whole-file `startswith('- d')` probe miscounted them as ring
+# lines (17 = 12 ring lines + 5 bullets, the cycle-512 wrap's 03:02:56Z leg).
+FIRE4_OPEN_THREADS_BULLETS = [
+    "- decision_log-arg-slip census 4 + mis-class sub-shape 3 (UNCHANGED — "
+    "the routing record classed CORRECTLY)",
+    "- describe-count-slip census 2 (UNCHANGED — the count probe names the "
+    "probed actual)",
+    "- duplicate-subject backfill first-sighting (counted — subjects "
+    "tail-probed first)",
+    "- digest-backstop tail leg census 3 (UNCHANGED — the tail identified "
+    "by jq on the rotated stream)",
+    "- decision-census re-arm (a NEW fire of the class re-fires the census)",
+]
+
+
+def _ring_entries(count):
+    return [
+        f"- d1791683736-{i}: eval-routing trip 96 binds (kimi) — the probed "
+        f"decision body {i}"
+        for i in range(count)
+    ]
+
+
+def _fire4_state(ring_count=12, bullet_count=5, header=RING_HEADER, tail_sections=""):
+    """A structurally-correct state file in the real section order: the
+    fields block, then `## open-threads`, then the `## decisions` ring
+    (running to EOF), optionally followed by more sections (tail_sections
+    appended verbatim). header=None drops the ring header (the guard's
+    genuinely-wrong-input shape)."""
+    lines = [
+        "schema: 1",
+        "eval-commit: 4426e9b",
+        "health: gates GREEN at the wrap",
+        "open-threads: 5 open — see the section below",
+        "pacing-streak: TRUE 0",
+        "purpose: Cold-cycle entry reads this first",
+        "",
+        "## open-threads (censuses the next eval updates; each names its trigger)",
+    ]
+    lines += FIRE4_OPEN_THREADS_BULLETS[:bullet_count]
+    if header is not None:
+        lines.append(header)
+        lines += _ring_entries(ring_count)
+    if tail_sections:
+        lines += tail_sections.splitlines()
+    return "\n".join(lines) + "\n"
+
+
+class RingSectionLinesTest(unittest.TestCase):
+    """T288: the ring-section extraction primitive (the count's scope)."""
+
+    def test_pass_extracts_the_body_between_the_header_and_the_next_section(self):
+        text = (
+            "schema: 1\n"
+            "\n"
+            "## open-threads (censuses the next eval updates)\n"
+            "- decision_log-arg-slip census 4 (a `- d` bullet OUTSIDE the ring)\n"
+            "\n"
+            "## decisions ring (last 12, newest first — newest batch at the head)\n"
+            "- d1791683736-1: eval-routing trip 96 binds (kimi)\n"
+            "- d1791684607-2: eval-triage T287 filed\n"
+            "\n"
+            "## health (one line per load-bearing check)\n"
+            "- gates: green\n"
+        )
+        self.assertEqual(
+            wrap_assert.ring_section_lines(text),
+            [
+                "- d1791683736-1: eval-routing trip 96 binds (kimi)",
+                "- d1791684607-2: eval-triage T287 filed",
+                "",  # a blank line is a body line — not a `- d` line
+            ],
+        )
+
+    def test_pass_lines_input_used_directly(self):
+        lines = [RING_HEADER, "- d1: a", "- d2: b"]
+        self.assertEqual(
+            wrap_assert.ring_section_lines(lines), ["- d1: a", "- d2: b"]
+        )
+
+    def test_pass_ring_at_eof_runs_to_eof(self):
+        text = (
+            "schema: 1\n"
+            "## decisions ring (last 12, newest first)\n"
+            "- d1: a\n"
+            "- d2: b\n"
+        )
+        self.assertEqual(wrap_assert.ring_section_lines(text), ["- d1: a", "- d2: b"])
+
+    def test_pass_prose_mention_of_the_heading_never_anchors(self):
+        # The T266 line-anchoring discipline: the anchor is `^## decisions
+        # ring` — a bare substring mention inside another field's prose is
+        # not an anchor (the cycle-305 splice shape). A substring anchor
+        # would extract the `- d1791-orphan` line too.
+        text = (
+            "purpose: the bullet quotes ## decisions ring (last 12) in prose\n"
+            "- d1791-orphan: NOT a ring line (no ring section here)\n"
+            "## decisions ring (last 12, newest first)\n"
+            "- d1791683736-1: the only real entry\n"
+        )
+        self.assertEqual(
+            wrap_assert.ring_section_lines(text),
+            ["- d1791683736-1: the only real entry"],
+        )
+
+    def test_fail_missing_header_raises_the_line_anchored_guard(self):
+        with self.assertRaises(AssertionError) as ctx:
+            wrap_assert.ring_section_lines("schema: 1\nopen-threads: none\n")
+        msg = str(ctx.exception)
+        self.assertIn("'## decisions ring'", msg)  # the missing anchor named
+        self.assertIn("matches NO line start", msg)  # the guard, not a miscount
+
+
+class AssertRingCountTest(unittest.TestCase):
+    """T288: the section-scoped, probe-derived ring count (fires 3 + 4)."""
+
+    def test_pass_fire4_fixture_section_scoped(self):
+        # The fire-4 fixture: 12 ring `- d` lines AND 5 open-threads `- d`
+        # bullets. The OLD whole-file shape reads 17 and mis-fires; the
+        # section-scoped assertion reads the ring's 12 and passes.
+        with tempfile.TemporaryDirectory() as tmp:
+            path = _write(tmp, "state.md", _fire4_state())
+            with open(path, "r", encoding="utf-8") as f:
+                whole_file = sum(
+                    1 for line in f.read().splitlines() if line.startswith("- d")
+                )
+            self.assertEqual(whole_file, 17)  # 12 ring + 5 bullets, the mis-read
+            wrap_assert.assert_ring_count(path)
+
+    def test_pass_lines_input_and_eof_ring(self):
+        wrap_assert.assert_ring_count([RING_HEADER] + _ring_entries(12))
+
+    def test_pass_dash_d_line_in_a_later_section_never_counts(self):
+        # The next-`## `-header boundary: a `- d`-starting bullet in a
+        # section AFTER the ring is outside the section (the whole-file
+        # shape would read 18 here and mis-fire).
+        tail = (
+            "## wrap-notes (the next wrap's input)\n"
+            "- d-scale prose quote: the ring holds the last 12 — NOT a ring line\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            path = _write(tmp, "state.md", _fire4_state(tail_sections=tail))
+            wrap_assert.assert_ring_count(path)
+
+    def test_remembered_arg_cannot_override_the_probed_capacity(self):
+        # Fire 3 (d1791684611-3) pinned: the remembered constant rode the
+        # helper's imported expected-count ARG. The capacity is PROBED from
+        # the live header, so a stale ARG (6, the fire-3 value) cannot
+        # mis-fire the gate on the correct 12-ring artifact.
+        with tempfile.TemporaryDirectory() as tmp:
+            path = _write(tmp, "state.md", _fire4_state())
+            wrap_assert.assert_ring_count(path, expected_capacity=6)
+
+    def test_capacity_probed_from_the_header_not_the_default(self):
+        # The expectation derives from the live artifact: a header reading
+        # `last 10` with a 10-line ring passes — under the old
+        # remembered-constant shape (== 12) the same artifact mis-fires.
+        with tempfile.TemporaryDirectory() as tmp:
+            path = _write(
+                tmp,
+                "state.md",
+                _fire4_state(
+                    header=(
+                        "## decisions ring (last 10, newest first — "
+                        "newest batch at the head)"
+                    ),
+                    ring_count=10,
+                ),
+            )
+            wrap_assert.assert_ring_count(path)
+
+    def test_fail_over_capacity_13_ring_lines(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = _write(tmp, "state.md", _fire4_state(ring_count=13))
+            with self.assertRaises(AssertionError) as ctx:
+                wrap_assert.assert_ring_count(path)
+        msg = str(ctx.exception)
+        self.assertIn("count 13", msg)  # the probed actual
+        self.assertIn("capacity 12", msg)
+        self.assertIn("probed from the header", msg)  # the expectation's provenance
+
+    def test_fail_under_capacity_11_ring_lines(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = _write(tmp, "state.md", _fire4_state(ring_count=11))
+            with self.assertRaises(AssertionError) as ctx:
+                wrap_assert.assert_ring_count(path)
+        msg = str(ctx.exception)
+        self.assertIn("count 11", msg)  # the probed actual
+        self.assertIn("capacity 12", msg)
+
+    def test_fail_names_the_whole_file_misfire_shape(self):
+        # Fire 4 pinned end-to-end: the OLD probe (whole-file
+        # `startswith('- d')` = 17) against the remembered 12 fires via
+        # assert_count_exact naming the probed actual; the SAME bytes pass
+        # section-scoped (test_pass_fire4_fixture_section_scoped).
+        with tempfile.TemporaryDirectory() as tmp:
+            path = _write(tmp, "state.md", _fire4_state())
+            with open(path, "r", encoding="utf-8") as f:
+                whole_file = sum(
+                    1 for line in f.read().splitlines() if line.startswith("- d")
+                )
+            with self.assertRaises(AssertionError) as ctx:
+                wrap_assert.assert_count_exact(
+                    whole_file, 12, "ring lines in the temp file"
+                )
+        msg = str(ctx.exception)
+        self.assertIn("ring lines in the temp file", msg)  # the fire's label
+        self.assertIn("probed actual 17", msg)  # the unscoped mis-read
+        self.assertIn("expected 12", msg)  # the remembered constant
+
+    def test_fail_header_without_annotation_uses_the_named_fallback(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = _write(
+                tmp,
+                "state.md",
+                _fire4_state(header="## decisions ring (newest first)"),
+            )
+            wrap_assert.assert_ring_count(path)  # the schema-default fallback 12
+            path13 = _write(
+                tmp,
+                "state13.md",
+                _fire4_state(
+                    header="## decisions ring (newest first)", ring_count=13
+                ),
+            )
+            with self.assertRaises(AssertionError) as ctx:
+                wrap_assert.assert_ring_count(path13)
+        msg = str(ctx.exception)
+        self.assertIn("expected_capacity fallback arg 12", msg)  # provenance named
+        self.assertIn("probed no `last N`", msg)
+
+    def test_fail_missing_ring_header_raises_the_guard(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = _write(tmp, "state.md", _fire4_state(header=None))
+            with self.assertRaises(AssertionError) as ctx:
+                wrap_assert.assert_ring_count(path)
+        msg = str(ctx.exception)
+        self.assertIn("'## decisions ring'", msg)  # the missing anchor named
+        self.assertIn("matches NO line start", msg)  # the guard, not a miscount
+
+    def test_fail_wrong_type_raises_type_error_naming_both_shapes(self):
+        with self.assertRaises(TypeError) as ctx:
+            wrap_assert.assert_ring_count(7)
+        msg = str(ctx.exception)
+        self.assertIn("PATH", msg)  # accepted shape 1 named
+        self.assertIn("LINE LIST", msg)  # accepted shape 2 named
+        self.assertIn("type int", msg)  # the probed wrong type
 
 
 if __name__ == "__main__":

@@ -22,6 +22,21 @@ wrap, and the banned shape re-fired twice post-adoption:
   CORRECT content, the file never touched, corrected one leg later to
   probed counts.
 
+Two further post-adoption fires extended the class into the count-ARG
+shapes this module's T288 variant closes:
+
+  d1791684611-3 (the cycle-508 wrap) — the remembered constant rode
+  assert_count_exact's imported expected-count ARG (expected 6 vs probed
+  8; 8 = 6 real entries + 2 legitimate pre-existing mentions), the
+  remembered-ARG sub-shape.
+
+  The cycle-512 wrap's 03:02:56Z leg — assert_count_exact('ring lines in
+  the temp file') expected the ring's schema capacity 12 as a remembered
+  ARG while the probe split the WHOLE temp file on `startswith('- d')`
+  and read 17 (12 ring lines + 5 open-threads bullets). The expectation
+  was right and the artifact correct; the probe's surface was wider than
+  the section it named.
+
 This module is the teeth (the T273 doctrine pointer in META-META-SPEC.md):
 ONE dependency-free (stdlib-only) helper the wrap/fill arcs IMPORT for the
 recurring shapes instead of re-authoring assertions inline. Every function
@@ -42,6 +57,8 @@ __all__ = [
     "assert_count_exact",
     "assert_window_count",
     "assert_window_clean",
+    "ring_section_lines",
+    "assert_ring_count",
 ]
 
 
@@ -333,4 +350,175 @@ def assert_window_clean(path, tokens, start, end=None):
             f"assert_window_clean({path!r}): {len(findings)} bare token(s) "
             f"still in the window ({desc}) — " + "; ".join(findings) +
             " — every placeholder must be substituted before the write"
+        )
+
+
+# RING_HEADER_PREFIX — the ring section's LINE-ANCHORED header anchor (T266).
+# `^## decisions ring`, never a bare substring: the cycle-305 fire's splice
+# anchored on `## open-threads` as a substring and matched INSIDE another
+# field's prose cross-reference.
+RING_HEADER_PREFIX = "## decisions ring"
+
+# _ring_section_bounds(lines, who, where) — INTERNAL; e.g. _ring_section_bounds(lines, "assert_ring_count", "state.md")
+def _ring_section_bounds(lines, who, where):
+    """Locate the `## decisions` ring section; the T288 shapes' mechanics.
+
+    The header anchor is LINE-ANCHORED (T266): a line STARTING WITH the
+    ring's own heading text (RING_HEADER_PREFIX) — a bare substring that can
+    match inside another field's prose is the banned anchor shape. The
+    section runs from the line AFTER the header through the next line
+    starting `## ` (exclusive) or EOF. Returns (header_index, lo, hi) —
+    0-based bounds into *lines*, the body being lines[lo:hi] with BOTH
+    boundary headers excluded. A missing header raises AssertionError: a
+    genuinely-wrong input (the header is format-pinned), the anchor-miss
+    guard firing correctly — not a wrong-expectation miscalibration.
+    """
+    header = None
+    for i, line in enumerate(lines):
+        if line.startswith(RING_HEADER_PREFIX):
+            header = i
+            break
+    if header is None:
+        raise AssertionError(
+            f"{who}({where}): the ring header anchor {RING_HEADER_PREFIX!r} "
+            f"matches NO line start in the probed artifact ({len(lines)} "
+            f"line(s)) — a genuinely-wrong input, the line-anchored "
+            f"anchor-miss guard firing (not a wrong-expectation "
+            f"miscalibration)"
+        )
+    end = len(lines)
+    for j in range(header + 1, len(lines)):
+        if lines[j].startswith("## "):
+            end = j
+            break
+    return header, header + 1, end
+
+
+# _ring_capacity(header_line) — INTERNAL; e.g. _ring_capacity("## decisions ring (last 12, ...)")
+def _ring_capacity(header_line):
+    """Probe the ring's capacity from the header's own `last N` annotation.
+
+    The probe-deriving primitive behind assert_ring_count: the EXPECTATION
+    is read back from the live artifact's header at call time
+    (`## decisions ring (last 12, ...)` probed as 12), never passed as a
+    remembered constant. Scans every `last ` occurrence for the first one
+    followed by digits (a prose `last ` without a number is skipped, not a
+    false None). Returns None when the header carries no parseable `last N`
+    — the caller's expected_capacity then fills in, and the failure message
+    NAMES that fallback provenance.
+    """
+    marker = "last "
+    idx = header_line.find(marker)
+    while idx != -1:
+        digits = ""
+        for ch in header_line[idx + len(marker):]:
+            if not ch.isdigit():
+                break
+            digits += ch
+        if digits:
+            return int(digits)
+        idx = header_line.find(marker, idx + 1)
+    return None
+
+
+# _where(source) — INTERNAL; e.g. _where("state.md") -> "'state.md'"; _where(["a"]) -> "3 probed line(s)"
+def _where(source):
+    """A compact source label for failure messages (never a full-list repr)."""
+    if isinstance(source, str) or hasattr(source, "__fspath__"):
+        return repr(source)
+    return f"{len(source)} probed line(s)"
+
+
+# ring_section_lines(text_or_lines) — state-file TEXT (a str) or a line LIST; e.g. ring_section_lines(open(path).read())
+def ring_section_lines(text_or_lines):
+    """Extract the `## decisions` ring section's body lines (the T288 probe
+    primitive).
+
+    *text_or_lines* is EITHER the state-file TEXT (a str — split here,
+    read_key_values' shape) OR an already-split line list (used directly,
+    no re-split). Returns the lines BETWEEN the ring header and the next
+    `## ` header (exclusive) or EOF — the section body only, both boundary
+    lines excluded. THIS scoping is fire 4's fix: a `- d` count over the
+    WHOLE file reads the open-threads bullets too (the cycle-512 wrap's
+    03:02:56Z leg probed 17 = 12 ring lines + 5 `- d`-starting bullets and
+    fired on structurally correct content); a count over THIS section
+    cannot see them. A missing ring header raises (the anchor-miss guard).
+    """
+    if isinstance(text_or_lines, str):
+        lines = text_or_lines.splitlines()
+    else:
+        lines = list(text_or_lines)
+    _, lo, hi = _ring_section_bounds(lines, "ring_section_lines", _where(text_or_lines))
+    return lines[lo:hi]
+
+
+# assert_ring_count(path_or_lines, expected_capacity=12) — a PATH (str/os.PathLike) or a line LIST + the schema fallback; e.g. assert_ring_count("state.md")
+def assert_ring_count(path_or_lines, expected_capacity=12):
+    """The section-scoped, PROBE-DERIVED ring count (the T288 shape).
+
+    Counts the `- d` lines WITHIN the `## decisions` ring section only
+    (ring_section_lines' extraction — line-anchored on the ring's own
+    header per T266, never a whole-file `startswith('- d')` split) and
+    asserts the count equals the ring's capacity — the capacity PROBED from
+    the section header's own `last N` annotation at call time. A remembered
+    constant passed INTO the helper cannot set the expectation when the
+    header probes one (fire 3, d1791684611-3: the remembered 6 rode the
+    imported expected-count ARG and fired on a correct artifact — the probed
+    capacity wins, so a stale ARG cannot mis-fire this gate).
+
+    *path_or_lines* is EITHER a path (str/os.PathLike — opened and split
+    here, assert_fields_non_empty's dispatch) OR an already-split line list
+    (used directly, no re-read). *expected_capacity* is the FALLBACK for a
+    header that probes no `last N` (provenance named in any failure) — it
+    must be the schema's structural capacity from the format's own pinned
+    text, never a count remembered from a previous artifact.
+
+    The asserted invariant is the AT-CAPACITY ring (the wrap's post-write
+    shape: prepend + rotate keeps the ring full — 11 or 13 ring lines is a
+    REAL violation and fires). A legitimately under-filled YOUNG ring is a
+    different call site: derive the expectation by probe (assert_count_exact
+    with both sides probed, its 2-probed-counts contract).
+    """
+    if isinstance(path_or_lines, str) or hasattr(path_or_lines, "__fspath__"):
+        with open(path_or_lines, "r", encoding="utf-8") as f:
+            lines = f.read().splitlines()
+    elif isinstance(path_or_lines, (list, tuple)):
+        lines = list(path_or_lines)
+    else:
+        raise TypeError(
+            f"assert_ring_count(path_or_lines, expected_capacity): "
+            f"path_or_lines must be a PATH (a str or os.PathLike, opened and "
+            f"split-read here) or an already-split LINE LIST (a list/tuple of "
+            f"str, used directly, no re-read); probed source "
+            f"{path_or_lines!r} is neither (type "
+            f"{type(path_or_lines).__name__})"
+        )
+    header, lo, hi = _ring_section_bounds(
+        lines, "assert_ring_count", _where(path_or_lines)
+    )
+    probed = _ring_capacity(lines[header])
+    if probed is not None:
+        capacity = probed
+        provenance = (
+            f"probed from the header's `last N` annotation "
+            f"({lines[header]!r})"
+        )
+    else:
+        capacity = expected_capacity
+        provenance = (
+            f"the expected_capacity fallback arg {expected_capacity!r} "
+            f"(the header probed no `last N`) — the fallback must be the "
+            f"schema's structural capacity, never a remembered count"
+        )
+    count = sum(1 for line in lines[lo:hi] if line.startswith("- d"))
+    if count != capacity:
+        raise AssertionError(
+            f"assert_ring_count({_where(path_or_lines)}): probed ring-section "
+            f"`- d` count {count} != capacity {capacity!r} ({provenance}) — "
+            f"the count is scoped to the `## decisions` ring section (lines "
+            f"{lo + 1}-{hi}), the expectation derived from the live artifact "
+            f"at call time; a whole-file `- d` count mis-fires on the "
+            f"open-threads bullets (fire 4, the cycle-512 wrap's 03:02:56Z "
+            f"leg: expected 12 vs probed 17) and a remembered ARG cannot set "
+            f"the expectation (fire 3, d1791684611-3)"
         )
