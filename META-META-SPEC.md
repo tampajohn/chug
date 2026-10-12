@@ -297,6 +297,31 @@ silent-variant text to the noisy slip. Both classes are a probe
 composed from habit instead of inspection — mask the exit code you
 expect, inspect the shape before you project.
 
+**Scoped-walk rule (T293, prune-first / scoped-probe).** Orchestrator
+probes NEVER run a recursive walk from the repo root inline — `find .`,
+`grep -r .`, `du .` and kin: the walk itself descends `target/` and the
+shared caches no matter what output filter rides behind it, and the 300s
+bash cap kills it mid-walk — the repo-root recursive-walk 300s kill
+census (five fires counted, the cycle-673 wrap's
+`find . -name '*.plist' -not -path './target*'` the fifth, record
+d1791821960-7: zero casualty — the batch's earlier legs' output was
+preserved and no figure was quoted from the killed leg — but the burn is
+the class the census paces). A locating probe takes the SCOPED shape
+first: named directories (`ls .chug/`, `ls tests/`), a direct
+`[ -f path ]` ladder over the candidate paths, `git ls-files`
+(index-resident, no walk), or a bounded `find <named-dir> -maxdepth N`.
+When a repo-root walk is genuinely unavoidable it runs PRUNE-FIRST —
+`find . -path ./target -prune -o ... -print` — because the `-prune`
+stops the descent while a `-not -path` filter does NOT prune the
+traversal (it filters output LINES only and the walk still descends
+every directory — the cycle-673 fire's exact mechanism), and even the
+pruned walk runs under a bounded window (`-maxdepth`, a `| head` tail)
+whenever the pruned tree can exceed the bash cap. The counted census +
+this doctrine sentence IS the guard; a mechanical walk-detector over
+probe text is the brittle-awk class and stays rejected — a 6th fire
+re-weighs the declined `scripts/scoped-find.sh` helper (the failure mode
+is composing the walk at all, not its internals).
+
 1. `.chug/eval-digest.md` FIRST — the mechanical pre-digest of this corpus
    (`scripts/eval-digest.sh`, refreshed by loopd before every cycle): per
    events-file iterations, wall time, tool distribution, error classes with
