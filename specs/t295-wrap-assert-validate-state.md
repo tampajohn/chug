@@ -111,4 +111,4 @@ RED-proven test legs ~65, the doctrine sentence ~5, row bookkeeping)
   `tests/loop_spec_doctrine_prune.rs`'s needles target LOOP-SPEC's T261
   region. The doctrine sentence perturbs ZERO pins.
 
-check: cd "$(git rev-parse --show-toplevel)" && export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared && touch src/*.rs tests/*.rs; set -o pipefail; python3 -m unittest scripts/test_wrap_assert.py 2>&1 | tail -5 && cargo test --release --test loop_spec_doctrine_prune --test eval_state_delta --test todo_consistency 2>&1 | tail -8
+check: cd "$(git rev-parse --show-toplevel)" && export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-validate-a && touch src/*.rs tests/*.rs; set -o pipefail; python3 -m unittest scripts/test_wrap_assert.py 2>&1 | tail -5 && cargo test --release --test loop_spec_doctrine_prune --test eval_state_delta --test todo_consistency 2>&1 | tail -8
