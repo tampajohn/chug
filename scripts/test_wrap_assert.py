@@ -1184,6 +1184,22 @@ class ValidateStateTest(unittest.TestCase):
         self.assertIn("capacity 8", msg)  # probed, never a remembered 12
         self.assertIn("probed from the header", msg)
 
+    def test_pass_last8_header_with_prev_gates_splice_against_8(self):
+        # The M7 pin (the kimi validator's named survivor): prev_ring_lines
+        # COMBINED with a non-12 ring header — the splice leg's capacity is
+        # probed from the header (8), never the fallback 12. keep =
+        # min(8 - 2, 8) = 6 carried under the probe; a hardcoded 12 would
+        # demand min(12 - 2, 8) = 8 carried and false-REJECT this correct
+        # state (the fail-safe direction the verdict named, pinned shut).
+        header8 = (
+            "## decisions ring (last 8, newest first — newest batch at the head)"
+        )
+        prev8 = VS_CARRIED + _vs_older(4)  # the previous ring's 8 lines
+        ring8 = _vs_batch(2) + prev8[:6]  # 2 prepended + 6 carried = 8
+        wrap_assert.validate_state(
+            _vs_text(ring=ring8, header=header8), prev_ring_lines=prev8
+        )
+
     def test_fail_non_str_text_raises_type_error_naming_text(self):
         # The facade's own interface defense: *text* is the composed TEXT —
         # anything else is the call-signature slip shape this facade
