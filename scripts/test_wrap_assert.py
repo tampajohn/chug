@@ -41,6 +41,25 @@ cycle-520 wrap's corrupted rewrite pinned as regression shapes):
     PASS assert_ring_splice; the vacuous-pass shape (the "carried"
     window a copy of the new batch's own head) fails it positionally.
 
+T295 adds the validate_state facade legs (the cycle-686 five-fire
+cluster's canonical fix — ONE call owning the surface conversions a wrap
+gate previously hand-matched across ~7 call sites):
+
+  - the d1791921121-12 / d1791921226-14 pair pinned end-to-end: the RAW
+    composed text into the path-walking helpers still errors (a str walks
+    as a PATH — `OSError: File name too long`, the interface defense
+    intact, the facade widens nothing), while validate_state on the SAME
+    text passes;
+  - the realistic fixture (the nine `state_field` fields, the sections, a
+    `last 12` ring of 12) passes ONE-call, with prev_ring_lines +
+    corpus_tail_ids riding the same call;
+  - each sub-surface's failure mode fails the facade naming probed
+    actuals: a dropped / empty field, a byte-duplicated ring line, a
+    mis-spliced carry (prev supplied), a corpus-tail mismatch (ids
+    supplied);
+  - the capacity is read from the header: a `last 8` fixture ring gates
+    against 8, not a hardcoded 12.
+
 Run (the check line): python3 -m unittest scripts/test_wrap_assert.py -v
 """
 
@@ -914,6 +933,285 @@ class AssertRingSpliceTest(unittest.TestCase):
         msg = str(ctx.exception)
         self.assertIn("non-negative int", msg)
         self.assertIn("probed prepended_count '4'", msg)
+
+
+# T295 fixtures: the validate_state facade's realistic state fixture,
+# modeled on the live eval-state.md's shape — the nine `state_field`
+# fields (the parser contract's exact list, scripts/eval-delta.sh: schema
+# checked first, then the eight-key loop), a blank line, the `## health`
+# and `## open-threads` sections, then the `## decisions` ring (last,
+# running to EOF). The open-threads bullet STARTS `- d` on purpose: a
+# whole-file scan would miscount it as a ring line (the fire-4 shape the
+# section-scoped extraction exists for).
+VS_FIELDS = [
+    ("schema", "1"),
+    ("eval-commit", "212bc03"),
+    ("eval-at", "2026-10-13T19:40:14+00:00"),
+    ("state-drift", "none"),
+    (
+        "fresh-input-last-eval",
+        "37924676 fresh input tokens across 89 usage-bearing iteration "
+        "events of 89 at this wrap write's read",
+    ),
+    (
+        "cache-read-last-eval",
+        "425566208 cache-read + 0 cache-creation + 6006789 output (same "
+        "stream read, at the wrap write's read)",
+    ),
+    ("health", "gates GREEN through the wrap"),
+    ("open-threads", "2 open — see the section below"),
+    ("pacing-streak", "TRUE 0"),
+]
+
+# The previous state's ring (12 lines): the 4 lines the new write carries
+# (the cycle-686 cluster's own records) + 8 older lines a full rotation
+# drops from the TAIL.
+VS_CARRIED = [
+    "- d1791921121-12: wrap_assert call-signature 34 (a carried ring line)",
+    "- d1791921226-14: wrap_assert call-signature 35 (a carried ring line)",
+    "- d1791921022-10: python-assertion-slip 105 (a carried ring line)",
+    "- d1791920768-8: python-assertion-slip 104 (a carried ring line)",
+]
+
+
+def _vs_batch(count=8, start=1):
+    """The new batch's ring lines (fresh ids, disjoint from the carried set)."""
+    return [
+        f"- d1791950000-{i}: eval-triage T295 new batch {i} (a probed ring line)"
+        for i in range(start, start + count)
+    ]
+
+
+def _vs_older(count=8):
+    return [
+        f"- d1791880000-{i}: an older decision body {i} (rotates off first)"
+        for i in range(1, count + 1)
+    ]
+
+
+VS_PREV_RING = VS_CARRIED + _vs_older(8)
+
+
+def _vs_composed_ring():
+    """The composed ring: 8 prepended + 4 carried = 12 (a full rotation)."""
+    return _vs_batch(8) + VS_CARRIED
+
+
+def _vs_ids(lines):
+    return [
+        line[2:].split(":", 1)[0].strip()
+        for line in lines
+        if line.startswith("- d")
+    ]
+
+
+def _vs_text(ring=None, fields=None, header=RING_HEADER, tail_sections=""):
+    """The composed state TEXT: the nine fields, ## health, ## open-threads
+    (one `- d` bullet OUTSIDE the ring), the ring (last, to EOF), optional
+    tail sections after it. Per-field mutations ride the `fields` arg; ring
+    mutations ride the `ring` arg."""
+    lines = [
+        f"{key}: {value}" for key, value in (VS_FIELDS if fields is None else fields)
+    ]
+    lines += [
+        "",
+        "## health (one line per load-bearing check)",
+        "- gates: green",
+        "",
+        "## open-threads (censuses the next eval updates; each names its trigger)",
+        "- decision_log-arg-slip census 5 (UNCHANGED — a `- d` bullet OUTSIDE the ring)",
+    ]
+    if header is not None:
+        lines.append(header)
+        lines += _vs_composed_ring() if ring is None else ring
+    if tail_sections:
+        lines += tail_sections.splitlines()
+    return "\n".join(lines) + "\n"
+
+
+class ValidateStateTest(unittest.TestCase):
+    """T295: the ONE-call state-write gate facade (the cycle-686 cluster's
+    canonical fix — the surface conversions owned internally, so no call
+    site re-derives which helper walks path-or-MAPPING vs path-or-LINES vs
+    EXTRACTED ring lines)."""
+
+    def test_state_field_keys_match_the_parser_contract(self):
+        # The nine `state_field` extractions, in the parser's check order
+        # (schema first, then eval-delta.sh's eight-key loop) — the facade
+        # gates exactly these, on the MAPPING, never on the raw text.
+        self.assertEqual(
+            list(wrap_assert.STATE_FIELD_KEYS),
+            [key for key, _ in VS_FIELDS],
+        )
+
+    def test_pass_realistic_fixture_one_call(self):
+        # (b) the realistic fixture: schema + the nine `state_field`
+        # fields, the sections, a `last 12` ring of 12 — ONE call, zero
+        # surface conversions at the call site.
+        wrap_assert.validate_state(_vs_text())
+
+    def test_pass_full_gate_prev_and_tail_ids(self):
+        # The dogfood shape: prev + corpus-tail ids supplied — the splice
+        # and the corpus-tail identity ride the SAME one call (the 686
+        # gate's ~7 surfaces in one).
+        ring = _vs_composed_ring()
+        wrap_assert.validate_state(
+            _vs_text(ring=ring),
+            prev_ring_lines=VS_PREV_RING,
+            corpus_tail_ids=_vs_ids(ring),
+        )
+
+    def test_pass_facade_on_the_fired_helpers_same_text(self):
+        # (a) the d1791921121-12 / d1791921226-14 pair pinned end-to-end:
+        # the RAW composed text into the field/count helpers still errors
+        # (a str walks as a PATH — `OSError: File name too long`, the
+        # interface defense intact, the facade widens nothing), while
+        # validate_state on the SAME text passes.
+        text = _vs_text()
+        with self.assertRaises(OSError):
+            wrap_assert.assert_fields_non_empty(
+                text, list(wrap_assert.STATE_FIELD_KEYS)
+            )
+        with self.assertRaises(OSError):
+            wrap_assert.assert_ring_count(text)
+        wrap_assert.validate_state(text)
+
+    def test_pass_prev_splice_with_a_section_after_the_ring(self):
+        # The ring is not always last: a section after it leaves a blank
+        # body line in the extraction — formatting noise, not a carried
+        # line (the unique gate's own blank exemption) — and the splice
+        # gate must not false-fire on it. The tail bullet starts `- d`:
+        # still outside the section (the count gate's scoping holds).
+        tail = (
+            "",
+            "## wrap-notes (the next wrap's input)",
+            "- d-scale prose quote: NOT a ring line (after the ring section)",
+        )
+        wrap_assert.validate_state(
+            _vs_text(tail_sections="\n".join(tail)),
+            prev_ring_lines=VS_PREV_RING,
+        )
+
+    def test_fail_dropped_field_names_the_missing_key(self):
+        # (c) the FIELDS sub-surface: a dropped `eval-at:` line fails the
+        # facade naming the probed absence.
+        fields = [f for f in VS_FIELDS if f[0] != "eval-at"]
+        with self.assertRaises(AssertionError) as ctx:
+            wrap_assert.validate_state(_vs_text(fields=fields))
+        msg = str(ctx.exception)
+        self.assertIn("missing key 'eval-at'", msg)
+        self.assertIn("1/9 named field(s) failed", msg)
+
+    def test_fail_empty_field_names_the_empty_key(self):
+        # (c) the FIELDS sub-surface, the empty-value shape: the split-read
+        # probed '' is named (the T270 shape, never a length threshold).
+        fields = [(k, "" if k == "pacing-streak" else v) for k, v in VS_FIELDS]
+        with self.assertRaises(AssertionError) as ctx:
+            wrap_assert.validate_state(_vs_text(fields=fields))
+        msg = str(ctx.exception)
+        self.assertIn("empty key 'pacing-streak'", msg)
+        self.assertIn("the split-read probed ''", msg)
+
+    def test_fail_duplicated_ring_line_names_the_dup_and_both_offsets(self):
+        # (c) the UNIQUENESS sub-surface: a byte-duplicated ring line (the
+        # count still reads 12 — the T289 shape) fails the facade naming
+        # the duplicated id and BOTH offsets.
+        ring = _vs_composed_ring()
+        ring[11] = ring[0]
+        with self.assertRaises(AssertionError) as ctx:
+            wrap_assert.validate_state(_vs_text(ring=ring))
+        msg = str(ctx.exception)
+        self.assertIn("duplicated line", msg)
+        self.assertIn("duplicated decision id 'd1791950000-1'", msg)
+        self.assertIn("ring lines 1 and 12", msg)
+        self.assertIn("file lines 17 and 28", msg)  # the ring body's file anchor
+
+    def test_fail_misspliced_carry_names_both_probed_reprs(self):
+        # (c) the SPLICE sub-surface: a mutated carried line (its id kept,
+        # so the probed prepended count stays honest) fails the facade
+        # positionally, naming the probed expected/actual reprs.
+        ring = _vs_composed_ring()
+        ring[8] = ring[8] + " (rewritten)"  # the first carried line mutated
+        with self.assertRaises(AssertionError) as ctx:
+            wrap_assert.validate_state(
+                _vs_text(ring=ring), prev_ring_lines=VS_PREV_RING
+            )
+        msg = str(ctx.exception)
+        self.assertIn("carried position 0", msg)
+        self.assertIn(repr(VS_CARRIED[0]), msg)  # the probed expected repr
+        self.assertIn("rewritten", msg)  # the probed actual sitting there
+
+    def test_fail_corpus_tail_mismatch_names_probed_vs_supplied(self):
+        # (c) the IDENTITY sub-surface: a supplied tail id the ring does
+        # not hold — the mismatch names the probed ring ids, the supplied
+        # tail ids, and the first divergence (a WRONG id at index 3, then
+        # a SHORT tail, both probed).
+        ring = _vs_composed_ring()
+        supplied = _vs_ids(ring)
+        supplied[3] = "d1791999999-99"  # a tail id the ring does not hold
+        with self.assertRaises(AssertionError) as ctx:
+            wrap_assert.validate_state(
+                _vs_text(ring=ring), corpus_tail_ids=supplied
+            )
+        msg = str(ctx.exception)
+        self.assertIn("corpus-tail identity", msg)
+        self.assertIn("'d1791999999-99'", msg)  # the supplied divergence
+        self.assertIn("'d1791950000-4'", msg)  # the probed id at the index
+        self.assertIn("first divergence at tail index 3", msg)
+        short = _vs_ids(ring)[:-1]  # the supplied tail one id short
+        with self.assertRaises(AssertionError) as ctx:
+            wrap_assert.validate_state(
+                _vs_text(ring=ring), corpus_tail_ids=short
+            )
+        msg = str(ctx.exception)
+        self.assertIn("probed decision ids (12)", msg)
+        self.assertIn("supplied tail ids (11)", msg)
+
+    def test_pass_last8_header_gates_against_8(self):
+        # (d) the capacity is read from the header: a `last 8` fixture ring
+        # gates against 8, not a hardcoded 12 — and a 9-line ring on the
+        # same header FAILS naming the probed capacity 8.
+        header8 = (
+            "## decisions ring (last 8, newest first — newest batch at the head)"
+        )
+        ring8 = _vs_batch(4) + VS_CARRIED  # 8 lines
+        wrap_assert.validate_state(_vs_text(ring=ring8, header=header8))
+        ring9 = _vs_batch(5) + VS_CARRIED  # 9 lines against a last-8 header
+        with self.assertRaises(AssertionError) as ctx:
+            wrap_assert.validate_state(_vs_text(ring=ring9, header=header8))
+        msg = str(ctx.exception)
+        self.assertIn("count 9", msg)  # the probed actual
+        self.assertIn("capacity 8", msg)  # probed, never a remembered 12
+        self.assertIn("probed from the header", msg)
+
+    def test_fail_non_str_text_raises_type_error_naming_text(self):
+        # The facade's own interface defense: *text* is the composed TEXT —
+        # anything else is the call-signature slip shape this facade
+        # exists to close, so it TypeErrors naming the accepted shape.
+        with self.assertRaises(TypeError) as ctx:
+            wrap_assert.validate_state(7)
+        msg = str(ctx.exception)
+        self.assertIn("TEXT", msg)
+        self.assertIn("type int", msg)
+
+    def test_fail_str_prev_ring_lines_raises_type_error(self):
+        # The sibling slip shape: the PREVIOUS ring's LINES are a list —
+        # raw text is the banned shape (a str would walk as CHARACTERS).
+        with self.assertRaises(TypeError) as ctx:
+            wrap_assert.validate_state(_vs_text(), prev_ring_lines="carried")
+        msg = str(ctx.exception)
+        self.assertIn("prev_ring_lines", msg)
+        self.assertIn("LINES", msg)
+        self.assertIn("type str", msg)
+
+    def test_fail_str_corpus_tail_ids_raises_type_error(self):
+        with self.assertRaises(TypeError) as ctx:
+            wrap_assert.validate_state(
+                _vs_text(), corpus_tail_ids="d1791950000-1"
+            )
+        msg = str(ctx.exception)
+        self.assertIn("corpus_tail_ids", msg)
+        self.assertIn("type str", msg)
 
 
 if __name__ == "__main__":

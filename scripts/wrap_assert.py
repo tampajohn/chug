@@ -53,7 +53,20 @@ bare constant mismatch — so a failed assertion reports what the artifact
 actually held. The arguments ARE the probed actuals: passing a remembered
 constant INTO a helper is the same banned shape as inlining it.
 
-Coverage (run by the check line): python3 -m unittest scripts/test_wrap_assert.py -v
+T295 adds validate_state — the ONE-call state-write gate facade (the
+cycle-686 five-fire cluster's canonical fix): it owns the surface
+conversions internally (read_key_values' MAPPING for the nine `state_field`
+fields, the full LINES for count/unique with the capacity probed from the
+ring header's own `last N`, ring_section_lines' extraction for the splice
+and the corpus-tail identity), so a wrap's gate is `wa.validate_state(text)`
+instead of ~7 hand-matched call-site surfaces re-derived per write (the
+d1791921121-12 / d1791921226-14 pair passed RAW COMPOSED TEXT where the
+helpers walk path-or-MAPPING / path-or-LINES → `OSError: File name too
+long`, caught pre-write both times).
+
+Coverage (run by the check line): python3 -m unittest
+scripts/test_wrap_assert.py -v — the pre-T295 legs plus the validate_state
+facade legs.
 """
 
 __all__ = [
@@ -69,6 +82,7 @@ __all__ = [
     "assert_ring_count",
     "assert_ring_unique",
     "assert_ring_splice",
+    "validate_state",
 ]
 
 
@@ -665,4 +679,214 @@ def assert_ring_splice(prev_ring_lines, new_ring_lines, prepended_count, capacit
                 f"window must be the previous ring's prefix below the new "
                 f"head, byte-identical and position-aligned; rotation drops "
                 f"from the previous ring's TAIL only"
+            )
+
+
+# STATE_FIELD_KEYS — the nine `state_field` extractions the state parser's
+# field check reads (scripts/eval-delta.sh: `schema` checked first, then the
+# eight-key loop) and T266's structural self-check names ("all nine
+# `state_field` extractions non-empty").
+STATE_FIELD_KEYS = (
+    "schema",
+    "eval-commit",
+    "eval-at",
+    "state-drift",
+    "fresh-input-last-eval",
+    "cache-read-last-eval",
+    "health",
+    "open-threads",
+    "pacing-streak",
+)
+
+
+# _ring_id(line) — INTERNAL; e.g. _ring_id("- d1791921121-12: the body") -> "d1791921121-12"
+def _ring_id(line):
+    """One ring line's decision id (the `- d<N>-<seq>:` prefix, T295)."""
+    return line[2:].split(":", 1)[0].strip()
+
+
+# _ring_ids(ring_lines) — INTERNAL; e.g. _ring_ids(ring_section_lines(text))
+def _ring_ids(ring_lines):
+    """A ring-body line list's decision ids, in order — the corpus-tail
+    identity's probe primitive (T295). Only `- d` lines carry ids; blank
+    body lines are skipped (the unique gate's own exemption)."""
+    return [
+        _ring_id(line) for line in ring_lines if line.startswith("- d")
+    ]
+
+
+# _probe_prepended(new_ring_lines, prev_ring_lines) — INTERNAL; 2 line LISTS
+def _probe_prepended(new_ring_lines, prev_ring_lines):
+    """Probe the batch's size from the two rings' OWN decision ids (T295).
+
+    The prepend count assert_ring_splice demands is PROBED, never a
+    remembered constant (the T270/T273 letter): the composed ring is
+    batch-then-carried, so the batch is the LEADING RUN of ring lines whose
+    decision ids are absent from the previous ring's ids — the scan stops at
+    the first line whose id the previous ring already holds. A duplicated
+    id (a batch line re-prepending an id the carry already holds) is
+    corruption and stops the run early — the splice gate then fires on the
+    misalignment with probed actuals, which is the gate working.
+    """
+    prev_ids = set(_ring_ids(prev_ring_lines))
+    prepended = 0
+    for line in new_ring_lines:
+        if line.startswith("- d") and _ring_id(line) in prev_ids:
+            break
+        prepended += 1
+    return prepended
+
+
+# validate_state(text, prev_ring_lines=None, corpus_tail_ids=None) — the composed state-file TEXT + 2 optional probed lists
+def validate_state(text, prev_ring_lines=None, corpus_tail_ids=None):
+    """The ONE-call state-write gate (the T295 facade).
+
+    A wrap's state-write gate composes ~7 helper calls and must match each
+    helper's walk semantics BY HAND — assert_fields_non_empty takes
+    path-or-MAPPING, assert_ring_count/assert_ring_unique take
+    path-or-LINES, assert_ring_splice takes EXTRACTED ring lines, and the
+    corpus-tail identity read goes through ring_section_lines. The
+    cycle-686 wrap fired FIVE assertion slips at one write (d1791921121-12
+    / d1791921226-14 the named pair: the RAW COMPOSED TEXT passed where the
+    helper walks path-or-MAPPING / path-or-LINES → `OSError: File name too
+    long`, caught pre-write) — one meta-root, call-site surfaces not swept
+    against their consumers' walks. The facade is the canonical fix: ONE
+    call owning the surface conversions internally, so no call site
+    re-derives them.
+
+    The gate, in order:
+      1. FIELDS — read_key_values parses *text* and assert_fields_non_empty
+         runs on the MAPPING (STATE_FIELD_KEYS, the nine `state_field`
+         extractions the parser's field check reads), never on the raw text.
+      2. RING COUNT + UNIQUENESS — the full LINES feed assert_ring_count +
+         assert_ring_unique, the capacity PROBED from the ring header's own
+         `last N` (never a remembered 12 — the T288 letter).
+      3. SPLICE (when *prev_ring_lines* is supplied) — the new ring is
+         extracted via ring_section_lines and assert_ring_splice runs on
+         the EXTRACTED lines: the prepended count PROBED from the two
+         rings' own decision ids (_probe_prepended, never a remembered
+         batch size), the capacity probed from the header (the schema's 12
+         when the header carries no `last N`). Blank body lines are dropped
+         from BOTH sides first — formatting noise, not carried content
+         (the unique gate's own blank exemption) — so a section after the
+         ring cannot false-fire the length arithmetic.
+      4. CORPUS-TAIL IDENTITY (when *corpus_tail_ids* is supplied) — the
+         extracted ring's decision ids must equal the supplied tail ids IN
+         ORDER; the mismatch names the probed ring ids, the supplied tail
+         ids, and the first divergence. The identity read goes through
+         ring_section_lines — a bare whole-file `startswith` scan is the
+         banned surface (the 105th fire matched five non-ring
+         open-threads bullets ahead of the ring section).
+
+    Failures propagate from the owning sub-helper (each naming its PROBED
+    actuals — the module's invariant) or raise here (the identity leg); the
+    facade adds no message of its own on their paths. The helpers' accepted
+    shapes are NOT widened: raw text into assert_fields_non_empty /
+    assert_ring_count still errors (the d1791921121-12 / d1791921226-14
+    OSError shapes stay pinned) — the facade is the surface that accepts
+    TEXT.
+
+    *text* must be the composed state-file TEXT (a str) — a path or line
+    list is the call-signature slip shape here (the conversions are the
+    facade's job) and raises TypeError naming the accepted shape, as do
+    non-list *prev_ring_lines* / *corpus_tail_ids*.
+    """
+    if not isinstance(text, str):
+        probed = (
+            f"{len(text)} probed line(s)"
+            if isinstance(text, (list, tuple))
+            else repr(text)
+        )
+        raise TypeError(
+            f"validate_state(text, prev_ring_lines, corpus_tail_ids): text "
+            f"must be the composed state-file TEXT (a str — the facade owns "
+            f"the surface conversions internally: read_key_values' MAPPING "
+            f"for the fields, the full LINES for count/unique, "
+            f"ring_section_lines' extraction for the splice and the "
+            f"corpus-tail identity); probed text {probed} (type "
+            f"{type(text).__name__}) — passing a PATH or other non-str here "
+            f"is the call-signature slip shape this facade closes "
+            f"(d1791921121-12)"
+        )
+    if prev_ring_lines is not None and not isinstance(
+        prev_ring_lines, (list, tuple)
+    ):
+        probed = (
+            f"a {len(prev_ring_lines)}-char str"
+            if isinstance(prev_ring_lines, str)
+            else repr(prev_ring_lines)
+        )
+        raise TypeError(
+            f"validate_state(text, prev_ring_lines, corpus_tail_ids): "
+            f"prev_ring_lines must be the PREVIOUS ring's LINES (a "
+            f"list/tuple of str — the previous state's ring_section_lines "
+            f"extraction) or None; probed prev_ring_lines {probed} (type "
+            f"{type(prev_ring_lines).__name__}) — a str here would walk as "
+            f"CHARACTERS (the call-signature slip shape this facade closes)"
+        )
+    if corpus_tail_ids is not None and not isinstance(
+        corpus_tail_ids, (list, tuple)
+    ):
+        probed = (
+            f"a {len(corpus_tail_ids)}-char str"
+            if isinstance(corpus_tail_ids, str)
+            else repr(corpus_tail_ids)
+        )
+        raise TypeError(
+            f"validate_state(text, prev_ring_lines, corpus_tail_ids): "
+            f"corpus_tail_ids must be the corpus tail's decision ids IN "
+            f"RING ORDER (a list/tuple of str, newest first — compared "
+            f"element-wise against the ring section's probed ids) or None; "
+            f"probed corpus_tail_ids {probed} (type "
+            f"{type(corpus_tail_ids).__name__})"
+        )
+    # 1. FIELDS — the MAPPING surface (read_key_values parses here).
+    assert_fields_non_empty(read_key_values(text), STATE_FIELD_KEYS)
+    # 2. COUNT + UNIQUENESS — the LINES surface (each helper probes the
+    #    capacity from the ring header's own `last N`).
+    lines = text.splitlines()
+    assert_ring_count(lines)
+    assert_ring_unique(lines)
+    # 3. SPLICE — the EXTRACTED-lines surface, blanks dropped both sides.
+    if prev_ring_lines is not None:
+        header, _, _ = _ring_section_bounds(
+            lines, "validate_state", _where(lines)
+        )
+        probed_capacity = _ring_capacity(lines[header])
+        capacity = probed_capacity if probed_capacity is not None else 12
+        new_ring = [line for line in ring_section_lines(lines) if line != ""]
+        prev_lines = [line for line in prev_ring_lines if line != ""]
+        prepended = _probe_prepended(new_ring, prev_lines)
+        assert_ring_splice(prev_lines, new_ring, prepended, capacity=capacity)
+    # 4. CORPUS-TAIL IDENTITY — the extracted ring ids == the supplied tail.
+    if corpus_tail_ids is not None:
+        actual_ids = _ring_ids(ring_section_lines(lines))
+        expected_ids = list(corpus_tail_ids)
+        if actual_ids != expected_ids:
+            divergence = None
+            for k in range(min(len(actual_ids), len(expected_ids))):
+                if actual_ids[k] != expected_ids[k]:
+                    divergence = k
+                    break
+            if divergence is None:
+                divergence = min(len(actual_ids), len(expected_ids))
+            probed_at = (
+                actual_ids[divergence] if divergence < len(actual_ids) else None
+            )
+            supplied_at = (
+                expected_ids[divergence]
+                if divergence < len(expected_ids)
+                else None
+            )
+            raise AssertionError(
+                f"validate_state: the corpus-tail identity broke — the ring "
+                f"section's probed decision ids ({len(actual_ids)}) != the "
+                f"supplied tail ids ({len(expected_ids)}), first divergence "
+                f"at tail index {divergence} (probed {probed_at!r} vs "
+                f"supplied {supplied_at!r}) — probed ring ids "
+                f"{actual_ids!r}, supplied tail ids {expected_ids!r}; the "
+                f"identity read goes through ring_section_lines (a bare "
+                f"whole-file `startswith` scan is the banned surface — it "
+                f"matched five non-ring open-threads bullets ahead of the "
+                f"ring section, the 105th fire)"
             )

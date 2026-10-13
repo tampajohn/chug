@@ -169,7 +169,17 @@ direct single-doc parse, zero casualty; READ the file's actual layout
 (a head/probe of the shape) BEFORE composing the reader, the same way
 the expectation above derives from the section's own live probe — and a
 bare `except: pass` inside a probe MASKS the layout mismatch instead of
-surfacing it.
+surfacing it. The FULL state-write gate rides the facade, not hand-matched
+call sites (T295): `wa.validate_state(text)` is the PREFERRED surface for
+the wrap's state write — ONE call owning the surface conversions
+internally (read_key_values' mapping for the nine `state_field` fields,
+the full lines for the ring count/uniqueness with the capacity probed from
+the header's own `last N`, the `ring_section_lines` extraction for the
+splice and the corpus-tail identity), the cycle-686 five-fire cluster
+(d1791921121-12 / d1791921226-14 the named pair — raw composed text passed
+where the helpers walk path-or-MAPPING / path-or-LINES → `OSError: File
+name too long`) its citation — while the per-helper calls stay for the
+narrower surfaces (window counts, byte-carries, substitutions).
 
 **Deferred digest-final equalities (T271,
 deferred-equality scope-or-re-probe).** A wrap that defers a
