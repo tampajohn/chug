@@ -87,4 +87,4 @@ estimate: ~60 changed lines (loopd.sh ~25 + tests ~35).
   loopd.sh in `tests/loopd_laya_triage.rs` still passes (or its count moved
   with the pin's own contract-change comment).
 
-check: export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared; touch src/*.rs tests/*.rs; cargo test --release --test loopd_laya_triage --test loop_spec_eval_read_path_pointer --test loop_spec_loopd_log_pointer
+check: export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-validate-a; touch src/*.rs tests/*.rs; cargo test --release --test loopd_laya_triage --test loop_spec_eval_read_path_pointer --test loop_spec_loopd_log_pointer
