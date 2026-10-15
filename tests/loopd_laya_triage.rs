@@ -1538,3 +1538,111 @@ fn the_minted_outcome_id_follows_the_triage_id_convention() {
         );
     }
 }
+
+// --- T296: the double-discharge guard — the backfill probes the corpus ------
+
+/// T296 — the park file's rm covers only loopd's OWN double-backfill. An
+/// OUT-OF-BAND outcome appended straight to `.chug/decisions.jsonl` (the
+/// wrap's T261 batch discharge is the observed racer — measured twice on
+/// the live corpus, both zero-casualty with agreeing verdicts) never
+/// touches the park, so the next look would backfill a consult that
+/// already carries an outcome: a duplicate subject in the F13 corpus.
+/// `laya_backfill` probes the corpus BEFORE appending: a hit consumes the
+/// park silently (ONE log note, ZERO new outcome records), a miss runs the
+/// designed backfill unchanged. RED-PROOF: with the guard leg reverted,
+/// the same fixture double-discharges — 2 outcome records naming the
+/// parked subject and the designed "outcome backfill" log line — and this
+/// pin fails; with the guard, exactly 1.
+#[test]
+fn an_out_of_band_outcome_consumes_the_park_silently_without_a_second_backfill() {
+    let f = borderline_fixture();
+    let sock = f.path().join(".chug/daemon.sock");
+    serve_judge(&sock, judge_answer("no", 0.93));
+    // Pass 1: the triaged skip parks triage id X (the consult record).
+    let out = run_one_pass(&f, &sock);
+    assert!(
+        out.status.success(),
+        "pass 1 exits clean: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let decisions = fixture_decisions(&f);
+    assert_eq!(decisions.len(), 1, "pass 1 recorded its triage: {decisions:?}");
+    let x_id = record_field(&decisions[0], "id").expect("the triage record has an id");
+    assert!(
+        f.path().join(".chug/loopd/triage-pending.json").exists(),
+        "X is parked for the next look"
+    );
+
+    // The OUT-OF-BAND discharge: an outcome naming X lands straight in the
+    // corpus — the wrap's T261 batch shape (its own id, X as the subject)
+    // — and the park file never hears about it.
+    let oob = format!(
+        "{{\"id\":\"d1792040908-7\",\"ts\":{FRESH_EPOCH},\"class\":\"outcome\",\"subject\":\"{x_id}\",\
+         \"inputs\":\"the wrap's T261 batch discharge\",\"options\":\"landed-clean | fixed-up | reverted\",\
+         \"choice\":\"landed-clean\",\"confidence\":1}}"
+    );
+    let corpus = f.path().join(".chug/decisions.jsonl");
+    let mut w = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&corpus)
+        .expect("open the fixture corpus");
+    writeln!(w, "{oob}").expect("append the out-of-band outcome");
+    drop(w);
+    let decisions = fixture_decisions(&f);
+    assert_eq!(decisions.len(), 2, "triage₁ + the out-of-band outcome: {decisions:?}");
+    assert_eq!(
+        decisions
+            .iter()
+            .filter(|d| {
+                d.contains("\"class\":\"outcome\"") && d.contains(&format!("\"subject\":\"{x_id}\""))
+            })
+            .count(),
+        1,
+        "the parked subject carries exactly one outcome BEFORE the look: {decisions:?}"
+    );
+
+    // Pass 2: a MECHANICAL skip look (the row re-drained — new=0 over the
+    // untouched baseline, bookkeeping-only, fresh; laya=none, so nothing
+    // re-parks after it). The look still consumes the park: the probe
+    // HITS, so ZERO new records land and the park is consumed silently.
+    f.commit_tree(
+        "eval: cycle-105 fresh eval — the queue re-drained",
+        Some(TODO_ONE_DONE),
+        None,
+    );
+    let out = run_one_pass(&f, &sock);
+    assert!(out.status.success(), "pass 2 exits clean");
+    let decisions = fixture_decisions(&f);
+    assert_eq!(
+        decisions.len(),
+        2,
+        "the look appended ZERO records — no second discharge for X: {decisions:?}"
+    );
+    assert_eq!(
+        decisions
+            .iter()
+            .filter(|d| {
+                d.contains("\"class\":\"outcome\"") && d.contains(&format!("\"subject\":\"{x_id}\""))
+            })
+            .count(),
+        1,
+        "ONE outcome per triage id — the out-of-band writer's record stands alone: {decisions:?}"
+    );
+    assert!(
+        !f.path().join(".chug/loopd/triage-pending.json").exists(),
+        "the park is consumed even though nothing was appended — no stale \
+         consult survives for a later look to re-discharge"
+    );
+    let log = fixture_log(&f);
+    assert_eq!(
+        log.matches(&format!("outcome for {x_id} already backfilled out-of-band"))
+            .count(),
+        1,
+        "ONE silent-consumption note naming the triage id: {log}"
+    );
+    assert!(
+        !log.contains(&format!("outcome backfill {x_id} ->")),
+        "the designed backfill never ran for X: {log}"
+    );
+    assert_ids_unique(&decisions);
+}

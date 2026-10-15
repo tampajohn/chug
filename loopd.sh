@@ -417,10 +417,36 @@ laya_backfill() { # $1 = the parked pending record, $2 = THIS cycle's gate
   # stale record behind, so no later look can ever double-backfill the same
   # id (pinned by a_pending_surviving_an_intervening_non_triage_cycle_
   # backfills_exactly_once).
-  local pend=$1 gate=$2 id out_id now route pbase cur_base cur_book choice what
+  # T296 — that invariant covers writers beyond loopd too. An OUT-OF-BAND
+  # outcome appended straight to .chug/decisions.jsonl (the wrap's T261
+  # batch discharge is the observed racer) never touches the park file, so
+  # the rm alone cannot see it: the next look would backfill a consult that
+  # already carries an outcome — a duplicate subject in the F13 corpus,
+  # measured twice on the live corpus (d1791919548-loopd4, both verdicts
+  # agreeing; d1792039974-loopd92, found at the cycle-850 trip-180 eval).
+  # The probe below runs BEFORE the append: a hit consumes the park
+  # silently (one loopd.log note, no record written), a miss runs the
+  # designed backfill unchanged. The guard is writer-agnostic — whichever
+  # writer (this look or the wrap's batch) lands first wins — and the
+  # tally of outcome records stays == unique triage subjects, so the
+  # double is impossible regardless of which writer races and LOOP-SPEC's
+  # T261 batch clause stands unedited.
+  local pend=$1 gate=$2 id out_id now route pbase cur_base cur_book choice what probe
   id=$(jq -r '.id // ""' "$pend" 2>/dev/null) || id=""
   if [ -z "$id" ]; then
     echo "$(ts) laya triage (T259): unreadable pending record — backfill skipped" >> "$LOG"
+    return 0
+  fi
+  # T296 double-discharge guard: one bounded read of the corpus for an
+  # outcome already naming the parked triage id. Fail-open to APPEND on
+  # any probe error — an unreadable/missing corpus or a jq failure never
+  # blocks the designed backfill (the same tolerance shape as the
+  # pending-record reads above).
+  probe=$(jq -r --arg id "$id" \
+    'select(.class == "outcome" and .subject == $id) | .subject' \
+    .chug/decisions.jsonl 2>/dev/null) || probe=""
+  if [ -n "$probe" ]; then
+    echo "$(ts) laya triage (T259): outcome for $id already backfilled out-of-band — consuming the park silently" >> "$LOG"
     return 0
   fi
   route=$(jq -r '.route // ""' "$pend" 2>/dev/null) || route=""
