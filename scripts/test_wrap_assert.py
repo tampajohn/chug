@@ -60,6 +60,15 @@ gate previously hand-matched across ~7 call sites):
   - the capacity is read from the header: a `last 8` fixture ring gates
     against 8, not a hardcoded 12.
 
+T298 adds the zero-carry refusal legs (the cycle-1042 wrap's
+prepend-12/carry-0 write the facade passed GREEN): a full-ring write
+whose batch fills the entire capacity computes keep = 0 and the
+carried-window assertion passed VACUOUSLY — the write-time gate now
+REFUSES the shape (T192: rotate at most 11 so one prior line always
+survives verbatim; the remedy is prepend-11/carry-1), while the
+under-capacity append path and the empty-previous-ring `m == 0` path
+stay GREEN.
+
 Run (the check line): python3 -m unittest scripts/test_wrap_assert.py -v
 """
 
@@ -935,6 +944,73 @@ class AssertRingSpliceTest(unittest.TestCase):
         self.assertIn("probed prepended_count '4'", msg)
 
 
+class AssertRingSpliceZeroCarryTest(unittest.TestCase):
+    """T298: the zero-carry full-ring write is REFUSED (the cycle-1042 gap).
+
+    When the previous ring is non-empty and the composed ring is at
+    capacity, keep = max(0, min(capacity - prepended, len(prev))) computes
+    0 whenever the batch fills the whole ring — and the carried-window
+    assertion passed VACUOUSLY (0 expected, 0 actual, nothing to compare)
+    while T192's rule caps the rotation at capacity-1 so one prior line
+    always survives verbatim. The refusal mirrors eval-delta.sh's post-hoc
+    `k == maxd && j == 0` leg at write time; below capacity and on an
+    empty previous ring the GREEN semantics are unchanged."""
+
+    def test_fail_zero_carry_full_ring_refused_names_t192_and_arithmetic(self):
+        # (a) 12 previous lines + 12 new disjoint lines, prepended 12:
+        # keep computes 0 → REFUSED, naming T192's rule, the probed
+        # arithmetic, and the remedy.
+        prev = _cycle520_prev_ring()
+        self.assertEqual(len(prev), 12)
+        batch = _batch_of(12)
+        self.assertEqual(len(batch), 12)
+        with self.assertRaises(AssertionError) as ctx:
+            wrap_assert.assert_ring_splice(prev, batch, len(batch))
+        msg = str(ctx.exception)
+        self.assertIn("zero-carry full-ring write is REFUSED", msg)
+        self.assertIn("T192", msg)  # the governing rule named
+        self.assertIn(
+            "rotate at most 11 so one prior line always survives verbatim",
+            msg,
+        )
+        self.assertIn("12 prepended line(s)", msg)  # probed prepended count
+        self.assertIn("capacity-12", msg)  # probed capacity
+        self.assertIn("composed 12-line ring", msg)  # probed new length
+        self.assertIn("previous ring's 12 line(s)", msg)  # probed prev length
+        self.assertIn("keep = max(0, ", msg)  # the probed arithmetic
+        self.assertIn("prepend-11/carry-1", msg)  # the remedy shape
+
+    def test_pass_prepend_11_carry_1_at_capacity_is_green(self):
+        # (b) the remedy shape at capacity: 11 prepended + 1 carried —
+        # keep = max(0, min(12 - 11, 12)) = 1, one prior line survives
+        # verbatim as the tail. GREEN.
+        prev = _cycle520_prev_ring()
+        batch = _batch_of(11)
+        composed = batch + prev[:1]
+        self.assertEqual(len(composed), 12)
+        wrap_assert.assert_ring_splice(prev, composed, len(batch))
+
+    def test_pass_under_capacity_prepend_still_green(self):
+        # (c) below capacity no new constraint: 6 previous lines + 3 new —
+        # the composed 9-line ring keeps every previous line (keep = 6),
+        # the under-capacity append path the eval-delta `k < maxd` leg
+        # passes. GREEN.
+        prev = _cycle520_prev_ring()[:6]
+        self.assertEqual(len(prev), 6)
+        batch = _batch_of(3)
+        composed = batch + prev
+        self.assertEqual(len(composed), 9)
+        wrap_assert.assert_ring_splice(prev, composed, len(batch))
+
+    def test_pass_empty_previous_ring_with_full_new_ring_is_green(self):
+        # (d) the `m == 0` leg: an EMPTY previous ring with a full new ring
+        # stays legal — a first-generation write carries nothing because
+        # there is nothing to carry (eval-delta's `m == 0` → ok). GREEN.
+        batch = _batch_of(12)
+        self.assertEqual(len(batch), 12)
+        wrap_assert.assert_ring_splice([], batch, len(batch))
+
+
 # T295 fixtures: the validate_state facade's realistic state fixture,
 # modeled on the live eval-state.md's shape — the nine `state_field`
 # fields (the parser contract's exact list, scripts/eval-delta.sh: schema
@@ -1228,6 +1304,31 @@ class ValidateStateTest(unittest.TestCase):
         msg = str(ctx.exception)
         self.assertIn("corpus_tail_ids", msg)
         self.assertIn("type str", msg)
+
+    def test_fail_cycle1042_zero_carry_write_refused_at_the_facade(self):
+        # T298 leg (e), the cycle-1042 regression: the wrap's first state
+        # write prepended the cycle's 12 post-eval records onto the
+        # previous 12-line ring — keep computed 0, the carried-window
+        # assertion passed VACUOUSLY, and THIS facade waved the write GREEN
+        # (12/12 same-generation ids, zero prior-generation lines
+        # surviving; eval-delta caught it one generation later). The
+        # write-time gate now refuses the same bytes.
+        batch = _batch_of(12)  # the 12-record batch, disjoint ids
+        self.assertEqual(len(VS_PREV_RING), 12)
+        with self.assertRaises(AssertionError) as ctx:
+            wrap_assert.validate_state(
+                _vs_text(ring=batch), prev_ring_lines=VS_PREV_RING
+            )
+        msg = str(ctx.exception)
+        self.assertIn("zero-carry full-ring write is REFUSED", msg)
+        self.assertIn("T192", msg)
+        self.assertIn(
+            "rotate at most 11 so one prior line always survives verbatim",
+            msg,
+        )
+        self.assertIn("12 prepended line(s)", msg)
+        self.assertIn("previous ring's 12 line(s)", msg)
+        self.assertIn("prepend-11/carry-1", msg)
 
 
 if __name__ == "__main__":
