@@ -1,4 +1,4 @@
-check: cd "$(git rev-parse --show-toplevel)" && export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared && touch src/*.rs tests/*.rs && grep -q 'python-probe-shape' META-META-SPEC.md && grep -q 'list indices must be integers' META-META-SPEC.md && cargo test --release --test todo_consistency --test eval_outcomes_carry --test eval_state_delta --test loop_spec_scoped_walk --test internal_info_lint
+check: cd "$(git rev-parse --show-toplevel)" && export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-validate-a && touch src/*.rs tests/*.rs && grep -q 'python-probe-shape' META-META-SPEC.md && grep -q 'list indices must be integers' META-META-SPEC.md && cargo test --release --test todo_consistency --test eval_outcomes_carry --test eval_state_delta --test loop_spec_scoped_walk --test internal_info_lint
 
 # T297 — META-META-SPEC probe-hygiene: name the PYTHON accessor-shape variant (python-probe-shape census, 4 fires)
 
