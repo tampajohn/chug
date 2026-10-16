@@ -338,3 +338,125 @@ fn mechanism_sentence_and_the_census_as_guard_are_pinned() {
          dropped, more than one means it is quoted twice"
     );
 }
+
+// ---- the T297 python accessor-shape extension ----
+
+/// The python variant's census name — the spec's required literal token
+/// (the T297 check line greps it in META-META-SPEC.md).
+const PYTHON_PROBE_SHAPE: &str = "python-probe-shape";
+
+/// The python noisy failure's core phrase — the spec's required literal
+/// phrase (the TypeError's stem, grepped by the T297 check line).
+const LIST_INDICES: &str = "list indices must be integers";
+
+/// The root the python text extends — its bold opening needle.
+const ACCESSOR_ROOT: &str = "**The accessor-shape root:**";
+
+/// The paragraph's closing letter — the python extension sits BEFORE it,
+/// so the letter still reads as covering both tools.
+const BOTH_CLASSES: &str = "Both classes are a probe composed from habit";
+
+/// The jq legs preserved verbatim (an EXTENSION, never a rewrite): the
+/// jq-probe-slip family name and the jq noisy array-index failure quote.
+const JQ_FAMILY: &str = "jq-probe-slip family";
+const JQ_NOISY: &str = "Cannot index array with string";
+
+/// (d) The T284 probe-hygiene paragraph's accessor-shape root names the
+/// PYTHON variant beside jq: the `python-probe-shape` census token and
+/// the `list indices must be integers` TypeError phrase each occur
+/// exactly once (in the probe-discipline window AND file-wide), the
+/// extension sits INSIDE the accessor-shape root (after its opening
+/// needle, before the paragraph's closing both-classes letter), the T284
+/// lead still opens the paragraph, and the jq legs it extends are intact
+/// (the jq-probe-slip family + the jq noisy quote, each exactly once).
+/// RED-proof: the orchestrator proved this pin pre-merge by mutating the
+/// doctrine paragraph in the worktree — deleting the python extension
+/// (both token counts → 0) and separately reverting it to jq-only text —
+/// and watching these legs go red.
+#[test]
+fn probe_hygiene_accessor_root_names_the_python_probe_shape() {
+    // Needle self-checks (T48 idiom): a mangled needle must not let this
+    // pin pass silently.
+    assert!(
+        PYTHON_PROBE_SHAPE.starts_with("python-") && PYTHON_PROBE_SHAPE.ends_with("-shape"),
+        "the census needle must be the python-probe-shape token verbatim"
+    );
+    assert!(
+        LIST_INDICES.starts_with("list indices") && LIST_INDICES.ends_with("integers"),
+        "the TypeError needle must be the list-indices phrase verbatim"
+    );
+    let spec_text = meta_meta_spec();
+    let spec = flat(&spec_text);
+    let probe_area = window(
+        &spec,
+        &flat(PROBE_HYGIENE_LEAD),
+        &flat(WRITE_EVAL_HEADING),
+        "probe-discipline",
+    );
+    // The required tokens, EXACTLY once in the window and once file-wide —
+    // zero means the python extension was deleted or reworded (the
+    // T297 check line's greps go red with it), more than one means a
+    // duplicate statement drifted in.
+    for (needle, what) in [
+        (PYTHON_PROBE_SHAPE, "the python-probe-shape census token"),
+        (LIST_INDICES, "the list-indices TypeError phrase"),
+    ] {
+        let needle = flat(needle);
+        assert_eq!(
+            probe_area.matches(&needle).count(),
+            1,
+            "the probe-discipline window must state {what} exactly once — \
+             zero means the T297 python extension was deleted, reworded, \
+             or moved out of the T284 paragraph, more than one means it \
+             is stated twice"
+        );
+        assert_eq!(
+            spec.matches(&needle).count(),
+            1,
+            "META-META-SPEC must carry {what} exactly once file-wide"
+        );
+    }
+    // The T284 lead still opens the paragraph — the extension never
+    // reworded the paragraph's existing opening.
+    assert_eq!(
+        spec.matches(&flat(PROBE_HYGIENE_LEAD)).count(),
+        1,
+        "META-META-SPEC must still lead the probe-hygiene paragraph with \
+         the T284 needle exactly once"
+    );
+    // Placement: the python text sits INSIDE the accessor-shape root —
+    // after its opening needle, before the paragraph's closing letter —
+    // so the root reads as one root with a jq arm and a python arm.
+    let root_at = probe_area
+        .find(&flat(ACCESSOR_ROOT))
+        .expect("the accessor-shape root opens inside the window");
+    let python_at = probe_area
+        .find(&flat(PYTHON_PROBE_SHAPE))
+        .expect("the python census is in the window (counted above)");
+    let both_at = probe_area
+        .find(&flat(BOTH_CLASSES))
+        .expect("the closing both-classes letter is in the window");
+    assert!(
+        root_at < python_at && python_at < both_at,
+        "the python extension must sit INSIDE the accessor-shape root \
+         (after its opening, before the closing both-classes letter) — \
+         moved outside it, the paragraph no longer reads as one root \
+         with a jq arm and a python arm"
+    );
+    // The jq legs are preserved (an EXTENSION, never a rewrite): the
+    // jq-probe-slip family and the jq noisy-failure quote still occur
+    // exactly once each in the window.
+    for (needle, what) in [
+        (JQ_FAMILY, "the jq-probe-slip family name"),
+        (JQ_NOISY, "the jq noisy array-index failure quote"),
+    ] {
+        let needle = flat(needle);
+        assert_eq!(
+            probe_area.matches(&needle).count(),
+            1,
+            "the probe-discipline window must still state {what} exactly \
+             once — zero means the python extension REWROTE the jq legs \
+             instead of extending them"
+        );
+    }
+}
