@@ -303,9 +303,23 @@ id did) — and the SAME inspect-first habit (a `type`/`keys:` shape
 probe before the projection) covers both variants, silent and noisy
 alike: the census's two post-landing fires are both this variant
 (family 8→10), the evidence a reader does not pattern-match the
-silent-variant text to the noisy slip. Both classes are a probe
-composed from habit instead of inspection — mask the exit code you
-expect, inspect the shape before you project.
+silent-variant text to the noisy slip. python composes the SAME root
+through its own failure surface — a `json.load(s)`-then-walk built from
+an ASSUMED file/value shape fails NOISILY (`TypeError:
+list indices must be integers or slices, not str` when a schema-memory JSONL
+walk meets the ARRAY-shaped `.chug/todos.json`; `AttributeError` on an
+assumed attribute), exiting nonzero naming the mis-shape, never
+printing `null` silently — the python-probe-shape census, FOUR fires,
+all read-only/zero-casualty: trip 223's cycle-1022-wrap str-minus-str
+`TypeError` on a probe value (first), the todos.json list-indices leg
+(second), the todos.json `AttributeError` leg (third), and trip 228's
+cycle-1042 20:27:47.006Z leg (fourth — the SAME list-indices variant
+re-firing as `[x['id'] for x in t]` over `json.loads(line)`'s array,
+the repeat that FIRED the watch's carried trigger — naming alone did
+not hold); the SAME inspect-first habit (a `head -c`/`type()`/`keys`
+shape probe before the walk) covers python and jq alike. Both classes
+are a probe composed from habit instead of inspection — mask the exit
+code you expect, inspect the shape before you project.
 
 **Scoped-walk rule (T293, prune-first / scoped-probe).** Orchestrator
 probes NEVER run a recursive walk from the repo root inline — `find .`,
