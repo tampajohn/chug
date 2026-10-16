@@ -639,6 +639,21 @@ def assert_ring_splice(prev_ring_lines, new_ring_lines, prepended_count, capacit
     trivially satisfy), so the ring surface upgrades to this gate. The
     failure names the probed splice arithmetic (prepended, capacity, both
     lengths) or the first misaligned carried position with BOTH reprs.
+
+    T298 closes the zero-carry gap the cycle-1042 wrap's prepend-12/carry-0
+    write slipped through: when the previous ring is NON-EMPTY and the
+    composed ring is at capacity and the computed keep is 0, the
+    carried-window assertion below would pass VACUOUSLY (0 expected
+    carried, 0 actual — nothing to compare), so the shape is REFUSED here
+    before it: T192's rule caps the rotation at capacity-1 so one prior
+    line always survives verbatim, and a same-generation-only ring is
+    corruption of the append-only history, never a rotation (the parity
+    contract with eval-delta.sh's post-hoc `k == maxd && j == 0` leg —
+    refused AT WRITE TIME, not one generation later). The remedy is the
+    prepend-(capacity-1)/carry-1 splice: drop the batch's oldest new line
+    and carry the previous ring's newest line as the tail. Below capacity
+    (the under-capacity append path) and on an empty previous ring (the
+    first-generation `m == 0` path) the current GREEN semantics hold.
     """
     if (
         not isinstance(prepended_count, int)
@@ -654,6 +669,22 @@ def assert_ring_splice(prev_ring_lines, new_ring_lines, prepended_count, capacit
             f"{type(prepended_count).__name__}"
         )
     keep = max(0, min(capacity - prepended_count, len(prev_ring_lines)))
+    if prev_ring_lines and len(new_ring_lines) >= capacity and keep == 0:
+        raise AssertionError(
+            f"assert_ring_splice: the zero-carry full-ring write is "
+            f"REFUSED — probed {prepended_count} prepended line(s) into a "
+            f"capacity-{capacity} ring computes keep = max(0, "
+            f"min(capacity - prepended, len(prev))) = 0, so the composed "
+            f"{len(new_ring_lines)}-line ring carries ZERO of the previous "
+            f"ring's {len(prev_ring_lines)} line(s) — T192: rotate at most "
+            f"{capacity - 1} so one prior line always survives verbatim; "
+            f"the remedy is to drop the batch's oldest new line and carry "
+            f"the previous ring's newest line as the tail (prepend-"
+            f"{capacity - 1}/carry-1) — a same-generation-only ring is "
+            f"corruption of the append-only history (the cycle-1042 wrap's "
+            f"prepend-12/carry-0 write passed GREEN through the vacuous "
+            f"carried-window leg), never a rotation"
+        )
     expected_carried = list(prev_ring_lines[:keep])
     actual_carried = list(new_ring_lines[prepended_count:])
     if len(actual_carried) != len(expected_carried):
