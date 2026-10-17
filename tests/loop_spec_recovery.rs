@@ -915,6 +915,109 @@ fn sed_no_match_needle_occurs_exactly_once_inside_step_5() {
     );
 }
 
+// ---- T299 — the BSD-flag compose-time rule (bsd-flag-compose family) ----
+//
+// The host's userland is macOS BSD and ad-hoc bash legs keep getting
+// composed from GNU muscle memory — a flag the GNU tool accepts and the
+// BSD tool refuses. The two `cat -A` fires (the 1111 wrap's seed, the
+// 1115 wrap's identical REPEAT — the repeat being the trigger's fire)
+// weighed the family doctrine row, and the row landed as ONE
+// compose-time rule beside the sed-assertion rule it disciplines:
+// verify the flag against the tool's own usage line BEFORE composing on
+// macOS, and reach `od -c` / `sed -n l` / `python3` for byte inspection
+// — never `cat -A`. These legs pin it in the T64/T114 pattern: the
+// `bsd-flag-compose` token and the `[-belnstuv]` flag-set literal each
+// occur EXACTLY once in LOOP-SPEC.md, inside step 5's bookkeeping
+// window, AFTER the sed-assertion paragraph and BEFORE the
+// Update-README sentence (the same ad-hoc-compose discipline surface).
+
+/// The family's name — the T299 check line greps it in LOOP-SPEC.md.
+/// Must occur EXACTLY once in LOOP-SPEC.md.
+const BSD_FLAG_COMPOSE: &str = "bsd-flag-compose";
+
+/// BSD cat's flag set — the designed-refusal proof that `cat -A` is GNU
+/// (the T299 check line greps it, fixed-string, in LOOP-SPEC.md). Must
+/// occur EXACTLY once in LOOP-SPEC.md.
+const BSD_CAT_FLAGS: &str = "[-belnstuv]";
+
+/// The paragraph's placement fence on the far side: the Update-README
+/// sentence the doctrine row sits BEFORE (the same step-5 surface).
+const UPDATE_README: &str = "Update README.md";
+
+/// (a) Both T299 needles occur EXACTLY once in LOOP-SPEC.md, inside
+/// step 5's window. Delete the doctrine row and both go red (count 0,
+/// which also breaks the spec's own check-line greps); a duplicate
+/// statement elsewhere goes red (count 2); moving the row out of step 5
+/// dies on the window find.
+#[test]
+fn bsd_flag_compose_needles_occur_exactly_once_inside_step_5() {
+    // Needle self-checks (T48 idiom): a mangled needle must not let this
+    // pin pass silently.
+    assert!(
+        BSD_FLAG_COMPOSE.starts_with("bsd-flag-") && BSD_FLAG_COMPOSE.ends_with("-compose"),
+        "the census needle must be the bsd-flag-compose token verbatim"
+    );
+    assert!(
+        BSD_CAT_FLAGS.starts_with("[-") && BSD_CAT_FLAGS.ends_with("]"),
+        "the flag-set needle must be the [-belnstuv] literal verbatim (the \
+         T299 check line greps it fixed-string)"
+    );
+    let spec = loop_spec();
+    let start = spec
+        .find(STEP5_HEADING_LOOSE)
+        .expect("step-5 heading (`5. **`) present");
+    let end = start
+        + spec[start..]
+            .find(STEP6_HEADING_LOOSE)
+            .expect("step-6 heading present after step 5's");
+    let window = &spec[start..end];
+    for (needle, what) in [
+        (BSD_FLAG_COMPOSE, "the bsd-flag-compose family name"),
+        (BSD_CAT_FLAGS, "the [-belnstuv] BSD-cat flag set"),
+    ] {
+        assert_eq!(
+            spec.matches(needle).count(),
+            1,
+            "LOOP-SPEC must state {what} exactly once — zero means the T299 \
+             doctrine row was deleted, reworded, or moved out of step 5 \
+             (the check line's greps go red with it), more than one means \
+             it is stated twice"
+        );
+        assert!(
+            window.contains(needle),
+            "step 5's window must carry {needle:?} — the T299 doctrine row \
+             was deleted, or moved out of step 5's bookkeeping window"
+        );
+    }
+}
+
+/// (b) The doctrine row sits in the SAME ad-hoc-compose surface as the
+/// sed-assertion rule it disciplines: AFTER the sed-assertion paragraph
+/// (`sed exits 0 on no-match`) and BEFORE the Update-README sentence.
+/// Moving the row to either side of the fence breaks the top-to-bottom
+/// read evaluators (and the compose habit) follow.
+#[test]
+fn bsd_flag_compose_row_sits_after_sed_assertion_before_update_readme() {
+    let spec = loop_spec();
+    let sed_at = spec.find(SED_NO_MATCH).expect(
+        "the sed-assertion paragraph's needle present (the T297-era pin \
+         covers its own existence)",
+    );
+    let row_at = spec
+        .find(BSD_FLAG_COMPOSE)
+        .expect("the bsd-flag-compose token present (row deleted?)");
+    let readme_at = spec
+        .find(UPDATE_README)
+        .expect("the Update-README sentence present");
+    assert!(
+        sed_at < row_at && row_at < readme_at,
+        "the BSD-flag compose-time row must sit AFTER the sed-assertion \
+         paragraph and BEFORE the Update-README sentence — moved outside \
+         that fence, the compose discipline no longer reads as one \
+         surface"
+    );
+}
+
 // ---- T125 — the estimate-calibration rule (the ~400 should-split band) ----
 //
 // The T110 ceiling is only as good as the estimate under it, and the era's

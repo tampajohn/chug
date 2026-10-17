@@ -769,6 +769,26 @@ simultaneously past gates — T194 amends T161's 2-child cap):
    changing nothing; only a later read-back caught it). Prefer
    `edit_file` (which errors on no-match) for repo files, and when sed
    is necessary, assert.
+   **BSD-flag compose-time rule (T299; the `bsd-flag-compose`
+   family).** The host userland is macOS BSD, and ad-hoc bash legs keep
+   getting composed from GNU muscle memory — a flag or range form the
+   GNU tool accepts and the BSD tool refuses (the watches at filing:
+   sed GNU-range-form census 4 — `,+N` and kin, BSD sed wants
+   `sed -n 'N,Mp'` or awk; grep repetition-limit census 3; tool-PATH
+   census 1; BSD cat flag census 2). The ONE compose-time rule: verify
+   the flag against the tool's own usage line BEFORE composing on
+   macOS, and for byte inspection reach `od -c` / `sed -n l` /
+   `python3` — never `cat -A`, which is GNU (BSD cat's flag set is
+   `[-belnstuv]`; the designed refusal prints its usage line with zero
+   mutation, but it burns a leg per fire). The fires: the 1111 wrap's
+   seed (a byte-inspection probe composed `cat -A`) and the 1115 wrap's
+   REPEAT (the identical `| cat -A | head -5` compose in the LIVE_CTX
+   structure probe) — the repeat is the trigger's fire, the carried
+   watch that a second sighting of any BSD-tool/GNU-flag slip weighs
+   the family doctrine row; this paragraph is that weighing's file
+   disposition. The rule stays a compose-time habit, NOT a gate: a
+   compose-text detector over the leg text is the brittle-awk class,
+   rejected (T293).
    Update README.md in the
    merge commit when the item is user-visible. **Outcomes batch at the
    wrap (T261; the wrap-boundary trigger)**: ONE Outcomes entry per
