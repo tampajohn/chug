@@ -1,4 +1,4 @@
-check: cd "$(git rev-parse --show-toplevel)" && export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared && touch src/*.rs tests/*.rs && grep -qF 'bsd-flag-compose' LOOP-SPEC.md && grep -qF '[-belnstuv]' LOOP-SPEC.md && cargo test --release --test todo_consistency --test loop_spec_recovery --test loop_spec_scoped_walk --test internal_info_lint
+check: cd "$(git rev-parse --show-toplevel)" && export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-validate-a && touch src/*.rs tests/*.rs && grep -qF 'bsd-flag-compose' LOOP-SPEC.md && grep -qF '[-belnstuv]' LOOP-SPEC.md && cargo test --release --test todo_consistency --test loop_spec_recovery --test loop_spec_scoped_walk --test internal_info_lint
 
 # T299 — LOOP-SPEC compose-time BSD/GNU portability rule (bsd-flag-compose family, 2nd-fire trigger)
 
