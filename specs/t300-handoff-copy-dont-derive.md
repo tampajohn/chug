@@ -81,4 +81,4 @@ figures once; the wrap-side quotations copy them).
 - estimate: ~60 changed lines all-in (the doctrine paragraph ~12
   lines + the pin ~30 lines + commit; no src changes).
 
-check: grep -c "copy-don't-derive" META-META-SPEC.md && cargo test --release --test loop_spec_recovery copy_derive
+check: cd "$(git rev-parse --show-toplevel)" && export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared && touch src/*.rs tests/*.rs && grep -qF "copy-don't-derive" META-META-SPEC.md && cargo test --release --test loop_spec_recovery --test todo_consistency --test internal_info_lint
