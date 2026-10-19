@@ -4971,3 +4971,83 @@ fn goal_boundary_race_and_recovery_proceeds_clauses_pinned() {
          {echo}, second-fire {second_fire})"
     );
 }
+
+// ---- T300 — the wrap-side handoff quotes the eval body's committed figures (copy-don't-derive) ----
+//
+// The eval body's `## Handoff` section authors the cycle's forward-looking
+// committed figures ONCE (the re-arm due-label pairings, the backstop
+// ordinals, the establishment ordinal, the trip-timing prediction); the
+// wrap then quotes that handoff in two derived surfaces (the Outcomes
+// entry's handoff paragraph, the wrap-notes commit's handoff clause). The
+// class fired TWICE, zero-casualty both times only because the machine
+// never reads the prose: the cycle-1328 wrap-notes handoff mis-carried the
+// close ordinal as the establishment ordinal (the 253rd written against
+// the true 254th), and the cycle-1332 wrap's Outcomes handoff mispaired
+// label and figure (trip-282 quoted with 80/1,223 against the committed
+// 68/1,168). META-META-SPEC's Handoff section now carries the doctrine
+// sentence; this leg pins it in the T48/T64/T114 pattern: the discipline
+// token exactly-once, inside the Handoff-section window, AFTER the
+// recommended-execution-order paragraph it follows.
+
+/// The copy-don't-derive doctrine's token needle — the discipline name,
+/// lowercase and apostrophized as written (a case-normalized or
+/// de-apostrophized variant must not satisfy the pin). Must occur EXACTLY
+/// once in META-META-SPEC.md.
+const COPY_DONT_DERIVE_NEEDLE: &str = "copy-don't-derive";
+
+/// The Handoff-section paragraph the doctrine sits AFTER — the section's
+/// original body paragraph, kept byte-identical (the doctrine extends it,
+/// never replaces or precedes it).
+const RECOMMENDED_ORDER_NEEDLE: &str = "End with a recommended execution order";
+
+/// (ar) T300 — the copy-don't-derive doctrine occurs EXACTLY once in
+/// META-META-SPEC.md, inside the Handoff-section window (the
+/// `## Handoff section in EVALUATION.md` heading through the next
+/// `## Hard rules` heading), AFTER the recommended-execution-order
+/// paragraph. Delete the paragraph and this goes red at count 0;
+/// duplicate the token elsewhere and it goes red at count 2; moving the
+/// paragraph out of the Handoff section (or before the paragraph it
+/// follows) dies on the window/ordering assert.
+#[test]
+fn copy_dont_derive_doctrine_exactly_once_inside_handoff_after_recommended_order() {
+    // Needle self-check (T48 idiom): a mangled needle must not let this
+    // pin pass silently.
+    assert!(
+        COPY_DONT_DERIVE_NEEDLE.starts_with("copy-")
+            && COPY_DONT_DERIVE_NEEDLE.contains("don't")
+            && COPY_DONT_DERIVE_NEEDLE.ends_with("derive"),
+        "the copy-don't-derive needle must carry the discipline token \
+         verbatim (lowercase, apostrophized)"
+    );
+    let spec = meta_meta_spec();
+    assert_eq!(
+        spec.matches(COPY_DONT_DERIVE_NEEDLE).count(),
+        1,
+        "META-META-SPEC must state the copy-don't-derive discipline exactly \
+         once — zero means the Handoff doctrine paragraph was deleted (or a \
+         needle was rewrapped), more than one means the token is duplicated"
+    );
+    let start = spec
+        .find(HANDOFF_HEADING)
+        .expect("the Handoff heading present");
+    let end = start
+        + spec[start..]
+            .find(HARD_RULES_HEADING)
+            .expect("the Hard-rules heading present after the Handoff heading");
+    let window = &spec[start..end];
+    let order = window
+        .find(RECOMMENDED_ORDER_NEEDLE)
+        .expect("the Handoff window must carry the recommended-execution-order paragraph");
+    let doctrine = window
+        .find(COPY_DONT_DERIVE_NEEDLE)
+        .expect(
+            "the Handoff window must carry the copy-don't-derive doctrine \
+             (moved out of the section?)",
+        );
+    assert!(
+        order < doctrine,
+        "the copy-don't-derive doctrine must sit AFTER the \
+         recommended-execution-order paragraph — order ({order}), doctrine \
+         ({doctrine})"
+    );
+}

@@ -593,6 +593,20 @@ T212 lesson: the indictment was inverted, a full round reverted).
 End with a recommended execution order: which rows go to SELF-SPEC
 (continuous improvement), which are big enough for a META-SPEC fan-out
 (adversarial validation), and which are human-decision items.
+The handoff's committed figures follow one discipline,
+`copy-don't-derive`: the eval body's handoff authors its committed
+figures ONCE (the re-arm due-label pairings, the backstop ordinals, the
+establishment ordinal, the trip-timing prediction), and any wrap-side
+quotation of the handoff (the Outcomes entry's handoff paragraph, the
+wrap-notes commit's handoff clause) copies those figures VERBATIM from
+the eval body's committed text, never re-derives them from memory. The
+class has fired twice, zero-casualty both times only because the
+machine never reads the prose: the cycle-1328 wrap-notes handoff
+mis-carried the close ordinal as the establishment ordinal (the 253rd
+written against the true 254th), and the cycle-1332 wrap's Outcomes
+handoff mispaired label and figure (trip-282 quoted with 80/1,223
+against the committed 68/1,168). This sentence is the second-sighting
+trigger's file disposition.
 
 ## Hard rules
 
