@@ -1275,6 +1275,8 @@ fn loop_spec_phase_1_carries_the_cheap_exit_clause() {
         "no child deaths since the last evaluation",
         "bookkeeping-only delta since the last evaluation",
         "EVALUATION.md fresh (same UTC day)",
+        // T301: the delta window's baseline anchor (the prediction-miss 3rd-sighting discharge).
+        "the baseline is the newest EVALUATION.md-touching commit",
         "writes the one-line disposition itself",
         "Who may write the disposition: the supervisor, mechanically, on an empty predicate (this rule), or the orchestrator under the chain rule above — never a third path.",
         "Any single non-empty input forces the launch instead",

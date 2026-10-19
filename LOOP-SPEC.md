@@ -92,8 +92,17 @@ supervisor computes it BEFORE any launch: no new TODO rows since the
 last evaluation, no child deaths since the last evaluation, a
 bookkeeping-only delta since the last evaluation (every commit an
 `eval:` commit touching nothing outside EVALUATION.md and TODO.md), and
-EVALUATION.md fresh (same UTC day). When all four hold and the valve
-has not tripped, `loopd.sh` writes the one-line disposition itself — an
+EVALUATION.md fresh (same UTC day). The delta window anchors
+mechanically: the baseline is the newest EVALUATION.md-touching commit
+(`git log -1 -- EVALUATION.md` — the last examination of loop state, a
+real eval or a wrap's bookkeeping alike), so work landed and accounted
+inside the filing cycle (an arc closed into the wrap prep's Outcomes)
+sits BEHIND the baseline and never forces a worked-delta launch.
+Handoff prose that predicts supervisor behavior reads this anchor's
+mechanics, never the chain rule's letter — the wrap-handoff
+prediction-miss class (cycles 458, ~1046, 1340) is the evidence. When
+all four hold and the valve has not tripped, `loopd.sh` writes the
+one-line disposition itself — an
 empty commit whose subject carries the T237 token, the TRUE streak, and
 the predicate inputs — and skips the cycle launch entirely: no LLM
 call. Who may write the disposition: the supervisor, mechanically, on
