@@ -1062,6 +1062,21 @@ alike) has been harvested.
   produces, never a pre-commit read reported as the post-commit
   machine streak (the cycle-123 miss: `60 0` probed at the pre-wrap
   HEAD, `120 1` post-commit).
+- **Wrap-corridor commit subjects stay `eval:`-prefixed (T302).** Every
+  commit an eval/wrap corridor writes — the eval body, the wrap prep, the
+  wrap notes, the wrap fill — carries an `eval:`-prefixed subject, because
+  loopd's delta_bookkeeping_only subject walk reads the corridor as
+  bookkeeping by the `^eval:` anchor: a wrap commit whose subject starts
+  with anything else flips the leg to book=no and forces a launched
+  evaluation over an otherwise cheap-exitable predicate (the fail-safe
+  direction — a bounded burn, never a silent skip over real work). Both
+  fires are the wrap fill's subject: fd5d33f's `fill:`-prefixed subject
+  (the ONLY `^fill:` in the wrap-fill census) forcing the cycle-1738
+  launch, and the cycle-1738 wrap's own first fill message caught
+  pre-push and amended message-only (zero consequence — the bad subject
+  never reached origin). The T237-token rules above govern the notes
+  subject's token; this rule governs the prefix every wrap commit
+  shares.
 - **A real-eval (trip) wrap's notes carry the trip stream's whole-stream
   iteration actual (T257).** A trip wrap's notes commit MUST carry the
   trip stream's whole-stream iteration actual (iterations + wall, read
