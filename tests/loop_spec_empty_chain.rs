@@ -401,3 +401,39 @@ fn trip_wrap_stream_actual_needle_occurs_exactly_once() {
         );
     }
 }
+
+// ---- the T302 Phase-3 leg: the wrap-corridor subject prefix ----
+
+/// (g) The wrap-corridor subject-prefix rule (Phase 3's sibling to the
+/// token bullet) — every commit an eval/wrap corridor writes (the eval
+/// body, the wrap prep, the wrap notes, the wrap fill) carries an
+/// `eval:`-prefixed subject, because loopd's delta_bookkeeping_only
+/// subject walk reads the corridor as bookkeeping by the `^eval:` anchor.
+/// Must occur EXACTLY once in LOOP-SPEC.md (whitespace-collapsed).
+const WRAP_PREFIX_NEEDLE: &str = "Wrap-corridor commit subjects stay";
+
+/// (g) The wrap-corridor subject-prefix rule occurs EXACTLY once in
+/// LOOP-SPEC.md. Delete the bullet (or reword the needle phrase) and this
+/// goes red at count 0; a duplicate statement of the rule elsewhere also
+/// goes red; rewrapping the phrase cannot save a deletion (the needle
+/// matches whitespace-collapsed text).
+#[test]
+fn wrap_corridor_prefix_needle_occurs_exactly_once() {
+    // Needle self-check (T48 idiom): a mangled needle must not let this
+    // pin pass silently.
+    assert!(
+        WRAP_PREFIX_NEEDLE.starts_with("Wrap-corridor")
+            && WRAP_PREFIX_NEEDLE.ends_with("subjects stay"),
+        "the wrap-prefix needle must carry the corridor-subject rule — \
+         wrap-corridor commit subjects stay `eval:`-prefixed"
+    );
+    let spec = flat(&loop_spec());
+    assert_eq!(
+        spec.matches(WRAP_PREFIX_NEEDLE).count(),
+        1,
+        "LOOP-SPEC must state the wrap-corridor subject-prefix rule \
+         ({WRAP_PREFIX_NEEDLE:?}) exactly once — zero means the rule was \
+         deleted or reworded (the T302 text-revert mutant), more than one \
+         means it is stated twice"
+    );
+}
