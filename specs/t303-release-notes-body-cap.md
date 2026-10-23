@@ -71,4 +71,4 @@ workflow YAML UNTOUCHED — the fix is generator-side only.
   --verify-tag --notes-file <capped-notes>` per tag is the operator's call;
   this row's fix makes the NEXT tag publish.
 
-check: cd "$(git rev-parse --show-toplevel)" && export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared && touch src/*.rs tests/*.rs && cargo test --release --test release_scripts --test todo_consistency --test internal_info_lint
+check: cd "$(git rev-parse --show-toplevel)" && export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-validate-a && touch src/*.rs tests/*.rs && cargo test --release --test release_scripts --test todo_consistency --test internal_info_lint
