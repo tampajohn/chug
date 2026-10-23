@@ -106,6 +106,14 @@ impl Fixture {
         self.git(&["rev-parse", "--short", "HEAD"])
     }
 
+    /// An empty commit: the cheap way to build a long history (the T303
+    /// over-cap fixture needs ~600 commits to blow past the 120,000-byte
+    /// body budget — writing+adding a file per commit would double the
+    /// subprocess cost for nothing).
+    fn commit_empty(&self, msg: &str) {
+        self.git(&["commit", "--quiet", "--allow-empty", "-m", msg]);
+    }
+
     fn tag(&self, name: &str, msg: &str) {
         self.git(&["tag", "-a", name, "-m", msg]);
     }
@@ -433,4 +441,153 @@ fn environment_failures_are_loud() {
     f.commit("chore: only");
     let out = run_sh(&script("release-notes.sh"), f.path(), &["refs/heads/nope"], &[]);
     assert_eq!(out.status.code(), Some(2), "an unresolvable TO_REF must fail loudly: {}", stderr(&out));
+}
+
+// --- T303: the GitHub 125,000-char release-body cap -----------------------------
+//
+// Four consecutive tags (v0.17.19–v0.17.22) failed `gh release create` with
+// "body is too long (maximum is 125000 characters)": the loop's eval:/wrap
+// subjects run multi-KB each, and one 1,122-commit window generated a
+// 1,070,737-byte body. The two deterministic guards pinned below: subjects
+// truncate at 200 bytes with a "..." marker, and an over-120,000-byte body
+// is cut at a line boundary under one footer naming the omission.
+
+/// Leg 1: a multi-KB subject is truncated to the byte budget carrying the
+/// "..." marker, byte-exact; an ordinary subject passes through untouched;
+/// the truncation is deterministic.
+#[test]
+fn overlong_subjects_are_truncated_with_an_ellipsis_marker() {
+    let f = Fixture::new("notes-longsubj");
+    f.cargo_toml("0.1.0");
+    f.commit("chore: bootstrap");
+    f.tag("v0.1.0", "first");
+    let long_subject = format!("eval: {}", "x".repeat(3000));
+    let long_sha = f.commit(&long_subject);
+    f.commit("fix: small one");
+    f.tag("v0.2.0", "second");
+
+    let out = run_sh(&script("release-notes.sh"), f.path(), &["v0.2.0"], &[]);
+    assert_eq!(out.status.code(), Some(0), "stderr: {}", stderr(&out));
+    let notes = stdout(&out);
+
+    // Byte-exact: the first 200 bytes of the subject, then the marker.
+    let expected = format!("- {}... (`{}`)", &long_subject[..200], long_sha);
+    assert!(notes.contains(&expected), "the truncated bullet line: {notes}");
+    assert!(
+        !notes.contains(&"x".repeat(201)),
+        "no run longer than the budget survives the truncation"
+    );
+    let line = notes
+        .lines()
+        .find(|l| l.starts_with("- eval:"))
+        .expect("the eval bullet is emitted");
+    assert_eq!(
+        line.len(),
+        2 + 200 + 3 + 3 + long_sha.len() + 2,
+        "- + 200-byte subject + ... + sha cite: {line:?}"
+    );
+    assert!(
+        notes.contains("- fix: small one (`"),
+        "ordinary subjects are never touched: {notes}"
+    );
+
+    let again = run_sh(&script("release-notes.sh"), f.path(), &["v0.2.0"], &[]);
+    assert_eq!(stdout(&again), notes, "truncation must stay deterministic");
+}
+
+/// Leg 2: a range whose body would exceed the hard cap is cut at a LINE
+/// boundary — never a partial line — under exactly one footer whose N is the
+/// omitted-bullet count and whose range names the git data it came from.
+/// (Subjects here sit exactly at the 200-byte per-subject budget, so the
+/// body cap is the only cutter in play.)
+#[test]
+fn over_cap_bodies_are_cut_at_a_line_boundary_with_one_footer() {
+    let f = Fixture::new("notes-overcap");
+    f.commit("chore: bootstrap");
+    f.tag("v0.1.0", "first");
+    let subject = format!("chore: {}", "y".repeat(193)); // 200 bytes exactly
+    const TOTAL: usize = 600; // 600 × ~214-byte bullets ≈ 128KB > the cap
+    for _ in 0..TOTAL {
+        f.commit_empty(&subject);
+    }
+    f.tag("v0.2.0", "second");
+
+    let out = run_sh(&script("release-notes.sh"), f.path(), &["v0.2.0"], &[]);
+    assert_eq!(out.status.code(), Some(0), "stderr: {}", stderr(&out));
+    let notes = stdout(&out);
+
+    assert!(
+        notes.len() <= 120_000,
+        "the body must fit the script's hard cap (GitHub's limit is 125,000): {}",
+        notes.len()
+    );
+    let footers: Vec<&str> = notes.lines().filter(|l| l.contains("(truncated: ")).collect();
+    assert_eq!(footers.len(), 1, "exactly one truncation footer: {footers:?}");
+    let footer = footers[0];
+
+    let n: usize = footer
+        .strip_prefix("- ... (truncated: ")
+        .and_then(|rest| rest.split(' ').next())
+        .and_then(|digits| digits.parse().ok())
+        .expect("the footer carries its omitted-commit count");
+    let kept = notes
+        .lines()
+        .filter(|l| l.starts_with("- ") && !l.contains("(truncated: "))
+        .count();
+    assert_eq!(kept + n, TOTAL, "N is the omitted-bullet count: {kept} kept + {n} omitted");
+    assert_eq!(
+        footer,
+        format!(
+            "- ... (truncated: {n} more commits in v0.1.0..v0.2.0; full list: git log v0.1.0..v0.2.0)"
+        ),
+        "the footer names the range and the full-list command"
+    );
+
+    // The cut lands between lines: the bullet before the footer is complete.
+    let lines: Vec<&str> = notes.lines().collect();
+    let before = lines[lines.len() - 2];
+    assert!(
+        before.starts_with("- ") && before.ends_with("`)"),
+        "no partial line at the cut: {before:?}"
+    );
+    assert!(notes.ends_with(")\n"), "the footer closes the body");
+
+    let again = run_sh(&script("release-notes.sh"), f.path(), &["v0.2.0"], &[]);
+    assert_eq!(stdout(&again), notes, "the cap must stay deterministic — same input, same N");
+}
+
+/// The other side of the T303 pin: a body that fits the cap keeps the
+/// pre-T303 bytes exactly — no footer appears, no subject is touched.
+#[test]
+fn under_cap_output_keeps_the_pre_cap_bytes() {
+    let f = Fixture::new("notes-undercap");
+    f.cargo_toml("0.1.0");
+    f.commit("chore: bootstrap");
+    f.tag("v0.1.0", "first");
+    f.cargo_toml("0.2.0");
+    let s_feat = f.commit("t42: add the thing");
+    let s_sparkle = f.commit("feat: sparkle");
+    let s_fix = f.commit("fix: crash on empty input");
+    let s_docs = f.commit("docs: readme install section");
+    let s_spec = f.commit("spec: wrap doctrine for t42");
+    let s_todo = f.commit("todo: t42 done");
+    f.tag("v0.2.0", "second");
+
+    let out = run_sh(&script("release-notes.sh"), f.path(), &["v0.2.0"], &[]);
+    assert_eq!(out.status.code(), Some(0), "stderr: {}", stderr(&out));
+    // Golden pre-T303 bytes (verified against the T100 output): groups in
+    // fixed order, newest-first inside each group, sha-cited bullets.
+    let expected = format!(
+        "## Features\n\n\
+         - feat: sparkle (`{s_sparkle}`)\n\
+         - t42: add the thing (`{s_feat}`)\n\
+         ## Fixes\n\n\
+         - fix: crash on empty input (`{s_fix}`)\n\
+         ## Docs\n\n\
+         - spec: wrap doctrine for t42 (`{s_spec}`)\n\
+         - docs: readme install section (`{s_docs}`)\n\
+         ## Chore\n\n\
+         - todo: t42 done (`{s_todo}`)\n"
+    );
+    assert_eq!(stdout(&out), expected, "under-cap output is untouched");
 }
