@@ -69,6 +69,22 @@ survives verbatim; the remedy is prepend-11/carry-1), while the
 under-capacity append path and the empty-previous-ring `m == 0` path
 stay GREEN.
 
+T306 adds the eval-commit probed-equality legs (the cycle-2035 filing
+fire's write-time half): the 2031 wrap's state recompose wrote
+`eval-commit: 3930452b1f9e0e05a12e93d69a2d6ba95d7cbe47` — the 7-char
+prefix TRUE, the suffix memory-composed (the TRUE full hash is
+`39304522865f99ca95b6e8b8750e1714e627e7fb`; `git cat-file -t` on the
+falsified hash rc-128) — and the facade's field check passed it, the
+field gated NON-EMPTY only. The facade gains `expected_eval_commit`:
+the CALL SITE probes `git rev-parse <commit>` and passes the probed
+full hash in, the facade asserts the parsed field EQUALS it (the
+T270/T273 probed-arg shape `prev_ring_lines` / `corpus_tail_ids`
+already ride). Legs: a fabricated-suffix eval-commit FAILS naming both
+the probed field value and the supplied probed actual; an honest
+eval-commit PASSES; without the keyword the leg is INERT (the
+fabricated text still passes a keyword-less gate — the boot-time
+fail-closed marker check in eval-delta.sh stays the other half).
+
 Run (the check line): python3 -m unittest scripts/test_wrap_assert.py -v
 """
 
@@ -1068,6 +1084,20 @@ def _vs_older(count=8):
 VS_PREV_RING = VS_CARRIED + _vs_older(8)
 
 
+# T306 fixtures: the cycle-2035 filing fire's eval-commit pair — the TRUE
+# full hash (probed) and the falsified variant the 2031 wrap's state
+# recompose actually wrote (7-char prefix TRUE, the suffix memory-composed;
+# `git cat-file -t` on it rc-128 `could not get object info`). The legs
+# below pin the write-time probed-equality leg against exactly these.
+T306_TRUE_HASH = "39304522865f99ca95b6e8b8750e1714e627e7fb"
+T306_FABRICATED_HASH = "3930452b1f9e0e05a12e93d69a2d6ba95d7cbe47"
+
+
+def _vs_fields_with_eval_commit(value):
+    """VS_FIELDS with the `eval-commit` value swapped to *value* (T306)."""
+    return [(k, value if k == "eval-commit" else v) for k, v in VS_FIELDS]
+
+
 def _vs_composed_ring():
     """The composed ring: 8 prepended + 4 carried = 12 (a full rotation)."""
     return _vs_batch(8) + VS_CARRIED
@@ -1329,6 +1359,64 @@ class ValidateStateTest(unittest.TestCase):
         self.assertIn("12 prepended line(s)", msg)
         self.assertIn("previous ring's 12 line(s)", msg)
         self.assertIn("prepend-11/carry-1", msg)
+
+    def test_pass_eval_commit_equals_the_probed_hash(self):
+        # T306 PASS path: the state's `eval-commit` EQUALS the probed full
+        # hash the call site passed in (probed via `git rev-parse <commit>`
+        # at the wrap's state-write helper — never composed from memory);
+        # an honest write rides the leg green, all other gates unchanged.
+        text = _vs_text(fields=_vs_fields_with_eval_commit(T306_TRUE_HASH))
+        wrap_assert.validate_state(text, expected_eval_commit=T306_TRUE_HASH)
+
+    def test_fail_fabricated_suffix_eval_commit_names_both_values(self):
+        # T306 FAIL path, the cycle-2035 filing fire's exact shape: the
+        # 7-char prefix TRUE (`3930452`), the suffix memory-composed — the
+        # field is non-empty (the pre-leg facade passed it, the field
+        # gated NON-EMPTY only) and must NOT equal the probed hash. The
+        # failure names BOTH the probed field value and the supplied
+        # probed actual (the T270 reporting requirement — never a bare
+        # constant mismatch), plus the probe discipline that closes it.
+        text = _vs_text(
+            fields=_vs_fields_with_eval_commit(T306_FABRICATED_HASH)
+        )
+        with self.assertRaises(AssertionError) as ctx:
+            wrap_assert.validate_state(
+                text, expected_eval_commit=T306_TRUE_HASH
+            )
+        msg = str(ctx.exception)
+        self.assertIn(T306_FABRICATED_HASH, msg)  # the probed field value
+        self.assertIn(T306_TRUE_HASH, msg)  # the supplied probed actual
+        self.assertIn("eval-commit", msg)  # the surface named
+        self.assertIn("git rev-parse", msg)  # the probe discipline named
+
+    def test_inert_without_expected_eval_commit(self):
+        # T306 INERT path: without the keyword the leg is inert — every
+        # pre-existing call site behaves exactly as today, INCLUDING on
+        # the fabricated text (the write-time half is opt-in; the
+        # boot-time fail-closed FULL-READ marker check in eval-delta.sh
+        # stays the other half, unchanged). This leg also pins the RED
+        # shape: pre-T306, THIS call on THIS text was the whole gate —
+        # the falsified hash sailed through.
+        text = _vs_text(
+            fields=_vs_fields_with_eval_commit(T306_FABRICATED_HASH)
+        )
+        wrap_assert.validate_state(text)
+        wrap_assert.validate_state(
+            _vs_text(fields=_vs_fields_with_eval_commit(T306_TRUE_HASH))
+        )
+
+    def test_fail_non_str_expected_eval_commit_raises_type_error(self):
+        # The facade's interface defense, the new arg's shape: the probed
+        # hash is a STR (`git rev-parse`'s output) — anything else is the
+        # call-signature slip shape the facade exists to close.
+        with self.assertRaises(TypeError) as ctx:
+            wrap_assert.validate_state(
+                _vs_text(), expected_eval_commit=3930452
+            )
+        msg = str(ctx.exception)
+        self.assertIn("expected_eval_commit", msg)
+        self.assertIn("PROBED full hash", msg)
+        self.assertIn("type int", msg)
 
 
 if __name__ == "__main__":

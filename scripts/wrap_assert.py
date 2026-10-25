@@ -64,6 +64,19 @@ d1791921121-12 / d1791921226-14 pair passed RAW COMPOSED TEXT where the
 helpers walk path-or-MAPPING / path-or-LINES → `OSError: File name too
 long`, caught pre-write both times).
 
+T306 adds the eval-commit probed-equality leg (the cycle-2035 filing
+fire's write-time half): the 2031 wrap's state FULL recompose wrote
+`eval-commit: 3930452b1f9e0e05a12e93d69a2d6ba95d7cbe47` — the 7-char
+prefix TRUE, the suffix memory-composed (the TRUE full hash is
+`39304522865f99ca95b6e8b8750e1714e627e7fb`) — and every existing guard
+passed it, the field gated NON-EMPTY only; the falsification surfaced
+one chain later at the next eval's boot delta read (fail-closed
+FULL-READ, zero casualty). validate_state gains `expected_eval_commit`
+— the T270/T273 probed-arg shape (`prev_ring_lines`, `corpus_tail_ids`
+already ride): the CALL SITE probes `git rev-parse <commit>` and passes
+the probed full hash in, the facade asserts the parsed field EQUALS it,
+naming both values on mismatch; without the keyword the leg is inert.
+
 Coverage (run by the check line): python3 -m unittest
 scripts/test_wrap_assert.py -v — the pre-T295 legs plus the validate_state
 facade legs.
@@ -768,8 +781,10 @@ def _probe_prepended(new_ring_lines, prev_ring_lines):
     return prepended
 
 
-# validate_state(text, prev_ring_lines=None, corpus_tail_ids=None) — the composed state-file TEXT + 2 optional probed lists
-def validate_state(text, prev_ring_lines=None, corpus_tail_ids=None):
+# validate_state(text, prev_ring_lines=None, corpus_tail_ids=None, expected_eval_commit=None) — the composed state-file TEXT + 3 optional probed args
+def validate_state(
+    text, prev_ring_lines=None, corpus_tail_ids=None, expected_eval_commit=None
+):
     """The ONE-call state-write gate (the T295 facade).
 
     A wrap's state-write gate composes ~7 helper calls and must match each
@@ -789,10 +804,23 @@ def validate_state(text, prev_ring_lines=None, corpus_tail_ids=None):
       1. FIELDS — read_key_values parses *text* and assert_fields_non_empty
          runs on the MAPPING (STATE_FIELD_KEYS, the nine `state_field`
          extractions the parser's field check reads), never on the raw text.
-      2. RING COUNT + UNIQUENESS — the full LINES feed assert_ring_count +
+      2. EVAL-COMMIT PROBED EQUALITY (when *expected_eval_commit* is
+         supplied) — the parsed `eval-commit` field must EQUAL the supplied
+         probed full hash; the mismatch names BOTH the probed field value
+         and the supplied probed actual (the T270 reporting requirement).
+         The intended call shape: the wrap's state-write helper PROBES
+         `git rev-parse <commit>` for the hash the state is being written
+         against and passes the probed value in — never composing the hash
+         from memory (the helper itself lives in the wrap corridor's shell,
+         outside this repo's tracked code; the function contract is what
+         lands here). When not supplied the leg is INERT — backwards-
+         compatible with every existing call site (the field stays
+         NON-EMPTY-checked only; eval-delta.sh's boot-time fail-closed
+         marker check is the other half, unchanged).
+      3. RING COUNT + UNIQUENESS — the full LINES feed assert_ring_count +
          assert_ring_unique, the capacity PROBED from the ring header's own
          `last N` (never a remembered 12 — the T288 letter).
-      3. SPLICE (when *prev_ring_lines* is supplied) — the new ring is
+      4. SPLICE (when *prev_ring_lines* is supplied) — the new ring is
          extracted via ring_section_lines and assert_ring_splice runs on
          the EXTRACTED lines: the prepended count PROBED from the two
          rings' own decision ids (_probe_prepended, never a remembered
@@ -820,7 +848,10 @@ def validate_state(text, prev_ring_lines=None, corpus_tail_ids=None):
     *text* must be the composed state-file TEXT (a str) — a path or line
     list is the call-signature slip shape here (the conversions are the
     facade's job) and raises TypeError naming the accepted shape, as do
-    non-list *prev_ring_lines* / *corpus_tail_ids*.
+    non-list *prev_ring_lines* / *corpus_tail_ids* and non-str
+    *expected_eval_commit* (the probed hash is `git rev-parse`'s output —
+    a str; a non-str is the composing-from-memory slip shape the leg
+    exists to close).
     """
     if not isinstance(text, str):
         probed = (
@@ -829,7 +860,8 @@ def validate_state(text, prev_ring_lines=None, corpus_tail_ids=None):
             else repr(text)
         )
         raise TypeError(
-            f"validate_state(text, prev_ring_lines, corpus_tail_ids): text "
+            f"validate_state(text, prev_ring_lines, corpus_tail_ids, "
+            f"expected_eval_commit): text "
             f"must be the composed state-file TEXT (a str — the facade owns "
             f"the surface conversions internally: read_key_values' MAPPING "
             f"for the fields, the full LINES for count/unique, "
@@ -848,7 +880,8 @@ def validate_state(text, prev_ring_lines=None, corpus_tail_ids=None):
             else repr(prev_ring_lines)
         )
         raise TypeError(
-            f"validate_state(text, prev_ring_lines, corpus_tail_ids): "
+            f"validate_state(text, prev_ring_lines, corpus_tail_ids, "
+            f"expected_eval_commit): "
             f"prev_ring_lines must be the PREVIOUS ring's LINES (a "
             f"list/tuple of str — the previous state's ring_section_lines "
             f"extraction) or None; probed prev_ring_lines {probed} (type "
@@ -864,21 +897,57 @@ def validate_state(text, prev_ring_lines=None, corpus_tail_ids=None):
             else repr(corpus_tail_ids)
         )
         raise TypeError(
-            f"validate_state(text, prev_ring_lines, corpus_tail_ids): "
+            f"validate_state(text, prev_ring_lines, corpus_tail_ids, "
+            f"expected_eval_commit): "
             f"corpus_tail_ids must be the corpus tail's decision ids IN "
             f"RING ORDER (a list/tuple of str, newest first — compared "
             f"element-wise against the ring section's probed ids) or None; "
             f"probed corpus_tail_ids {probed} (type "
             f"{type(corpus_tail_ids).__name__})"
         )
-    # 1. FIELDS — the MAPPING surface (read_key_values parses here).
-    assert_fields_non_empty(read_key_values(text), STATE_FIELD_KEYS)
-    # 2. COUNT + UNIQUENESS — the LINES surface (each helper probes the
+    if expected_eval_commit is not None and not isinstance(
+        expected_eval_commit, str
+    ):
+        raise TypeError(
+            f"validate_state(text, prev_ring_lines, corpus_tail_ids, "
+            f"expected_eval_commit): expected_eval_commit must be the "
+            f"PROBED full hash (a str — `git rev-parse <commit>`'s output, "
+            f"probed by the wrap's state-write helper, never composed from "
+            f"memory) or None; probed expected_eval_commit "
+            f"{expected_eval_commit!r} (type "
+            f"{type(expected_eval_commit).__name__}) — a non-str here is "
+            f"the call-signature slip shape this facade closes"
+        )
+    # 1. FIELDS — the MAPPING surface (read_key_values parses here; the
+    #    parsed mapping is reused by the eval-commit leg below).
+    fields = read_key_values(text)
+    assert_fields_non_empty(fields, STATE_FIELD_KEYS)
+    # 2. EVAL-COMMIT PROBED EQUALITY — the parsed field equals the probed
+    #    hash the CALL SITE passed in (the call site probes `git rev-parse
+    #    <commit>`; the facade only asserts the equality, naming BOTH
+    #    values on mismatch — the T270 reporting requirement).
+    if expected_eval_commit is not None:
+        field_value = fields.get("eval-commit")
+        if field_value != expected_eval_commit:
+            raise AssertionError(
+                f"validate_state: the eval-commit probed-equality leg broke "
+                f"— the state's probed `eval-commit` field {field_value!r} "
+                f"!= the supplied probed full hash "
+                f"{expected_eval_commit!r} — the state-write call site must "
+                f"probe `git rev-parse <commit>` and pass the probed value "
+                f"in, never compose the hash from memory (the cycle-2035 "
+                f"filing fire: the 2031 wrap's state FULL recompose wrote a "
+                f"7-char-TRUE / suffix-memory-composed hash — `git "
+                f"cat-file -t` on it rc-128 — latent across three cheap-exit "
+                f"dispositions, caught by the boot delta's fail-closed "
+                f"FULL-READ verdict; triage d1792968241-2)"
+            )
+    # 3. COUNT + UNIQUENESS — the LINES surface (each helper probes the
     #    capacity from the ring header's own `last N`).
     lines = text.splitlines()
     assert_ring_count(lines)
     assert_ring_unique(lines)
-    # 3. SPLICE — the EXTRACTED-lines surface, blanks dropped both sides.
+    # 4. SPLICE — the EXTRACTED-lines surface, blanks dropped both sides.
     if prev_ring_lines is not None:
         header, _, _ = _ring_section_bounds(
             lines, "validate_state", _where(lines)
@@ -889,7 +958,7 @@ def validate_state(text, prev_ring_lines=None, corpus_tail_ids=None):
         prev_lines = [line for line in prev_ring_lines if line != ""]
         prepended = _probe_prepended(new_ring, prev_lines)
         assert_ring_splice(prev_lines, new_ring, prepended, capacity=capacity)
-    # 4. CORPUS-TAIL IDENTITY — the extracted ring ids == the supplied tail.
+    # 5. CORPUS-TAIL IDENTITY — the extracted ring ids == the supplied tail.
     if corpus_tail_ids is not None:
         actual_ids = _ring_ids(ring_section_lines(lines))
         expected_ids = list(corpus_tail_ids)
