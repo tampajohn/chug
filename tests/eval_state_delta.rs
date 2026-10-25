@@ -508,6 +508,46 @@ fn drift_flag_is_full_read() {
     );
 }
 
+// The state's writers legitimately carry prose after the schema token (the
+// cycle-229 bootstrap write and the cycle-1978 wrap's recompose both wrote
+// `none —`/`none (…)` commentary and were mis-flagged into full reads). The
+// gate compares the field's FIRST whitespace-delimited token: commentary
+// after `none` is not drift, commentary after `flagged` still is.
+
+#[test]
+fn drift_none_with_prose_is_state_hit() {
+    let f = Fixture::new("drift-prose-none");
+    let marker = f.head();
+    f.set_state(
+        &state_text(
+            &marker,
+            "none (the boot STATE-HIT: state+delta read mechanically; T260 the 299th STATE-HIT)",
+            &refs(&ring(1)),
+        ),
+        true,
+    );
+    let (_, delta) = run_delta(&f.dir);
+    assert_eq!(verdict(&delta), "STATE-HIT", "{delta}");
+    assert_eq!(reason(&delta), "", "{delta}");
+}
+
+#[test]
+fn drift_flagged_with_prose_is_full_read() {
+    let f = Fixture::new("drift-prose-flagged");
+    let marker = f.head();
+    f.set_state(
+        &state_text(&marker, "flagged (my own drift note)", &refs(&ring(1))),
+        true,
+    );
+    let (_, delta) = run_delta(&f.dir);
+    assert_eq!(verdict(&delta), "FULL-READ REQUIRED", "{delta}");
+    let r = reason(&delta);
+    assert!(
+        r.starts_with("state-drift-flagged") && r.contains("flagged"),
+        "{delta}"
+    );
+}
+
 #[test]
 fn missing_prev_snapshot_is_full_read_until_snapshotted() {
     let f = Fixture::new("bootstrap");

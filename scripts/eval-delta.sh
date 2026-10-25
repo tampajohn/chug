@@ -204,7 +204,12 @@ else
         if [ "$evals_behind" -gt "$MAX_EVALS_BEHIND" ]; then
           VERDICT="FULL-READ REQUIRED"
           REASON="marker-behind (${evals_behind} evals > ${MAX_EVALS_BEHIND})"
-        elif [ "$drift" != "none" ]; then
+        elif [ "${drift%%[[:space:]]*}" != "none" ]; then
+          # The schema's token is the field's FIRST word; the writers carry
+          # prose after it (`none — first write (bootstrap; …)`, the 1978
+          # wrap's `none (the boot STATE-HIT: …)`). First-token compare so
+          # commentary is not mis-flagged; the reason still names the full
+          # field (display usage in state_line keeps the whole prose too).
           VERDICT="FULL-READ REQUIRED"
           REASON="state-drift-flagged (state-drift: ${drift})"
         elif [ ! -f "$PREV" ]; then
