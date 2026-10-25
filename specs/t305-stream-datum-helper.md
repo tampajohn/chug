@@ -93,4 +93,4 @@ the mechanical read is ONE command.
 5. `cargo test --test stream_datum` green; the full suite + clippy
    `-D warnings` green in the worktree gates.
 
-check: touch src/*.rs tests/*.rs; CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared cargo test --test stream_datum
+check: touch src/*.rs tests/*.rs; CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-validate-a cargo test --test stream_datum
