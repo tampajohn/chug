@@ -85,6 +85,19 @@ eval-commit PASSES; without the keyword the leg is INERT (the
 fabricated text still passes a keyword-less gate — the boot-time
 fail-closed marker check in eval-delta.sh stays the other half).
 
+T307 adds the state-drift first-token legs (the T304 arc's write-side
+half, the cycle-2039 filing fire): the 2035 wrap's state FULL recompose
+healed the eval-commit field (T306's leg rode green) but composed the
+drift field with the healed event's NARRATIVE in the flag position —
+the field is non-empty (the facade gated it NON-EMPTY only), and the
+2039 boot's delta re-flagged FULL-READ REQUIRED (state-drift-flagged)
+with the marker HEALED and reachable. The facade now refuses a drift
+field whose FIRST whitespace-token is not exactly `none` — an
+INTRINSIC leg, no new keyword. Legs: the prose-after-token shape
+(`none (the boot STATE-HIT: …)` — the flag token first, the narrative
+AFTER it) PASSES; the narrative-first shape FAILS naming both the
+received first token and the full field value.
+
 Run (the check line): python3 -m unittest scripts/test_wrap_assert.py -v
 """
 
@@ -1098,6 +1111,29 @@ def _vs_fields_with_eval_commit(value):
     return [(k, value if k == "eval-commit" else v) for k, v in VS_FIELDS]
 
 
+# T307 fixtures: the cycle-2039 filing fire's state-drift pair. The
+# prose-after-token shape is the schema contract the boot delta builder's
+# own comment names (`none — first write (bootstrap; …)`, the 1978 wrap's
+# `none (the boot STATE-HIT: …)`: the flag token FIRST, the prose AFTER
+# it). The narrative-first shape is what the 2035 wrap's state FULL
+# recompose actually wrote — the healed event's NARRATIVE in the flag
+# position — so the 2039 boot's delta re-flagged FULL-READ REQUIRED
+# (state-drift-flagged) with the marker HEALED and reachable (fail-safe,
+# zero routing consequence; the latch the write-side leg exists to close).
+T307_PROSE_AFTER_TOKEN = (
+    "none (the boot STATE-HIT: the slim path holds, re-arm 373rd discharged)"
+)
+T307_NARRATIVE_FIRST = (
+    "FULL-READ REQUIRED (marker-unreachable) at the boot - the 2035 wrap's "
+    "composition miss: the healed event's narrative in the flag position"
+)
+
+
+def _vs_fields_with_state_drift(value):
+    """VS_FIELDS with the `state-drift` value swapped to *value* (T307)."""
+    return [(k, value if k == "state-drift" else v) for k, v in VS_FIELDS]
+
+
 def _vs_composed_ring():
     """The composed ring: 8 prepended + 4 carried = 12 (a full rotation)."""
     return _vs_batch(8) + VS_CARRIED
@@ -1417,6 +1453,41 @@ class ValidateStateTest(unittest.TestCase):
         self.assertIn("expected_eval_commit", msg)
         self.assertIn("PROBED full hash", msg)
         self.assertIn("type int", msg)
+
+    def test_pass_state_drift_prose_after_none_token_is_green(self):
+        # T307 PASS path: the prose-after-token shape the schema contract
+        # names — the flag token `none` FIRST, the narrative AFTER it (the
+        # 1978 wrap's `none (the boot STATE-HIT: …)` shape) — rides the
+        # first-token leg GREEN: the T304 first-token semantics mirrored
+        # write-side, prose after `none` stays legal.
+        text = _vs_text(
+            fields=_vs_fields_with_state_drift(T307_PROSE_AFTER_TOKEN)
+        )
+        wrap_assert.validate_state(text)
+
+    def test_fail_narrative_first_state_drift_names_token_and_field(self):
+        # T307 FAIL path, the cycle-2039 filing fire's exact shape: the
+        # 2035 wrap's state FULL recompose wrote the healed event's
+        # NARRATIVE in the flag position — the field is non-empty (the
+        # pre-leg facade passed it, the field gated NON-EMPTY only) and
+        # its FIRST whitespace-token is not `none`, so the 2039 boot's
+        # delta re-flagged FULL-READ REQUIRED with the marker HEALED and
+        # reachable (every genuine drift event re-flags the next boot —
+        # the permanent latch). The failure names BOTH the received first
+        # token and the full field value (the T270 reporting requirement —
+        # never a bare constant), plus the composition contract that
+        # closes it.
+        text = _vs_text(
+            fields=_vs_fields_with_state_drift(T307_NARRATIVE_FIRST)
+        )
+        with self.assertRaises(AssertionError) as ctx:
+            wrap_assert.validate_state(text)
+        msg = str(ctx.exception)
+        self.assertIn("'FULL-READ'", msg)  # the received first token
+        self.assertIn(T307_NARRATIVE_FIRST, msg)  # the full field value
+        self.assertIn("state-drift", msg)  # the surface named
+        self.assertIn("first whitespace-token", msg)  # the flag position
+        self.assertIn("narrative AFTER the token", msg)  # the contract
 
 
 if __name__ == "__main__":

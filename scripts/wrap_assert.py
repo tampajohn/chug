@@ -77,6 +77,24 @@ already ride): the CALL SITE probes `git rev-parse <commit>` and passes
 the probed full hash in, the facade asserts the parsed field EQUALS it,
 naming both values on mismatch; without the keyword the leg is inert.
 
+T307 adds the state-drift first-token leg (the T304 arc's write-side
+half, the cycle-2039 filing fire): the 2035 wrap's state FULL recompose
+healed the eval-commit field (T306's leg rode green) but composed the
+drift field with the healed event's NARRATIVE in the flag position —
+`state-drift: FULL-READ REQUIRED (marker-unreachable) at the boot - …`
+— and every existing guard passed it, the field gated NON-EMPTY only;
+the 2039 boot's delta re-flagged FULL-READ REQUIRED
+(state-drift-flagged) with the marker HEALED and reachable (fail-safe
+by design, zero routing consequence; the structural hazard if unpinned:
+every genuine drift event permanently latches the slim path off, each
+wrap's narrative re-flagging the next boot). validate_state refuses a
+drift field whose FIRST whitespace-token is not exactly `none` — an
+INTRINSIC leg, no new keyword: the contract is the field's own (the
+flag token first, the prose AFTER it — a healed/adjudicated drift event
+writes `state-drift: none` with its narrative after the token, never
+the narrative in the flag position), mirroring eval-delta.sh's
+boot-time first-token compare write-side.
+
 Coverage (run by the check line): python3 -m unittest
 scripts/test_wrap_assert.py -v — the pre-T295 legs plus the validate_state
 facade legs.
@@ -804,7 +822,19 @@ def validate_state(
       1. FIELDS — read_key_values parses *text* and assert_fields_non_empty
          runs on the MAPPING (STATE_FIELD_KEYS, the nine `state_field`
          extractions the parser's field check reads), never on the raw text.
-      2. EVAL-COMMIT PROBED EQUALITY (when *expected_eval_commit* is
+      2. STATE-DRIFT FIRST TOKEN — the parsed `state-drift` field's FIRST
+         whitespace-token must be exactly `none` (an intrinsic leg, no new
+         keyword: the contract is the field's own). eval-delta.sh's
+         boot-time delta build reads the same first token and flags
+         FULL-READ REQUIRED (state-drift-flagged) on anything else, so a
+         healed/adjudicated drift event writes the token `none` with its
+         narrative AFTER it — `none (the boot STATE-HIT: …)` — never the
+         narrative in the flag position (the 2035 wrap's composition miss
+         is the named counter-example: its narrative-first field re-flagged
+         every later boot on the HEALED state, the permanent latch this
+         leg closes). The mismatch names BOTH the received first token and
+         the full field value (the T270 reporting requirement).
+      3. EVAL-COMMIT PROBED EQUALITY (when *expected_eval_commit* is
          supplied) — the parsed `eval-commit` field must EQUAL the supplied
          probed full hash; the mismatch names BOTH the probed field value
          and the supplied probed actual (the T270 reporting requirement).
@@ -817,10 +847,10 @@ def validate_state(
          compatible with every existing call site (the field stays
          NON-EMPTY-checked only; eval-delta.sh's boot-time fail-closed
          marker check is the other half, unchanged).
-      3. RING COUNT + UNIQUENESS — the full LINES feed assert_ring_count +
+      4. RING COUNT + UNIQUENESS — the full LINES feed assert_ring_count +
          assert_ring_unique, the capacity PROBED from the ring header's own
          `last N` (never a remembered 12 — the T288 letter).
-      4. SPLICE (when *prev_ring_lines* is supplied) — the new ring is
+      5. SPLICE (when *prev_ring_lines* is supplied) — the new ring is
          extracted via ring_section_lines and assert_ring_splice runs on
          the EXTRACTED lines: the prepended count PROBED from the two
          rings' own decision ids (_probe_prepended, never a remembered
@@ -829,7 +859,7 @@ def validate_state(
          from BOTH sides first — formatting noise, not carried content
          (the unique gate's own blank exemption) — so a section after the
          ring cannot false-fire the length arithmetic.
-      4. CORPUS-TAIL IDENTITY (when *corpus_tail_ids* is supplied) — the
+      6. CORPUS-TAIL IDENTITY (when *corpus_tail_ids* is supplied) — the
          extracted ring's decision ids must equal the supplied tail ids IN
          ORDER; the mismatch names the probed ring ids, the supplied tail
          ids, and the first divergence. The identity read goes through
@@ -922,7 +952,35 @@ def validate_state(
     #    parsed mapping is reused by the eval-commit leg below).
     fields = read_key_values(text)
     assert_fields_non_empty(fields, STATE_FIELD_KEYS)
-    # 2. EVAL-COMMIT PROBED EQUALITY — the parsed field equals the probed
+    # 2. STATE-DRIFT FIRST TOKEN — the intrinsic write-side half of the
+    #    T304 first-token semantics: eval-delta.sh's boot-time delta build
+    #    reads the field's FIRST whitespace-token and flags FULL-READ
+    #    REQUIRED (state-drift-flagged) on anything but exactly `none`, so
+    #    the flag position belongs to the token — a healed/adjudicated
+    #    drift event is written `state-drift: none` with the narrative
+    #    AFTER the token (`none (the boot STATE-HIT: …)`), never the
+    #    narrative in the flag position (the 2035 wrap's composition miss:
+    #    its narrative-first field re-flagged every later boot on the
+    #    HEALED state — the permanent latch that would defeat T260's
+    #    slim-path re-arm after the first drift).
+    drift_value = fields.get("state-drift", "")
+    drift_token = drift_value.split(None, 1)[0] if drift_value else ""
+    if drift_token != "none":
+        raise AssertionError(
+            f"validate_state: the state-drift first-token leg broke — the "
+            f"parsed `state-drift` field's first whitespace-token "
+            f"{drift_token!r} != 'none' (the full field value "
+            f"{drift_value!r}) — a healed/adjudicated drift event is "
+            f"written `state-drift: none` with the narrative AFTER the "
+            f"token (the T304 first-token semantics mirrored write-side: "
+            f"eval-delta.sh's boot compare flags FULL-READ REQUIRED "
+            f"(state-drift-flagged) on anything but the `none` token), "
+            f"never the narrative in the flag position (the 2035 wrap's "
+            f"composition miss wrote the healed event's narrative there "
+            f"and every later boot re-flagged the HEALED state — the "
+            f"permanent latch this leg exists to close)"
+        )
+    # 3. EVAL-COMMIT PROBED EQUALITY — the parsed field equals the probed
     #    hash the CALL SITE passed in (the call site probes `git rev-parse
     #    <commit>`; the facade only asserts the equality, naming BOTH
     #    values on mismatch — the T270 reporting requirement).
@@ -942,12 +1000,12 @@ def validate_state(
                 f"dispositions, caught by the boot delta's fail-closed "
                 f"FULL-READ verdict; triage d1792968241-2)"
             )
-    # 3. COUNT + UNIQUENESS — the LINES surface (each helper probes the
+    # 4. COUNT + UNIQUENESS — the LINES surface (each helper probes the
     #    capacity from the ring header's own `last N`).
     lines = text.splitlines()
     assert_ring_count(lines)
     assert_ring_unique(lines)
-    # 4. SPLICE — the EXTRACTED-lines surface, blanks dropped both sides.
+    # 5. SPLICE — the EXTRACTED-lines surface, blanks dropped both sides.
     if prev_ring_lines is not None:
         header, _, _ = _ring_section_bounds(
             lines, "validate_state", _where(lines)
@@ -958,7 +1016,7 @@ def validate_state(
         prev_lines = [line for line in prev_ring_lines if line != ""]
         prepended = _probe_prepended(new_ring, prev_lines)
         assert_ring_splice(prev_lines, new_ring, prepended, capacity=capacity)
-    # 5. CORPUS-TAIL IDENTITY — the extracted ring ids == the supplied tail.
+    # 6. CORPUS-TAIL IDENTITY — the extracted ring ids == the supplied tail.
     if corpus_tail_ids is not None:
         actual_ids = _ring_ids(ring_section_lines(lines))
         expected_ids = list(corpus_tail_ids)
