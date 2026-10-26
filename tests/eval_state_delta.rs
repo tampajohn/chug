@@ -596,6 +596,47 @@ fn unreachable_marker_is_full_read() {
     );
 }
 
+// The wrap's state writers legitimately carry provenance prose after the
+// eval-commit hash (the cycle-2087 wrap's recompose wrote
+// `eval-commit: 7d3947c… probed` — the bare hash is a real commit, but the
+// whole-field rev-parse failed on the suffix and every delta build since
+// reported marker-unreachable). Like the drift gate (T304), the marker gate
+// consumes the field's FIRST whitespace token: prose-tolerant, never
+// prose-lenient — a garbage FIRST token still fails closed.
+
+#[test]
+fn eval_commit_with_prose_resolves_as_the_bare_hash() {
+    let f = Fixture::new("marker-prose");
+    let marker = f.head();
+    f.set_state(
+        &state_text(&format!("{marker} probed"), "none", &refs(&ring(1))),
+        true,
+    );
+    let (_, delta) = run_delta(&f.dir);
+    assert_eq!(
+        verdict(&delta),
+        "STATE-HIT",
+        "hash-plus-prose must resolve exactly as the bare hash: {delta}"
+    );
+    assert_eq!(reason(&delta), "", "not marker-unreachable: {delta}");
+}
+
+#[test]
+fn eval_commit_garbage_first_token_is_still_full_read() {
+    // Fail-closed preserved: only the field's FIRST token is resolved; if
+    // that token is not a commit the verdict stays FULL-READ (the prose
+    // never rescues an unresolvable marker).
+    let f = Fixture::new("marker-prose-garbage");
+    f.set_state(&state_text("zzzzzzz probed", "none", &refs(&ring(1))), true);
+    let (_, delta) = run_delta(&f.dir);
+    assert_eq!(verdict(&delta), "FULL-READ REQUIRED", "{delta}");
+    let r = reason(&delta);
+    assert!(
+        r.starts_with("marker-unreachable") && r.contains("zzzzzzz"),
+        "{delta}"
+    );
+}
+
 #[test]
 fn git_unavailable_is_full_read() {
     let f = Fixture::new("no-git");

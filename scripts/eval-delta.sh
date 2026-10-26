@@ -190,6 +190,14 @@ else
       REASON="git-unavailable (marker ancestry unverifiable)"
     else
       MARKER=$(state_field "$STATE" eval-commit)
+      # The schema's token is the field's FIRST word; the writers carry
+      # provenance prose after the bare hash (the 2087 wrap's
+      # `eval-commit: 7d3947c… probed` unreach'd a resolvable marker for
+      # every delta build after it). First-token extract, mirroring the
+      # drift gate's documented contract: a bare-hash field is
+      # byte-identical, a hash-plus-prose field resolves exactly as the
+      # bare hash, and a garbage FIRST token still fails closed below.
+      MARKER=${MARKER%%[[:space:]]*}
       if ! g rev-parse --verify --quiet "${MARKER}^{commit}" >/dev/null; then
         VERDICT="FULL-READ REQUIRED"
         REASON="marker-unreachable (${MARKER} is not a commit in this repo)"
