@@ -1102,7 +1102,15 @@ alike) has been harvested.
   found three committed corridor texts falsified at their own named stamps
   in one window — the 1910 notes' `32 iters`, the 1910 fill's `55 iters`,
   the 1982 fill's `ok:false 4 == 4` + `trim 0 == 0` — each figure composed
-  at an earlier stamp and carried forward).
+  at an earlier stamp and carried forward). The fill compose leg's
+  pre-commit assert RE-RUNS `scripts/stream_datum.py` at the fill stamp in
+  the SAME leg and verifies the fill text carries its exact figures (iters
+  / wall-seconds / both stream anchors) via `scripts/wrap_assert.py`'s
+  datum leg (`assert_fill_datum`, T309: the cycle-2240 fill 8ea1079 wrote
+  72/1,225.624 composed from the PRIOR probe plus a projected delta BEFORE
+  the same leg's helper run printed the TRUE 73/1,223.542, corrected
+  forward eae4d90 — the class's 4th sighting) — the compose-time catch
+  over the same-wrap correction commit.
 - Final gates green in main (build + clippy + step 5's T82 gate runner —
   `cargo nextest run --release` when `cargo nextest` is on PATH, else
   `cargo test --release`) → push anything

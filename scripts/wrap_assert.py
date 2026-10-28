@@ -95,9 +95,26 @@ writes `state-drift: none` with its narrative after the token, never
 the narrative in the flag position), mirroring eval-delta.sh's
 boot-time first-token compare write-side.
 
+T309 adds the fill-datum leg (the corridor-figure falsification class's
+4th-sighting guard, the cycle-2240 wrap): fill 8ea1079's committed FINAL
+datum block read "72 iters / ~1,225.624s wall [2026-10-28T12:08:22.432Z ->
+2026-10-28T12:28:48.056Z]" against the TRUE helper-generated record at the
+stamp (73 iters / ~1,223.542s wall [-> 2026-10-28T12:28:45.974Z]) — the
+figures composed from the PRIOR probe plus a projected delta, written into
+the heredoc payload BEFORE the same leg's scripts/stream_datum.py run
+printed the actuals (the compose-from-projection shape the T305 doctrine
+bans; three fires in the last 28 cycles show the sentence alone does not
+extinguish the habit). assert_fill_datum is the mechanical tooth: the fill
+compose leg re-runs the helper at the fill stamp in the SAME pre-commit leg
+and passes its stdout IN as the probed actual; the function asserts the
+composed text carries that run's exact iters / wall-seconds / both stream
+anchors — the compose-time catch over the same-wrap correction commit, the
+fire zero-mutation by construction (both arguments are strs; nothing is
+opened or written).
+
 Coverage (run by the check line): python3 -m unittest
 scripts/test_wrap_assert.py -v — the pre-T295 legs plus the validate_state
-facade legs.
+facade legs and the T309 fill-datum legs.
 """
 
 __all__ = [
@@ -114,6 +131,7 @@ __all__ = [
     "assert_ring_unique",
     "assert_ring_splice",
     "validate_state",
+    "assert_fill_datum",
 ]
 
 
@@ -1048,3 +1066,243 @@ def validate_state(
                 f"matched five non-ring open-threads bullets ahead of the "
                 f"ring section, the 105th fire)"
             )
+
+
+# _datum_figures(datum_output) — INTERNAL; e.g. _datum_figures(helper_stdout)
+_FILL_DATUM_KEYS = ("iters", "first-anchor", "last-anchor", "wall-secs")
+
+
+def _datum_figures(datum_output):
+    """The four asserted figures read off the helper's `key: value` stdout.
+
+    The read_key_values shape scoped to the datum keys (a `key: ` prefix
+    match, so `ok-false-legs` never reads as `ok-false`). Fail-closed: a
+    datum_output missing any figure — or carrying `none` for one (the
+    helper's unparsable-anchor emission) — raises AssertionError naming the
+    probed line(s); a datum without the figures cannot be asserted against,
+    and a silent pass would wave a wrong-stream probe GREEN.
+    """
+    probed = {}
+    for line in datum_output.splitlines():
+        for key in _FILL_DATUM_KEYS:
+            if line.startswith(key + ":"):
+                probed[key] = line[len(key) + 1:].strip()
+    problems = []
+    for key in _FILL_DATUM_KEYS:
+        value = probed.get(key)
+        if value is None:
+            problems.append(f"no `{key}:` line in the supplied datum_output")
+        elif value == "" or value == "none":
+            problems.append(f"the probed `{key}:` figure is {value!r}")
+        elif key == "iters" and not value.isdigit():
+            problems.append(
+                f"the probed `iters:` figure {value!r} is not a digit count"
+            )
+    if problems:
+        raise AssertionError(
+            "assert_fill_datum: the supplied datum_output carries no "
+            "assertable figure(s) — " + "; ".join(problems) + " — the "
+            "helper output passed in must be a FRESH `python3 "
+            "scripts/stream_datum.py <events> --at <fill-stamp>` stdout "
+            "probed in the SAME pre-commit leg (iters / first-anchor / "
+            "last-anchor / wall-secs all printed); a datum without the "
+            "figures fails closed (never a silent pass)"
+        )
+    return probed
+
+
+# _fill_datum_blocks(text) — INTERNAL; e.g. _fill_datum_blocks(composed_text)
+_FILL_WS = " \t\r\n"
+_FILL_TS_CHARS = "-T:.Z"
+
+
+def _take_ts(text, p):
+    """Consume the timestamp-shaped token at *p* ([0-9T:.Z-]+); (token, end)."""
+    n = len(text)
+    start = p
+    while p < n and (text[p].isdigit() or text[p] in _FILL_TS_CHARS):
+        p += 1
+    return text[start:p], p
+
+
+def _fill_datum_blocks(text):
+    """The `N iters / ~W.WWWs wall [START -> END` blocks in *text*.
+
+    Hand-scanned (the module stays import-free — no `re`): each literal
+    `iters` marker reads as a datum block iff a digit count precedes it and
+    the `/ ~WALL s wall [ ANCHOR -> ANCHOR` shape follows (whitespace
+    tolerant, so a wrapped commit message still scans); any other
+    occurrence is prose and skipped. Returns the (iters, wall, first, last)
+    4-tuples in stream order.
+    """
+    blocks = []
+    pos = 0
+    n = len(text)
+    while True:
+        i = text.find("iters", pos)
+        if i < 0:
+            return blocks
+        pos = i + len("iters")
+        k = i
+        while k > 0 and text[k - 1] in _FILL_WS:
+            k -= 1
+        d_end = k
+        while k > 0 and text[k - 1].isdigit():
+            k -= 1
+        iters = text[k:d_end]
+        if not iters:
+            continue
+        p = pos
+        while p < n and text[p] in _FILL_WS:
+            p += 1
+        if p >= n or text[p] != "/":
+            continue
+        p += 1
+        while p < n and text[p] in _FILL_WS:
+            p += 1
+        if p >= n or text[p] != "~":
+            continue
+        p += 1
+        w_start = p
+        while p < n and (text[p].isdigit() or text[p] in ",."):
+            p += 1
+        wall = text[w_start:p]
+        if not wall or not any(c.isdigit() for c in wall):
+            continue
+        if p >= n or text[p] != "s":
+            continue
+        p += 1
+        while p < n and text[p] in _FILL_WS:
+            p += 1
+        if not text.startswith("wall", p):
+            continue
+        p += 4
+        while p < n and text[p] in _FILL_WS:
+            p += 1
+        if p >= n or text[p] != "[":
+            continue
+        first, p = _take_ts(text, p + 1)
+        while p < n and text[p] in _FILL_WS:
+            p += 1
+        if not text.startswith("->", p):
+            continue
+        p += 2
+        while p < n and text[p] in _FILL_WS:
+            p += 1
+        last, p = _take_ts(text, p)
+        blocks.append((iters, wall, first, last))
+        pos = p
+
+
+# assert_fill_datum(text, datum_output) — 2 probed strings, no path; e.g. assert_fill_datum(fill_text, fresh_stream_datum_stdout)
+def assert_fill_datum(text, datum_output):
+    """The fill's FINAL datum figures equal a FRESH helper run's (T309).
+
+    The corridor-figure falsification class's fourth sighting (the cycle-2240
+    fill 8ea1079, corrected forward eae4d90): the FINAL datum block was
+    composed from the PRIOR probe's figures plus a projected delta and
+    written into the heredoc payload BEFORE the same leg's
+    scripts/stream_datum.py run printed the actuals — the
+    compose-from-projection shape the T305 doctrine bans.
+
+    *datum_output* is the helper's OWN stdout (a str) from a FRESH
+    `python3 scripts/stream_datum.py <events> --at <fill-stamp>` run at
+    assertion time — passed IN as the probed actual (the T273 letter:
+    arguments are the probed actuals; the function never re-derives the
+    expectation from a remembered constant and never runs the helper
+    itself). *text* is the composed fill/wrap TEXT (a str). Either non-str
+    is the call-signature slip shape — TypeError naming the accepted shape.
+
+    The asserted surface is EXACTLY the four figures the helper prints for
+    the stream: the iterations count (`iters:`), the wall-seconds figure
+    (`wall-secs:`), and BOTH stream anchors (`first-anchor:` /
+    `last-anchor:`), each as the helper printed it. The block's other
+    figures (ok:false / ctx-edit / trim / goal / bytes / mtime) and the
+    display parenthetical derived FROM the wall figure (`PLAIN display 1223
+    == 20*60+23`) are NOT asserted — asserting the derived parenthetical
+    would double-count a figure the wall figure already pins.
+
+    The block shape scanned in *text* is the corpus's FINAL-datum
+    rendering, `N iters / ~W.WWWs wall [START -> END ...]`; the wall figure
+    may carry the corpus's comma grouping (~1,223.542s) — normalized
+    (commas stripped BOTH sides) before the compare — and the anchors
+    compare exactly as printed. The assertion passes iff at least one block
+    carries all four figures exactly (the fill carries ONE FINAL datum
+    block; a text legitimately quoting an earlier corridor datum stays
+    green because a FRESH run's stamp-figures cannot equal any earlier
+    probe's block). Zero blocks is the named-missing fire — a datum-less
+    fill is never a silent pass — and a datum_output missing any of the
+    four figures fails closed naming the probed line. The fire is
+    zero-mutation by construction: both arguments are strs, nothing is
+    opened or written.
+    """
+    if not isinstance(text, str):
+        raise TypeError(
+            f"assert_fill_datum(text, datum_output): text must be the "
+            f"composed fill/wrap TEXT (a str — the datum block the fill "
+            f"commits is asserted in memory, pre-write); probed text "
+            f"{text!r} (type {type(text).__name__})"
+        )
+    if not isinstance(datum_output, str):
+        probed = (
+            f"{len(datum_output)} probed line(s)"
+            if isinstance(datum_output, (list, tuple))
+            else repr(datum_output)
+        )
+        raise TypeError(
+            f"assert_fill_datum(text, datum_output): datum_output must be "
+            f"the helper's OWN stdout from a FRESH `python3 "
+            f"scripts/stream_datum.py <events> --at <fill-stamp>` run (a "
+            f"str — passed IN as the probed actual, never re-derived from a "
+            f"remembered constant); probed datum_output {probed} (type "
+            f"{type(datum_output).__name__})"
+        )
+    figures = _datum_figures(datum_output)
+    blocks = _fill_datum_blocks(text)
+    if not blocks:
+        raise AssertionError(
+            "assert_fill_datum: no FINAL datum block found in the composed "
+            "fill text — zero `N iters / ~W.WWWs wall [START -> END ...]` "
+            "blocks probed (the named-missing fire, never a silent pass); "
+            "the fill must carry the datum block GENERATED by "
+            "scripts/stream_datum.py at its named stamp (the T305 "
+            "doctrine), its figures composed from the SAME pre-commit "
+            "leg's fresh helper run — re-run the helper at the fill stamp "
+            "and compose the block from its stdout"
+        )
+    reports = []
+    for idx, (iters, wall, first, last) in enumerate(blocks, 1):
+        divergent = []
+        if iters != figures["iters"]:
+            divergent.append(f"iters {iters!r} != probed {figures['iters']!r}")
+        if wall.replace(",", "") != figures["wall-secs"].replace(",", ""):
+            divergent.append(
+                f"wall {wall!r} (comma-normalized {wall.replace(',', '')!r})"
+                f" != probed {figures['wall-secs']!r}"
+            )
+        if first != figures["first-anchor"]:
+            divergent.append(
+                f"first-anchor {first!r} != probed {figures['first-anchor']!r}"
+            )
+        if last != figures["last-anchor"]:
+            divergent.append(
+                f"last-anchor {last!r} != probed {figures['last-anchor']!r}"
+            )
+        if not divergent:
+            return
+        reports.append(
+            f"datum block {idx} of {len(blocks)} probed ({iters} iters / "
+            f"~{wall}s wall [{first} -> {last}]): " + "; ".join(divergent)
+        )
+    raise AssertionError(
+        f"assert_fill_datum: the fill text's datum block(s) diverge from "
+        f"the helper's probed figures — " + " | ".join(reports) + " — the "
+        "figures must be GENERATED by scripts/stream_datum.py at their "
+        "named stamp and carried VERBATIM into the fill (the T305 "
+        "doctrine; the cycle-2240 fill 8ea1079 composed 72/1,225.624 from "
+        "the PRIOR probe plus a projected delta BEFORE the same leg's "
+        "helper run printed the TRUE 73/1,223.542 — corrected forward "
+        "eae4d90, the class's 4th sighting): re-run the helper at the fill "
+        "stamp in the SAME pre-commit leg and compose the figures from its "
+        "stdout, never from a remembered/projected figure"
+    )
