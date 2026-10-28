@@ -1605,6 +1605,34 @@ class AssertFillDatumTest(unittest.TestCase):
         self.assertIn("8ea1079", msg)  # the fire named
         self.assertIn("T305", msg)  # the doctrine named
 
+    def test_fail_start_anchor_divergence_named(self):
+        # The start anchor's kill-proof (the sweep-the-family finding:
+        # every asserted surface needs a RED-proven killing test). The
+        # eae4d90 fixture's anchors MATCH by construction — iters / wall /
+        # last-anchor carry their kill-proofs there, but the first-anchor
+        # surface had none, so the mutant dropping the first-anchor
+        # compare survived the suite green. A start-anchor-ONLY
+        # divergence (a stale-probe anchor) fires naming it — and ONLY
+        # it: the matched iters / wall / last-anchor are not reported
+        # divergent (the T270 reporting requirement).
+        text = _t309_fill(
+            T309_TRUE_BLOCK.replace(
+                "2026-10-28T12:08:22.432Z", "2026-10-28T12:07:00.000Z", 1
+            )
+        )
+        with self.assertRaises(AssertionError) as ctx:
+            wrap_assert.assert_fill_datum(text, T309_TRUE_DATUM)
+        msg = str(ctx.exception)
+        self.assertIn(
+            "first-anchor '2026-10-28T12:07:00.000Z' != probed "
+            "'2026-10-28T12:08:22.432Z'",
+            msg,
+        )
+        self.assertEqual(msg.count("!= probed"), 1)  # one divergent figure
+        self.assertNotIn("!= probed '73'", msg)
+        self.assertNotIn("!= probed '1223.542'", msg)
+        self.assertNotIn("!= probed '2026-10-28T12:28:45.974Z'", msg)
+
     def test_fail_fire_is_pre_write_zero_mutation(self):
         # The fire is designed pre-commit: both arguments are strs, the
         # function opens and writes NOTHING — the tempdir is byte-unchanged
