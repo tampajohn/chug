@@ -1110,7 +1110,18 @@ alike) has been harvested.
   72/1,225.624 composed from the PRIOR probe plus a projected delta BEFORE
   the same leg's helper run printed the TRUE 73/1,223.542, corrected
   forward eae4d90 — the class's 4th sighting) — the compose-time catch
-  over the same-wrap correction commit.
+  over the same-wrap correction commit. The fill compose leg's pre-commit
+  assert ALSO re-enumerates the stream's `ok:false` legs at the fill stamp
+  in the SAME leg (`jq -c 'select(.type=="tool_result" and .ok==false)'
+  .chug/events.jsonl | wc -l`, the count captured into a shell variable —
+  probed values ride argv/env into the script, never literal-composed) and
+  verifies the fill text's enumeration figure carries the probed count via
+  `scripts/wrap_assert.py`'s enumeration leg (`assert_fill_enumeration`,
+  T310: the cycle-2244 fill 5b5e38f wrote "ok:false 4 == 4" at its
+  14:03:44Z stamp against the mechanical 5 — the recompose-after-guard-fire
+  updated the datum figures, never re-ran the enumeration — corrected
+  forward per T70 at the cycle-2248 eval's establishment) — the same
+  compose-time catch for the enumeration surface.
 - Final gates green in main (build + clippy + step 5's T82 gate runner —
   `cargo nextest run --release` when `cargo nextest` is on PATH, else
   `cargo test --release`) → push anything

@@ -117,6 +117,50 @@ iters) FAILS closed; non-str arguments TypeError naming the accepted
 shape; the correction-quote shape (both blocks in one text) stays GREEN —
 a FRESH run's stamp-figures cannot equal any earlier probe's block.
 
+T309 adds the fill-datum leg coverage (the corridor-figure falsification
+class's 4th sighting, the cycle-2240 wrap): fill 8ea1079's committed FINAL
+datum block (72 iters / ~1,225.624s wall [-> 12:28:48.056Z]) vs the TRUE
+helper record at the stamp (73 / ~1,223.542s [-> 12:28:45.974Z]) — composed
+from the PRIOR probe plus a projected delta BEFORE the same leg's
+scripts/stream_datum.py run printed the actuals. Legs: the fill text
+carrying the helper's exact figures (the corpus's comma-grouped wall
+rendering, the uncommaed form, a wrapped marker) PASSES; the eae4d90 shape
+FAILS pre-write naming every divergent figure (iters, wall, the end anchor
+— the matching start anchor is NOT reported) with the tempdir
+byte-unchanged (zero mutation); the PLAIN display parenthetical (it
+derives from the wall figure) and the block's other adjudication figures
+(ok:false / trim) are OUTSIDE the asserted surface — divergent ones stay
+GREEN; a datum-less fill FAILS named-missing (never a silent pass); a
+degenerate datum_output (a `none` figure, a missing line, a non-digit
+iters) FAILS closed; non-str arguments TypeError naming the accepted
+shape; the correction-quote shape (both blocks in one text) stays GREEN —
+a FRESH run's stamp-figures cannot equal any earlier probe's block.
+
+T310 adds the fill-enumeration leg coverage (the T272 false-at-write
+class's newest fire, the cycle-2244 wrap fill 5b5e38f): the committed
+FINAL datum block reads "ok:false 4 == 4 adjudicated" at its named
+2026-10-28T14:03:44Z stamp while the mechanical whole-final enumeration
+finds FIVE `ok:false` legs at that stamp — the fifth the 14:03:24.421Z
+assert_fill_datum AssertionError (the T309 guard's first production fire,
+itself the designed pre-commit catch). The recompose-after-guard-fire
+updated the datum figures (the T309 leg forced that) but NOT the
+enumeration — a read taken earlier, not re-run before the write. Legs:
+the TRUE enumeration figure (5 == 5, the mechanical count) PASSES (also
+the bare `ok:false K` head-figure shape, the wrapped rendering, and a
+legitimate 0 count); the 5b5e38f falsified figure (4 against the probed
+5) FAILS naming BOTH figures with the tempdir byte-unchanged (zero
+mutation); a datum-less fill FAILS named-missing (never a silent pass);
+a degenerate probed_count (a str, None, a bool, negative) FAILS closed
+naming the probed value; non-str text / probed_stamp TypeError naming
+the accepted shapes (the pre-split line list is the text slip shape);
+the any-block semantics (a stale + TRUE block pair) stays GREEN — the
+TRUE block redeems the text, the freshness contract riding the compose
+leg's SAME-leg re-probe (the T282 channel half) rather than the datum
+leg's stamp-moves argument; RED-provability hand-proved by mutants run
+on a copy (the count compare deleted → the falsified leg goes red; the
+zero-block fire silent-passed → the named-missing leg goes red), the
+module restored byte-identical after each run.
+
 Run (the check line): python3 -m unittest scripts/test_wrap_assert.py -v
 """
 
@@ -1752,6 +1796,300 @@ class AssertFillDatumTest(unittest.TestCase):
                 both, T309_TRUE_DATUM.replace("wall-secs: 1223.542",
                                               "wall-secs: none")
             )
+
+
+# ---- T310: the fill-enumeration leg (assert_fill_enumeration) ----
+
+T310_FILL_STAMP = "2026-10-28T14:03:44Z"
+# The mechanical enumeration the compose leg probes at the fill stamp (the
+# T282 channel half: probed values ride argv/env into the script, never
+# literal-composed) — the cycle-2244 stream's whole-final `ok:false`-leg
+# count is FIVE: the four legs the fill adjudicates plus the fifth, the
+# 14:03:24.421Z assert_fill_datum AssertionError (the T309 guard's own
+# first production fire, itself the designed pre-commit catch).
+T310_PROBED_COUNT = 5
+# The corpus's FINAL-enumeration rendering: the TRUE figure (the mechanical
+# 5) and the falsified 5b5e38f figure (the pre-fire probe's read, taken
+# BEFORE the datum-leg guard fired).
+T310_TRUE_BLOCK = (
+    "ok:false 5 == 5 adjudicated [[1] the 13:44:45.635Z M4-reproof needle "
+    "assert-miss [read-only, recomposed grep-verified the very next leg] + "
+    "[2] the 13:52:18.630Z git-add gitignore refusal [the DESIGNED refusal] "
+    "+ [3] the 14:00:55.442Z facade TypeError [read-only] + [4] the "
+    "14:01:04.251Z assert_ring_splice AssertionError [the prepend-12/"
+    "carry-0 REFUSAL, zero mutation] + [5] the 14:03:24.421Z "
+    "assert_fill_datum AssertionError [the T309 datum-leg guard's first "
+    "production fire, the designed pre-commit catch], 0-REAL]"
+)
+T310_FALSIFIED_BLOCK = (
+    "ok:false 4 == 4 adjudicated [[1] the 13:44:45.635Z M4-reproof needle "
+    "assert-miss [read-only, recomposed grep-verified the very next leg] + "
+    "[2] the 13:52:18.630Z git-add gitignore refusal [the DESIGNED refusal] "
+    "+ [3] the 14:00:55.442Z facade TypeError [read-only] + [4] the "
+    "14:01:04.251Z assert_ring_splice AssertionError [the prepend-12/"
+    "carry-0 REFUSAL, zero mutation], 0-REAL]"
+)
+
+
+# The corpus's FINAL-datum rendering is one physical line in the commit
+# subject, but a fill BODY wraps — a multi-line TRUE fixture (the
+# line-agnostic scan) doubling as the pre-split line-list slip shape's
+# source (7 lines).
+T310_MULTILINE_FILL = "\n".join(
+    [
+        "eval: cycle-2244 wrap fill - the state write landed [FACADE-GREEN]",
+        "FINAL datum at the fill stamp [GENERATED by scripts/stream_datum.py",
+        f"per the T305 doctrine, {T310_FILL_STAMP}]: 159 iters / ~4,147.136s",
+        "wall [2026-10-28T12:54:37.339Z -> 2026-10-28T14:03:44.475Z off the",
+        f"stream anchors]: {T310_TRUE_BLOCK}",
+        "+ ctx_edit 1 accepted / 1 rejected + trim 1 == 1 + goal 0 at the "
+        "stamp",
+        "the wrap final todo flips land BEFORE the goal gate per T255",
+    ]
+)
+
+
+def _t310_fill(enum_block):
+    """A fill text carrying *enum_block* as its FINAL-datum enumeration."""
+    return (
+        "eval: cycle-2244 wrap fill - the state write landed "
+        "[FACADE-GREEN]; the fill-stamp pins re-verify 236/236 PINS-EXIT 0; "
+        "FINAL datum at the fill stamp [GENERATED by scripts/stream_datum.py "
+        f"per the T305 doctrine, {T310_FILL_STAMP}]: 159 iters / ~4,147.136s "
+        "wall [2026-10-28T12:54:37.339Z -> 2026-10-28T14:03:44.475Z off the "
+        "stream anchors; PLAIN display 4147 == 69*60+7]: "
+        f"{enum_block} + ctx_edit 1 accepted / 1 rejected + trim 1 == 1 + "
+        "goal 0 at the stamp"
+    )
+
+
+def _mutant_wrap_assert(pristine, old, new):
+    """A mutated COPY of wrap_assert.py exec'd in a fresh namespace.
+
+    The module itself is never written: the mutation rides an in-memory
+    exec of the mutated source string (the module is import-free, so the
+    exec needs nothing from sys.modules). The surgical-mutation self-check
+    (the T48 needle idiom) refuses a non-unique target.
+    """
+    assert pristine.count(old) == 1, "the mutation target must be unique"
+    namespace = {"__name__": "wrap_assert_mutant"}
+    exec(compile(pristine.replace(old, new), "<wrap_assert-mutant>", "exec"),
+         namespace)
+    return namespace
+
+
+class AssertFillEnumerationTest(unittest.TestCase):
+    def test_pass_true_enumeration_carried_exactly(self):
+        # T310 PASS path: the fill text carrying the mechanical count
+        # exactly (ok:false 5 == 5, the 5-after-fire figure) rides the
+        # enumeration leg green — the one-line subject shape AND a
+        # multi-line body shape (the scan is line-agnostic).
+        wrap_assert.assert_fill_enumeration(
+            _t310_fill(T310_TRUE_BLOCK), T310_PROBED_COUNT, T310_FILL_STAMP
+        )
+        wrap_assert.assert_fill_enumeration(
+            T310_MULTILINE_FILL, T310_PROBED_COUNT, T310_FILL_STAMP
+        )
+
+    def test_pass_bare_head_figure_and_wrapped_shapes(self):
+        # The bare `ok:false K` head-figure (the establishment prose's
+        # shape, `ok:false 5, ctx 1, trim 0, ...`) and the wrapped
+        # rendering (`ok:false 5 ==\n5` — a commit message wrapped
+        # mid-rendering) both carry the probed count: green. A legitimate
+        # 0 count is likewise green (0 is a count, never degenerate).
+        wrap_assert.assert_fill_enumeration(
+            _t310_fill(
+                "ok:false 5, ctx 1, trim 0, goal 1, 45,786 bytes + mtime "
+                "2026-10-28T14:03:46Z"
+            ),
+            T310_PROBED_COUNT,
+            T310_FILL_STAMP,
+        )
+        wrap_assert.assert_fill_enumeration(
+            _t310_fill(T310_TRUE_BLOCK.replace(
+                "ok:false 5 == 5", "ok:false 5 ==\n5")),
+            T310_PROBED_COUNT,
+            T310_FILL_STAMP,
+        )
+        wrap_assert.assert_fill_enumeration(
+            _t310_fill("ok:false 0 == 0 (none to adjudicate, 0-REAL)"),
+            0,
+            T310_FILL_STAMP,
+        )
+
+    def test_fail_falsified_count_names_both_figures(self):
+        # T310 FAIL path, the 5b5e38f shape exactly: the committed figure
+        # (4, the pre-fire probe's read) against the mechanical 5 (the
+        # fifth leg the T309 datum guard's own first fire). BOTH figures
+        # are named — the divergent block figure and the probed count —
+        # with the stamp, the fire, and the T272 false-at-write shape.
+        text = _t310_fill(T310_FALSIFIED_BLOCK)
+        with self.assertRaises(AssertionError) as ctx:
+            wrap_assert.assert_fill_enumeration(
+                text, T310_PROBED_COUNT, T310_FILL_STAMP
+            )
+        msg = str(ctx.exception)
+        self.assertIn("block figure '4' != probed 5", msg)
+        self.assertIn(T310_FILL_STAMP, msg)  # the probed enumeration stamp
+        self.assertIn("5b5e38f", msg)  # the fire named
+        self.assertIn("false-at-write", msg)  # the class named
+        self.assertIn("recompose", msg)  # the remedy named
+        self.assertIn("wc -l", msg)  # the mechanical enumeration named
+        self.assertIn("block 1 of 1", msg)
+        self.assertIn("the full FINAL-enumeration rendering (== 4)", msg)
+
+    def test_fail_zero_blocks_named_missing(self):
+        # A datum-less fill is NEVER a silent pass: zero enumeration
+        # blocks probed fires named-missing — including a fill carrying a
+        # datum block whose enumeration figure was dropped entirely, and
+        # prose that merely names the class (`ok:false count-0`,
+        # `ok:false-legs`) without a count figure.
+        for bare in (
+            "eval: cycle-2244 wrap fill - the state write landed "
+            "[FACADE-GREEN]; FINAL datum at the fill stamp: 159 iters / "
+            "~4,147.136s wall [2026-10-28T12:54:37.339Z -> "
+            "2026-10-28T14:03:44.475Z] + trim 1 == 1 + goal 0 at the stamp",
+            "the ok:false count-0 falsified at its own stamp",
+            "the ok:false-legs projection the compose leg re-runs",
+        ):
+            with self.assertRaises(AssertionError) as ctx:
+                wrap_assert.assert_fill_enumeration(
+                    bare, T310_PROBED_COUNT, T310_FILL_STAMP
+                )
+            msg = str(ctx.exception)
+            self.assertIn("no `ok:false K` enumeration figure", msg)
+            self.assertIn("named-missing", msg)
+            self.assertIn("never a silent pass", msg)
+            self.assertIn(T310_FILL_STAMP, msg)
+            self.assertIn("wc -l", msg)
+
+    def test_fail_degenerate_probed_count_fails_closed(self):
+        # A degenerate probed_count fails closed naming the probed value
+        # and its type — a str count, None, a bool (a bool is an int
+        # subclass; it is not a count), and a negative all refuse. The
+        # corpus's false-at-write shape: a literal-composed count riding
+        # the ARG can never wave the leg GREEN.
+        for bad, frag in (
+            ("5", "probed probed_count '5' (type str)"),
+            (None, "probed probed_count None (type NoneType)"),
+            (True, "probed probed_count True (type bool)"),
+            (-1, "probed probed_count -1 (type int)"),
+        ):
+            with self.assertRaises(AssertionError) as ctx:
+                wrap_assert.assert_fill_enumeration(
+                    _t310_fill(T310_TRUE_BLOCK), bad, T310_FILL_STAMP
+                )
+            msg = str(ctx.exception)
+            self.assertIn("fails closed", msg)
+            self.assertIn(frag, msg)
+
+    def test_fail_non_str_arguments_raise_type_error(self):
+        # The interface defense: *text* is the composed TEXT and
+        # *probed_stamp* is the probed stamp STR — a pre-split line list
+        # is the text call-signature slip shape (the caller passes the
+        # composed text verbatim), so it TypeErrors naming the shape.
+        with self.assertRaises(TypeError) as ctx:
+            wrap_assert.assert_fill_enumeration(
+                7, T310_PROBED_COUNT, T310_FILL_STAMP
+            )
+        msg = str(ctx.exception)
+        self.assertIn("TEXT", msg)
+        self.assertIn("type int", msg)
+        with self.assertRaises(TypeError) as ctx:
+            wrap_assert.assert_fill_enumeration(
+                T310_MULTILINE_FILL.splitlines(),
+                T310_PROBED_COUNT,
+                T310_FILL_STAMP,
+            )
+        msg = str(ctx.exception)
+        self.assertIn("7 probed line(s)", msg)
+        self.assertIn("type list", msg)
+        with self.assertRaises(TypeError) as ctx:
+            wrap_assert.assert_fill_enumeration(
+                _t310_fill(T310_TRUE_BLOCK), T310_PROBED_COUNT, None
+            )
+        msg = str(ctx.exception)
+        self.assertIn("probed_stamp", msg)
+        self.assertIn("type NoneType", msg)
+
+    def test_pass_any_block_stale_plus_true_redeemed(self):
+        # The any-block semantics (the datum leg's rule): one text quoting
+        # BOTH the stale pre-fire figure and the TRUE recompose figure
+        # stays GREEN — the TRUE block redeems the text. Unlike the datum
+        # leg's stamp-moves safety argument, a bare count CAN repeat
+        # across streams — the freshness contract rides the compose leg's
+        # SAME-leg re-probe (the T282 channel half: the probed count is
+        # the live reading, captured into a shell variable, never
+        # literal-composed), not the any-block semantics.
+        both = _t310_fill(T310_FALSIFIED_BLOCK) + "\n" + _t310_fill(
+            T310_TRUE_BLOCK
+        )
+        wrap_assert.assert_fill_enumeration(
+            both, T310_PROBED_COUNT, T310_FILL_STAMP
+        )
+        # ...and the same text rides green against the stale figure's own
+        # count too (any-block), while a text carrying ONLY the stale
+        # figure still fires (the falsified-count leg above).
+
+    def test_fail_fire_is_pre_write_zero_mutation(self):
+        # The fire is designed pre-commit: all arguments are values, the
+        # function opens and writes NOTHING — the tempdir is byte-unchanged
+        # through the raise.
+        with tempfile.TemporaryDirectory() as tmp:
+            before = sorted(os.listdir(tmp))
+            with self.assertRaises(AssertionError):
+                wrap_assert.assert_fill_enumeration(
+                    _t310_fill(T310_FALSIFIED_BLOCK),
+                    T310_PROBED_COUNT,
+                    T310_FILL_STAMP,
+                )
+            self.assertEqual(sorted(os.listdir(tmp)), before)
+
+    def test_red_provability_mutants_run_on_a_copy(self):
+        # RED-provability, hand-proved by mutants run on a COPY: the
+        # module itself is never written (the mutation rides an in-memory
+        # exec of a mutated source string), and the on-disk module is
+        # re-read byte-identical after each run.
+        with open(wrap_assert.__file__, "r", encoding="utf-8") as f:
+            pristine = f.read()
+        falsified_text = _t310_fill(T310_FALSIFIED_BLOCK)
+        datumless_text = "eval: cycle-2244 wrap fill - no enumeration figure"
+        # The shipped module fires on both inputs (the legs above pin it;
+        # re-asserted here so the mutant contrast is self-contained).
+        with self.assertRaises(AssertionError):
+            wrap_assert.assert_fill_enumeration(
+                falsified_text, T310_PROBED_COUNT, T310_FILL_STAMP
+            )
+        with self.assertRaises(AssertionError):
+            wrap_assert.assert_fill_enumeration(
+                datumless_text, T310_PROBED_COUNT, T310_FILL_STAMP
+            )
+        # M1 — the count compare deleted (every block redeems): the
+        # falsified-count fire goes red (no raise under the mutant, where
+        # the shipped leg raises).
+        m1 = _mutant_wrap_assert(
+            pristine,
+            "        if int(head) == probed_count:",
+            "        if True:",
+        )
+        m1["assert_fill_enumeration"](
+            falsified_text, T310_PROBED_COUNT, T310_FILL_STAMP
+        )
+        # M2 — the zero-block fire silent-passed: the named-missing fire
+        # goes red (no raise under the mutant, where the shipped leg
+        # raises).
+        m2 = _mutant_wrap_assert(
+            pristine,
+            "        _fire_named_missing(probed_stamp)",
+            "        return",
+        )
+        m2["assert_fill_enumeration"](
+            datumless_text, T310_PROBED_COUNT, T310_FILL_STAMP
+        )
+        # The module restored byte-identical after each run (nothing was
+        # ever written — re-read and compared against the pristine read).
+        with open(wrap_assert.__file__, "r", encoding="utf-8") as f:
+            self.assertEqual(f.read(), pristine)
 
 
 if __name__ == "__main__":
