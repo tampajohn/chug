@@ -1121,7 +1121,27 @@ alike) has been harvested.
   14:03:44Z stamp against the mechanical 5 — the recompose-after-guard-fire
   updated the datum figures, never re-ran the enumeration — corrected
   forward per T70 at the cycle-2248 eval's establishment) — the same
-  compose-time catch for the enumeration surface.
+  compose-time catch for the enumeration surface. The fill compose leg's
+  pre-commit assert ALSO runs `scripts/wrap_assert.py`'s on-disk
+  state-schema leg (`assert_state_on_disk`, T311) against the committed
+  `.chug/eval-state.md` AFTER the wrap's state write: the leg reads the
+  file's bytes from disk and runs the FULL `validate_state` gate on the
+  read text (the eval-commit probed via
+  `git log -1 --format=%H -- EVALUATION.md` when gated; the
+  splice/corpus-tail legs inert — the on-disk state stands alone), so a
+  GREEN state-write claim is never composed without the mechanical run
+  over the on-disk file (T311: the cycle-2515 wrap's state recompose wrote
+  the state in a free-form prose format — zero of the nine pinned
+  `state_field` fields — every loopd build since fails CLOSED
+  `FULL-READ REQUIRED: schema-mismatch`, the enforcer working, yet fill
+  a66f604 claimed "state write FACADE-GREEN first attempt" while
+  validate_state on the COMMITTED bytes raises at the FIELDS leg — the
+  claim composed without a real run over the on-disk bytes, the corridor
+  having no post-write mechanical check that reads the on-disk state
+  through its actual consumer) — the same compose-time catch for the
+  on-disk surface; a refusal BLOCKS the fill commit — the state is
+  rewritten as the full single write (the cycle-309 precedent) and
+  re-gated before the fill push.
 - Final gates green in main (build + clippy + step 5's T82 gate runner —
   `cargo nextest run --release` when `cargo nextest` is on PATH, else
   `cargo test --release`) → push anything

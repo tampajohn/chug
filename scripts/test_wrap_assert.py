@@ -161,6 +161,25 @@ on a copy (the count compare deleted → the falsified leg goes red; the
 zero-block fire silent-passed → the named-missing leg goes red), the
 module restored byte-identical after each run.
 
+T311 adds the on-disk state-schema leg coverage (the 2515 false-GREEN
+class's durable gate, the T309/T310 fill-assert family's third leg): the
+cycle-2515 fill a66f604 claimed "state write FACADE-GREEN first attempt"
+while `validate_state` on the COMMITTED `.chug/eval-state.md` bytes
+raises AssertionError at the FIELDS leg — the claim composed without a
+real run over the on-disk bytes. assert_state_on_disk IS that run,
+wired into the fill compose leg's pre-commit assert (the SAME leg as
+the commit). Legs: the schema-conformant fixture on disk PASSES with and
+without expected_eval_commit; the 2515-shape prose fixture
+(`last-eval-commit:` substituted, zero schema fields, `## Delta pointer`
+/ `## Outcome-id ring` sections only) FAILS from the FIELDS leg naming
+the missing keys; a wrong probed hash FAILS naming BOTH the probed field
+value and the supplied actual (the T270 reporting requirement); a
+nonexistent path FAILS naming the probed path and the OS error (never an
+uncaught OSError); a non-str path TypeErrors naming the accepted shape
+(the call-signature-slip convention); the on-disk read is a REAL disk
+read (a mutate-after-write state fails the leg — the committed bytes,
+not a remembered draft, are what the gate runs).
+
 Run (the check line): python3 -m unittest scripts/test_wrap_assert.py -v
 """
 
@@ -2090,6 +2109,197 @@ class AssertFillEnumerationTest(unittest.TestCase):
         # ever written — re-read and compared against the pristine read).
         with open(wrap_assert.__file__, "r", encoding="utf-8") as f:
             self.assertEqual(f.read(), pristine)
+
+
+# ---- T311: the on-disk state-schema leg (assert_state_on_disk) ----
+
+# The 2515-shape prose state: the cycle-2515 wrap's state recompose wrote
+# `.chug/eval-state.md` in a free-form prose format — `last-eval-commit:`
+# substituted for `eval-commit:`, ZERO of the nine pinned `state_field`
+# fields, and none of the doctrine's pinned sections (only the non-schema
+# `## Delta pointer` / `## Outcome-id ring`). Every loopd delta build since
+# fails CLOSED (`FULL-READ REQUIRED: schema-mismatch`, the enforcer
+# working) — yet fill a66f604 claimed "state write FACADE-GREEN first
+# attempt" while validate_state on these committed bytes raises
+# AssertionError at the FIELDS leg (RED-proven at the 597th eval).
+T311_PROSE_STATE = (
+    "## Delta pointer\n"
+    "\n"
+    "last-eval-commit: a66f604 (the 2515 wrap's substituted field — the\n"
+    "schema's eval-commit field never written)\n"
+    "next delta: builds from EVALUATION.md at the next boot\n"
+    "\n"
+    "## Outcome-id ring (last 5, newest first)\n"
+    "- o-2515: the wrap's outcome record, prose format (not the schema's\n"
+    "decision ring)\n"
+    "- o-2514: the prior cycle's outcome record\n"
+)
+
+
+class AssertStateOnDiskTest(unittest.TestCase):
+    """T311: the ON-DISK state-schema leg — the fill compose leg's pre-commit
+    assert re-runs the FULL validate_state gate over the COMMITTED bytes (the
+    2515 false-GREEN class's durable gate: a GREEN state-write claim is never
+    composed without the mechanical run over the on-disk file)."""
+
+    def test_pass_conformant_state_on_disk_without_the_keyword(self):
+        # PASS path, keyword-less: the schema-conformant fixture (all nine
+        # `state_field` fields, `state-drift: none`, the pinned sections, a
+        # 12-cap ring) written to a temp file rides the FULL gate green —
+        # the same bytes validate_state passes on, now read FROM DISK.
+        with tempfile.TemporaryDirectory() as tmp:
+            path = _write(tmp, "eval-state.md", _vs_text())
+            wrap_assert.assert_state_on_disk(path)
+
+    def test_pass_conformant_state_on_disk_with_probed_eval_commit(self):
+        # PASS path with the keyword: the T306 probed-equality leg forwards —
+        # the CALL SITE probes the full hash (`git log -1 --format=%H --
+        # EVALUATION.md`, never composed from memory) and passes it in; an
+        # honest write rides green with the hash gate ACTIVE.
+        with tempfile.TemporaryDirectory() as tmp:
+            path = _write(
+                tmp,
+                "eval-state.md",
+                _vs_text(fields=_vs_fields_with_eval_commit(T306_TRUE_HASH)),
+            )
+            wrap_assert.assert_state_on_disk(path, T306_TRUE_HASH)
+
+    def test_fail_2515_prose_shape_fails_the_fields_leg_naming_missing_keys(self):
+        # FAIL path, the 2515 shape exactly: the prose-format state
+        # (`last-eval-commit:` substituted for `eval-commit:`, zero schema
+        # fields, only the non-schema sections) fails the leg from the
+        # FIELDS leg — all nine pinned keys named missing, the substituted
+        # `last-eval-commit:` field satisfying nothing. RED-proven at the
+        # 597th eval: validate_state on these committed bytes raises here,
+        # so the fill's "FACADE-GREEN first attempt" claim could not have
+        # been composed from a real run over them.
+        with tempfile.TemporaryDirectory() as tmp:
+            path = _write(tmp, "eval-state.md", T311_PROSE_STATE)
+            with open(path, "r", encoding="utf-8") as f:
+                self.assertIn("last-eval-commit:", f.read())  # the substitution
+            with self.assertRaises(AssertionError) as ctx:
+                wrap_assert.assert_state_on_disk(path)
+        msg = str(ctx.exception)
+        self.assertIn("assert_fields_non_empty", msg)  # the FIELDS leg fired
+        self.assertIn("9/9 named field(s) failed", msg)  # ALL nine missing
+        for key in wrap_assert.STATE_FIELD_KEYS:
+            self.assertIn(f"missing key '{key}'", msg)  # each named
+        # The substitute key is parsed (it rides the probed mapping's repr)
+        # but is NOT one of the nine gated keys — the schema's
+        # `eval-commit:` gate reads the schema's key, never the prose's.
+        self.assertNotIn("missing key 'last-eval-commit'", msg)
+
+    def test_fail_eval_commit_mismatch_names_both_values(self):
+        # FAIL path, the T306 probed-equality leg forwarded: the conformant
+        # fixture + a WRONG probed hash fails naming BOTH the probed field
+        # value (what the on-disk bytes hold) and the supplied actual (the
+        # T270 reporting requirement — never a bare constant mismatch).
+        with tempfile.TemporaryDirectory() as tmp:
+            path = _write(
+                tmp,
+                "eval-state.md",
+                _vs_text(fields=_vs_fields_with_eval_commit(T306_TRUE_HASH)),
+            )
+            with self.assertRaises(AssertionError) as ctx:
+                wrap_assert.assert_state_on_disk(path, T306_FABRICATED_HASH)
+        msg = str(ctx.exception)
+        self.assertIn(T306_TRUE_HASH, msg)  # the probed field value
+        self.assertIn(T306_FABRICATED_HASH, msg)  # the supplied actual
+        self.assertIn("eval-commit", msg)  # the surface named
+
+    def test_fail_missing_file_names_probed_path_and_os_error(self):
+        # FAIL path, the missing state: a nonexistent path raises
+        # AssertionError (never an uncaught OSError) naming the probed path
+        # and the OS error — a missing state can never wave the fill's
+        # state-write claim GREEN.
+        with tempfile.TemporaryDirectory() as tmp:
+            missing = os.path.join(tmp, "absent-eval-state.md")
+            with self.assertRaises(AssertionError) as ctx:
+                wrap_assert.assert_state_on_disk(missing)
+        msg = str(ctx.exception)
+        self.assertIn("absent-eval-state.md", msg)  # the probed path
+        self.assertIn("No such file or directory", msg)  # the OS error
+        self.assertIn("assert_state_on_disk", msg)  # the leg named
+
+    def test_fail_non_str_path_raises_type_error_naming_the_shape(self):
+        # The interface defense: *path* is the ON-DISK state file's PATH (a
+        # str — the bytes are read HERE); anything else is the
+        # call-signature slip shape and TypeErrors naming the accepted
+        # shape (the module's convention).
+        with self.assertRaises(TypeError) as ctx:
+            wrap_assert.assert_state_on_disk(7)
+        msg = str(ctx.exception)
+        self.assertIn("PATH", msg)
+        self.assertIn("a str", msg)
+        self.assertIn("type int", msg)
+
+    def test_fail_composed_text_slips_into_the_unreadable_fire(self):
+        # The composed-TEXT slip shape (the d1791921121-12 OSError shape,
+        # re-pinned on this leg's surface): a str IS the accepted type for
+        # *path*, so the composed state TEXT walks as a PATH — and fails
+        # CLOSED at the unreadable-file fire naming the OS error (`File
+        # name too long`), never a silent pass and never a bare traceback.
+        # The composed text is never this leg's argument: the facade owns
+        # the TEXT surface, this leg owns the ON-DISK surface.
+        with self.assertRaises(AssertionError) as ctx:
+            wrap_assert.assert_state_on_disk(_vs_text())
+        msg = str(ctx.exception)
+        self.assertIn("unreadable", msg)
+        self.assertIn("File name too long", msg)
+        self.assertIn("assert_state_on_disk", msg)
+
+    def test_fail_non_str_expected_eval_commit_propagates_the_facade_error(self):
+        # The keyword's interface defense propagates from the facade (the
+        # T306 shape): the probed hash is a STR — a non-str TypeErrors
+        # naming the accepted shape.
+        with tempfile.TemporaryDirectory() as tmp:
+            path = _write(tmp, "eval-state.md", _vs_text())
+            with self.assertRaises(TypeError) as ctx:
+                wrap_assert.assert_state_on_disk(path, 3930452)
+        msg = str(ctx.exception)
+        self.assertIn("expected_eval_commit", msg)
+        self.assertIn("PROBED full hash", msg)
+        self.assertIn("type int", msg)
+
+    def test_fail_unreadable_file_fails_closed_naming_the_error(self):
+        # A directory path is unreadable as a state file: the leg fails
+        # closed naming the probed path and the OS error (never a bare
+        # traceback) — the same fire shape as the missing file.
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaises(AssertionError) as ctx:
+                wrap_assert.assert_state_on_disk(tmp)
+        msg = str(ctx.exception)
+        self.assertIn("unreadable", msg)
+        self.assertIn("IsADirectoryError", msg)
+
+    def test_on_disk_read_is_a_real_disk_read_not_a_remembered_draft(self):
+        # The class's whole point, pinned: the gate runs over the COMMITTED
+        # bytes read fresh at call time — the same path asserting GREEN
+        # before a later overwrite and RED after it. A GREEN claim composed
+        # over a draft a later leg overwrote is exactly the 2515 shape.
+        with tempfile.TemporaryDirectory() as tmp:
+            path = _write(tmp, "eval-state.md", _vs_text())
+            wrap_assert.assert_state_on_disk(path)  # GREEN on the good bytes
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(T311_PROSE_STATE)  # a later leg overwrites the draft
+            with self.assertRaises(AssertionError) as ctx:
+                wrap_assert.assert_state_on_disk(path)  # RED on the new bytes
+        msg = str(ctx.exception)
+        self.assertIn("missing key 'schema'", msg)
+
+    def test_fail_fire_is_read_only_zero_mutation(self):
+        # The fire is designed pre-commit: the file is only ever READ — the
+        # tempdir and the state's bytes are unchanged through the raise.
+        with tempfile.TemporaryDirectory() as tmp:
+            path = _write(tmp, "eval-state.md", T311_PROSE_STATE)
+            with open(path, "rb") as f:
+                before_bytes = f.read()
+            before = sorted(os.listdir(tmp))
+            with self.assertRaises(AssertionError):
+                wrap_assert.assert_state_on_disk(path)
+            self.assertEqual(sorted(os.listdir(tmp)), before)
+            with open(path, "rb") as f:
+                self.assertEqual(f.read(), before_bytes)
 
 
 if __name__ == "__main__":
