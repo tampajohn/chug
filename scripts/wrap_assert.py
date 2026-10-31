@@ -137,9 +137,28 @@ the datum leg's iteration count does: the recompose re-runs the probe and
 asserts the NEW text carries the NEW count (5-after-fire vs 4-at-first-
 probe on the 2244 stream).
 
+T311 adds the on-disk state-schema leg (the 2515 false-GREEN class's
+durable gate, the T309/T310 fill-assert family's third leg): the
+cycle-2515 wrap's state recompose wrote `.chug/eval-state.md` in a
+free-form prose format — ZERO of the nine pinned `state_field` fields
+(`last-eval-commit:` substituted for `eval-commit:`) — every loopd delta
+build since fails CLOSED (`FULL-READ REQUIRED: schema-mismatch`, the
+enforcer working), yet the 2515 fill (a66f604) claimed "state write
+FACADE-GREEN first attempt" while `validate_state` on the COMMITTED bytes
+raises AssertionError at the FIELDS leg (RED-proven at the 597th eval) —
+the claim composed without a real run over the on-disk bytes, and the
+corridor had NO post-write mechanical check reading the on-disk state
+through its actual consumer. assert_state_on_disk IS that run: it reads
+the state file's BYTES from the probed path and runs the FULL
+validate_state gate on the read text (expected_eval_commit forwarded
+when supplied — probed via `git log -1 --format=%H -- EVALUATION.md`;
+the splice/corpus-tail legs inert), wired into the fill compose leg's
+pre-commit assert in the SAME leg as the commit.
+
 Coverage (run by the check line): python3 -m unittest
 scripts/test_wrap_assert.py -v — the pre-T295 legs plus the validate_state
-facade legs, the T309 fill-datum legs, and the T310 fill-enumeration legs.
+facade legs, the T309 fill-datum legs, and the T310 fill-enumeration legs,
+and the T311 on-disk state-schema legs.
 """
 
 __all__ = [
@@ -158,6 +177,7 @@ __all__ = [
     "validate_state",
     "assert_fill_datum",
     "assert_fill_enumeration",
+    "assert_state_on_disk",
 ]
 
 
@@ -1531,3 +1551,84 @@ def assert_fill_enumeration(text, probed_count, probed_stamp):
         f"`{_FILL_ENUM_PROBE}` at the fill stamp in the SAME pre-commit "
         "leg and compose the figure from the probed count"
     )
+
+
+# _STATE_ON_DISK_PROBE — the mechanical eval-commit probe the CALL SITE runs
+# (doctrine text, never executed here): the fill compose leg probes the
+# commit the state was written against with THIS and passes the probed full
+# hash in — never composed from memory (the T306 discipline, mirrored here).
+_STATE_ON_DISK_PROBE = "git log -1 --format=%H -- EVALUATION.md"
+
+
+# assert_state_on_disk(path, expected_eval_commit=None) — a PATH (str) + the optional probed hash; e.g. assert_state_on_disk(".chug/eval-state.md", probed_full_hash)
+def assert_state_on_disk(path, expected_eval_commit=None):
+    """The ON-DISK state-schema leg (T311 — the 2515 false-GREEN class's
+    durable gate, the T309/T310 fill-assert family's third leg).
+
+    The filing fire (the cycle-2515 wrap): the wrap's state recompose wrote
+    `.chug/eval-state.md` in a free-form prose format — ZERO of the nine
+    pinned `state_field` fields (`last-eval-commit:` substituted for
+    `eval-commit:`, no `schema:`, no `eval-at:`, no `state-drift:`, no
+    telemetry fields, no `health:`, no `open-threads:`, no
+    `pacing-streak:`) and none of the doctrine's pinned sections — and
+    every loopd delta build since fails CLOSED (`FULL-READ REQUIRED:
+    schema-mismatch`, the enforcer working). But the 2515 fill (a66f604)
+    claimed "state write FACADE-GREEN first attempt" while
+    `validate_state` on the COMMITTED bytes raises AssertionError at the
+    FIELDS leg (RED-proven at the 597th eval) — the facade CANNOT have
+    greened the committed text; the claim was composed without a real run
+    over the on-disk bytes (or over a draft a later leg overwrote). The
+    corridor had NO post-write mechanical check that reads the on-disk
+    state through its actual consumer, so a non-conformant write AND a
+    false GREEN claim both passed silently.
+
+    This leg IS that run, wired into the fill compose leg's pre-commit
+    assert (the SAME leg as the commit, per the T309/T310 pattern — the
+    compose-time catch independent of the writer's claim): a GREEN
+    state-write claim is never composed without the mechanical run over
+    the on-disk file.
+
+    *path* is the state file's PATH (a str — the BYTES are read HERE, from
+    disk, and the FULL validate_state gate runs on the read text); any
+    other shape is the call-signature slip shape and raises TypeError
+    naming the accepted shape. *expected_eval_commit*, when supplied, is
+    forwarded to the facade's probed-equality leg (T306) — PROBED by the
+    caller via `git log -1 --format=%H -- EVALUATION.md`, never composed
+    from memory. The splice/corpus-tail legs stay INERT — the on-disk
+    state stands alone (no previous-ring context is composed here; the
+    ring's count/uniqueness legs still gate). Failures propagate from the
+    facade (each naming its PROBED actuals — the module's invariant); a
+    missing/unreadable file raises AssertionError naming the probed path
+    and the error (never a bare traceback) — a missing state can never
+    wave the fill's state-write claim GREEN. The fire is zero-mutation by
+    construction: the file is only ever READ.
+    """
+    if not isinstance(path, str):
+        probed = (
+            f"{len(path)} probed line(s)"
+            if isinstance(path, (list, tuple))
+            else repr(path)
+        )
+        raise TypeError(
+            f"assert_state_on_disk(path, expected_eval_commit): path must "
+            f"be the ON-DISK state file's PATH (a str — the BYTES are read "
+            f"HERE, from disk, and the FULL validate_state gate runs on the "
+            f"read text, so the caller passes the probed path — "
+            f"`{_STATE_ON_DISK_PROBE}` supplies the optional hash — never "
+            f"the text itself, the facade's own surface); probed path "
+            f"{probed} (type {type(path).__name__})"
+        )
+    try:
+        with open(path, "rb") as f:
+            raw = f.read()
+        text = raw.decode("utf-8")
+    except (OSError, UnicodeDecodeError) as err:
+        raise AssertionError(
+            f"assert_state_on_disk({path!r}): the on-disk state file is "
+            f"unreadable — {type(err).__name__}: {err} — the leg reads the "
+            f"committed bytes through the state's actual consumer "
+            f"(validate_state), so a missing/unreadable state can never "
+            f"wave the fill's state-write claim GREEN (the 2515 shape: the "
+            f"claim composed without a real run over the on-disk bytes)"
+        ) from err
+    validate_state(text, expected_eval_commit=expected_eval_commit)
