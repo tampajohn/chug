@@ -259,6 +259,22 @@ impl Fixture {
             self.write(".chug/eval-state.prev.md", text);
         }
     }
+
+    /// The append-only decision corpus (`.chug/decisions.jsonl`, T70 shape:
+    /// `id` is the FIRST key, one record per line) with the given record ids
+    /// in file order (oldest first). Untracked, like the real corpus — the
+    /// delta builder reads it host-side regardless of git.
+    fn decisions_corpus(&self, ids: &[&str]) {
+        let mut body = String::new();
+        for id in ids {
+            body.push_str(&format!(
+                "{{\"id\":\"{id}\",\"ts\":\"2026-10-07T10:00:00Z\",\"class\":\"validation-routing\",\
+                 \"subject\":\"T1\",\"inputs\":\"files: x.rs\",\"options\":\"land | skip\",\
+                 \"choice\":\"land\",\"confidence\":0.5}}\n"
+            ));
+        }
+        self.write(".chug/decisions.jsonl", &body);
+    }
 }
 
 impl Drop for Fixture {
@@ -423,6 +439,106 @@ fn splice_violations_force_full_read() {
             "{what}: reason {r:?} must name the splice leg ({needle})"
         );
     }
+}
+
+/// T315 leg (a) — the ALL-RECORDS wrap: a cycle whose new decision-corpus
+/// records fill the ring exactly writes prepend-12/carry-0 BY DESIGN, with
+/// the wrap verifying the STRONGER anchor (ring == the corpus tail-12
+/// reversed). The splice check's state-vs-state anchor alone reads that as a
+/// spurious `nothing carried` violation and forces the next eval full; the
+/// corpus-tail acceptance leg downgrades it to the
+/// `ok (…, corpus-tail-verified)` STATE-HIT form.
+#[test]
+fn splice_all_records_carry0_with_matching_corpus_tail_is_corpus_tail_verified() {
+    let f = Fixture::new("corpus-tail-hit");
+    let marker = f.head();
+    // A 26-record corpus: the 12 OLDEST records rode an earlier generation
+    // (the previous snapshot's full ring), the 12 NEWEST are this wrap's
+    // all-records batch — the tail slice must pick EXACTLY the last 12.
+    let ids: Vec<String> = (1..=26).map(|i| format!("d1791-{i:02}")).collect();
+    let old_ring: Vec<String> = ids[0..12].iter().rev().cloned().collect();
+    let new_ring: Vec<String> = ids[14..26].iter().rev().cloned().collect();
+    f.decisions_corpus(&refs(&ids));
+    f.write(
+        ".chug/eval-state.prev.md",
+        &state_text(&marker, "none", &refs(&old_ring)),
+    );
+    // The all-records wrap's state: 12 new ids NEWEST first, zero carried.
+    f.set_state(&state_text(&marker, "none", &refs(&new_ring)), false);
+    let (_, delta) = run_delta(&f.dir);
+    assert_eq!(
+        verdict(&delta),
+        "STATE-HIT",
+        "a carry-0 ring the corpus tail corroborates exactly is a STATE-HIT: {delta}"
+    );
+    assert!(
+        delta.contains(
+            "splice-check: ok (carried 0, rotated 0, appended 12, corpus-tail-verified)"
+        ),
+        "{delta}"
+    );
+    assert!(reason(&delta).is_empty(), "a hit carries no reason: {delta}");
+}
+
+/// T315 leg (b) — a full-ring carry-0 rewrite whose ring does NOT match the
+/// corpus tail keeps the `nothing carried verbatim` violation verbatim
+/// (fail-closed), and so does a MISSING corpus: the acceptance leg is an
+/// EXACT identity, never a pass-through.
+#[test]
+fn splice_carry0_without_the_corpus_tail_identity_stays_full_read() {
+    let f = Fixture::new("corpus-tail-miss");
+    let marker = f.head();
+    let ids: Vec<String> = (1..=26).map(|i| format!("d1791-{i:02}")).collect();
+    let old_ring: Vec<String> = ids[0..12].iter().rev().cloned().collect();
+    let mut new_ring: Vec<String> = ids[14..26].iter().rev().cloned().collect();
+    new_ring[0] = "d1791-99".to_string(); // a ring id the corpus never held
+    f.decisions_corpus(&refs(&ids));
+    f.write(
+        ".chug/eval-state.prev.md",
+        &state_text(&marker, "none", &refs(&old_ring)),
+    );
+    f.set_state(&state_text(&marker, "none", &refs(&new_ring)), false);
+    let (_, delta) = run_delta(&f.dir);
+    assert_eq!(verdict(&delta), "FULL-READ REQUIRED", "{delta}");
+    let r = reason(&delta);
+    assert!(
+        r.starts_with("splice-violated") && r.contains("nothing carried verbatim"),
+        "a corrupted carry-0 keeps the violation verbatim: {r:?}"
+    );
+
+    // Missing corpus: fail-closed too — the violation survives, never a green.
+    // (The run above refreshed the snapshot; restore the disjoint prev ring
+    // so the splice still lands on the nothing-carried leg.)
+    f.write(
+        ".chug/eval-state.prev.md",
+        &state_text(&marker, "none", &refs(&old_ring)),
+    );
+    std::fs::remove_file(f.dir.join(".chug/decisions.jsonl"))
+        .expect("removing the fixture corpus");
+    let (_, delta) = run_delta(&f.dir);
+    assert_eq!(verdict(&delta), "FULL-READ REQUIRED", "{delta}");
+    let r = reason(&delta);
+    assert!(
+        r.starts_with("splice-violated") && r.contains("nothing carried verbatim"),
+        "a missing corpus keeps the violation (fail-closed): {r:?}"
+    );
+
+    // Unreadable corpus (malformed JSON): fail-closed the same way.
+    f.write(
+        ".chug/eval-state.prev.md",
+        &state_text(&marker, "none", &refs(&old_ring)),
+    );
+    f.write(
+        ".chug/decisions.jsonl",
+        "{\"id\":\"d1791-26\",\"ts\": oops not json\n",
+    );
+    let (_, delta) = run_delta(&f.dir);
+    assert_eq!(verdict(&delta), "FULL-READ REQUIRED", "{delta}");
+    let r = reason(&delta);
+    assert!(
+        r.starts_with("splice-violated") && r.contains("nothing carried verbatim"),
+        "an unreadable corpus keeps the violation (fail-closed): {r:?}"
+    );
 }
 
 // ---- pin 2: the stale-marker fallbacks (each reason fires FULL-READ) ----

@@ -108,7 +108,12 @@ state_decisions() {
 #   * at a full ring, rotation drops from the previous ring's TAIL (the
 #     oldest end under newest-first storage), and at least one line must
 #     survive verbatim (a rewrite that carries nothing reads as summarization
-#     and forces the next eval full).
+#     and forces the next eval full) — with ONE caller-checked exception
+#     (T315): an ALL-RECORDS wrap, a cycle whose new decision-corpus records
+#     fill the ring exactly, writes prepend-12/carry-0 BY DESIGN, and the
+#     caller accepts it when the state's ring equals the append-only decision
+#     corpus's tail-12 reversed (the stronger, host-verifiable anchor),
+#     downgrading to `ok (…, corpus-tail-verified)`.
 # Anything else prints `violated: ...`.
 #
 # (The file split uses FILENAME == ARGV[1], never the NR==FNR idiom: that
@@ -149,6 +154,35 @@ splice_verdict() {
       printf "ok (carried %d, rotated %d, appended %d)\n", j, m - j, k - j
     }
   ' <(state_decisions "$PREV") <(state_decisions "$STATE")
+}
+
+# --- the corpus-tail acceptance leg (T315) -----------------------------------
+# The ALL-RECORDS wrap — a cycle whose new decision-corpus records fill the
+# ring exactly — writes prepend-12/carry-0 BY DESIGN, and the wrap verifies
+# the STRONGER anchor at fill time: the state's ring == the decision corpus's
+# tail-12 REVERSED (the corpus `.chug/decisions.jsonl` is append-only per
+# T70, host-present though LOCAL-ONLY/untracked, and `jq` is already a
+# dependency of this script's events probes). The splice check's weaker
+# state-vs-state anchor alone reads every such wrap as a spurious
+# `nothing carried` violation and forces the next eval full. The CALLER (not
+# the awk) computes the corpus-tail identity ONLY when that violation fires:
+# the last MAX_DECISIONS record ids of the corpus, each `- `-prefixed,
+# reversed NEWEST FIRST with the portable awk reversal (never `tail -r`
+# [BSD-only] and never `tac(1)` [GNU-only]). An EXACT match with the state's
+# ring downgrades the verdict to the `ok (…, corpus-tail-verified)` form; a
+# mismatch — including an unreadable or missing corpus — keeps the violation
+# verbatim (fail-closed, never a false-green: an empty tail can never equal
+# the 12-line ring that reached this branch).
+corpus_tail_decisions() {
+  jq -r '.id // empty' "$CHUG/decisions.jsonl" 2>/dev/null \
+    | awk -v maxd="$MAX_DECISIONS" '
+        NF { l[++n] = $0 }
+        END {
+          first = (n > maxd ? n - maxd : 0) + 1
+          for (i = first; i <= n; i++) print "- " l[i]
+        }
+      ' \
+    | awk '{ a[NR] = $0 } END { for (i = NR; i >= 1; i--) print a[i] }'
 }
 
 # --- git plumbing (all best-effort; a missing repo is a FULL reason) ---------
@@ -228,6 +262,22 @@ else
           splice_out="$sp"
           case "$sp" in
             ok*) : ;;
+            "violated: nothing carried verbatim from the previous ring (summarization?)")
+              # T315: the all-records wrap's carry-0 is legal when the ring IS
+              # the append-only corpus's tail-12 reversed. An exact identity
+              # downgrades to the ok* form the case above accepts unchanged;
+              # anything else (mismatch, unreadable or missing corpus) keeps
+              # the violation verbatim.
+              ct="$(corpus_tail_decisions)"
+              if [ -n "$ct" ] && [ "$ct" = "$(state_decisions "$STATE")" ]; then
+                n=$(state_decisions "$STATE" | awk 'NF { n++ } END { print n + 0 }')
+                sp="ok (carried 0, rotated 0, appended ${n}, corpus-tail-verified)"
+                splice_out="$sp"
+              else
+                VERDICT="FULL-READ REQUIRED"
+                REASON="splice-violated (${sp})"
+              fi
+              ;;
             *) VERDICT="FULL-READ REQUIRED"; REASON="splice-violated (${sp})" ;;
           esac
         fi
