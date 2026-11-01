@@ -1126,8 +1126,13 @@ alike) has been harvested.
   state-schema leg (`assert_state_on_disk`, T311) against the committed
   `.chug/eval-state.md` AFTER the wrap's state write: the leg reads the
   file's bytes from disk and runs the FULL `validate_state` gate on the
-  read text (the eval-commit probed via
-  `git log -1 --format=%H -- EVALUATION.md` when gated; the
+  read text (T312 made the marker leg ALWAYS-ON and SELF-PROBING — the
+  leg OWNS the probe in-module and self-probes the expected marker via
+  `git log -1 --format=%H -- EVALUATION.md` in the repo toplevel on
+  EVERY run by default, the `expected_eval_commit` keyword demoted to an
+  OVERRIDE (asserted against INSTEAD of the self-probe when supplied,
+  never the leg's enabler), and a probe failure fails closed
+  (AssertionError naming the probe and the OS error); the
   splice/corpus-tail legs inert — the on-disk state stands alone), so a
   GREEN state-write claim is never composed without the mechanical run
   over the on-disk file (T311: the cycle-2515 wrap's state recompose wrote
