@@ -180,11 +180,44 @@ uncaught OSError); a non-str path TypeErrors naming the accepted shape
 read (a mutate-after-write state fails the leg — the committed bytes,
 not a remembered draft, are what the gate runs).
 
+T312 makes the marker leg ALWAYS-ON at the on-disk surface (the T306
+composed-marker class's second fire, the cycle-2704 wrap): the 2704
+state recompose wrote `eval-commit: 2f905d7e8c5b75eb1c2d4b2a3f0c5d6e7a8
+b9c0d` — the 7-char prefix TRUE, the 33-hex suffix memory-composed (the
+TRUE full hash 2f905d7f8cfcafbeff2894be019b2488b4cefc02) — and the T311
+run green-lit it with the T306 expected_eval_commit leg INERT (the call
+site supplied no keyword, the run validating schema-shape only); the
+2708 boot's delta build caught it fail-closed (FULL-READ REQUIRED
+marker-unreachable, zero casualty — a trip boot full-reads regardless),
+the opt-in remedy's insufficiency proven. assert_state_on_disk now OWNS
+the probe: after the facade run it self-probes `git log -1
+--format=%H -- EVALUATION.md` in the repo cwd and asserts the parsed
+field EQUALS the probed full hash — ALWAYS-ON, the keyword demoted to an
+OVERRIDE (asserted against instead of the self-probe; the probe is not
+called under an override), the `probe_marker` injectable keeping the leg
+testable, a probe FAILURE surfacing AssertionError naming the probe and
+the OS error (never a bare traceback). Legs: the keyword-less PASS rides
+the test's OWN dynamic probe (`git log -1 --format=%H -- EVALUATION.md`
+at the repo root, probed at test time, NEVER hardcoded); the same
+fixture passes with the override (and an injected raising probe is
+never called under it); the 2704 shape (the probed hash's own 7-char
+prefix + 33 invented hex chars) FAILS naming BOTH the field value and
+the probed actual; the semantic-drift shape (a DIFFERENT reachable
+commit — the repo's root commit) FAILS the same way, reachability alone
+not being the contract; an injected OSError probe FAILS closed naming
+the probe; a non-callable probe_marker TypeErrors naming the shape; the
+RED proof rides the in-suite mutant (the fire stashed on a COPY — the
+fabricated fixture passes the keyword-less call, the 2704 GREEN again —
+while the shipped module fires; the module byte-identical after). The
+two T311-era keyword-less fixtures now carry the probed marker (the
+always-on leg's contract) — their assertions unchanged.
+
 Run (the check line): python3 -m unittest scripts/test_wrap_assert.py -v
 """
 
 import ast
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -2147,8 +2180,17 @@ class AssertStateOnDiskTest(unittest.TestCase):
         # `state_field` fields, `state-drift: none`, the pinned sections, a
         # 12-cap ring) written to a temp file rides the FULL gate green —
         # the same bytes validate_state passes on, now read FROM DISK.
+        # T312: the marker leg is ALWAYS-ON (the keyword is no longer the
+        # leg's enabler), so the keyword-less fixture's `eval-commit:`
+        # marker carries the test's OWN probe of `git log -1 --format=%H
+        # -- EVALUATION.md` — probed dynamically at test time, never
+        # hardcoded — the self-probe the leg now owns matches it.
         with tempfile.TemporaryDirectory() as tmp:
-            path = _write(tmp, "eval-state.md", _vs_text())
+            path = _write(
+                tmp,
+                "eval-state.md",
+                _t312_state_with_marker(_t312_probe_marker()),
+            )
             wrap_assert.assert_state_on_disk(path)
 
     def test_pass_conformant_state_on_disk_with_probed_eval_commit(self):
@@ -2277,8 +2319,15 @@ class AssertStateOnDiskTest(unittest.TestCase):
         # bytes read fresh at call time — the same path asserting GREEN
         # before a later overwrite and RED after it. A GREEN claim composed
         # over a draft a later leg overwrote is exactly the 2515 shape.
+        # T312: the GREEN call rides keyword-less through the ALWAYS-ON
+        # marker leg, so the good bytes carry the test's OWN probed marker
+        # (the self-probe the leg owns matches it).
         with tempfile.TemporaryDirectory() as tmp:
-            path = _write(tmp, "eval-state.md", _vs_text())
+            path = _write(
+                tmp,
+                "eval-state.md",
+                _t312_state_with_marker(_t312_probe_marker()),
+            )
             wrap_assert.assert_state_on_disk(path)  # GREEN on the good bytes
             with open(path, "w", encoding="utf-8") as f:
                 f.write(T311_PROSE_STATE)  # a later leg overwrites the draft
@@ -2300,6 +2349,215 @@ class AssertStateOnDiskTest(unittest.TestCase):
             self.assertEqual(sorted(os.listdir(tmp)), before)
             with open(path, "rb") as f:
                 self.assertEqual(f.read(), before_bytes)
+
+
+# ---- T312: the ALWAYS-ON eval-commit marker leg (assert_state_on_disk) ----
+
+def _t312_repo_root():
+    """The repo root — this test file lives at <root>/scripts/."""
+    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def _t312_probe_marker():
+    """The test's OWN probe of the eval-commit marker: `git log -1
+    --format=%H -- EVALUATION.md` at the repo root, probed dynamically at
+    test time — NEVER hardcoded (the T270 probe-then-assert discipline: the
+    expectation is read back from the live repo, never remembered)."""
+    proc = subprocess.run(
+        ["git", "log", "-1", "--format=%H", "--", "EVALUATION.md"],
+        cwd=_t312_repo_root(), capture_output=True, text=True,
+    )
+    probed = proc.stdout.strip()
+    if proc.returncode != 0 or len(probed) != 40:
+        raise AssertionError(
+            f"the test's own marker probe failed — `git log -1 "
+            f"--format=%H -- EVALUATION.md` rc {proc.returncode} probed "
+            f"{probed!r} ({proc.stderr.strip()})"
+        )
+    return probed
+
+
+def _t312_invented_suffix(probed):
+    """33 invented hex chars GUARANTEED different from the true suffix:
+    the per-char hex complement (every position maps to a different hex
+    digit) — the 2704 shape's memory-composed suffix without any luck
+    dependence."""
+    return "".join("0" if c != "0" else "1" for c in probed[7:])
+
+
+def _t312_state_with_marker(marker):
+    """The schema-conformant fixture (_vs_text) with the `eval-commit:`
+    marker swapped to *marker* (the _vs_fields_with_eval_commit shape)."""
+    return _vs_text(fields=_vs_fields_with_eval_commit(marker))
+
+
+class AssertStateOnDiskMarkerLegTest(unittest.TestCase):
+    """T312: the ALWAYS-ON marker leg — the on-disk surface OWNS the probe
+    (the T306 composed-marker class's second fire, the cycle-2704 wrap's
+    fabricated-suffix marker green-lit by the T311 run with the opt-in leg
+    inert; the expected_eval_commit keyword demoted to an OVERRIDE, the leg
+    self-probing by default so no call site can leave it off)."""
+
+    def test_pass_marker_equals_the_test_own_probe_no_keyword(self):
+        # PASS path, no keyword: the schema-conformant fixture whose marker
+        # EQUALS the test's OWN probe of `git log -1 --format=%H --
+        # EVALUATION.md` (probed dynamically at test time, never hardcoded)
+        # rides the ALWAYS-ON leg green — the self-probe the leg owns
+        # matches it, no keyword required.
+        probed = _t312_probe_marker()
+        with tempfile.TemporaryDirectory() as tmp:
+            path = _write(
+                tmp, "eval-state.md", _t312_state_with_marker(probed)
+            )
+            wrap_assert.assert_state_on_disk(path)  # no keyword — self-probe
+
+    def test_pass_override_equals_the_probed_marker_replaces_the_self_probe(
+        self,
+    ):
+        # PASS path (override): the same fixture passes with
+        # expected_eval_commit=<the same probed value> — the OVERRIDE is
+        # asserted against INSTEAD of the self-probe, so an injected
+        # raising probe_marker is never even called under it (the override
+        # REPLACES the probe, it does not add a leg).
+        probed = _t312_probe_marker()
+        with tempfile.TemporaryDirectory() as tmp:
+            path = _write(
+                tmp, "eval-state.md", _t312_state_with_marker(probed)
+            )
+            wrap_assert.assert_state_on_disk(path, probed)
+
+            def _raiser():
+                raise OSError("the self-probe must not run under an override")
+
+            wrap_assert.assert_state_on_disk(path, probed, probe_marker=_raiser)
+
+    def test_fail_fabricated_suffix_2704_shape_names_both_values(self):
+        # FAIL path, the 2704 shape exactly: the fixture's marker replaced
+        # by its own 7-char prefix + 33 invented hex chars (the prefix TRUE,
+        # the suffix memory-composed — the cycle-2704 wrap's composition)
+        # raises AssertionError naming BOTH the field value and the probed
+        # actual (the T270 reporting requirement), with the fire, the owned
+        # probe, and the doctrine named. RED-proven by the stash leg below.
+        probed = _t312_probe_marker()
+        fabricated = probed[:7] + _t312_invented_suffix(probed)
+        self.assertEqual(len(fabricated), 40)
+        self.assertNotEqual(fabricated, probed)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = _write(
+                tmp, "eval-state.md", _t312_state_with_marker(fabricated)
+            )
+            with self.assertRaises(AssertionError) as ctx:
+                wrap_assert.assert_state_on_disk(path)  # no keyword
+        msg = str(ctx.exception)
+        self.assertIn(fabricated, msg)  # BOTH values: the probed field value
+        self.assertIn(probed, msg)  # ...and the probed actual
+        self.assertIn("eval-commit", msg)  # the surface named
+        self.assertIn("marker", msg)  # the ALWAYS-ON leg named
+        self.assertIn("2704", msg)  # the class's second fire named
+        self.assertIn("reachability alone is not the contract", msg)
+
+    def test_fail_semantic_drift_reachable_commit_names_both_values(self):
+        # FAIL path, semantic drift: the fixture's marker replaced by a
+        # DIFFERENT REACHABLE commit (the repo's root commit — a real,
+        # resolvable commit; any 40-hex != the probe satisfies the shape)
+        # raises AssertionError — reachability alone is NOT the contract,
+        # the field must equal THE probed commit, not merely a commit.
+        probed = _t312_probe_marker()
+        listing = subprocess.run(
+            ["git", "rev-list", "--max-parents=0", "HEAD"],
+            cwd=_t312_repo_root(), capture_output=True, text=True,
+        )
+        self.assertEqual(listing.returncode, 0, listing.stderr)
+        drift = listing.stdout.split()[0]
+        self.assertEqual(len(drift), 40)
+        self.assertNotEqual(
+            drift,
+            probed,
+            "the root commit IS the EVALUATION.md probe — pick another "
+            "reachable commit for the drift fixture",
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            path = _write(
+                tmp, "eval-state.md", _t312_state_with_marker(drift)
+            )
+            with self.assertRaises(AssertionError) as ctx:
+                wrap_assert.assert_state_on_disk(path)  # no keyword
+        msg = str(ctx.exception)
+        self.assertIn(drift, msg)  # BOTH values: the reachable field value
+        self.assertIn(probed, msg)  # ...and the probed actual
+        self.assertIn("reachability alone is not the contract", msg)
+
+    def test_fail_probe_failure_names_the_probe_and_os_error(self):
+        # FAIL path, probe failure: an injected probe_marker raising
+        # OSError surfaces AssertionError naming the probe (the owned
+        # command) and the OS error — never a bare traceback — even on an
+        # otherwise-matching state (a failed probe fails CLOSED).
+        probed = _t312_probe_marker()
+        with tempfile.TemporaryDirectory() as tmp:
+            path = _write(
+                tmp, "eval-state.md", _t312_state_with_marker(probed)
+            )
+
+            def _raiser():
+                raise OSError("git spawn refused (the injected probe)")
+
+            with self.assertRaises(AssertionError) as ctx:
+                wrap_assert.assert_state_on_disk(path, probe_marker=_raiser)
+        msg = str(ctx.exception)
+        self.assertIn("probe", msg)
+        self.assertIn("git log -1 --format=%H -- EVALUATION.md", msg)
+        self.assertIn("OSError", msg)
+        self.assertIn("git spawn refused (the injected probe)", msg)
+        self.assertIn("fails closed", msg)
+
+    def test_fail_non_callable_probe_marker_raises_type_error(self):
+        # The injectable's interface defense: probe_marker is a CALLABLE
+        # returning the 40-char hash — anything else is the call-signature
+        # slip shape and TypeErrors naming the shape (the module's
+        # convention), never a bare `'int' object is not callable`.
+        with self.assertRaises(TypeError) as ctx:
+            wrap_assert.assert_state_on_disk(
+                "unused-state-path.md", probe_marker=7
+            )
+        msg = str(ctx.exception)
+        self.assertIn("probe_marker", msg)
+        self.assertIn("callable", msg)
+        self.assertIn("type int", msg)
+
+    def test_red_proof_leg_stashed_the_fabricated_fixture_passes(self):
+        # RED-provability, demonstrated by stashing the leg — the T310
+        # mutant idiom (the fire stashed on an in-memory COPY; the module
+        # itself never written, re-read byte-identical after): with the
+        # marker fire stashed, the 2704-shape fabricated fixture PASSES the
+        # keyword-less call (today's pre-T312 surface — the T306 leg inert
+        # by contract, the GREEN the second fire rode); with the leg live
+        # (the shipped module) the same fixture fires.
+        with open(wrap_assert.__file__, "r", encoding="utf-8") as f:
+            pristine = f.read()
+        probed = _t312_probe_marker()
+        fabricated = probed[:7] + _t312_invented_suffix(probed)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = _write(
+                tmp, "eval-state.md", _t312_state_with_marker(fabricated)
+            )
+            # The shipped module fires (the leg above pins it; re-asserted
+            # here so the mutant contrast is self-contained).
+            with self.assertRaises(AssertionError):
+                wrap_assert.assert_state_on_disk(path)
+            # The stash: the fire line swapped for `pass` on a copy — the
+            # keyword-less call now PASSES (RED proven: the FAIL-path test
+            # above goes red without the leg).
+            stash_line = (
+                "        _fire_marker_mismatch(path, field_value, "
+                "expected_eval_commit)"
+            )
+            self.assertEqual(pristine.count(stash_line), 1)
+            stash = _mutant_wrap_assert(pristine, stash_line, "        pass")
+            stash["assert_state_on_disk"](path)  # no raise under the stash
+        # The module restored byte-identical after the run (nothing was
+        # ever written — re-read and compared against the pristine read).
+        with open(wrap_assert.__file__, "r", encoding="utf-8") as f:
+            self.assertEqual(f.read(), pristine)
 
 
 if __name__ == "__main__":
