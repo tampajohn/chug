@@ -63,7 +63,17 @@ the T192 LIVE_CTX discipline: **verbatim splice, never summarization** — the
 lines byte-identical, new decision batches PREPENDED at the head, rotation
 drops from the TAIL (the oldest end) once the ring is full; if this eval made
 more decisions than the ring has room for, rotate at most 11 so one prior
-line always survives verbatim. The ring holds no duplicated line — a
+line always survives verbatim. THE ONE EXCEPTION (T315, the all-records
+wrap): a cycle whose new decision-corpus records fill the ring exactly MAY
+write prepend-12/carry-0 — the wrap then verifies the STRONGER anchor at
+fill time, the state's ring == the decision corpus's tail-12 REVERSED (the
+corpus is append-only per T70, so its tail is ground truth, strictly
+stronger than the previous state snapshot) — and the delta's splice-check
+accepts exactly that case via its corpus-tail leg (the
+`ok (…, corpus-tail-verified)` downgrade); a carry-0 rewrite the corpus
+tail does not corroborate exactly stays a FULL-READ violation, and an
+unreadable or missing corpus keeps it (fail-closed). The ring holds no
+duplicated line — a
 duplicated carried line is corruption of the append-only history, never a
 rotation (the cycle-520 wrap's rewrite landed 12 ring lines carrying only
 8 unique decision ids, the new batch's own head written twice into the
