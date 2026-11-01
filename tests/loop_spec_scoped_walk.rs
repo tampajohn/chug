@@ -23,6 +23,16 @@
 //! rejected (a 6th fire re-weighs the declined `scripts/scoped-find.sh`
 //! helper).
 //!
+//! The sixth fire fired at the cycle-2729 eval's boot: a plist probe
+//! pruned over target/target-shared* but with `.git` unpruned and NO
+//! bounded window — it descended `.git/` and the 300s cap killed the
+//! process group after it had already printed the answer (count 1, the
+//! launcher plist; zero casualty, the scoped re-probe confirmed in under
+//! a second). The re-weigh's verdict was LAND: T314 landed
+//! `scripts/scoped-find.sh` (leg (e) below) so the canned scoped shape —
+//! prunes plus a -maxdepth window, baked — is the default reach instead
+//! of a hand-composed walk.
+//!
 //! These pins assert that paragraph exists, sits where the spec requires,
 //! and carries its load-bearing sentences. No production code changes;
 //! doctrine-only. The pin file greps META-META-SPEC.md only — never a
@@ -459,4 +469,88 @@ fn probe_hygiene_accessor_root_names_the_python_probe_shape() {
              instead of extending them"
         );
     }
+}
+
+// ---- the T314 landed helper (the 6th-fire re-weigh's LAND verdict) ----
+
+/// The LANDED helper's path — resolved from the runtime checkout (the T48
+/// idiom), never a compile-time path.
+const HELPER_REL: &str = "scripts/scoped-find.sh";
+
+/// The prune coverage the helper bakes — each clause exactly once in the
+/// compose. The sixth fire carried the first two but missed the `.git`
+/// prune and carried no window; the helper closes both gaps every time.
+const HELPER_PRUNE_TARGET: &str = "-path \"$ROOT/target\" -prune";
+const HELPER_PRUNE_SHARED: &str = "-path \"$ROOT/target-shared*\" -prune";
+const HELPER_PRUNE_GIT: &str = "-path \"$ROOT/.git\" -prune";
+
+/// The bounded window — the `-maxdepth` global option (placed right after
+/// <root>, accepted by GNU and macOS BSD find alike) and its default N.
+const HELPER_MAXDEPTH: &str = "-maxdepth";
+const HELPER_MAXDEPTH_DEFAULT: &str = "MAXDEPTH=4";
+
+/// (e) The 6th-fire re-weigh's LANDED verdict: the canned scoped-find
+/// helper exists at scripts/scoped-find.sh, is executable, and bakes the
+/// safe shape — the three prune clauses (target/, target-shared*, .git)
+/// each exactly once, plus a -maxdepth window with its default N — so the
+/// scoped shape is the DEFAULT reach instead of a hand-composed walk.
+/// Deleting the script (or any baked clause, or the default) drops a
+/// count to 0 → RED. This pins a POSITIVE tool, not a probe-text
+/// detector — the brittle-awk class stays rejected. RED-proof: the
+/// orchestrator RED-proved this leg pre-merge by deleting the script,
+/// stripping the `.git` prune clause, and stripping the -maxdepth
+/// default — each mutation went red.
+#[test]
+fn scoped_find_helper_is_landed_with_prune_coverage_and_a_bounded_window() {
+    let root = std::env::current_dir().expect("cargo sets the test cwd to the package root");
+    let path = root.join(HELPER_REL);
+    let text = std::fs::read_to_string(&path).unwrap_or_else(|e| {
+        panic!("reading {HELPER_REL} from the runtime checkout: {e} — the \
+                T314 helper was deleted or the cwd is not the package root")
+    });
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&path)
+            .unwrap_or_else(|e| panic!("stat'ing {HELPER_REL}: {e}"))
+            .permissions()
+            .mode();
+        assert!(
+            mode & 0o111 != 0,
+            "{HELPER_REL} must be executable — the canned reach is no \
+             reach if the shell refuses to run it"
+        );
+    }
+    // The baked prune coverage: each clause exactly once (the deletion
+    // check is built in — stripping a clause drops its count to 0).
+    for (needle, what) in [
+        (HELPER_PRUNE_TARGET, "the target/ prune clause"),
+        (HELPER_PRUNE_SHARED, "the target-shared* prune clause"),
+        (HELPER_PRUNE_GIT, "the .git prune clause (the sixth fire's gap)"),
+    ] {
+        assert_eq!(
+            text.matches(needle).count(),
+            1,
+            "{HELPER_REL} must carry {what} ({needle:?}) exactly once — \
+             zero means a prune was stripped and the walk's traversal is \
+             unbounded again, more than one means the compose drifted"
+        );
+    }
+    // The bounded window: the global option is present and its default N
+    // is stated exactly once (stripping the default stops the helper from
+    // being the one-liner reach — a caller without --maxdepth would fall
+    // back to composing by hand, the exact failure mode T314 lands
+    // against).
+    assert!(
+        text.contains(HELPER_MAXDEPTH),
+        "{HELPER_REL} must carry -maxdepth — the bounded window is baked, \
+         never remembered"
+    );
+    assert_eq!(
+        text.matches(HELPER_MAXDEPTH_DEFAULT).count(),
+        1,
+        "{HELPER_REL} must default the window to {HELPER_MAXDEPTH_DEFAULT:?} \
+         exactly once — zero means the default was stripped, more than one \
+         means a duplicate assignment drifted in"
+    );
 }
