@@ -1,6 +1,6 @@
 # T314 — `scripts/scoped-find.sh`: the canned scoped-find helper (the T293 6th-fire re-weigh: LAND)
 
-check: cargo test && [ "$(scripts/scoped-find.sh . -- -name 'com.tampajohn.chug-loopd.plist')" = "./scripts/com.tampajohn.chug-loopd.plist" ]
+check: export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-validate-a && cargo test --release -- --test-threads=4 && [ "$(scripts/scoped-find.sh . -- -name 'com.tampajohn.chug-loopd.plist')" = "./scripts/com.tampajohn.chug-loopd.plist" ]
 
 ## Repo context
 
