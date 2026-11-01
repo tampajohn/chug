@@ -155,10 +155,42 @@ when supplied — probed via `git log -1 --format=%H -- EVALUATION.md`;
 the splice/corpus-tail legs inert), wired into the fill compose leg's
 pre-commit assert in the SAME leg as the commit.
 
+T312 makes the marker leg ALWAYS-ON at the on-disk surface (the T306
+composed-marker class's second fire, the cycle-2704 wrap): the wrap's
+state FULL recompose wrote `eval-commit:
+2f905d7e8c5b75eb1c2d4b2a3f0c5d6e7a8b9c0d` — the 7-char prefix TRUE, the
+remaining 33 hex chars memory-composed (the TRUE full hash of the 2704
+eval commit is `2f905d7f8cfcafbeff2894be019b2488b4cefc02`, re-probed via
+`git rev-parse 2f905d7` at the cycle-2708 eval) — and every write-side
+guard passed it: the fill (0a8bf5b) claimed "state FULL recompose + T311
+assert_state_on_disk GREEN first attempt" while that run supplied NO
+expected_eval_commit, the T306 leg inert by contract, the run validating
+schema-shape only. The consumer caught it one boot later, fail-closed by
+design: the 2708 boot's delta build reported `FULL-READ REQUIRED:
+marker-unreachable (2f905d7e8c… is not a commit in this repo)` — casualty
+ZERO (the boot was a trip eval, always a full read), the exact
+zero-casualty shape of the class's first fire, proving the opt-in remedy
+does not hold: the corridor's own call site left the leg off.
+assert_state_on_disk now OWNS the probe: after the facade run it
+self-probes the expected marker (`git log -1 --format=%H --
+EVALUATION.md` via subprocess in the repo cwd — the T311 documented probe
+convention, resolved through `git rev-parse --show-toplevel` so the probe
+runs in the REPO cwd from any directory inside the repo) and asserts the
+parsed `eval-commit:` field EQUALS the probed full hash, naming BOTH
+values on mismatch. The leg is ALWAYS-ON — the expected_eval_commit
+keyword is demoted to an OVERRIDE (asserted against INSTEAD of the
+self-probe when supplied, never the leg's enabler), and the probe_marker
+injectable (a callable returning the 40-char hash, defaulting to the
+owned subprocess probe) keeps the leg testable; a probe FAILURE raises
+AssertionError naming the probe and the OS error, never a bare
+traceback. The module stays dependency-free/stdlib-only: the owned probe
+reaches subprocess through the builtin `__import__` (the lazy stdlib
+form), keeping the AST import-free shape the stdlib-only leg pins.
+
 Coverage (run by the check line): python3 -m unittest
 scripts/test_wrap_assert.py -v — the pre-T295 legs plus the validate_state
 facade legs, the T309 fill-datum legs, and the T310 fill-enumeration legs,
-and the T311 on-disk state-schema legs.
+the T311 on-disk state-schema legs, and the T312 always-on marker legs.
 """
 
 __all__ = [
@@ -1553,17 +1585,118 @@ def assert_fill_enumeration(text, probed_count, probed_stamp):
     )
 
 
-# _STATE_ON_DISK_PROBE — the mechanical eval-commit probe the CALL SITE runs
-# (doctrine text, never executed here): the fill compose leg probes the
-# commit the state was written against with THIS and passes the probed full
-# hash in — never composed from memory (the T306 discipline, mirrored here).
+# _STATE_ON_DISK_PROBE — the eval-commit marker probe, OWNED by the on-disk
+# surface as of T312 (doctrine text AND executed command): the probe the
+# fill compose leg's call site USED to run itself and pass the probed full
+# hash in as `expected_eval_commit` (the T306 discipline) — the opt-in
+# keyword's second fire (the cycle-2704 wrap: no keyword supplied, the leg
+# inert, the fabricated-suffix marker green-lit) demoted the keyword to an
+# OVERRIDE and moved the probe INTO assert_state_on_disk, where no call
+# site can leave it off. The repo cwd is resolved through
+# _STATE_ON_DISK_TOPLEVEL_PROBE first, so the pinned command runs in the
+# REPO cwd from any directory inside the repo (the T311 documented probe
+# convention, now owned).
 _STATE_ON_DISK_PROBE = "git log -1 --format=%H -- EVALUATION.md"
+_STATE_ON_DISK_TOPLEVEL_PROBE = "git rev-parse --show-toplevel"
+
+# The probed hash's shape: 40 lowercase hex chars (`git rev-parse`'s output
+# shape) — a shorter/malformed probe read fails closed rather than comparing
+# against a fabricated expectation.
+_STATE_HASH_HEX = "0123456789abcdef"
 
 
-# assert_state_on_disk(path, expected_eval_commit=None) — a PATH (str) + the optional probed hash; e.g. assert_state_on_disk(".chug/eval-state.md", probed_full_hash)
-def assert_state_on_disk(path, expected_eval_commit=None):
+# _probe_eval_commit() — the DEFAULT probe_marker injectable; e.g. assert_state_on_disk(path, probe_marker=_probe_eval_commit)
+def _probe_eval_commit():
+    """The OWNED marker probe (T312): the LAST commit touching
+    EVALUATION.md, as a 40-char full hash.
+
+    Runs `_STATE_ON_DISK_TOPLEVEL_PROBE` (the repo cwd's root) and then the
+    pinned `_STATE_ON_DISK_PROBE` via subprocess with that root as cwd —
+    the T311 documented probe convention (`git log -1 --format=%H --
+    EVALUATION.md` in the repo cwd), now owned by this module so no call
+    site can leave it off. Subprocess is reached through the builtin
+    `__import__` — the lazy stdlib form (subprocess IS stdlib; the module's
+    AST stays import-free per the stdlib-only leg).
+
+    Every failure raises AssertionError naming the probe and the error —
+    the rc, the stderr, the probed output, or the OS error of the spawn —
+    never a bare traceback: a failed probe fails CLOSED (the leg cannot
+    wave a state-write claim GREEN without the probed expected marker).
+    """
+    subprocess = __import__("subprocess")
+    try:
+        top = subprocess.run(
+            _STATE_ON_DISK_TOPLEVEL_PROBE.split(), capture_output=True,
+            text=True,
+        )
+        if top.returncode != 0:
+            raise AssertionError(
+                f"_probe_eval_commit: the marker probe failed — "
+                f"`{_STATE_ON_DISK_TOPLEVEL_PROBE}` rc {top.returncode} "
+                f"({top.stderr.strip()}) — the probe runs in the REPO cwd "
+                f"(resolved through the toplevel first), so the caller must "
+                f"be inside the repo the state was written against"
+            )
+        proc = subprocess.run(
+            _STATE_ON_DISK_PROBE.split(), cwd=top.stdout.strip(),
+            capture_output=True, text=True,
+        )
+        if proc.returncode != 0:
+            raise AssertionError(
+                f"_probe_eval_commit: the marker probe failed — "
+                f"`{_STATE_ON_DISK_PROBE}` rc {proc.returncode} "
+                f"({proc.stderr.strip()}) — the expected marker is the last "
+                f"commit touching EVALUATION.md, probed, never composed "
+                f"from memory"
+            )
+    except OSError as err:
+        raise AssertionError(
+            f"_probe_eval_commit: the marker probe failed — the subprocess "
+            f"spawn for `{' '.join(_STATE_ON_DISK_TOPLEVEL_PROBE.split())}` / "
+            f"`{_STATE_ON_DISK_PROBE}` raised {type(err).__name__}: {err} — "
+            f"a probe failure fails closed, never a bare traceback"
+        ) from err
+    probed = proc.stdout.strip()
+    if len(probed) != 40 or any(c not in _STATE_HASH_HEX for c in probed):
+        raise AssertionError(
+            f"_probe_eval_commit: the marker probe failed — "
+            f"`{_STATE_ON_DISK_PROBE}` probed {probed!r}, not the 40-char "
+            f"hex full-hash shape (40 chars of [0-9a-f]) — fail-closed "
+            f"against comparing a fabricated expectation"
+        )
+    return probed
+
+
+# _fire_marker_mismatch(path, field_value, expected) — INTERNAL; 3 probed values
+def _fire_marker_mismatch(path, field_value, expected):
+    """The ALWAYS-ON marker leg's fire (T312) — split from the leg's body
+    so the RED-provability mutant is a ONE-LINE stash (the call swapped for
+    `pass` on a copy, the T310 `_fire_named_missing` idiom) rather than a
+    multi-line raise excision that cannot compile half-removed."""
+    raise AssertionError(
+        f"assert_state_on_disk({path!r}): the on-disk eval-commit marker "
+        f"leg broke — the state's probed `eval-commit` field "
+        f"{field_value!r} != the probed expected marker {expected!r} — the "
+        f"field must EQUAL the full hash the marker probe read back "
+        f"(`{_STATE_ON_DISK_PROBE}` in the repo cwd, now owned by this "
+        f"leg), never a 7-char-TRUE / suffix-memory-composed composition "
+        f"(the cycle-2704 filing fire: `2f905d7e8c5b75eb1c2d4b2a3f0c5d6e7a"
+        f"8b9c0d` written against the TRUE "
+        f"2f905d7f8cfcafbeff2894be019b2488b4cefc02, green-lit by the T311 "
+        f"run with the T306 expected_eval_commit leg INERT — the call site "
+        f"supplied no keyword — and caught one boot later by the fail-"
+        f"closed FULL-READ REQUIRED marker-unreachable verdict); "
+        f"reachability alone is not the contract — the field equals THE "
+        f"probed commit, not merely a commit"
+    )
+
+
+# assert_state_on_disk(path, expected_eval_commit=None, probe_marker=_probe_eval_commit) — a PATH (str) + the optional OVERRIDE hash + the injectable probe; e.g. assert_state_on_disk(".chug/eval-state.md")
+def assert_state_on_disk(path, expected_eval_commit=None, probe_marker=None):
     """The ON-DISK state-schema leg (T311 — the 2515 false-GREEN class's
-    durable gate, the T309/T310 fill-assert family's third leg).
+    durable gate, the T309/T310 fill-assert family's third leg) with the
+    ALWAYS-ON eval-commit marker leg (T312 — the T306 composed-marker
+    class's second fire closed).
 
     The filing fire (the cycle-2515 wrap): the wrap's state recompose wrote
     `.chug/eval-state.md` in a free-form prose format — ZERO of the nine
@@ -1588,20 +1721,39 @@ def assert_state_on_disk(path, expected_eval_commit=None):
     state-write claim is never composed without the mechanical run over
     the on-disk file.
 
-    *path* is the state file's PATH (a str — the BYTES are read HERE, from
-    disk, and the FULL validate_state gate runs on the read text); any
-    other shape is the call-signature slip shape and raises TypeError
-    naming the accepted shape. *expected_eval_commit*, when supplied, is
-    forwarded to the facade's probed-equality leg (T306) — PROBED by the
-    caller via `git log -1 --format=%H -- EVALUATION.md`, never composed
-    from memory. The splice/corpus-tail legs stay INERT — the on-disk
-    state stands alone (no previous-ring context is composed here; the
-    ring's count/uniqueness legs still gate). Failures propagate from the
-    facade (each naming its PROBED actuals — the module's invariant); a
-    missing/unreadable file raises AssertionError naming the probed path
-    and the error (never a bare traceback) — a missing state can never
-    wave the fill's state-write claim GREEN. The fire is zero-mutation by
-    construction: the file is only ever READ.
+    The gate, in order:
+      1. READ — the state file's BYTES are read HERE, from disk, and the
+         FULL validate_state gate runs on the read text (the T311 leg).
+      2. FACADE — validate_state gates the read text (the nine fields, the
+         drift first token, the ring count/uniqueness; the
+         splice/corpus-tail legs stay INERT — the on-disk state stands
+         alone). The `expected_eval_commit` keyword, when supplied, rides
+         through to the facade's T306 probed-equality leg unchanged.
+      3. MARKER, ALWAYS-ON (T312) — after the facade run the leg asserts
+         the parsed `eval-commit:` field EQUALS the expected marker,
+         naming BOTH values on mismatch. The expected marker is the
+         SELF-PROBE by default: `_probe_eval_commit()` runs the pinned
+         `git log -1 --format=%H -- EVALUATION.md` via subprocess in the
+         repo cwd (the T311 documented probe convention, now OWNED here so
+         no call site can leave the leg off — the 2704 fire: the
+         corridor's own call supplied no keyword and the T306 leg never
+         ran). The `expected_eval_commit` keyword is an OVERRIDE: when
+         supplied it is asserted against INSTEAD of the self-probe (the
+         probe is not even called) — never the leg's enabler.
+
+    *path* is the state file's PATH (a str); any other shape is the
+    call-signature slip shape and raises TypeError naming the accepted
+    shape. *probe_marker* is the injectable that keeps the leg testable —
+    a callable returning the 40-char full hash, defaulting to the owned
+    subprocess probe; a non-callable raises TypeError naming the shape. A
+    probe FAILURE (an OSError from the spawn) raises AssertionError naming
+    the probe and the OS error — never a bare traceback: the leg fails
+    closed, a failed probe can never wave a state-write claim GREEN.
+    Failures otherwise propagate from the facade (each naming its PROBED
+    actuals — the module's invariant); a missing/unreadable file raises
+    AssertionError naming the probed path and the error. The fire is
+    zero-mutation by construction: the file is only ever READ (the probe
+    only ever runs git's read-side).
     """
     if not isinstance(path, str):
         probed = (
@@ -1610,13 +1762,24 @@ def assert_state_on_disk(path, expected_eval_commit=None):
             else repr(path)
         )
         raise TypeError(
-            f"assert_state_on_disk(path, expected_eval_commit): path must "
+            f"assert_state_on_disk(path, expected_eval_commit, "
+            f"probe_marker): path must "
             f"be the ON-DISK state file's PATH (a str — the BYTES are read "
             f"HERE, from disk, and the FULL validate_state gate runs on the "
             f"read text, so the caller passes the probed path — "
-            f"`{_STATE_ON_DISK_PROBE}` supplies the optional hash — never "
-            f"the text itself, the facade's own surface); probed path "
-            f"{probed} (type {type(path).__name__})"
+            f"`{_STATE_ON_DISK_PROBE}` is the marker probe this leg now "
+            f"OWNS — never the text itself, the facade's own surface); "
+            f"probed path {probed} (type {type(path).__name__})"
+        )
+    if probe_marker is not None and not callable(probe_marker):
+        raise TypeError(
+            f"assert_state_on_disk(path, expected_eval_commit, "
+            f"probe_marker): probe_marker must be a callable returning the "
+            f"probed 40-char full hash (the injectable that keeps the "
+            f"ALWAYS-ON marker leg testable — None defaults to the owned "
+            f"subprocess probe `{_STATE_ON_DISK_PROBE}`); probed "
+            f"probe_marker {probe_marker!r} (type "
+            f"{type(probe_marker).__name__})"
         )
     try:
         with open(path, "rb") as f:
@@ -1632,3 +1795,26 @@ def assert_state_on_disk(path, expected_eval_commit=None):
             f"claim composed without a real run over the on-disk bytes)"
         ) from err
     validate_state(text, expected_eval_commit=expected_eval_commit)
+    # T312: the ALWAYS-ON marker leg — the on-disk surface OWNS the probe.
+    # The expected marker is the self-probe unless the OVERRIDE keyword is
+    # supplied (then it is asserted against instead and the probe is not
+    # called), so no call site can leave the leg inert the way the 2704
+    # fill's call did.
+    if expected_eval_commit is None:
+        try:
+            expected_eval_commit = (
+                probe_marker() if probe_marker is not None
+                else _probe_eval_commit()
+            )
+        except OSError as err:
+            raise AssertionError(
+                f"assert_state_on_disk({path!r}): the marker probe failed — "
+                f"the owned probe (`{_STATE_ON_DISK_PROBE}` in the repo "
+                f"cwd) raised {type(err).__name__}: {err} — a probe "
+                f"failure fails closed (never a bare traceback): the "
+                f"ALWAYS-ON leg cannot wave a state-write claim GREEN "
+                f"without the probed expected marker"
+            ) from err
+    field_value = read_key_values(text).get("eval-commit")
+    if field_value != expected_eval_commit:
+        _fire_marker_mismatch(path, field_value, expected_eval_commit)
