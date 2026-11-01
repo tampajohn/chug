@@ -1,6 +1,6 @@
 # T315 — `scripts/eval-delta.sh` splice-check: accept the corpus-tail identity for the all-records carry-0 ring
 
-check: export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared && touch src/*.rs tests/*.rs; cargo test --release --test eval_state_delta --test eval_outcomes_carry --test loop_spec_cheap_exit --test loop_spec_check_wall --test loop_spec_doctrine_prune --test loop_spec_eval_read_path_pointer --test loop_spec_recovery --test loop_spec_scoped_walk --test loop_spec_validation_lane --test todo_consistency --test internal_info_lint -- --test-threads=4
+check: export CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-validate-a && touch src/*.rs tests/*.rs; cargo test --release --test eval_state_delta --test eval_outcomes_carry --test loop_spec_cheap_exit --test loop_spec_check_wall --test loop_spec_doctrine_prune --test loop_spec_eval_read_path_pointer --test loop_spec_recovery --test loop_spec_scoped_walk --test loop_spec_validation_lane --test todo_consistency --test internal_info_lint -- --test-threads=4
 
 ## Repo context
 
