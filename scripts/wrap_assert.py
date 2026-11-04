@@ -191,7 +191,8 @@ Coverage (run by the check line): python3 -m unittest
 scripts/test_wrap_assert.py -v — the pre-T295 legs plus the validate_state
 facade legs, the T309 fill-datum legs, and the T310 fill-enumeration legs,
 the T311 on-disk state-schema legs, and the T312 always-on marker legs, and
-the T316 Outcomes one-liner figure-audit legs.
+the T316 Outcomes one-liner figure-audit legs, and the
+T317 fill trim-enumeration legs.
 """
 
 __all__ = [
@@ -211,6 +212,7 @@ __all__ = [
     "assert_fill_datum",
     "assert_fill_enumeration",
     "assert_state_on_disk",
+    "assert_fill_trim",
     "assert_outcomes_one_liner",
 ]
 
@@ -1583,6 +1585,208 @@ def assert_fill_enumeration(text, probed_count, probed_stamp):
         "\"ok:false 4 == 4\" at its 14:03:44Z stamp against the mechanical "
         "5, the fifth leg the T309 datum guard's own first fire): re-run "
         f"`{_FILL_ENUM_PROBE}` at the fill stamp in the SAME pre-commit "
+        "leg and compose the figure from the probed count"
+    )
+
+
+# _FILL_TRIM_PROBE — the mechanical trim-enumeration command the CALL SITE
+# runs (doctrine text, never executed here): the compose leg re-runs THIS at
+# the fill stamp in the SAME pre-commit leg and passes the probed count in.
+_FILL_TRIM_PROBE = (
+    "jq -c 'select(.type==\"trim\")' .chug/events.jsonl | wc -l"
+)
+
+
+# _trim_blocks(text) — INTERNAL; e.g. _trim_blocks(composed_text)
+def _trim_blocks(text):
+    """Every `trim K` enumeration figure in *text* — (head, tail) pairs.
+
+    Hand-scanned (the module stays import-free — no `re`), the
+    `_enumeration_blocks` shape with the `trim` marker: each literal
+    `trim` marker reads as an enumeration block iff whitespace then a
+    digit count follows — the head figure K. The corpus's
+    FINAL-enumeration rendering carries ` == K` after the head
+    (`trim 1 == 1`); the tail figure is recognized and reported, the
+    asserted figure is the head either way — the bare `trim K`
+    head-figure (the establishment prose's shape, `... + trim 1, ctx 1,
+    goal 0, ...`) scans identically. Any other occurrence is prose and
+    skipped: a non-digit follow (`trim-fire`, `trim: 1`), no following
+    whitespace (`trim-0`, the hyphenated compounds). Whitespace-tolerant,
+    so a wrapped commit message still scans. Returns (head, tail_or_None)
+    string tuples in stream order.
+    """
+    blocks = []
+    marker = "trim"
+    pos = 0
+    n = len(text)
+    while True:
+        i = text.find(marker, pos)
+        if i < 0:
+            return blocks
+        pos = i + len(marker)
+        p = pos
+        if p >= n or text[p] not in _FILL_WS:
+            continue
+        while p < n and text[p] in _FILL_WS:
+            p += 1
+        start = p
+        while p < n and text[p].isdigit():
+            p += 1
+        head = text[start:p]
+        if not head:
+            continue
+        q = p
+        while q < n and text[q] in _FILL_WS:
+            q += 1
+        tail = None
+        if text.startswith("==", q):
+            q += 2
+            while q < n and text[q] in _FILL_WS:
+                q += 1
+            t_start = q
+            while q < n and text[q].isdigit():
+                q += 1
+            if q > t_start:
+                tail = text[t_start:q]
+        blocks.append((head, tail))
+
+
+# _fire_trim_named_missing(probed_stamp) — INTERNAL; e.g.
+# _fire_trim_named_missing(fill_stamp)
+def _fire_trim_named_missing(probed_stamp):
+    """The zero-block fire: a datum-less fill is never a silent pass (T317).
+
+    Split from assert_fill_trim's body so the RED-provability
+    mutant (the fire silent-passed) is a ONE-LINE swap on a copy — the
+    guard `_fire_trim_named_missing(probed_stamp)` -> `return` — rather
+    than a multi-line raise excision that cannot compile half-removed.
+    """
+    raise AssertionError(
+        f"assert_fill_trim: no `trim K` enumeration figure found in the "
+        f"composed fill text — zero enumeration blocks probed (the "
+        f"named-missing fire, never a silent pass); the fill must carry "
+        f"the FINAL-enumeration rendering (`trim K == K`) at its named "
+        f"stamp ({probed_stamp!r}), its figure composed from the SAME "
+        f"pre-commit leg's mechanical enumeration — re-run "
+        f"`{_FILL_TRIM_PROBE}` at the fill stamp and compose the figure "
+        f"from the probed count"
+    )
+
+
+# assert_fill_trim(text, probed_count, probed_stamp) — the composed TEXT + 2 probed actuals; e.g. assert_fill_trim(fill_text, probed_trim_count, fill_stamp)
+def assert_fill_trim(text, probed_count, probed_stamp):
+    """The fill's trim enumeration figure equals a FRESH mechanical count.
+
+    The corridor-figure falsification class's FOURTH committed sighting,
+    the SECOND on the trim surface (the first the cycle-1982 fill's
+    `trim 0 == 0` inside the T305 window): the cycle-2951 wrap fill
+    51f2f7f committed "trim 0 == 0 [… on THIS stream's trim-0 at the
+    stamp]" at its named 2026-11-04T13:47:56.795Z fill stamp while the
+    mechanical re-run at that same stamp reads `trim: 1` — the trim leg
+    2026-11-04T13:46:55.188Z fired ~62s BEFORE the stamp (the notes'
+    `trim 0 == 0` at ITS stamp 13:43:57Z was TRUE; the leg fired between
+    the two stamps). Caught one chain later by the digest backstop's
+    designed net at the trip-699 eval — zero casualty, corrected forward
+    per T70 at the cycle-2955 wrap. The trim surface was the only one of
+    the datum block's three stream-flag enumerations (ok:false / trim /
+    the ctx pair) without a mechanical leg — the figure composed from an
+    earlier read, not re-run before the write (META-META-SPEC T272, the
+    false-at-write shape).
+
+    *probed_count* is the trim-fire count the CALL SITE probed from the
+    LIVE events stream at assertion time — the FRESH
+    `{_FILL_TRIM_PROBE}` reading at the fill stamp, captured into a shell
+    variable per the T282 channel half — passed IN as the probed actual
+    (the T273 letter: arguments are the probed actuals; the function
+    never re-derives the expectation nor runs the probe itself).
+    *probed_stamp* is the stamp the count was probed at (the fill stamp)
+    — named in every fire so the recompose knows where to re-probe.
+    *text* is the composed fill/wrap TEXT (a str). Either non-str is the
+    call-signature slip shape — TypeError naming the accepted shape (the
+    pre-split line list is the text slip shape).
+
+    The asserted surface is the corpus's FINAL-enumeration rendering,
+    `trim K == K` (and the bare `trim K` head-figure): the assertion
+    passes iff at least ONE probed block carries the probed count exactly
+    (any-block semantics, the datum leg's rule — a text legitimately
+    quoting an earlier stream's figure stays green because the FINAL
+    datum's own figure rides beside it). Zero blocks is the
+    named-missing fire — a datum-less fill is never a silent pass — and
+    a degenerate *probed_count* (non-int, negative) fails closed naming
+    the probed value. The fire is zero-mutation by construction: all
+    arguments are values, nothing is opened or written.
+    """
+    if not isinstance(text, str):
+        probed = (
+            f"{len(text)} probed line(s)"
+            if isinstance(text, (list, tuple))
+            else repr(text)
+        )
+        raise TypeError(
+            f"assert_fill_trim(text, probed_count, probed_stamp): "
+            f"text must be the composed fill/wrap TEXT (a str — the "
+            f"trim enumeration figure the fill commits is asserted in "
+            f"memory, pre-write); probed text {probed} (type "
+            f"{type(text).__name__}) — the pre-split line list is the "
+            f"call-signature slip shape"
+        )
+    if not isinstance(probed_stamp, str):
+        probed = (
+            f"{len(probed_stamp)} probed line(s)"
+            if isinstance(probed_stamp, (list, tuple))
+            else repr(probed_stamp)
+        )
+        raise TypeError(
+            f"assert_fill_trim(text, probed_count, probed_stamp): "
+            f"probed_stamp must be the stamp the mechanical trim "
+            f"enumeration was probed at (a str — the fill stamp, named "
+            f"in every fire so the recompose knows where to re-probe); "
+            f"probed probed_stamp {probed} (type "
+            f"{type(probed_stamp).__name__})"
+        )
+    if (
+        not isinstance(probed_count, int)
+        or isinstance(probed_count, bool)
+        or probed_count < 0
+    ):
+        raise AssertionError(
+            f"assert_fill_trim: the probed count fails closed — "
+            f"probed probed_count {probed_count!r} (type "
+            f"{type(probed_count).__name__}) is not a non-negative int — "
+            f"the count must be the LIVE `{_FILL_TRIM_PROBE}` reading at "
+            f"the fill stamp probed in the SAME pre-commit leg (the T282 "
+            f"channel half: probed values ride argv/env into the script, "
+            f"never literal-composed); a degenerate probed count can "
+            f"never wave the leg GREEN"
+        )
+    trim_blocks = _trim_blocks(text)
+    if not trim_blocks:
+        _fire_trim_named_missing(probed_stamp)
+    reports = []
+    for idx, (t_head, t_tail) in enumerate(trim_blocks, 1):
+        if int(t_head) == probed_count:
+            return
+        shape = (
+            f"the full FINAL-enumeration rendering (== {t_tail})"
+            if t_tail is not None
+            else "the bare head-figure"
+        )
+        reports.append(
+            f"enumeration block {idx} of {len(trim_blocks)} probed "
+            f"({shape}: trim {t_head}): block figure {t_head!r} != probed "
+            f"{probed_count}"
+        )
+    raise AssertionError(
+        f"assert_fill_trim: the fill text's trim enumeration figure(s) "
+        f"diverge from the mechanical trim enumeration probed at the "
+        f"fill stamp {probed_stamp!r} — " + " | ".join(reports) + " — "
+        "the figure must carry the SAME pre-commit leg's probed count, "
+        "never a read taken earlier (the T272 false-at-write shape: the "
+        "cycle-2951 fill 51f2f7f carried the notes' earlier trim-0 read "
+        "past the leg's fire — the trim leg fired between the two stamps "
+        "— and the recompose re-runs the probe and asserts the NEW text "
+        "carries the NEW count): re-run "
+        f"`{_FILL_TRIM_PROBE}` at the fill stamp in the SAME pre-commit "
         "leg and compose the figure from the probed count"
     )
 

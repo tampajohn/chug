@@ -1122,6 +1122,16 @@ alike) has been harvested.
   updated the datum figures, never re-ran the enumeration — corrected
   forward per T70 at the cycle-2248 eval's establishment) — the same
   compose-time catch for the enumeration surface. The fill compose leg's
+  pre-commit assert ALSO re-enumerates the stream's trim-fire legs at the
+  fill stamp in the SAME leg (`jq -c 'select(.type=="trim")'
+  .chug/events.jsonl | wc -l`, the count captured into a shell variable —
+  probed values ride argv/env into the script, never literal-composed) and
+  verifies the fill text's trim enumeration figure carries the probed
+  count via `scripts/wrap_assert.py`'s trim-enumeration leg
+  (`assert_fill_trim`, T317: the cycle-2951 fill 51f2f7f wrote
+  `trim 0 == 0` at its named stamp against the mechanical 1 — the class's
+  fourth committed sighting, the second on the trim surface) — the same
+  compose-time catch for the trim surface. The fill compose leg's
   pre-commit assert ALSO runs `scripts/wrap_assert.py`'s on-disk
   state-schema leg (`assert_state_on_disk`, T311) against the committed
   `.chug/eval-state.md` AFTER the wrap's state write: the leg reads the
