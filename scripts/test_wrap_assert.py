@@ -3441,11 +3441,11 @@ class AssertFillTrimTest(unittest.TestCase):
             self.assertEqual(sorted(os.listdir(tmp)), before)
 
     def test_export_and_docstring_coverage_sentence_pinned(self):
-        # The leg rides the module's __all__ (17 -> 18) and the docstring
-        # coverage sentence names the T317 legs (the pin-surface extended,
-        # not re-shaped).
+        # The leg rides the module's __all__ (17 -> 18; T319 -> 19) and the
+        # docstring coverage sentence names the T317 legs (the pin-surface
+        # extended, not re-shaped).
         self.assertIn("assert_fill_trim", wrap_assert.__all__)
-        self.assertEqual(len(wrap_assert.__all__), 18)
+        self.assertEqual(len(wrap_assert.__all__), 19)
         self.assertIn("T317 fill trim-enumeration legs", wrap_assert.__doc__)
         # The extension, not a re-shape: the T316 sentence tail still rides.
         self.assertIn("T316 Outcomes one-liner figure-audit legs",
@@ -3494,6 +3494,361 @@ class AssertFillTrimTest(unittest.TestCase):
         )
         m2["assert_fill_trim"](
             datumless_text, T317_PROBED_COUNT, T317_FILL_STAMP
+        )
+        # The module restored byte-identical after each run (nothing was
+        # ever written — re-read and compared against the pristine read).
+        with open(wrap_assert.__file__, "r", encoding="utf-8") as f:
+            self.assertEqual(f.read(), pristine)
+
+
+# ---- T319: the fill enumeration count-word leg (assert_fill_enumeration_word) ----
+
+T319_FILL_STAMP = "2026-11-04T17:51:05.800Z"
+# The mechanical `ok:false`-leg count the compose leg probes at the fill
+# stamp (the SAME probe the T310 leg takes — the T282 channel half: probed
+# values ride argv/env into the script, never literal-composed) — the
+# cycle-2955 stream's whole-final `ok:false`-leg count at the fill stamp is
+# TWELVE (jq `select(.type=="tool_result" and .ok==false)` count-12 — all
+# twelve timestamps the fill itself enumerates).
+T319_PROBED_COUNT = 12
+# The corpus's FINAL-enumeration count-word renderings: the TRUE words (the
+# mechanical TWELVE at the fill stamp — head `TWELVE legs` + tail `ALL
+# TWELVE designed`) and the falsified 652fd7c words (head `ELEVEN legs` +
+# tail `ALL ELEVEN designed` against the mechanical TWELVE — the class's
+# FIFTH committed sighting, the FIRST on the enumeration count-word
+# surface; the FIGURE `12 == 12` itself TRUE, the T310 guard-fire's
+# designed catch having corrected it after the fire leg landed as the
+# 12th, while the count-WORD rode stale, head and tail both).
+T319_TRUE_BLOCK = (
+    "ok:false 12 == 12 [the enumeration re-run off the stream's own flags "
+    "per T272/T310 at the fill stamp: TWELVE legs — 14:43:00.698Z the "
+    "Phase-1 corpus probe's trailing grep no-match exit-1 [recomposed] + "
+    "16:16:59.628Z the 300s bash-cap timeout kill on the T317 harvest "
+    "composite [no casualty, verified next leg] + 16:19:01.014Z the "
+    "git-add .chug/* gitignore refusal [recomposed with TODO.md only "
+    "GREEN] + 17:25:32.179Z/.180Z/.180Z/.181Z/.182Z the FIVE outcome-batch "
+    "decision_log designed refusals [prose-suffixed choice, recomposed "
+    "bare GREEN] + 17:35:26.002Z the tac command-not-found exit-127 "
+    "[GNU-only on the BSD host, recomposed with tail -r GREEN] + "
+    "17:38:16.919Z the prep-battery verify grep count-0 exit-1 [the "
+    "Summary line the authority, recomposed GREEN] + ~17:49Z the T309 "
+    "datum assert's FIRST guard-fire [the fill text's datum block carried "
+    "the unicode arrow where the leg probes the ASCII form — the designed "
+    "pre-commit fire, zero-commit consequence, recomposed GREEN the same "
+    "wrap] + ~17:51Z the T310 enumeration assert's FIRST guard-fire [the "
+    "recompose updated the datum but hardcoded the enumeration figure 10 "
+    "against the mechanical 11 — the exact T272 shape the leg pins, the "
+    "designed pre-commit fire, zero-commit consequence, recomposed with "
+    "the probed count GREEN] — ALL TWELVE designed read-only zero-mutation "
+    "0-REAL legs [the last two the assert family's own designed "
+    "guard-fires dogfooding]]"
+)
+T319_FALSIFIED_BLOCK = T319_TRUE_BLOCK.replace(
+    "TWELVE legs", "ELEVEN legs"
+).replace("ALL TWELVE designed", "ALL ELEVEN designed")
+
+
+# The corpus's FINAL-datum rendering is one physical line in the commit
+# subject, but a fill BODY wraps — a multi-line TRUE fixture (the
+# line-agnostic scan) doubling as the pre-split line-list slip shape's
+# source (8 lines).
+T319_MULTILINE_FILL = "\n".join(
+    [
+        "eval: cycle-2955 wrap fill - the wrap tail [the state write landed",
+        "FACADE-GREEN]; Datum FINAL 195 iters / ~12554.650s wall [GENERATED",
+        "by scripts/stream_datum.py per the T305 doctrine,",
+        f"{T319_FILL_STAMP}]: ok:false 12 == 12 [the enumeration re-run off",
+        "the stream's own flags per T272/T310 at the fill stamp: TWELVE",
+        "legs — the ten timestamped legs plus the T309/T310 guard-fires —",
+        "ALL TWELVE designed read-only zero-mutation 0-REAL legs",
+        "[the last two the assert family's own designed guard-fires "
+        "dogfooding]]",
+    ]
+)
+
+
+def _t319_fill(word_block):
+    """A fill text carrying *word_block* as its FINAL-datum enumeration."""
+    return (
+        "eval: cycle-2955 wrap fill - the wrap tail. Datum FINAL 195 iters "
+        "/ ~12554.650s wall [2026-11-04T14:21:51.150Z -> "
+        "2026-11-04T17:51:05.800Z off the stream anchors per "
+        "scripts/stream_datum.py --at 2026-11-04T17:51:05Z at the fill "
+        f"stamp] — {word_block} + masked-stderr 0 candidates + ctx 1 "
+        "accepted / 0 rejected + trim 1 == 1 + goal 0 at the stamp"
+    )
+
+
+class AssertFillEnumerationWordTest(unittest.TestCase):
+    def test_pass_true_count_words_carried_exactly(self):
+        # T319 PASS path: the fill text whose enumeration count-words carry
+        # the probed count (head `TWELVE legs` + tail `ALL TWELVE designed`
+        # at the mechanical 12 — the figure the T310 leg already pins) rides
+        # the count-word leg green — the one-line subject shape AND a
+        # multi-line body shape (the scan is line-agnostic).
+        wrap_assert.assert_fill_enumeration_word(
+            _t319_fill(T319_TRUE_BLOCK), T319_PROBED_COUNT, T319_FILL_STAMP
+        )
+        wrap_assert.assert_fill_enumeration_word(
+            T319_MULTILINE_FILL, T319_PROBED_COUNT, T319_FILL_STAMP
+        )
+
+    def test_pass_singular_and_zero_shapes(self):
+        # The singular `ONE leg` head form (the count-1 shape) and the
+        # `ZERO legs` head form (the count-0 shape — a stream that fired no
+        # ok:false leg, quoted at a stamp before any leg fired) both carry
+        # the probed count: green (0 is a count, never degenerate).
+        wrap_assert.assert_fill_enumeration_word(
+            _t319_fill(
+                "ok:false 1 == 1 [the enumeration re-run off the stream's "
+                "own flags per T272/T310 at the fill stamp: ONE leg — "
+                "13:46:55.188Z the trim-leg AssertionError [the designed "
+                "pre-commit fire, recomposed GREEN] — ALL ONE designed "
+                "read-only zero-mutation 0-REAL legs]"
+            ),
+            1,
+            T319_FILL_STAMP,
+        )
+        wrap_assert.assert_fill_enumeration_word(
+            _t319_fill(
+                "ok:false 0 == 0 [the enumeration re-run off the stream's "
+                "own flags per T272/T310 at the fill stamp: ZERO legs — no "
+                "ok:false leg fired on this stream — ALL ZERO designed "
+                "read-only zero-mutation 0-REAL legs]"
+            ),
+            0,
+            T319_FILL_STAMP,
+        )
+
+    def test_fail_2955_shape_names_word_mapped_probed_and_stamp(self):
+        # T319 FAIL path, the 652fd7c shape exactly: the committed
+        # count-WORD (ELEVEN, head and tail both) against the mechanical
+        # TWELVE at the fill's own named stamp — the figure 12 == 12 itself
+        # TRUE (the T310 guard-fire's designed catch corrected it) while
+        # the word rode stale. The fire names BOTH offending words with
+        # their mapped value, the probed count, and the stamp, with the
+        # class and the remedy.
+        text = _t319_fill(T319_FALSIFIED_BLOCK)
+        with self.assertRaises(AssertionError) as ctx:
+            wrap_assert.assert_fill_enumeration_word(
+                text, T319_PROBED_COUNT, T319_FILL_STAMP
+            )
+        msg = str(ctx.exception)
+        self.assertIn(
+            "count-word 'ELEVEN' (head form) maps 11 != probed 12", msg
+        )
+        self.assertIn(
+            "count-word 'ELEVEN' (tail form) maps 11 != probed 12", msg
+        )
+        self.assertIn(T319_FILL_STAMP, msg)  # the probed enumeration stamp
+        self.assertIn("652fd7c", msg)  # the fire named
+        self.assertIn("FIFTH committed sighting", msg)  # the class named
+        self.assertIn("re-run", msg)  # the remedy named
+        self.assertIn("wc -l", msg)  # the mechanical enumeration named
+        self.assertIn("block 1 of 1", msg)
+
+    def test_fail_word_mismatch_inside_one_block(self):
+        # The head right and the tail wrong (`ALL ELEVEN designed` against
+        # the mechanical TWELVE) STILL fires — every count-word occurrence
+        # in the block must map, not merely one of them; only the offending
+        # occurrence is named (the head word mapped true and rides).
+        text = _t319_fill(
+            T319_TRUE_BLOCK.replace(
+                "ALL TWELVE designed", "ALL ELEVEN designed"
+            )
+        )
+        with self.assertRaises(AssertionError) as ctx:
+            wrap_assert.assert_fill_enumeration_word(
+                text, T319_PROBED_COUNT, T319_FILL_STAMP
+            )
+        msg = str(ctx.exception)
+        self.assertIn(
+            "count-word 'ELEVEN' (tail form) maps 11 != probed 12", msg
+        )
+        self.assertNotIn("head form", msg)
+
+    def test_fail_zero_word_bearing_blocks_named_missing(self):
+        # A datum-less fill is NEVER a silent pass: enumeration blocks
+        # probed with NO count-word rendering (the T310-era figure-only
+        # shape, `ok:false 12 == 12 adjudicated, 0-REAL + ...` — no payload
+        # bracket, no words) fire named-missing, as does a fill with no
+        # enumeration figure at all.
+        for bare in (
+            "eval: cycle-2955 wrap fill - the wrap tail. Datum FINAL 195 "
+            "iters / ~12554.650s wall [2026-11-04T14:21:51.150Z -> "
+            "2026-11-04T17:51:05.800Z off the stream anchors]: ok:false 12 "
+            "== 12 adjudicated, 0-REAL + trim 1 == 1 + goal 0 at the stamp",
+            "eval: cycle-2955 wrap fill - the wrap tail [no enumeration "
+            "figure probed]",
+        ):
+            with self.assertRaises(AssertionError) as ctx:
+                wrap_assert.assert_fill_enumeration_word(
+                    bare, T319_PROBED_COUNT, T319_FILL_STAMP
+                )
+            msg = str(ctx.exception)
+            self.assertIn("no count-word rendering", msg)
+            self.assertIn("named-missing", msg)
+            self.assertIn("never a silent pass", msg)
+            self.assertIn(T319_FILL_STAMP, msg)
+            self.assertIn("wc -l", msg)
+
+    def test_fail_unknown_word_fails_closed(self):
+        # An unknown word in a count-word rendering fails closed naming it
+        # — the vocabulary is the corpus's observed words (ZERO..TWENTY),
+        # never a projection of what a fill MIGHT write.
+        text = _t319_fill(
+            T319_TRUE_BLOCK.replace("TWELVE legs", "THIRTY legs")
+        )
+        with self.assertRaises(AssertionError) as ctx:
+            wrap_assert.assert_fill_enumeration_word(
+                text, T319_PROBED_COUNT, T319_FILL_STAMP
+            )
+        msg = str(ctx.exception)
+        self.assertIn(
+            "count-word 'THIRTY' (head form) is not in the ZERO..TWENTY "
+            "vocabulary", msg
+        )
+        self.assertIn("fails closed", msg)
+
+    def test_fail_degenerate_probed_count_fails_closed(self):
+        # A degenerate probed_count fails closed naming the probed value
+        # and its type — a str count, None, a bool (a bool is an int
+        # subclass; it is not a count), and a negative all refuse. The
+        # corpus's false-at-write shape: a literal-composed count riding
+        # the ARG can never wave the leg GREEN.
+        for bad, frag in (
+            ("12", "probed probed_count '12' (type str)"),
+            (None, "probed probed_count None (type NoneType)"),
+            (True, "probed probed_count True (type bool)"),
+            (-1, "probed probed_count -1 (type int)"),
+        ):
+            with self.assertRaises(AssertionError) as ctx:
+                wrap_assert.assert_fill_enumeration_word(
+                    _t319_fill(T319_TRUE_BLOCK), bad, T319_FILL_STAMP
+                )
+            msg = str(ctx.exception)
+            self.assertIn("fails closed", msg)
+            self.assertIn(frag, msg)
+
+    def test_fail_non_str_arguments_raise_type_error(self):
+        # The interface defense: *text* is the composed TEXT and
+        # *probed_stamp* is the probed stamp STR — a pre-split line list is
+        # the text call-signature slip shape (the caller passes the
+        # composed text verbatim), so it TypeErrors naming the shape.
+        with self.assertRaises(TypeError) as ctx:
+            wrap_assert.assert_fill_enumeration_word(
+                7, T319_PROBED_COUNT, T319_FILL_STAMP
+            )
+        msg = str(ctx.exception)
+        self.assertIn("TEXT", msg)
+        self.assertIn("type int", msg)
+        with self.assertRaises(TypeError) as ctx:
+            wrap_assert.assert_fill_enumeration_word(
+                T319_MULTILINE_FILL.splitlines(),
+                T319_PROBED_COUNT,
+                T319_FILL_STAMP,
+            )
+        msg = str(ctx.exception)
+        self.assertIn("8 probed line(s)", msg)
+        self.assertIn("type list", msg)
+        with self.assertRaises(TypeError) as ctx:
+            wrap_assert.assert_fill_enumeration_word(
+                _t319_fill(T319_TRUE_BLOCK), T319_PROBED_COUNT, None
+            )
+        msg = str(ctx.exception)
+        self.assertIn("probed_stamp", msg)
+        self.assertIn("type NoneType", msg)
+
+    def test_pass_any_block_stale_plus_true_redeemed(self):
+        # The any-block semantics (the datum leg's rule): one text quoting
+        # BOTH the falsified 652fd7c word shape (the stale ELEVEN read) and
+        # the TRUE recompose shape stays GREEN — the TRUE block redeems the
+        # text. The freshness contract rides the compose leg's SAME-leg
+        # re-probe (the T282 channel half: the probed count is the live
+        # reading, captured into a shell variable, never literal-composed),
+        # not the any-block semantics.
+        both = _t319_fill(T319_FALSIFIED_BLOCK) + "\n" + _t319_fill(
+            T319_TRUE_BLOCK
+        )
+        wrap_assert.assert_fill_enumeration_word(
+            both, T319_PROBED_COUNT, T319_FILL_STAMP
+        )
+        # ...and the same text rides green against the stale word's own
+        # count too (any-block), while a text carrying ONLY the stale word
+        # still fires (the 2955-shape leg above).
+        wrap_assert.assert_fill_enumeration_word(both, 11, T319_FILL_STAMP)
+
+    def test_fail_fire_is_pre_write_zero_mutation(self):
+        # The fire is designed pre-commit: all arguments are values, the
+        # function opens and writes NOTHING — the tempdir is byte-unchanged
+        # through the raise.
+        with tempfile.TemporaryDirectory() as tmp:
+            before = sorted(os.listdir(tmp))
+            with self.assertRaises(AssertionError):
+                wrap_assert.assert_fill_enumeration_word(
+                    _t319_fill(T319_FALSIFIED_BLOCK),
+                    T319_PROBED_COUNT,
+                    T319_FILL_STAMP,
+                )
+            self.assertEqual(sorted(os.listdir(tmp)), before)
+
+    def test_export_and_docstring_coverage_sentence_pinned(self):
+        # The leg rides the module's __all__ (18 -> 19) and the docstring
+        # coverage sentence names the T319 legs (the pin-surface extended,
+        # not re-shaped).
+        self.assertIn("assert_fill_enumeration_word", wrap_assert.__all__)
+        self.assertEqual(len(wrap_assert.__all__), 19)
+        self.assertIn(
+            "T319 fill enumeration count-word legs", wrap_assert.__doc__
+        )
+        # The extension, not a re-shape: the T317 and T310 sentence tails
+        # still ride.
+        self.assertIn("T317 fill trim-enumeration legs", wrap_assert.__doc__)
+        self.assertIn("T310 fill-enumeration legs", wrap_assert.__doc__)
+
+    def test_red_provability_mutants_run_on_a_copy(self):
+        # RED-provability, hand-proved by mutants run on a COPY: the module
+        # itself is never written (the mutation rides an in-memory exec of
+        # a mutated source string), and the on-disk module is re-read
+        # byte-identical after each run.
+        with open(wrap_assert.__file__, "r", encoding="utf-8") as f:
+            pristine = f.read()
+        falsified_text = _t319_fill(T319_FALSIFIED_BLOCK)
+        wordless_text = _t319_fill(
+            "ok:false 12 == 12 adjudicated, 0-REAL + trim 1 == 1 + goal 0 "
+            "at the stamp"
+        )
+        # The shipped module fires on both inputs (the legs above pin it;
+        # re-asserted here so the mutant contrast is self-contained).
+        with self.assertRaises(AssertionError):
+            wrap_assert.assert_fill_enumeration_word(
+                falsified_text, T319_PROBED_COUNT, T319_FILL_STAMP
+            )
+        with self.assertRaises(AssertionError):
+            wrap_assert.assert_fill_enumeration_word(
+                wordless_text, T319_PROBED_COUNT, T319_FILL_STAMP
+            )
+        # M1 — the word-compare deleted (every known word redeems): the
+        # 2955-shape fire goes red (no raise under the mutant, where the
+        # shipped leg raises).
+        m1 = _mutant_wrap_assert(
+            pristine,
+            "            elif mapped != probed_count:",
+            "            elif False:",
+        )
+        m1["assert_fill_enumeration_word"](
+            falsified_text, T319_PROBED_COUNT, T319_FILL_STAMP
+        )
+        # M2 — the zero-word-bearing fire silent-passed: the named-missing
+        # fire goes red (no raise under the mutant, where the shipped leg
+        # raises).
+        m2 = _mutant_wrap_assert(
+            pristine,
+            "        _fire_word_named_missing(probed_stamp)",
+            "        return",
+        )
+        m2["assert_fill_enumeration_word"](
+            wordless_text, T319_PROBED_COUNT, T319_FILL_STAMP
         )
         # The module restored byte-identical after each run (nothing was
         # ever written — re-read and compared against the pristine read).
