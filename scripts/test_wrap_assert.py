@@ -2702,6 +2702,98 @@ T316_ONE_LINER_FALSIFIED = _t316_one_liner(
     rearm="re-arm 598th discharged EXACT",
 )
 
+# The T318 m6 survivor's killing fixture (the T316 validator
+# d1793798848-4's second survivor, LOW impact: group 1's RED fixtures
+# perturbed only the quiet-TRIP sub-figure, never the zero-row
+# `A/B → C/D` pair). The one-liner agrees on quiet-TRIP (42→43) and on
+# the zero-row FIRST fraction (656/698) and perturbs the SECOND fraction
+# only (→ 658/700 where the full entry carries → 657/699) — the C/D-only
+# falsification the validator verified the SHIPPED leg fires on
+# (AssertionError naming the 'quiet-TRIP/zero-row pair' group). The m6
+# MUTANT SHAPE it kills: the comparison with the zero-row second
+# fraction dropped — the `zero_row = zero_row + (frac2[0], frac2[1])`
+# extension in _ol_pair_figures deleted, both sides read as the bare
+# `A/B` 2-tuple — under which the fixture compares (656, 698) ==
+# (656, 698) and stays SILENT (the pre-T318 suite gap: nothing pinned
+# the pair's second fraction).
+T316_ONE_LINER_ZERO_ROW_SECOND_FALSIFIED = T316_ONE_LINER_2919.replace(
+    "ZERO rows 656/698 → 657/699", "ZERO rows 656/698 → 658/700", 1
+)
+
+# The T318 m1 survivor's killing fixture (the T316 validator
+# d1793798848-4's first survivor, LOW impact: no committed fixture
+# exercised the ordinal-adjacency contract). The FULL entry's close
+# region carries the ordinal-adjacency VIOLATION the shipped leg rejects
+# — the handoff's forward announcement `the 611th backstop closes the
+# 2692 stream at the NEXT real eval` (a `backstop closes` occurrence
+# WITHOUT the EXACT adjacency — the NEXT close, the wrong ordinal AND
+# the wrong stream, the 2704-era trap `_ol_close_anchor`'s docstring
+# names) riding BEFORE the own `the 610th close EXACT` — and the
+# falsified one-liner writes the close group with the trap's stale-but-
+# in-window values (the 611th/2692 stream 61/1,318 — present in the full
+# entry's close window, UNEQUAL to the true own 610th/2688 stream
+# 84/1,251, the corridor class's exact divergence shape). The other four
+# figure groups agree, so the fire is the close group ALONE with BOTH
+# ordinals probed. The m1 MUTANT SHAPE it kills: the adjacency check
+# dropped — the close anchor's first candidate scanned as bare
+# `backstop closes` (shipped demands `backstop closes EXACT`) — under
+# which the scan anchors the full side on the VIOLATING trap, reads
+# (611, 2692, 61, 1318) == the one-liner's falsified close, and stays
+# SILENT. The validator's residual pathological case (a stale ordinal
+# EQUAL to the true own ordinal) stays out of scope per its own impact
+# assessment.
+T316_FULL_CLOSE_ADJACENCY_TRAP = (
+    "### Cycle 2704 (2026-10-27) — trip-475 eval (kimi; the T247 valve's "
+    "FIRST-attempt trip at TRUE 2 on a mixed chain): ZERO rows filed (the "
+    "zero-row count moves 650/692 → 651/693, the queue EMPTY), 0 items "
+    "worked; eval 7c4d2e9 + the eval's push carried the 2 unpushed "
+    "supervisor dispositions 2702-2703 = b81a6f4/09c3e57 along; the 611th "
+    "backstop closes the 2692 stream at the NEXT real eval [the rotation's "
+    "forward slot — the 2692 stream's own final re-derived THIS eval "
+    "CONCURS: 61/1,318 — the 611th establishment's committed figure, the "
+    "2696 eval commit 5ec41a7, events-20261027-190412 per the rotation "
+    "mechanism — NO carried tension]. ZERO eval-triage records (the T261 "
+    "change-detection trigger QUIET — the fully-quiet-TRIP streak moves "
+    "38 → 39); the second net re-derived THIS wrap exact → 521 = the 2700 "
+    "wrap's 520 + the 610th EXACT close's increment; the T261 "
+    "change-detection anchor the newest EVALUATION-md-touching commit "
+    "7c4d2e9 [THIS eval]. The eval: the 610th close EXACT on the "
+    "carried-TRUE figure — reading the 2688 stream's whole-stream final "
+    "84/1,251 [re-derivation off events-20261027-171233 per scripts/"
+    "stream_datum.py CONCURS: iters=84, wall-secs 1250.881 → 1,251 "
+    "[ROUND-anchor], ok:false 5, ctx 1/0, trim 0, goal 1] == the 610th "
+    "establishment's committed figure [the 2692 eval, commit 19bb40c — "
+    "re-grepped off the committed text at eval-write, count-3], NO carried "
+    "tension; correct-accounting 331 → 332; INEXACT-close HOLDS 8; the "
+    "quiet top HOLDS 96. The 667th establishment — reading the 2696 "
+    "stream's whole-stream final 96/1,478 [re-derivation off "
+    "events-20261027-204455 per scripts/stream_datum.py CONCURS: iters=96, "
+    "wall-secs 1477.412 → 1,478 [ROUND-anchor]]; ok:false 3 == 3; the "
+    "102-bound NON-FIRES [96 < the bound — the census HOLDS 37, the "
+    "non-fire streak 2 → 3]; the quiet top HOLDS 96; the 668th "
+    "establishment hands off [the 2700 stream's own final]. re-arm 542nd "
+    "DISCHARGED EXACT — reading the 2806 stream's whole-final 71/1,590 "
+    "[the 531st establishment's committed figure [the 2810 eval, commit "
+    "aa17e02]]; (b) NEGATIVE — 71 < the 102 bound [the watch HOLDS 49]; "
+    "the quiet top HOLDS 96 [71 < 96]; the 542nd hands off. The wrap: "
+    "gates GREEN docs-only (batteries 210/210 ×2), batch ONE (914th), "
+    "audit zero-growth, NO TAG (TRUE 2 = T88 + T91), fill 40b9a17 pushed, "
+    "main == origin/main. Handoff: the 611th backstop and the 668th "
+    "establishment hand off; re-arm 543rd DUE reading the 2810 stream's "
+    "own final."
+)
+
+T316_ONE_LINER_CLOSE_ADJACENCY_FALSIFIED = (
+    "### Cycle 2704 (2026-10-27) — trip-475 eval 7c4d2e9 (kimi, ZERO rows "
+    "650/692 → 651/693, ZERO triage, fully-quiet-TRIP 38→39, second net → "
+    "521, the 611th EXACT close [2692 stream 61/1,318] + the 667th "
+    "establishment [2696 stream 96/1,478, the 102-bound NON-FIRES census "
+    "HOLDS 37] + re-arm 542nd discharged EXACT [(b) NEGATIVE watch HOLDS "
+    "49]) + wrap landed: gates GREEN docs-only (batteries 210/210 ×2), "
+    "audit zero-growth, NO TAG (TRUE 2 = T88 + T91), fill 40b9a17 pushed, "
+    "main == origin/main."
+)
+
 T316_FULL_HOLDS = (
     "### Cycle 2951 (2026-11-04) — trip-694 eval (kimi; the T247 valve's "
     "FIRST-attempt trip at TRUE 1 on a bookkeeping window): ZERO rows "
@@ -2875,6 +2967,98 @@ class AssertOutcomesOneLinerTest(unittest.TestCase):
         self.assertIn("'re-arm ordinal'", message)
         self.assertIn("(597,)", message)
         self.assertIn("(598,)", message)
+
+    def test_red_zero_row_second_fraction_falsified_names_group_and_values(
+        self,
+    ):
+        # The T318 m6 survivor's killing fixture: the one-liner agrees on
+        # the quiet-TRIP sub-figure (42→43) and on the zero-row FIRST
+        # fraction (656/698) but perturbs the zero-row SECOND fraction
+        # only (→ 658/700 where the full entry carries → 657/699) — the
+        # C/D-only falsification the T316 validator verified the shipped
+        # leg fires on. The leg must fire naming the 'quiet-TRIP/zero-row
+        # pair' group with both probed tuples.
+        falsified = T316_ONE_LINER_ZERO_ROW_SECOND_FALSIFIED
+        self.assertNotEqual(falsified, T316_ONE_LINER_2919)
+        with self.assertRaises(AssertionError) as caught:
+            wrap_assert.assert_outcomes_one_liner(T316_FULL_2919, falsified)
+        message = str(caught.exception)
+        self.assertIn("'quiet-TRIP/zero-row pair'", message)
+        self.assertIn("(656, 698, 657, 699)", message)
+        self.assertIn("(656, 698, 658, 700)", message)
+        # C/D-only: exactly ONE group problem (the other four groups
+        # agree — the perturbation never leaves the pair).
+        self.assertIn("1 figure-group problem(s)", message)
+        # RED provability against the m6 MUTANT SHAPE (run on a COPY, the
+        # T310/T316 idiom): the comparison with the zero-row second
+        # fraction dropped — the `zero_row = zero_row + (frac2[0],
+        # frac2[1])` extension deleted, both sides read as the bare `A/B`
+        # 2-tuple — the fixture then compares (656, 698) == (656, 698)
+        # and stays SILENT (no raise under the mutant, where the shipped
+        # leg raises above). The on-disk module is re-read byte-identical
+        # after (the mutation rides an in-memory exec, never a write).
+        with open(wrap_assert.__file__, "r", encoding="utf-8") as f:
+            pristine = f.read()
+        m6 = _mutant_wrap_assert(
+            pristine,
+            "            zero_row = zero_row + (frac2[0], frac2[1])",
+            "            pass",
+        )
+        m6["assert_outcomes_one_liner"](T316_FULL_2919, falsified)
+        with open(wrap_assert.__file__, "r", encoding="utf-8") as f:
+            self.assertEqual(f.read(), pristine)
+
+    def test_red_close_adjacency_violation_falsified_names_group_and_ordinals(
+        self,
+    ):
+        # The T318 m1 survivor's killing fixture: the full entry's close
+        # region carries the ordinal-adjacency VIOLATION the shipped leg
+        # rejects — the handoff's forward announcement `the 611th backstop
+        # closes the 2692 stream at the NEXT real eval` (a `backstop
+        # closes` occurrence WITHOUT the EXACT adjacency — the NEXT close,
+        # the wrong ordinal AND the wrong stream) riding BEFORE the own
+        # `the 610th close EXACT` — and the one-liner's close ordinal is a
+        # stale-but-in-window value UNEQUAL to the true own ordinal (the
+        # 611th/2692 stream written where the full entry's own close is
+        # the 610th/2688 — the corridor class's divergence shape). The leg
+        # must fire naming the 'backstop close' group with BOTH ordinals.
+        with self.assertRaises(AssertionError) as caught:
+            wrap_assert.assert_outcomes_one_liner(
+                T316_FULL_CLOSE_ADJACENCY_TRAP,
+                T316_ONE_LINER_CLOSE_ADJACENCY_FALSIFIED,
+            )
+        message = str(caught.exception)
+        self.assertIn("'backstop close'", message)
+        self.assertIn("(610, 2688, 84, 1251)", message)
+        self.assertIn("(611, 2692, 61, 1318)", message)
+        # Only the close group diverged (the trap hijacks nothing else —
+        # the other four figure groups agree).
+        self.assertIn("1 figure-group problem(s)", message)
+        # RED provability against the m1 MUTANT SHAPE (run on a COPY, the
+        # T310/T316 idiom): the adjacency check dropped — the close
+        # anchor's first candidate scanned as bare `backstop closes`
+        # (shipped demands `backstop closes EXACT`, the 2704-era guard) —
+        # the scan then anchors the full side on the VIOLATING trap and
+        # reads (611, 2692, 61, 1318) == the one-liner's falsified close:
+        # the fixture stays SILENT (no raise under the mutant, where the
+        # shipped leg raises above). The on-disk module is re-read
+        # byte-identical after (the mutation rides an in-memory exec,
+        # never a write).
+        with open(wrap_assert.__file__, "r", encoding="utf-8") as f:
+            pristine = f.read()
+        m1 = _mutant_wrap_assert(
+            pristine,
+            '_CLOSE_ANCHORS = ("backstop closes EXACT", "EXACT close", '
+            '"close EXACT")',
+            '_CLOSE_ANCHORS = ("backstop closes", "EXACT close", '
+            '"close EXACT")',
+        )
+        m1["assert_outcomes_one_liner"](
+            T316_FULL_CLOSE_ADJACENCY_TRAP,
+            T316_ONE_LINER_CLOSE_ADJACENCY_FALSIFIED,
+        )  # no raise under the mutant
+        with open(wrap_assert.__file__, "r", encoding="utf-8") as f:
+            self.assertEqual(f.read(), pristine)
 
     def test_red_full_falsified_one_liner_names_all_five_in_one_fire(self):
         # The class's canonical regression pin: the eb7dd7a one-liner (all
