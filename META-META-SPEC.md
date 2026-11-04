@@ -331,6 +331,28 @@ shape probe before the walk) covers python and jq alike. Both classes
 are a probe composed from habit instead of inspection — mask the exit
 code you expect, inspect the shape before you project.
 
+**Rotation-filename citation hygiene (T320, ls-verify at compose
+time).** A rotated events-filename citation (`events-<ts>.jsonl`) in
+corridor text — an eval body, a wrap one-liner, a hand-off, a state
+open-threads bullet — is verified against the tree at compose time,
+never composed from memory or derived from the stream's own anchors:
+the filename-ts is the SUCCESSOR run's launch timestamp (the rotation
+mechanism), so a computed ts drifts by seconds and a remembered name
+can point at a different stream's file. The compose-time act: probe
+`ls .chug/events-<candidate>.jsonl` (existence) and, when the citation
+binds a figure, confirm the stream by content
+(`jq -c 'select(.type=="run_start") | .ts' <file>`) BEFORE the commit —
+or generate the citation from the `ls` output captured into a shell
+variable, never literal-compose the name. The class evidence: three
+committed sightings — the 709th eval body's 677th citation (104607 for
+the 2947 stream, the 2943 stream's file), the cycle-2956 one-liner's
+678th mis-attachment (104607 for the 2951 stream, the body correct at
+142147), the 710th eval body's backstop hand-off (114929 vs the TRUE
+114931) — every figure byte-TRUE, the machine never reading the name;
+the cycle-2923 carried-file mis-slot is the precedent near-miss. The
+rule stays a compose-time habit, NOT a gate: a text-level detector over
+citation prose is the brittle-awk class, rejected.
+
 **Scoped-walk rule (T293, prune-first / scoped-probe).** Orchestrator
 probes NEVER run a recursive walk from the repo root inline — `find .`,
 `grep -r .`, `du .` and kin: the walk itself descends `target/` and the
