@@ -212,6 +212,45 @@ while the shipped module fires; the module byte-identical after). The
 two T311-era keyword-less fixtures now carry the probed marker (the
 always-on leg's contract) — their assertions unchanged.
 
+T316 makes the Outcomes one-liner's five figure groups auditable at
+compose time (the corridor-figure falsification class's second committed
+sighting, the cycle-2947 wrap): the 2943 wrap's compaction of cycle 2919
+wrote its one-liner with the 2923 entry's figures — quiet-TRIP 43→44
+(TRUE 42→43), net →530 (TRUE 529), the 666th EXACT close [2903 stream
+51/1,403] (TRUE the 665th/2899 stream 80/1,182), the 669th establishment
+[2915 stream 108/2,095 census 39→40] (TRUE the 668th/2911 stream
+122/1,333 census 38→39), re-arm 598th (TRUE 597th) — every existing guard
+passed it, and the compacted line rode the tree FALSE for 4 cycles
+(2943→2947) until the 2947 wrap's own ad-hoc one-liner audit caught it
+(corrected forward per T70 in c600bc5); the class's own watch
+pre-authorized this row (a second committed sighting weighs a guard row).
+assert_outcomes_one_liner(full_text, one_liner_text) compares the SAME
+five groups (the quiet-TRIP/zero-row pair, the second-net figure, the
+backstop close, the establishment, the re-arm ordinal) between the
+committed FULL entry and the one-liner replacing it — both probed strs
+passed in (TEXT-not-path, no subprocess, no file IO), all group problems
+reporting in ONE AssertionError naming the group + the full-entry value +
+the one-liner value, extraction failures fail-closed (a group that cannot
+be extracted from EITHER text fires the named failure — a silent skip
+would re-create the vacuous-pass class). Legs: the GREEN pair rides the
+cycle-2919 template shape (the corrected one-liner's exact figures); the
+holds/RESETS pair and the ASCII-arrow paren-form pair ride the corpus's
+other committed shapes (the 2951-era `HOLDS`/`RESETS` renderings, the
+2798-era `->` arrows and `close EXACT (` close); a prose-only perturbation
+(wrap-boilerplate digits) stays GREEN — the leg audits FIGURES, not prose;
+each of the five groups RED-proved with ITS OWN falsified one-liner (the
+eb7dd7a figures) firing the named group + both values; the full eb7dd7a
+one-liner fires ALL FIVE in one AssertionError; extraction failures fire
+closed (an establishment slice surgically removed, the census-less
+2915-era one-liner rendering, a close-anchor-less 2907-era full — each
+naming the side); non-str arguments TypeError naming the accepted shape;
+the export + docstring coverage sentence pinned; the RED proof rides the
+in-suite mutant (the fire stashed on a COPY — the falsified pair passes
+the stash — while the shipped module fires; the module byte-identical
+after). The eval-body T184 mis-quote subclass stays OUT of scope (the
+state file's `fresh-input-last-eval:` line backstops that surface per
+T282/T305).
+
 Run (the check line): python3 -m unittest scripts/test_wrap_assert.py -v
 """
 
@@ -2554,6 +2593,442 @@ class AssertStateOnDiskMarkerLegTest(unittest.TestCase):
             self.assertEqual(pristine.count(stash_line), 1)
             stash = _mutant_wrap_assert(pristine, stash_line, "        pass")
             stash["assert_state_on_disk"](path)  # no raise under the stash
+        # The module restored byte-identical after the run (nothing was
+        # ever written — re-read and compared against the pristine read).
+        with open(wrap_assert.__file__, "r", encoding="utf-8") as f:
+            self.assertEqual(f.read(), pristine)
+
+
+# ---- T316: the Outcomes one-liner figure-audit legs (assert_outcomes_one_liner) ----
+
+T316_FULL_2919 = (
+    "### Cycle 2919 (2026-11-04) — trip-690 eval (kimi; the T247 valve's "
+    "FIRST-attempt trip at TRUE 3 on an ALL-supervisor cheap-exit chain "
+    "[2916 757ba63 / 2917 a4107d2 / 2918 726b222, all base c2d54d9 — "
+    "grep-verified 0-files 3/3 at eval-write]): ZERO rows filed (the "
+    "zero-row count moves 656/698 → 657/699, the queue EMPTY), 0 items "
+    "worked; eval 259dd99 + the eval's push carried the 3 unpushed "
+    "supervisor cheap-exit dispositions 2916-2918 = 757ba63/a4107d2/"
+    "726b222 along. ZERO eval-triage records (the T261 change-detection "
+    "trigger QUIET — the quiet trip: the bookkeeping-only window since the "
+    "marker c2d54d9 [4 commits, all EMPTY by construction], every "
+    "candidate's disposition unchanged; the fully-quiet-TRIP streak moves "
+    "42 → 43); the second net re-derived THIS wrap exact → 529 = the 2915 "
+    "wrap's 528 + the 665th EXACT close's increment; the T261 "
+    "change-detection anchor the newest EVALUATION-md-touching commit "
+    "259dd99 [THIS eval]. The eval: the 665th backstop closes EXACT on the "
+    "carried-TRUE figure — reading the 2899 stream's whole-stream final "
+    "80/1,182 [re-derivation off events-20261104-005801 per scripts/"
+    "stream_datum.py CONCURS: iters=80, wall-secs 1181.763 → 1,182 "
+    "[ROUND-anchor], ok:false 7, ctx 1/0, trim 0, goal 1] == the 665th "
+    "establishment's committed figure [the 2907 eval, commit ba470da — "
+    "re-grepped off the committed text at eval-write, count-3], NO carried "
+    "tension; correct-accounting 478 → 479; INEXACT-close HOLDS 8; the "
+    "quiet top HOLDS 139; the 666th backstop hands off [the 2903 stream "
+    "51/1,403 — the 666th establishment's committed figure, the 2911 eval "
+    "commit af0be77, events-20261103-234510 per the rotation mechanism — "
+    "NO carried tension]. The 668th establishment — reading the 2911 "
+    "stream's whole-stream final 122/1,333 [re-derivation off "
+    "events-20261104-032712 per scripts/stream_datum.py CONCURS: iters=122, "
+    "wall-secs 1332.579 → 1,333 [ROUND-anchor]]; ok:false 4 == 4 [the "
+    "fill's committed FOUR byte-exact, ZERO post-stamp tail legs]; "
+    "ctx_edit 1 accepted / 0 rejected [ZERO post-stamp ctx tail legs]; "
+    "trim 0 == 0 [the TRUE streak reading at the 668th: 14 → 15]; goal 1 "
+    "[accepted 2026-11-04T03:03:42.153Z]; the digest arithmetic CONCURS: "
+    "104,324+108==104,432 EXACT; files 1,545 measured [ls-probed at "
+    "eval-write]; the 102-bound FIRES [122 >= the bound — the census moves "
+    "38 → 39, the non-fire streak BREAKS 14 → 0 [the first fire in "
+    "fourteen readings]]; the quiet top HOLDS 139; the 669th establishment "
+    "hands off [the 2915 stream's own final — re-derived THIS eval for the "
+    "digest CONCURS: 108/2,095]. re-arm 597th DISCHARGED EXACT — reading "
+    "the 2850 stream's whole-final 65/1,663 [the 651st establishment's "
+    "committed figure [the 2854 eval, commit 6adb7a0]]; the pairing "
+    "(597th, 699) lands on THIS the 699th evaluation EXACT [597 + 102 == "
+    "699]; the re-arm spot-watch discharges its two-hundred-and-"
+    "seventy-third; (b) NEGATIVE — 65 < the 102 bound [the watch HOLDS "
+    "58]; the quiet top HOLDS 139 [65 < 139]; 1 rides [the TRUE count "
+    "598th through the lattice's 598th [the 2858 slot = the 2858 stream "
+    "103/2,005 committed 0af2f05 — (b) will be POSITIVE: 103 > the 102 "
+    "bound, the watch TRIPS 58→59 at the 701st evaluation's discharge]]; "
+    "the 597th hands off. The wrap: gates GREEN docs-only (batteries "
+    "239/239 ×2), batch TWO (1,029th/1,030th), audit zero-growth, NO TAG "
+    "(TRUE 1 = T315), fill 3e3ec30 pushed, main == origin/main. Handoff: "
+    "the 666th backstop and the 669th establishment hand off; re-arm "
+    "598th DUE reading the 2858 stream's 103/2,005 — (b) will be "
+    "POSITIVE; the 700th evaluation is the next backstop close's slot."
+)
+
+
+def _t316_one_liner(
+    quiet="42→43",
+    net="529",
+    close="the 665th EXACT close [2899 stream 80/1,182]",
+    establishment=(
+        "the 668th establishment [2911 stream 122/1,333, the 102-bound "
+        "FIRES census 38→39]"
+    ),
+    rearm="re-arm 597th discharged EXACT",
+):
+    """The cycle-2919 one-liner template (the corrected c600bc5 figures).
+
+    Each figure-group slice is a keyword — the RED fixtures swap ONE
+    group's slice for the eb7dd7a falsification's figures.
+    """
+    return (
+        "### Cycle 2919 (2026-11-04) — trip-690 eval 259dd99 (kimi, ZERO "
+        "rows 656/698 → 657/699, ZERO triage, fully-quiet-TRIP " + quiet
+        + ", second net → " + net + ", " + close + " + " + establishment
+        + " + " + rearm + " [(b) NEGATIVE watch HOLDS 58]) + wrap landed: "
+        "gates GREEN docs-only (batteries 239/239 ×2 [eval pid 76147 "
+        "23.058s + prep pid 5074 22.720s] + inherited full gates at "
+        "8a51ada), batch TWO (1,029th/1,030th, guard TRUE 678/678/0 the "
+        "179th), audit zero-growth, NO TAG (TRUE 1 = T315), fill 3e3ec30 "
+        "pushed, main == origin/main."
+    )
+
+
+T316_ONE_LINER_2919 = _t316_one_liner()
+
+# The full eb7dd7a falsification: every figure group duplicated from the
+# 2923 entry (the class's canonical shape — rode the tree FALSE 2943→2947).
+T316_ONE_LINER_FALSIFIED = _t316_one_liner(
+    quiet="43→44",
+    net="530",
+    close="the 666th EXACT close [2903 stream 51/1,403]",
+    establishment=(
+        "the 669th establishment [2915 stream 108/2,095, the 102-bound "
+        "FIRES census 39→40]"
+    ),
+    rearm="re-arm 598th discharged EXACT",
+)
+
+T316_FULL_HOLDS = (
+    "### Cycle 2951 (2026-11-04) — trip-694 eval (kimi; the T247 valve's "
+    "FIRST-attempt trip at TRUE 1 on a bookkeeping window): ZERO rows "
+    "filed (the zero-row count HOLDS 664/707, the queue EMPTY), 0 items "
+    "worked. ZERO eval-triage records (the T261 change-detection trigger "
+    "QUIET — the fully-quiet-TRIP streak RESETS 50 → 0; the second net "
+    "HOLDS 537). The eval: the 673rd backstop closes EXACT (2931 stream "
+    "80/1,678 re-derived CONCURS off events-20261104-080617 == the 673rd "
+    "establishment's committed figure [the 704th eval 99565f6 re-grepped "
+    "count-3]; the 2931 fill datum FINAL [76/~1,625.250, 9c7aea8] a "
+    "strict PREFIX CONSISTENT [76 <= 80, +4]; ok:false 4==4 byte-exact, "
+    "ctx 1/1, trim 0, goal 1; correct-accounting 486→487, INEXACT-close "
+    "HOLDS 8); the 674th backstop hands off [the 2935 stream 91/1,958]. "
+    "The 676th establishment (2943 stream 87/1,556 re-derived CONCURS off "
+    "events-20261104-104607 — byte-identical to the 706th eval's "
+    "re-derivation; the 102-bound NON-FIRES [census HOLDS 41, non-fire "
+    "streak 5→6], trim-0 [TRUE streak 0→1 as projected], ok:false 2==2 "
+    "byte-exact, ctx 1/0, digest CONCURS 105,074+97==105,171 + files "
+    "1,553 measured); the 677th establishment hands off [the 2947 "
+    "stream's own final]. re-arm 605th DISCHARGED EXACT (2882 stream "
+    "100/1,910, (b) NEGATIVE — 100 < the 102 bound [the watch HOLDS 59], "
+    "the 278th discharge); the 605th hands off. Handoff: the 674th "
+    "backstop and the 677th establishment hand off; re-arm 606th DUE "
+    "reading the 2886 stream's 98/1,972."
+)
+
+T316_ONE_LINER_HOLDS = (
+    "### Cycle 2951 (2026-11-04) — trip-694 eval 99565f6 (kimi, ZERO rows "
+    "664/707, ZERO triage, fully-quiet-TRIP 50→0, second net HOLDS 537, "
+    "the 673rd EXACT close [2931 stream 80/1,678] + the 676th "
+    "establishment [2943 stream 87/1,556, the 102-bound NON-FIRES census "
+    "HOLDS 41] + re-arm 605th discharged EXACT [(b) NEGATIVE watch HOLDS "
+    "59]) + wrap landed: gates GREEN docs-only (batteries 239/239 ×2 "
+    "[eval pid 991 22.4s + prep pid 992 22.1s]), audit zero-growth, NO "
+    "TAG (TRUE 1 = T315), fill pushed, main == origin/main."
+)
+
+T316_FULL_ASCII = (
+    "### Cycle 2798 (2026-11-02) — trip-660 eval (kimi): ZERO rows filed "
+    "(the zero-row count moves 625/667 -> 626/668, the queue EMPTY), 0 "
+    "items worked. ZERO eval-triage records (the fully-quiet-TRIP streak "
+    "moves 12 -> 13); the second net re-derived THIS wrap exact -> 499 = "
+    "the 2794 wrap's 498 + the 634th close's increment. The eval: the "
+    "634th backstop closes EXACT — reading the 2782 stream's whole-stream "
+    "final 95/1,822 [re-derivation CONCURS: iters=95, wall-secs 1821.4 "
+    "-> 1,822 [ROUND-anchor]] == the 634th establishment's committed "
+    "figure; correct-accounting 451 -> 452; INEXACT HOLDS 8; the 635th "
+    "backstop hands off [the 2786 stream 91/1,824]. The 637th "
+    "establishment — reading the 2786 stream's whole-stream final "
+    "91/1,824 [re-derivation CONCURS]; ok:false 3 == 3; the 102-bound "
+    "NON-FIRES [91 < the bound — the census HOLDS 35, the non-fire "
+    "streak moves 6 -> 7]; the 638th establishment hands off. re-arm "
+    "566th DISCHARGED EXACT — reading the 2714 stream's whole-final "
+    "92/1,876; (b) NEGATIVE — 92 < the 102 bound [the watch HOLDS 50 "
+    "fires]; the 566th hands off. Handoff: the 635th backstop and the "
+    "638th establishment hand off; re-arm 567th DUE."
+)
+
+T316_ONE_LINER_ASCII = (
+    "### Cycle 2798 (2026-11-02) — trip-660 eval c0ffee1 (kimi, ZERO rows "
+    "625/667 -> 626/668, ZERO triage, fully-quiet-TRIP 12->13, second net "
+    "-> 499, the 634th close EXACT (2782 stream 95/1,822; "
+    "correct-accounting 451 -> 452, INEXACT HOLDS 8) + the 637th "
+    "establishment (2786 stream 91/1,824, the 102-bound NON-FIRES census "
+    "HOLDS 35, streak 6 -> 7) + re-arm 566th DISCHARGED (b) NEGATIVE "
+    "[watch HOLDS 50 fires]) + wrap landed: gates GREEN docs-only "
+    "(batteries 239/239 ×2), audit zero-growth, NO TAG (TRUE 1 = T315), "
+    "fill pushed, main == origin/main."
+)
+
+
+class AssertOutcomesOneLinerTest(unittest.TestCase):
+    """T316: the five figure groups equal between full entry and one-liner."""
+
+    def test_pass_true_one_liner_matches_full(self):
+        # T316 PASS path: the corrected cycle-2919 one-liner (the c600bc5
+        # figures) against its committed full entry — all five groups
+        # equal, no fire.
+        wrap_assert.assert_outcomes_one_liner(
+            T316_FULL_2919, T316_ONE_LINER_2919
+        )
+
+    def test_pass_holds_and_resets_shapes(self):
+        # The 2951-era template renderings: the zero-row count HOLDS (one
+        # fraction, no arrow), the quiet-TRIP streak RESETS, the net
+        # HOLDS, the paren-form full close/establishment, the census
+        # HOLDS — the same five groups, the same numbers, green.
+        wrap_assert.assert_outcomes_one_liner(
+            T316_FULL_HOLDS, T316_ONE_LINER_HOLDS
+        )
+
+    def test_pass_ascii_arrow_paren_close_shapes(self):
+        # The 2798-era renderings: ASCII `->` arrows, the `close EXACT (`
+        # close shape, `the <id> stream's` possessives, the holds-shaped
+        # census trailing a streak move — green.
+        wrap_assert.assert_outcomes_one_liner(
+            T316_FULL_ASCII, T316_ONE_LINER_ASCII
+        )
+
+    def test_pass_prose_only_perturbation_stays_green(self):
+        # The leg audits FIGURES, not prose: perturbing the wrap
+        # boilerplate's digits and the fill hash leaves all five figure
+        # groups untouched — green (an over-matching leg would fire).
+        prose_swapped = T316_ONE_LINER_2919.replace(
+            "batteries 239/239 ×2", "batteries 238/238 ×2"
+        ).replace("fill 3e3ec30", "fill d0d0d0d")
+        self.assertNotEqual(prose_swapped, T316_ONE_LINER_2919)
+        wrap_assert.assert_outcomes_one_liner(T316_FULL_2919, prose_swapped)
+
+    def test_red_quiet_trip_pair_falsified_names_group_and_values(self):
+        # The class's group-1 sighting: quiet-TRIP 43→44 written where the
+        # full entry carries 42→43 — fires naming the group and BOTH
+        # values.
+        falsified = _t316_one_liner(quiet="43→44")
+        self.assertNotEqual(falsified, T316_ONE_LINER_2919)
+        with self.assertRaises(AssertionError) as caught:
+            wrap_assert.assert_outcomes_one_liner(T316_FULL_2919, falsified)
+        message = str(caught.exception)
+        self.assertIn("'quiet-TRIP/zero-row pair'", message)
+        self.assertIn("(42, 43)", message)
+        self.assertIn("(43, 44)", message)
+
+    def test_red_second_net_falsified_names_group_and_values(self):
+        # Group 2: net →530 written where the full entry carries 529.
+        falsified = _t316_one_liner(net="530")
+        with self.assertRaises(AssertionError) as caught:
+            wrap_assert.assert_outcomes_one_liner(T316_FULL_2919, falsified)
+        message = str(caught.exception)
+        self.assertIn("'second-net figure'", message)
+        self.assertIn("(529,)", message)
+        self.assertIn("(530,)", message)
+
+    def test_red_backstop_close_falsified_names_group_and_values(self):
+        # Group 3: the 666th/2903-stream close written where the full
+        # entry carries the 665th/2899-stream close — the exact
+        # eb7dd7a shape.
+        falsified = _t316_one_liner(
+            close="the 666th EXACT close [2903 stream 51/1,403]"
+        )
+        with self.assertRaises(AssertionError) as caught:
+            wrap_assert.assert_outcomes_one_liner(T316_FULL_2919, falsified)
+        message = str(caught.exception)
+        self.assertIn("'backstop close'", message)
+        self.assertIn("(665, 2899, 80, 1182)", message)
+        self.assertIn("(666, 2903, 51, 1403)", message)
+
+    def test_red_establishment_falsified_names_group_and_values(self):
+        # Group 4: the 669th/2915-stream establishment with census 39→40
+        # written where the full entry carries the 668th/2911-stream with
+        # census 38→39 — the exact eb7dd7a shape.
+        falsified = _t316_one_liner(
+            establishment=(
+                "the 669th establishment [2915 stream 108/2,095, the "
+                "102-bound FIRES census 39→40]"
+            )
+        )
+        with self.assertRaises(AssertionError) as caught:
+            wrap_assert.assert_outcomes_one_liner(T316_FULL_2919, falsified)
+        message = str(caught.exception)
+        self.assertIn("'establishment'", message)
+        self.assertIn("(668, 2911, 122, 1333, 38, 39)", message)
+        self.assertIn("(669, 2915, 108, 2095, 39, 40)", message)
+
+    def test_red_rearm_falsified_names_group_and_values(self):
+        # Group 5: re-arm 598th written where the full entry carries 597th
+        # — the exact eb7dd7a shape.
+        falsified = _t316_one_liner(rearm="re-arm 598th discharged EXACT")
+        with self.assertRaises(AssertionError) as caught:
+            wrap_assert.assert_outcomes_one_liner(T316_FULL_2919, falsified)
+        message = str(caught.exception)
+        self.assertIn("'re-arm ordinal'", message)
+        self.assertIn("(597,)", message)
+        self.assertIn("(598,)", message)
+
+    def test_red_full_falsified_one_liner_names_all_five_in_one_fire(self):
+        # The class's canonical regression pin: the eb7dd7a one-liner (all
+        # five figure groups duplicated from the 2923 entry) fires ALL
+        # FIVE groups in ONE AssertionError (the all-failures-in-one-error
+        # convention), each with its full-entry and one-liner values.
+        with self.assertRaises(AssertionError) as caught:
+            wrap_assert.assert_outcomes_one_liner(
+                T316_FULL_2919, T316_ONE_LINER_FALSIFIED
+            )
+        message = str(caught.exception)
+        self.assertIn("5 figure-group problem(s)", message)
+        for group in (
+            "'quiet-TRIP/zero-row pair'",
+            "'second-net figure'",
+            "'backstop close'",
+            "'establishment'",
+            "'re-arm ordinal'",
+        ):
+            self.assertIn(group, message)
+        # Both values probed per group (the reporting requirement).
+        for value in (
+            "(42, 43)", "(43, 44)",
+            "(529,)", "(530,)",
+            "(665, 2899, 80, 1182)", "(666, 2903, 51, 1403)",
+            "(668, 2911, 122, 1333, 38, 39)",
+            "(669, 2915, 108, 2095, 39, 40)",
+            "(597,)", "(598,)",
+        ):
+            self.assertIn(value, message)
+
+    def test_red_missing_group_fail_closed_on_one_liner(self):
+        # A one-liner missing a whole group fires the named extraction
+        # failure — fail-closed (a silent skip would re-create the
+        # vacuous-pass class).
+        sliced = T316_ONE_LINER_2919.replace(
+            " + the 668th establishment [2911 stream 122/1,333, the "
+            "102-bound FIRES census 38→39]",
+            "",
+            1,
+        )
+        self.assertNotEqual(sliced, T316_ONE_LINER_2919)
+        with self.assertRaises(AssertionError) as caught:
+            wrap_assert.assert_outcomes_one_liner(T316_FULL_2919, sliced)
+        message = str(caught.exception)
+        self.assertIn("'establishment'", message)
+        self.assertIn("could not be extracted from the one-liner", message)
+        # The other four groups still compared (only the extraction
+        # failure reported — the group that CANNOT be extracted is named,
+        # the groups that CAN are either equal or named as divergent).
+        self.assertNotIn("'backstop close'", message)
+
+    def test_red_census_less_one_liner_fail_closed(self):
+        # The 2915-era one-liner rendering dropped the establishment's
+        # census figure while the current-template full carries it — the
+        # named extraction failure fires (the census move is part of the
+        # establishment group).
+        census_less = _t316_one_liner(
+            establishment="the 668th establishment [2911 stream 122/1,333]"
+        )
+        with self.assertRaises(AssertionError) as caught:
+            wrap_assert.assert_outcomes_one_liner(T316_FULL_2919, census_less)
+        message = str(caught.exception)
+        self.assertIn("'establishment'", message)
+        self.assertIn("no `census` figure", message)
+
+    def test_red_anchor_less_full_entry_fail_closed_on_full_side(self):
+        # The 2907-era compaction template carried NO close, establishment
+        # or re-arm groups — a full entry lacking them fires the named
+        # extraction failures on the FULL side (the side is named, not
+        # guessed).
+        anchor_less_full = (
+            "### Cycle 2907 (2026-11-04) — trip-687 eval ba470da (kimi): "
+            "ZERO rows filed (the zero-row count moves 653/695 → 654/696, "
+            "the queue EMPTY), 0 items worked. ZERO eval-triage records "
+            "(the fully-quiet-TRIP streak moves 39 → 40); the second net "
+            "re-derived THIS wrap exact → 526 = the 2903 wrap's 525 + the "
+            "663rd EXACT close's increment. The wrap: gates GREEN "
+            "docs-only, audit zero-growth, NO TAG, fill pushed. Handoff: "
+            "nothing rides."
+        )
+        with self.assertRaises(AssertionError) as caught:
+            wrap_assert.assert_outcomes_one_liner(
+                anchor_less_full, T316_ONE_LINER_2919
+            )
+        message = str(caught.exception)
+        for group in ("'backstop close'", "'establishment'", "'re-arm ordinal'"):
+            self.assertIn(group, message)
+        self.assertIn(
+            "the 'backstop close' group could not be extracted from the "
+            "full entry", message
+        )
+        self.assertIn(
+            "the 'establishment' group could not be extracted from the "
+            "full entry", message
+        )
+        self.assertIn(
+            "the 're-arm ordinal' group could not be extracted from the "
+            "full entry", message
+        )
+
+    def test_signature_non_str_arguments_type_error(self):
+        # The TEXT-not-path convention: both probed values are strs (the
+        # section texts passed in — nothing opened, read, or written). A
+        # non-str is the call-signature slip shape — TypeError naming the
+        # accepted shape and the probed actual.
+        for bad_full in (None, 42, b"### Cycle 2919", ["### Cycle 2919"]):
+            with self.assertRaises(TypeError) as caught:
+                wrap_assert.assert_outcomes_one_liner(
+                    bad_full, T316_ONE_LINER_2919
+                )
+            message = str(caught.exception)
+            self.assertIn("full_text", message)
+            self.assertIn("TEXT-not-path", message)
+        for bad_one in (None, 42, b"### Cycle 2919", ["### Cycle 2919"]):
+            with self.assertRaises(TypeError) as caught:
+                wrap_assert.assert_outcomes_one_liner(
+                    T316_FULL_2919, bad_one
+                )
+            message = str(caught.exception)
+            self.assertIn("one_liner_text", message)
+            self.assertIn("TEXT-not-path", message)
+
+    def test_export_and_docstring_coverage_sentence_pinned(self):
+        # The leg rides the module's __all__ (16 -> 17) and the docstring
+        # coverage sentence names the T316 legs (the pin-surface extended,
+        # not re-shaped).
+        self.assertIn("assert_outcomes_one_liner", wrap_assert.__all__)
+        self.assertEqual(wrap_assert.__all__[-1], "assert_outcomes_one_liner")
+        self.assertIn(
+            "T316 Outcomes one-liner figure-audit legs", wrap_assert.__doc__
+        )
+        # The extension, not a re-shape: the T312 sentence tail still rides.
+        self.assertIn("T312 always-on marker legs", wrap_assert.__doc__)
+
+    def test_red_proof_fire_stashed_on_copy(self):
+        # RED provability: the fire stashed on a COPY (the one-line call
+        # swapped for `pass`) — the falsified pair then PASSES the leg;
+        # the shipped module fires. The module byte-identical after (the
+        # mutation rides an in-memory exec, never a write).
+        with open(wrap_assert.__file__, "r", encoding="utf-8") as f:
+            pristine = f.read()
+        # The shipped module fires (the leg above pins it; re-asserted
+        # here so the mutant contrast is self-contained).
+        with self.assertRaises(AssertionError):
+            wrap_assert.assert_outcomes_one_liner(
+                T316_FULL_2919, T316_ONE_LINER_FALSIFIED
+            )
+        stash_line = "        _fire_one_liner_groups(problems)"
+        self.assertEqual(pristine.count(stash_line), 1)
+        stash = _mutant_wrap_assert(pristine, stash_line, "        pass")
+        stash["assert_outcomes_one_liner"](
+            T316_FULL_2919, T316_ONE_LINER_FALSIFIED
+        )  # no raise under the stash
         # The module restored byte-identical after the run (nothing was
         # ever written — re-read and compared against the pristine read).
         with open(wrap_assert.__file__, "r", encoding="utf-8") as f:

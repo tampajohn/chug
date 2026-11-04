@@ -190,7 +190,8 @@ form), keeping the AST import-free shape the stdlib-only leg pins.
 Coverage (run by the check line): python3 -m unittest
 scripts/test_wrap_assert.py -v — the pre-T295 legs plus the validate_state
 facade legs, the T309 fill-datum legs, and the T310 fill-enumeration legs,
-the T311 on-disk state-schema legs, and the T312 always-on marker legs.
+the T311 on-disk state-schema legs, and the T312 always-on marker legs, and
+the T316 Outcomes one-liner figure-audit legs.
 """
 
 __all__ = [
@@ -210,6 +211,7 @@ __all__ = [
     "assert_fill_datum",
     "assert_fill_enumeration",
     "assert_state_on_disk",
+    "assert_outcomes_one_liner",
 ]
 
 
@@ -1818,3 +1820,577 @@ def assert_state_on_disk(path, expected_eval_commit=None, probe_marker=None):
     field_value = read_key_values(text).get("eval-commit")
     if field_value != expected_eval_commit:
         _fire_marker_mismatch(path, field_value, expected_eval_commit)
+
+
+# ---- T316: the Outcomes one-liner figure-audit leg (assert_outcomes_one_liner) ----
+
+_ONE_LINER_WS = " \t\r\n"
+
+_ONE_LINER_ORDINALS = ("st", "nd", "rd", "th")
+
+_ONE_LINER_ARROWS = ("→", "->")
+
+
+# _ol_number_span(text, i) — INTERNAL; e.g. _ol_number_span("80/1,182", 3) -> (3, 8)
+def _ol_number_span(text, i):
+    """The comma-aware digit span starting at *i* — (start, end) or None.
+
+    Consumes `[0-9]+` plus any `,`-grouped continuation (`1,182` reads as
+    ONE figure — the corpus's wall rendering), so a span never ends mid-
+    grouping. The caller converts `text[start:end]` to int.
+    """
+    n = len(text)
+    if i >= n or not text[i].isdigit():
+        return None
+    j = i
+    while j < n and text[j].isdigit():
+        j += 1
+    while j + 1 < n and text[j] == "," and text[j + 1].isdigit():
+        j += 1
+        while j < n and text[j].isdigit():
+            j += 1
+    return (i, j)
+
+
+# _ol_next_number(text, p) — INTERNAL; e.g. _ol_next_number("→ 529, ...", 0)
+def _ol_next_number(text, p):
+    """The first comma-aware number at/after *p* — (value, end) or None."""
+    n = len(text)
+    i = p
+    while i < n:
+        if text[i].isdigit():
+            span = _ol_number_span(text, i)
+            return (int(text[span[0]:span[1]].replace(",", "")), span[1])
+        i += 1
+    return None
+
+
+# _ol_find_first(text, needles, start) — INTERNAL; e.g. _ol_find_first(text, ("→", "->"), 12)
+def _ol_find_first(text, needles, start=0):
+    """The earliest occurrence of any *needle* at/after *start* — (idx, needle).
+
+    (-1, None) when none matches. The multi-needle earliest-hit rule keeps
+    the anchor scan shape-agnostic (arrow variants, close-anchor variants).
+    """
+    best = (-1, None)
+    for needle in needles:
+        idx = text.find(needle, start)
+        if idx >= 0 and (best[0] < 0 or idx < best[0]):
+            best = (idx, needle)
+    return best
+
+
+# _ol_ordinal_before(text, pos) — INTERNAL; e.g. _ol_ordinal_before("the 665th backstop closes", 13)
+def _ol_ordinal_before(text, pos):
+    """The ordinal token ending immediately before *pos* — its int, or None.
+
+    Adjacency is the contract: the token must END right at *pos* (whitespace
+    skipped) and parse as `<digits><st|nd|rd|th>`. A farther-back ordinal is
+    NOT this group's — the handoff bracket's `the 666th establishment's
+    committed figure` sits directly before `The 668th establishment` in the
+    committed prose, and a nearest-anywhere scan would read the WRONG entry's
+    ordinal; only the ADJACENT token is the group's own.
+    """
+    j = pos
+    while j > 0 and text[j - 1] in _ONE_LINER_WS:
+        j -= 1
+    k = j
+    while k > 0 and text[k - 1].isalpha():
+        k -= 1
+    if text[k:j] not in _ONE_LINER_ORDINALS:
+        return None
+    m = k
+    while m > 0 and text[m - 1].isdigit():
+        m -= 1
+    if m == k:
+        return None
+    return int(text[m:k])
+
+
+# _ol_number_ending_before(text, pos) — INTERNAL; e.g. _ol_number_ending_before("the 2899 stream's", 9)
+def _ol_number_ending_before(text, pos):
+    """The number whose digit-run ends immediately before *pos* — int or None.
+
+    Whitespace skipped, then `[0-9]+` walked back. `the 2899 stream's` at the
+    `stream` offset reads 2899; `whole-stream` / `stream_datum.py` read None
+    (no digit run — the scan moves on to the next `stream` occurrence).
+    """
+    j = pos
+    while j > 0 and text[j - 1] in _ONE_LINER_WS:
+        j -= 1
+    k = j
+    while k > 0 and text[k - 1].isdigit():
+        k -= 1
+    if k == j:
+        return None
+    return int(text[k:j])
+
+
+# _ol_first_fraction(text, p) — INTERNAL; e.g. _ol_first_fraction("final 80/1,182 [...]", 6)
+def _ol_first_fraction(text, p):
+    """The first `D+/D+` figure at/after *p* — (a, b, end) or None.
+
+    Hand-scanned (the module stays import-free — no `re`): at each digit, a
+    comma-aware span is read and must be followed by `/` then another
+    comma-aware span; a failed attempt skips PAST the whole span (never
+    re-scanning inside it — `1,371.870` cannot half-match as `371/...`).
+    Dates/times (`2026-11-04T03:03:42.153Z`) and `A accepted / B rejected`
+    prose never parse (no digit directly abutting the slash).
+    """
+    n = len(text)
+    i = p
+    while i < n:
+        if text[i].isdigit():
+            span = _ol_number_span(text, i)
+            j = span[1]
+            if j < n and text[j] == "/":
+                second = _ol_number_span(text, j + 1)
+                if second is not None:
+                    return (
+                        int(text[span[0]:span[1]].replace(",", "")),
+                        int(text[second[0]:second[1]].replace(",", "")),
+                        second[1],
+                    )
+            i = span[1] if span[1] > i else i + 1
+        else:
+            i += 1
+    return None
+
+
+# _ol_arrow_pos(text, p) — INTERNAL; e.g. _ol_arrow_pos("42 → 43)", 2)
+def _ol_arrow_pos(text, p):
+    """The position just past an arrow at/after *p* — int or None.
+
+    Whitespace-tolerant (the full entry renders `42 → 43`, the one-liner
+    `42→43`); ANY other non-whitespace character stops the scan — a digit, a
+    comma, a bracket arriving before the arrow means there is no arrow HERE
+    (the `census HOLDS 41, the non-fire streak moves 4 → 5` prose's later
+    arrow is not the figure's). Both arrow spellings ride (`→`, `->`).
+    """
+    n = len(text)
+    i = p
+    while i < n:
+        ch = text[i]
+        if ch in _ONE_LINER_WS:
+            i += 1
+            continue
+        if ch == "→":
+            return i + 1
+        if text.startswith("->", i):
+            return i + 2
+        return None
+    return None
+
+
+# _ol_stream_figures(text, p, tries) — INTERNAL; e.g. _ol_stream_figures("[2899 stream 80/1,182]", 0)
+def _ol_stream_figures(text, p, tries=6):
+    """The first `<id> stream` reference at/after *p* plus its `X/Y` figures.
+
+    Scans successive `stream` occurrences (up to *tries*) — the first whose
+    immediately-preceding token is a number (`whole-stream` and
+    `scripts/stream_datum.py` read no id and are skipped) — then reads the
+    FIRST `D+/D+` figure pair after it (the `whole-stream final 80/1,182`
+    rendering and the bare `2899 stream 80/1,182` rendering both scan).
+    Returns (stream_id, iters, wall) or None — None is fail-closed (the
+    caller fires the named extraction failure, never a silent skip).
+    """
+    start = p
+    for _ in range(tries):
+        idx = text.find("stream", start)
+        if idx < 0:
+            return None
+        sid = _ol_number_ending_before(text, idx)
+        if sid is not None:
+            frac = _ol_first_fraction(text, idx + len("stream"))
+            if frac is not None:
+                return (sid, frac[0], frac[1])
+            return None
+        start = idx + len("stream")
+    return None
+
+
+# _ol_anchor(text, needles) — INTERNAL; e.g. _ol_anchor(text, ("zero-row", "ZERO rows"))
+def _ol_anchor(text, needles):
+    """The earliest anchor occurrence — (idx, needle) or (-1, None)."""
+    return _ol_find_first(text, needles, 0)
+
+
+# _ol_pair_figures(text) — INTERNAL; e.g. _ol_pair_figures(full_entry_text)
+def _ol_pair_figures(text):
+    """Group 1 — the quiet-TRIP/zero-row count pair, both sub-figures.
+
+    ZERO-ROW: the anchor (`zero-row` / `ZERO rows`, earliest hit) followed by
+    the `A/B → C/D` fraction-pair shape (`the zero-row count moves 656/698 →
+    657/699` full, `ZERO rows 656/698 → 657/699` compacted; the holds shape
+    `A/B` with no arrow reads as the 2-tuple). QUIET-TRIP: the anchor
+    (`quiet-TRIP` / `quiet-trip`) followed by the first number and, when an
+    arrow follows it, the second (`the fully-quiet-TRIP streak moves 42 → 43`
+    full, `fully-quiet-TRIP 42→43` compacted; the RESETS/ENDS shapes read the
+    same numbers). Returns ((zero_row...), (quiet_trip...)); (None, detail)
+    on any extraction failure — fail-closed, never a silent skip.
+    """
+    idx, needle = _ol_anchor(text, ("zero-row", "ZERO rows"))
+    if idx < 0:
+        return (None, "no `zero-row`/`ZERO rows` anchor probed")
+    frac = _ol_first_fraction(text, idx + len(needle))
+    if frac is None:
+        return (None, "no `A/B` fraction after the zero-row anchor")
+    zero_row = (frac[0], frac[1])
+    arrow = _ol_arrow_pos(text, frac[2])
+    if arrow is not None:
+        frac2 = _ol_first_fraction(text, arrow)
+        if frac2 is not None:
+            zero_row = zero_row + (frac2[0], frac2[1])
+    idx, _ = _ol_anchor(text, ("quiet-TRIP", "quiet-trip"))
+    if idx < 0:
+        return (None, "no `quiet-TRIP` anchor probed")
+    p = idx + len("quiet-TRIP")
+    first = _ol_next_number(text, p)
+    if first is None:
+        return (None, "no figure after the quiet-TRIP anchor")
+    quiet = (first[0],)
+    arrow = _ol_arrow_pos(text, first[1])
+    if arrow is not None:
+        second = _ol_next_number(text, arrow)
+        if second is not None:
+            quiet = quiet + (second[0],)
+    return ((zero_row, quiet), None)
+
+
+# _ol_net_figure(text) — INTERNAL; e.g. _ol_net_figure(full_entry_text)
+def _ol_net_figure(text):
+    """Group 2 — the second-net figure (`net →K` / `A→B` / `HOLDS K`).
+
+    After the `second net` anchor the corpus renders three shapes: the arrow-
+    led `→ 529` (the newest: full `the second net re-derived THIS wrap exact
+    → 529`, compacted `second net → 530`), the bare move `277→278` (older
+    fulls/one-liners), and the holds `HOLDS 273`. The scan takes the first
+    digit OR arrow within a bounded window after the anchor — an arrow first
+    reads the number after it; a digit first reads the number then, when an
+    arrow follows, the second (the `= the 2915 wrap's 528 +` arithmetic that
+    trails the newest full shape is never reached — the arrow's number ends
+    the figure). Returns (figures...); (None, detail) fail-closed.
+    """
+    idx, _ = _ol_anchor(text, ("second net",))
+    if idx < 0:
+        return (None, "no `second net` anchor probed")
+    p = idx + len("second net")
+    window = text[p:p + 120]
+    hit = _ol_find_first(window, ("→", "->"), 0)
+    digit = None
+    for k, ch in enumerate(window):
+        if ch.isdigit():
+            digit = k
+            break
+    if hit[0] >= 0 and (digit is None or hit[0] < digit):
+        num = _ol_next_number(text, p + hit[0] + len(hit[1]))
+        if num is None:
+            return (None, "no figure after the second-net arrow")
+        return ((num[0],), None)
+    if digit is None:
+        return (None, "no figure within the window after the `second net` anchor")
+    num = _ol_next_number(text, p + digit)
+    figures = (num[0],)
+    arrow = _ol_arrow_pos(text, num[1])
+    if arrow is not None:
+        second = _ol_next_number(text, arrow)
+        if second is not None:
+            figures = figures + (second[0],)
+    return (figures, None)
+
+
+# _CLOSE_ANCHORS — the close-anchor shapes in PRIORITY order; e.g. _CLOSE_ANCHORS[0]
+_CLOSE_ANCHORS = ("backstop closes EXACT", "EXACT close", "close EXACT")
+
+
+def _ol_close_anchor(text):
+    """The cycle's OWN close anchor — (idx, needle) or (-1, None).
+
+    PRIORITY-ordered with per-shape guards — the committed corpus carries a
+    trap for EVERY naive rule, both directions:
+      - the 2919-era full's net line ends `+ the 665th EXACT close's
+        increment` — an earliest-of-any `EXACT close` scan anchors the
+        close group on THAT clause (its figures reached only by the forward
+        luck of no intervening `<id> stream` prose), so `backstop closes
+        EXACT` is searched FIRST;
+      - the 2704-era full's handoff reads `the 611th backstop closes the
+        2692 stream at the NEXT real eval` — a bare `backstop closes`
+        priority scan anchors on THAT (the NEXT close, the wrong ordinal
+        AND the wrong stream), so the first candidate demands the EXACT
+        adjacency the own close always carries;
+      - the increment clause is `EXACT close's` — the second candidate
+        rejects the `'s` follow (the 2704-era own close is `close EXACT on
+        the figure`, the third candidate's shape; the compacted one-liner
+        is `the 665th EXACT close [` / `the 633rd close EXACT (`).
+    Each candidate scans ALL its occurrences (the guarded-out first hit
+    never blinds the second); the first candidate with a surviving
+    occurrence wins.
+    """
+    for needle in _CLOSE_ANCHORS:
+        start = 0
+        while True:
+            idx = text.find(needle, start)
+            if idx < 0:
+                break
+            if needle == "EXACT close" and text.startswith(
+                "'s", idx + len(needle)
+            ):
+                start = idx + len(needle)
+                continue
+            return (idx, needle)
+    return (-1, None)
+
+
+# _ol_close_figures(text) — INTERNAL; e.g. _ol_close_figures(full_entry_text)
+def _ol_close_figures(text):
+    """Group 3 — the backstop close group: ordinal + stream id + figures.
+
+    The ordinal is read ADJACENT before the anchor (`the 665th backstop
+    closes` / `the 665th EXACT close` / `the 633rd close EXACT` — all
+    adjacency-true); the stream id + `X/Y` figures via _ol_stream_figures
+    (`reading the 2899 stream's whole-stream final 80/1,182` full, `[2899
+    stream 80/1,182]` compacted). Returns (ordinal, id, iters, wall);
+    (None, detail) fail-closed.
+    """
+    idx, needle = _ol_close_anchor(text)
+    if idx < 0:
+        return (None, "no close anchor probed (backstop closes / EXACT close / close EXACT)")
+    ordinal = _ol_ordinal_before(text, idx)
+    if ordinal is None:
+        return (None, f"no `<N>th` ordinal adjacent before the close anchor {needle!r}")
+    figures = _ol_stream_figures(text, idx + len(needle))
+    if figures is None:
+        return (None, "no `<id> stream` reference with `X/Y` figures after the close anchor")
+    return ((ordinal, figures[0], figures[1], figures[2]), None)
+
+
+# _ol_establishment_anchor(text) — INTERNAL; e.g. _ol_establishment_anchor(full_entry_text)
+def _ol_establishment_anchor(text):
+    """The cycle's OWN establishment anchor — (idx, needle) or (-1, None).
+
+    The FIRST `establishment` occurrence whose follow is neither the `\'s`
+    back-reference (`the 665th establishment\'s committed figure` — the
+    close\'s establishment, an EARLIER cycle\'s) nor the `hands off` handoff
+    (the NEXT cycle\'s). The own shapes all pass: `The 668th establishment —
+    reading` full, `the 669th establishment [` / `the 640th establishment (`
+    compacted.
+    """
+    start = 0
+    while True:
+        idx = text.find("establishment", start)
+        if idx < 0:
+            return (-1, None)
+        p = idx + len("establishment")
+        n = len(text)
+        while p < n and text[p] in _ONE_LINER_WS:
+            p += 1
+        if text.startswith("'s", p) or text.startswith("hands", p):
+            start = idx + len("establishment")
+            continue
+        return (idx, "establishment")
+
+
+# _ol_establishment_figures(text) — INTERNAL; e.g. _ol_establishment_figures(full_entry_text)
+def _ol_establishment_figures(text):
+    """Group 4 — the establishment group: ordinal + stream + figures + census.
+
+    The ordinal read ADJACENT before the anchor; the stream id + `X/Y`
+    figures via _ol_stream_figures (`The 668th establishment — reading the
+    2911 stream's whole-stream final 122/1,333` full, `[2911 stream 122/1,333,
+    ...]` compacted); the census figure from the FIRST `census` after the
+    anchor — the move `census moves 38 → 39` / `census 39→40` reads the pair,
+    the holds `census HOLDS 41` reads the single (the arrow must arrive
+    before any other character, so the trailing `non-fire streak` figures are
+    never swept in). Returns (ordinal, id, iters, wall, census...);
+    (None, detail) fail-closed.
+    """
+    idx, _ = _ol_establishment_anchor(text)
+    if idx < 0:
+        return (None, "no own-establishment anchor probed (the `establishment` occurrence is a `'s` back-reference or a `hands off` handoff)")
+    ordinal = _ol_ordinal_before(text, idx)
+    if ordinal is None:
+        return (None, "no `<N>th` ordinal adjacent before the establishment anchor")
+    figures = _ol_stream_figures(text, idx + len("establishment"))
+    if figures is None:
+        return (None, "no `<id> stream` reference with `X/Y` figures after the establishment anchor")
+    c_idx = text.find("census", idx)
+    if c_idx < 0:
+        return (None, "no `census` figure after the establishment anchor")
+    first = _ol_next_number(text, c_idx + len("census"))
+    if first is None:
+        return (None, "no figure after the `census` anchor")
+    census = (first[0],)
+    arrow = _ol_arrow_pos(text, first[1])
+    if arrow is not None:
+        second = _ol_next_number(text, arrow)
+        if second is not None:
+            census = census + (second[0],)
+    return ((ordinal, figures[0], figures[1], figures[2]) + census, None)
+
+
+# _ol_rearm_figure(text) — INTERNAL; e.g. _ol_rearm_figure(full_entry_text)
+def _ol_rearm_figure(text):
+    """Group 5 — the re-arm group: the ordinal (`re-arm <ord>`).
+
+    The FIRST `re-arm` occurrence (boundary-checked — `pre-arm` is refused)
+    and the first number after it (`re-arm 597th DISCHARGED EXACT` full,
+    `re-arm 598th discharged EXACT` compacted). The own discharge is the
+    first mention: the wrap's `the re-arm spot-watch discharges` and the
+    handoff's `re-arm <next>th DUE` both follow it. Returns (ordinal,);
+    (None, detail) fail-closed.
+    """
+    start = 0
+    while True:
+        idx = text.find("re-arm", start)
+        if idx < 0:
+            return (None, "no `re-arm` anchor probed")
+        if idx > 0 and (text[idx - 1].isalnum() or text[idx - 1] == "-"):
+            start = idx + len("re-arm")
+            continue
+        num = _ol_next_number(text, idx + len("re-arm"))
+        if num is None:
+            return (None, "no figure after the `re-arm` anchor")
+        return ((num[0],), None)
+
+
+# Wire the group registry (the extractors are defined above).
+_ONE_LINER_GROUPS = (
+    ("quiet-TRIP/zero-row pair", _ol_pair_figures),
+    ("second-net figure", _ol_net_figure),
+    ("backstop close", _ol_close_figures),
+    ("establishment", _ol_establishment_figures),
+    ("re-arm ordinal", _ol_rearm_figure),
+)
+
+
+# _fire_one_liner_groups(problems) — INTERNAL; e.g. _fire_one_liner_groups(problems)
+def _fire_one_liner_groups(problems):
+    """The T316 fire — split from the leg's body so the RED-provability
+    mutant is a ONE-LINE stash (the call swapped for `pass` on a copy, the
+    T310 `_fire_named_missing` idiom) rather than a multi-line raise
+    excision that cannot compile half-removed."""
+    raise AssertionError(
+        f"assert_outcomes_one_liner: {len(problems)} figure-group "
+        f"problem(s) between the committed FULL entry and the one-liner "
+        f"replacing it — " + " | ".join(problems) + " — the one-liner's "
+        "figures must be composed from the cycle's OWN full entry, never "
+        "duplicated from a neighboring entry (the corridor-figure "
+        "falsification class's second committed sighting, the cycle-2947 "
+        "wrap: the compacted 2919 one-liner duplicated the 2923 figures "
+        "across 5 groups [quiet-TRIP 43→44 FALSE (TRUE 42→43), net 530 "
+        "FALSE (TRUE 529), the close ordinal+stream FALSE (wrote the "
+        "666th/2903 stream; TRUE the 665th/2899 stream 80/1,182), the "
+        "establishment ordinal+stream+census FALSE (wrote the 669th/2915 "
+        "stream; TRUE the 668th/2911 stream 122/1,333 census 38→39), the "
+        "re-arm ordinal FALSE (wrote 598th; TRUE 597th)] and rode the tree "
+        "FALSE for 4 cycles (2943→2947) before the ad-hoc audit caught it, "
+        "corrected forward per T70 in c600bc5): re-derive every divergent "
+        "figure from the full entry being compacted"
+    )
+
+
+# assert_outcomes_one_liner(full_text, one_liner_text) — 2 probed strings, no path; e.g. assert_outcomes_one_liner(full_entry_text, one_liner_text)
+def assert_outcomes_one_liner(full_text, one_liner_text):
+    """The Outcomes one-liner's five figure groups equal the FULL entry's (T316).
+
+    The corridor-figure falsification class's second committed sighting (the
+    cycle-2947 wrap): the 2943 wrap's compaction of cycle 2919 wrote its
+    one-liner with the 2923 entry's figures — quiet-TRIP 43→44 (TRUE 42→43),
+    net →530 (TRUE 529), the 666th EXACT close [2903 stream 51/1,403] (TRUE
+    the 665th/2899 stream 80/1,182), the 669th establishment [2915 stream
+    108/2,095 census 39→40] (TRUE the 668th/2911 stream 122/1,333 census
+    38→39), re-arm 598th (TRUE 597th) — and every existing guard passed it;
+    the compacted line rode the tree FALSE for 4 cycles (2943→2947) until the
+    2947 wrap's own ad-hoc one-liner audit caught it (corrected forward per
+    T70 in c600bc5). The class's own watch pre-authorized this guard row: a
+    second committed sighting weighs a mechanical compose-time check for the
+    one-liner surface.
+
+    *full_text* is the cycle's committed FULL `### Cycle N … —` entry (the
+    section being compacted away) and *one_liner_text* the one-liner
+    replacing it — BOTH probed strs passed in (the module's TEXT-not-path
+    convention: nothing is opened, read, or written — the fire is
+    zero-mutation by construction). Either non-str is the call-signature
+    slip shape — TypeError naming the accepted shape.
+
+    The five figure groups (the compaction template's regular shape, from
+    the committed one-liners) are extracted from BOTH texts and compared
+    group-by-group:
+      1. the quiet-TRIP/zero-row count pair (`zero-row A/B → C/D` /
+         `quiet-TRIP X→Y`);
+      2. the second-net figure (`net →K`, the older bare `A→B` and `HOLDS K`
+         shapes riding);
+      3. the backstop close group (the `<ord>` + stream id + `X/Y` figures);
+      4. the establishment group (the `<ord>` + stream id + `X/Y` figures +
+         the census move);
+      5. the re-arm group (`re-arm <ord>`).
+
+    A group that cannot be extracted from EITHER text raises AssertionError
+    naming the group and the extraction failure — fail-closed, a silent skip
+    would re-create the vacuous-pass class. All group problems (mismatches
+    AND extraction failures) report in ONE AssertionError (each group named,
+    with the full-entry value and the one-liner value probed — the
+    all-failures-in-one-error convention), so the wrap fixes every figure in
+    one pass. The extractors are shape-tolerant where the corpus is (arrow
+    spellings `→`/`->`, comma-grouped figures `1,182`, `the <id> stream's`
+    possessives, holds-shaped census/zero-row renderings) and ADJACENCY-
+    strict where the committed prose demands it (the ordinal is read from
+    the token immediately before the anchor — the handoff bracket's
+    `the 666th establishment's committed figure` sits directly before
+    `The 668th establishment` and must never be read as the group's own).
+
+    The scoping decision recorded at filing: the eval-body T184 mis-quote
+    subclass is NOT covered here — that surface is backstopped by the state
+    file's own `fresh-input-last-eval:` line (the catch that fired at the
+    2947 wrap prep) and stays prose-guarded per T282/T305. This leg covers
+    the Outcomes one-liner surface only.
+    """
+    if not isinstance(full_text, str):
+        probed = (
+            f"{len(full_text)} probed line(s)"
+            if isinstance(full_text, (list, tuple))
+            else repr(full_text)
+        )
+        raise TypeError(
+            f"assert_outcomes_one_liner(full_text, one_liner_text): "
+            f"full_text must be the cycle's committed FULL `### Cycle N … —` "
+            f"entry TEXT (a str — the section being compacted away, passed "
+            f"in per the module's TEXT-not-path convention); probed "
+            f"full_text {probed} (type {type(full_text).__name__})"
+        )
+    if not isinstance(one_liner_text, str):
+        probed = (
+            f"{len(one_liner_text)} probed line(s)"
+            if isinstance(one_liner_text, (list, tuple))
+            else repr(one_liner_text)
+        )
+        raise TypeError(
+            f"assert_outcomes_one_liner(full_text, one_liner_text): "
+            f"one_liner_text must be the one-liner TEXT replacing the full "
+            f"entry (a str — the compacted `### Cycle N (date) —` line, "
+            f"passed in per the module's TEXT-not-path convention); probed "
+            f"one_liner_text {probed} (type {type(one_liner_text).__name__})"
+        )
+    problems = []
+    for group, extract in _ONE_LINER_GROUPS:
+        full_value, full_err = extract(full_text)
+        one_value, one_err = extract(one_liner_text)
+        if full_err is not None:
+            problems.append(
+                f"the {group!r} group could not be extracted from the full "
+                f"entry — {full_err}"
+            )
+            continue
+        if one_err is not None:
+            problems.append(
+                f"the {group!r} group could not be extracted from the "
+                f"one-liner — {one_err}"
+            )
+            continue
+        if full_value != one_value:
+            problems.append(
+                f"the {group!r} group diverged — the full entry probed "
+                f"{full_value!r} vs the one-liner probed {one_value!r}"
+            )
+    if problems:
+        _fire_one_liner_groups(problems)
