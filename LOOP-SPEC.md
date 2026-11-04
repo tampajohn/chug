@@ -1122,6 +1122,16 @@ alike) has been harvested.
   updated the datum figures, never re-ran the enumeration — corrected
   forward per T70 at the cycle-2248 eval's establishment) — the same
   compose-time catch for the enumeration surface. The fill compose leg's
+  pre-commit assert ALSO re-verifies the enumeration block's count-WORD at
+  the fill stamp in the SAME leg (the same probed count the T310 leg
+  takes, riding argv/env) and verifies the fill text's enumeration
+  count-word renderings carry the probed count via
+  `scripts/wrap_assert.py`'s enumeration count-word leg
+  (`assert_fill_enumeration_word`, T319: the cycle-2955 fill 652fd7c wrote
+  `ELEVEN legs` at its named stamp against the mechanical TWELVE — the
+  class's fifth committed sighting, the first on the enumeration
+  count-word surface) — the same compose-time catch for the enumeration
+  count-word surface. The fill compose leg's
   pre-commit assert ALSO re-enumerates the stream's trim-fire legs at the
   fill stamp in the SAME leg (`jq -c 'select(.type=="trim")'
   .chug/events.jsonl | wc -l`, the count captured into a shell variable —

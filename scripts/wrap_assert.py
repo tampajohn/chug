@@ -192,7 +192,8 @@ scripts/test_wrap_assert.py -v — the pre-T295 legs plus the validate_state
 facade legs, the T309 fill-datum legs, and the T310 fill-enumeration legs,
 the T311 on-disk state-schema legs, and the T312 always-on marker legs, and
 the T316 Outcomes one-liner figure-audit legs, and the
-T317 fill trim-enumeration legs.
+T317 fill trim-enumeration legs, and the
+T319 fill enumeration count-word legs.
 """
 
 __all__ = [
@@ -213,6 +214,7 @@ __all__ = [
     "assert_fill_enumeration",
     "assert_state_on_disk",
     "assert_fill_trim",
+    "assert_fill_enumeration_word",
     "assert_outcomes_one_liner",
 ]
 
@@ -1788,6 +1790,379 @@ def assert_fill_trim(text, probed_count, probed_stamp):
         "carries the NEW count): re-run "
         f"`{_FILL_TRIM_PROBE}` at the fill stamp in the SAME pre-commit "
         "leg and compose the figure from the probed count"
+    )
+
+
+# ---- T319: the fill enumeration count-word leg (assert_fill_enumeration_word) ----
+
+# _COUNT_WORDS — the corpus's observed count-word vocabulary (the words the
+# FINAL-enumeration count-word renderings carry): ZERO through TWENTY. An
+# unknown word in a count-word rendering fails closed naming it — the table
+# is the corpus's observed vocabulary, never a projection of what a fill
+# MIGHT write.
+_COUNT_WORDS = {
+    "ZERO": 0,
+    "ONE": 1,
+    "TWO": 2,
+    "THREE": 3,
+    "FOUR": 4,
+    "FIVE": 5,
+    "SIX": 6,
+    "SEVEN": 7,
+    "EIGHT": 8,
+    "NINE": 9,
+    "TEN": 10,
+    "ELEVEN": 11,
+    "TWELVE": 12,
+    "THIRTEEN": 13,
+    "FOURTEEN": 14,
+    "FIFTEEN": 15,
+    "SIXTEEN": 16,
+    "SEVENTEEN": 17,
+    "EIGHTEEN": 18,
+    "NINETEEN": 19,
+    "TWENTY": 20,
+}
+
+
+# _enumeration_block_spans(text) — INTERNAL; e.g. _enumeration_block_spans(composed_text)
+def _enumeration_block_spans(text):
+    """The (start, end) span of each `ok:false K` enumeration block in *text*.
+
+    The same scan surface as `_enumeration_blocks` (the T310 leg's marker
+    rule: the literal `ok:false` followed by whitespace then a digit head
+    figure — hand-scanned, import-free, no `re`), extended to carry each
+    block's SPAN for the count-word scan: the span runs from the marker
+    through the block's bracketed payload when one follows the figures
+    directly (the corpus's `ok:false K == K [payload]` rendering — the
+    bracket walk is balanced, whitespace-tolerant, and capped at the next
+    enumeration marker), else through the figure run alone (the bare
+    `ok:false K` head-figure and the `... adjudicated, 0-REAL + ...`
+    prose-tailed shapes carry no payload and no count-words — their
+    word-bearing absence is the word leg's named-missing fire, never a
+    silent pass). Returns (start, end) index pairs in stream order.
+    """
+    marker = "ok:false"
+    n = len(text)
+    starts = []
+    pos = 0
+    while True:
+        i = text.find(marker, pos)
+        if i < 0:
+            break
+        pos = i + len(marker)
+        p = pos
+        if p >= n or text[p] not in _FILL_WS:
+            continue
+        while p < n and text[p] in _FILL_WS:
+            p += 1
+        d_start = p
+        while p < n and text[p].isdigit():
+            p += 1
+        if p == d_start:
+            continue
+        starts.append(i)
+    spans = []
+    for k, i in enumerate(starts):
+        cap = starts[k + 1] if k + 1 < len(starts) else n
+        p = i + len(marker)
+        while p < n and text[p] in _FILL_WS:
+            p += 1
+        while p < n and text[p].isdigit():
+            p += 1
+        q = p
+        while q < n and text[q] in _FILL_WS:
+            q += 1
+        if text.startswith("==", q):
+            q += 2
+            while q < n and text[q] in _FILL_WS:
+                q += 1
+            while q < n and text[q].isdigit():
+                q += 1
+            p = q
+        r = p
+        while r < n and text[r] in _FILL_WS:
+            r += 1
+        if r < cap and r < n and text[r] == "[":
+            p = r
+            depth = 0
+            while p < cap:
+                if text[p] == "[":
+                    depth += 1
+                elif text[p] == "]":
+                    depth -= 1
+                    if depth == 0:
+                        p += 1
+                        break
+                p += 1
+        spans.append((i, min(p, cap)))
+    return spans
+
+
+# _caps_run_end(segment, i) — INTERNAL; e.g. _caps_run_end("ALL TWELVE", 0) -> 3
+def _caps_run_end(segment, i):
+    """The end of the ALL-CAPS letter run starting at *i* (the run may be
+    length 1 — `AssertionError`'s leading `A` reads as a run and is
+    skipped by the caller's shape checks, never a count word)."""
+    n = len(segment)
+    j = i
+    while j < n and "A" <= segment[j] <= "Z":
+        j += 1
+    return j
+
+
+# _standalone_token(segment, start, end) — INTERNAL; e.g. _standalone_token("0-REAL legs", 2, 6)
+def _standalone_token(segment, start, end):
+    """True iff segment[start:end] is whitespace-delimited on BOTH sides.
+
+    The count-word token's boundary rule: `0-REAL legs`'s `REAL` is
+    hyphen-glued (a compound's tail, not a count word) and must never read
+    as a rendering; a vocabulary word surrounded by whitespace is.
+    """
+    if start > 0 and segment[start - 1] not in _FILL_WS:
+        return False
+    if end < len(segment) and segment[end] not in _FILL_WS:
+        return False
+    return True
+
+
+# _letters_after(segment, p) — INTERNAL; e.g. _letters_after("TWELVE legs", 6) -> "legs"
+def _letters_after(segment, p):
+    """The letters token at/after *p* (whitespace skipped) — '' when none.
+
+    The FULL alpha run is read (so `ONE legs` reads `legs`, `ONE leg.`
+    reads `leg`), giving the follow-token its natural word boundary.
+    """
+    n = len(segment)
+    i = p
+    while i < n and segment[i] in _FILL_WS:
+        i += 1
+    j = i
+    while j < n and segment[j].isalpha():
+        j += 1
+    return segment[i:j]
+
+
+# _count_word_occurrences(segment) — INTERNAL; e.g. _count_word_occurrences(payload)
+def _count_word_occurrences(segment):
+    """The count-word renderings in an enumeration block's segment.
+
+    Hand-scanned (the module stays import-free — no `re`), over ALL-CAPS
+    tokens:
+      - the HEAD form `<WORD> legs` — a whitespace-delimited caps token
+        followed by whitespace then the literal `legs` (any caps token —
+        a word outside the vocabulary is reported unknown, fail-closed);
+      - the HEAD singular `<WORD> leg` — the count-1 shape: only the word
+        `ONE` reads the singular (`TWO leg` is ungrammatical prose, never
+        the rendering);
+      - the TAIL form `ALL <WORD> designed` — the literal `ALL` lead,
+        whitespace, a whitespace-delimited caps token, whitespace, the
+        literal `designed`.
+    `ALL` itself is a structural lead (never a count word) and is skipped
+    as a head-form candidate after its tail-form attempt — the tail's own
+    word then gets its own head-form turn (`ALL ELEVEN designed` reads the
+    tail occurrence only: the word's follow is `designed`, not `legs`).
+    Returns (word, form) pairs in scan order, form `head` or `tail`.
+    """
+    occurrences = []
+    n = len(segment)
+    i = 0
+    while i < n:
+        if not ("A" <= segment[i] <= "Z"):
+            i += 1
+            continue
+        end = _caps_run_end(segment, i)
+        word = segment[i:end]
+        if word == "ALL":
+            w_start = end
+            while w_start < n and segment[w_start] in _FILL_WS:
+                w_start += 1
+            w_end = _caps_run_end(segment, w_start)
+            tail_word = segment[w_start:w_end]
+            if (
+                tail_word
+                and _standalone_token(segment, w_start, w_end)
+                and _letters_after(segment, w_end) == "designed"
+            ):
+                occurrences.append((tail_word, "tail"))
+            i = end
+            continue
+        if _standalone_token(segment, i, end):
+            follow = _letters_after(segment, end)
+            if follow == "legs" or (follow == "leg" and word == "ONE"):
+                occurrences.append((word, "head"))
+        i = end
+    return occurrences
+
+
+# _fire_word_named_missing(probed_stamp) — INTERNAL; e.g.
+# _fire_word_named_missing(fill_stamp)
+def _fire_word_named_missing(probed_stamp):
+    """The zero-word-bearing-block fire: a datum-less fill is never a
+    silent pass (T319).
+
+    Split from assert_fill_enumeration_word's body so the RED-provability
+    mutant (the fire silent-passed) is a ONE-LINE swap on a copy — the
+    guard `_fire_word_named_missing(probed_stamp)` -> `return` — rather
+    than a multi-line raise excision that cannot compile half-removed.
+    """
+    raise AssertionError(
+        f"assert_fill_enumeration_word: no count-word rendering found in "
+        f"the composed fill text's enumeration block(s) — zero "
+        f"word-bearing enumeration blocks probed (the named-missing fire, "
+        f"never a silent pass); the fill must carry the FINAL-enumeration "
+        f"count-word renderings (the head `at the fill stamp: <WORD> legs` "
+        f"— singular `ONE leg` at the count-1 shape — and the tail `ALL "
+        f"<WORD> designed`) at its named stamp ({probed_stamp!r}), the "
+        f"word composed from the SAME pre-commit leg's mechanical "
+        f"enumeration — re-run `{_FILL_ENUM_PROBE}` at the fill stamp and "
+        f"compose the count-word from the probed count"
+    )
+
+
+# assert_fill_enumeration_word(text, probed_count, probed_stamp) — the composed TEXT + 2 probed actuals; e.g. assert_fill_enumeration_word(fill_text, probed_ok_false_count, fill_stamp)
+def assert_fill_enumeration_word(text, probed_count, probed_stamp):
+    """The fill's FINAL enumeration count-WORD equals a FRESH mechanical count.
+
+    The corridor-figure falsification class's FIFTH committed sighting, the
+    FIRST on the enumeration count-word surface (the cycle-2955 wrap fill
+    652fd7c, caught one chain later by the digest backstop's designed net
+    at the 709th eval, corrected forward per T70 at the cycle-2956 wrap —
+    zero casualty): the committed FINAL datum block reads "ok:false 12 ==
+    12 [the enumeration re-run off the stream's own flags per T272/T310 at
+    the fill stamp: ELEVEN legs — … — ALL ELEVEN designed read-only
+    zero-mutation 0-REAL legs […]]" at its named 2026-11-04T17:51:05.800Z
+    fill stamp while the mechanical whole-final enumeration at that same
+    stamp reads TWELVE `ok:false` legs (jq
+    `select(.type=="tool_result" and .ok==false)` count-12 — all twelve
+    timestamps the fill itself enumerates). The FIGURE `12 == 12` is TRUE —
+    the T310 leg's own designed guard-fire caught the stale figure-10
+    pre-commit, and the final recompose corrected the figure to 12 after
+    the T310 fire leg itself landed as the 12th — but the count-WORD rode
+    stale, head and tail both. assert_fill_enumeration (T310) is the
+    figure's mechanical tooth; THIS leg is the count-WORD's — the
+    enumeration surface's last unpinned element (the FIGURE pinned by
+    T310, the enumerated legs' timestamps the enumeration's payload by
+    design, the count-WORD here).
+
+    *probed_count* is the `ok:false`-leg count the CALL SITE probed from
+    the LIVE events stream at assertion time — the SAME
+    `{_FILL_ENUM_PROBE}` reading the T310 leg takes, captured into a shell
+    variable per the T282 channel half — passed IN as the probed actual
+    (the T273 letter: arguments are the probed actuals; the function never
+    re-derives the expectation nor runs the probe itself). *probed_stamp*
+    is the stamp the count was probed at (the fill stamp) — named in every
+    fire so the recompose knows where to re-probe. *text* is the composed
+    fill/wrap TEXT (a str). Either non-str is the call-signature slip
+    shape — TypeError naming the accepted shape (the pre-split line list
+    is the text slip shape).
+
+    The asserted surface is the enumeration blocks' count-WORD renderings
+    (the same `_enumeration_blocks` scan surface the T310 leg scans, here
+    with each block's bracketed payload spanned): the HEAD form
+    `<WORD> legs` (and the count-1 singular `ONE leg`) and, when present,
+    the TAIL form `ALL <WORD> designed` — each word mapped through the
+    ZERO..TWENTY vocabulary (_COUNT_WORDS, the corpus's observed words; an
+    unknown word fails closed naming it). Every count-word occurrence
+    found inside an enumeration block must map to the probed count for
+    that block to pass, and the assertion passes iff at least ONE
+    enumeration block's every count-word maps to the probed count
+    (any-block semantics, the datum leg's rule — a text legitimately
+    quoting an earlier stream's enumeration stays green because the FINAL
+    datum's own enumeration rides beside it). Zero word-bearing
+    enumeration blocks is the named-missing fire — a datum-less fill is
+    never a silent pass — and a degenerate *probed_count* (non-int,
+    negative) fails closed naming the probed value. The fire is
+    zero-mutation by construction: all arguments are values, nothing is
+    opened or written.
+    """
+    if not isinstance(text, str):
+        probed = (
+            f"{len(text)} probed line(s)"
+            if isinstance(text, (list, tuple))
+            else repr(text)
+        )
+        raise TypeError(
+            f"assert_fill_enumeration_word(text, probed_count, "
+            f"probed_stamp): text must be the composed fill/wrap TEXT (a "
+            f"str — the enumeration count-word rendering the fill commits "
+            f"is asserted in memory, pre-write); probed text {probed} "
+            f"(type {type(text).__name__}) — the pre-split line list is "
+            f"the call-signature slip shape"
+        )
+    if not isinstance(probed_stamp, str):
+        probed = (
+            f"{len(probed_stamp)} probed line(s)"
+            if isinstance(probed_stamp, (list, tuple))
+            else repr(probed_stamp)
+        )
+        raise TypeError(
+            f"assert_fill_enumeration_word(text, probed_count, "
+            f"probed_stamp): probed_stamp must be the stamp the mechanical "
+            f"enumeration was probed at (a str — the fill stamp, named in "
+            f"every fire so the recompose knows where to re-probe); probed "
+            f"probed_stamp {probed} (type {type(probed_stamp).__name__})"
+        )
+    if (
+        not isinstance(probed_count, int)
+        or isinstance(probed_count, bool)
+        or probed_count < 0
+    ):
+        raise AssertionError(
+            f"assert_fill_enumeration_word: the probed count fails closed "
+            f"— probed probed_count {probed_count!r} (type "
+            f"{type(probed_count).__name__}) is not a non-negative int — "
+            f"the count must be the LIVE `{_FILL_ENUM_PROBE}` reading at "
+            f"the fill stamp probed in the SAME pre-commit leg (the T282 "
+            f"channel half: probed values ride argv/env into the script, "
+            f"never literal-composed); a degenerate probed count can "
+            f"never wave the leg GREEN"
+        )
+    spans = _enumeration_block_spans(text)
+    word_blocks = []
+    for idx, (b_start, b_end) in enumerate(spans, 1):
+        occurrences = _count_word_occurrences(text[b_start:b_end])
+        if occurrences:
+            word_blocks.append((idx, occurrences))
+    if not word_blocks:
+        _fire_word_named_missing(probed_stamp)
+    reports = []
+    for idx, occurrences in word_blocks:
+        block_reports = []
+        for word, form in occurrences:
+            mapped = _COUNT_WORDS.get(word)
+            if mapped is None:
+                block_reports.append(
+                    f"count-word {word!r} ({form} form) is not in the "
+                    f"ZERO..TWENTY vocabulary — fails closed"
+                )
+            elif mapped != probed_count:
+                block_reports.append(
+                    f"count-word {word!r} ({form} form) maps {mapped} != "
+                    f"probed {probed_count}"
+                )
+        if not block_reports:
+            return
+        reports.append(
+            f"enumeration block {idx} of {len(spans)} probed: "
+            + "; ".join(block_reports)
+        )
+    raise AssertionError(
+        f"assert_fill_enumeration_word: the fill text's enumeration "
+        f"count-word rendering(s) diverge from the mechanical enumeration "
+        f"probed at the fill stamp {probed_stamp!r} — "
+        + " | ".join(reports)
+        + " — the count-WORD must carry the SAME pre-commit leg's probed "
+        "count, never a word composed from a read taken earlier (the "
+        "corridor-figure falsification class's FIFTH committed sighting, "
+        "the FIRST on the enumeration count-word surface: the cycle-2955 "
+        "fill 652fd7c wrote head `ELEVEN legs` + tail `ALL ELEVEN "
+        "designed` at its named stamp against the mechanical TWELVE — the "
+        "figure 12 == 12 TRUE via the T310 guard-fire's designed catch "
+        "while the word rode stale, corrected forward per T70 at the "
+        "cycle-2956 wrap): re-run "
+        f"`{_FILL_ENUM_PROBE}` at the fill stamp in the SAME pre-commit "
+        "leg and compose the count-word from the probed count"
     )
 
 
