@@ -3936,6 +3936,56 @@ T321_3020_STREAMS = T321_3024_STREAMS + [
      ["2026-11-05T18:12:53.572Z"]),
 ]
 
+# ---- T322 fixture geometries ----
+
+# The T322 finding-2 boundary geometry — a resetting stream whose
+# whole-final trim count is EXACTLY 1 (the modal real-corpus resetter
+# shape: a one-post-stamp-trim stream), followed by two trim-0 streams
+# and a trim-0-at-the-stamp live stream: chain = 2, TRUE 3, the walk
+# stops AT the trim-1 stream and names it.
+T322_TRIM1_STREAMS = [
+    ("events-20261105-093000.jsonl", "2026-11-05T08:30:00.000Z",
+     ["2026-11-05T09:00:00.000Z"]),
+    ("events-20261105-104500.jsonl", "2026-11-05T09:30:00.000Z", []),
+    ("events-20261105-120000.jsonl", "2026-11-05T10:45:00.000Z", []),
+]
+T322_TRIM1_LIVE = ("2026-11-05T11:00:00.000Z", [])
+T322_TRIM1_STAMP = "2026-11-05T11:30:00Z"
+
+# The T322 finding-3 boundary geometry — the live current stream carries
+# ONE trim leg whose ts string EXACTLY equals the fill stamp (identical
+# strings — the 3020 leg's `.` < `Z` subsecond shape pinned the
+# comparison, never the equality arm): shipped, the at-stamp count
+# INCLUDES it (at-stamp 1), the extension precondition fails, TRUE reads
+# the bare chain 2; the `<=` -> `<` mutant excludes it (at-stamp 0, TRUE
+# 3). The resetter echoes the 3004 stream's whole-final trim 2.
+T322_EQUALITY_STAMP = "2026-11-05T11:30:00Z"
+T322_EQUALITY_STREAMS = [
+    ("events-20261105-093000.jsonl", "2026-11-05T08:30:00.000Z",
+     ["2026-11-05T09:00:00.000Z", "2026-11-05T09:05:00.000Z"]),
+    ("events-20261105-104500.jsonl", "2026-11-05T09:30:00.000Z", []),
+    ("events-20261105-120000.jsonl", "2026-11-05T10:45:00.000Z", []),
+]
+T322_EQUALITY_LIVE = ("2026-11-05T11:00:00.000Z", [T322_EQUALITY_STAMP])
+
+# The T322 finding-1 scoping geometry — a legacy two-run_start file sits
+# OLDEST, BEYOND the resetting stream: the walk stops at the trim-1
+# stream three files newer, so the corrupt file is never read and never
+# identity-checked (the live main corpus's Sept-2026 shape — the T321
+# sweep refused every fill on it).
+T322_SCOPING_STREAMS = [
+    ("events-20261105-080000.jsonl", "2026-11-05T07:00:00.000Z", []),
+    ("events-20261105-093000.jsonl", "2026-11-05T08:30:00.000Z",
+     ["2026-11-05T09:00:00.000Z"]),
+    ("events-20261105-104500.jsonl", "2026-11-05T09:30:00.000Z", []),
+]
+T322_SCOPING_LIVE = ("2026-11-05T10:00:00.000Z", [])
+T322_SCOPING_STAMP = "2026-11-05T10:30:00Z"
+# The `events-tNNN-*` task-harvest name shape — NEVER a main-loop
+# predecessor stream (the T321 glob swept 610+ of them into the identity
+# check); the fixture's harvest file carries a two-run_start corruption
+# the scoped leg must never read.
+T322_HARVEST_NAME = "events-t322-harvest.jsonl"
 
 def _t321_strip_run_start_lines(path):
     """Rewrite the events file without its run_start lines (the
@@ -4430,6 +4480,238 @@ class AssertFillTrimStreakTest(unittest.TestCase):
             )
         # The module restored byte-identical after each run (nothing was
         # ever written — re-read and compared against the pristine read).
+        with open(wrap_assert.__file__, "r", encoding="utf-8") as f:
+            self.assertEqual(f.read(), pristine)
+
+    def test_boundary_trim_1_resetter_stops_the_walk_and_names_it(self):
+        # The T322 finding-2 boundary (the M7 weak-test survivor): the
+        # resetting stream's whole-final trim count EXACTLY 1 — the modal
+        # real-corpus resetter shape (a one-post-stamp-trim stream), the
+        # boundary value every T321 fixture overshot with count 2 —
+        # STOPS the walk and is NAMED: the chain counts only the trim-0
+        # streams newer than it (2), TRUE 3 at the stamp. RED-proof: the
+        # `>= 1` threshold flipped to `>= 2` walks PAST the trim-1
+        # stream — the TRUE `reads 3` fixture fires under the mutant
+        # (probed 4, no resetting stream named) and rides green shipped.
+        true_text = (
+            "the strict post-reset streak reads 3 TRUE on THIS "
+            "stream's trim-0 at the stamp"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            events_dir = _t321_build_events_dir(
+                tmp, T322_TRIM1_STREAMS, live=T322_TRIM1_LIVE
+            )
+            wrap_assert.assert_fill_trim_streak(
+                true_text, events_dir, T322_TRIM1_STAMP
+            )
+            with self.assertRaises(AssertionError) as ctx:
+                wrap_assert.assert_fill_trim_streak(
+                    "the strict post-reset streak reads 4 TRUE on THIS "
+                    "stream's trim-0 at the stamp",
+                    events_dir,
+                    T322_TRIM1_STAMP,
+                )
+            msg = str(ctx.exception)
+            self.assertIn("reads 4", msg)
+            self.assertIn("the probed 3", msg)
+            self.assertIn("prior chain 2", msg)
+            # the walk STOPPED at the trim-1 stream: it is the named
+            # resetting stream (its ONE trim leg resets the streak).
+            self.assertIn("events-20261105-093000.jsonl", msg)
+            self.assertIn("2026-11-05T08:30:00.000Z", msg)
+            self.assertIn("resetting stream", msg)
+        # RED-proof on a copy (the module never written): the `>= 1` ->
+        # `>= 2` threshold flip walks past the trim-1 resetter.
+        with open(wrap_assert.__file__, "r", encoding="utf-8") as f:
+            pristine = f.read()
+        m3 = _mutant_wrap_assert(
+            pristine,
+            "        if _streak_trim_count(events) >= 1:",
+            "        if _streak_trim_count(events) >= 2:",
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            events_dir = _t321_build_events_dir(
+                tmp, T322_TRIM1_STREAMS, live=T322_TRIM1_LIVE
+            )
+            with self.assertRaises(AssertionError) as ctx:
+                m3["assert_fill_trim_streak"](
+                    true_text, events_dir, T322_TRIM1_STAMP
+                )
+            m_msg = str(ctx.exception)
+            self.assertIn("reads 3", m_msg)
+            self.assertIn("the probed 4", m_msg)
+            self.assertIn(
+                "no resetting stream in the enumerated window", m_msg
+            )
+        with open(wrap_assert.__file__, "r", encoding="utf-8") as f:
+            self.assertEqual(f.read(), pristine)
+
+    def test_boundary_trim_ts_equal_to_stamp_counts_in_at_stamp(self):
+        # The T322 finding-3 boundary (the M4 weak-test survivor): the
+        # current stream's trim leg whose ts string EXACTLY equals the
+        # fill stamp (identical strings — the T321 fixture's `.` < `Z`
+        # subsecond shape pinned the comparison without ever pinning the
+        # equality arm) is INCLUDED in the at-stamp count: at-stamp 1
+        # fails the extension's precondition, TRUE reads the bare chain
+        # 2, and a claim composed as if the equality leg were excluded
+        # (3) fires. RED-proof: `<=` flipped to `<` EXCLUDES the
+        # equality leg — the TRUE `reads 2` fixture fires under the
+        # mutant (probed 3) and rides green shipped.
+        true_text = (
+            "trim 1 == 1 [the trim leg at the stamp — the harness's "
+            "automatic context trim; the strict post-reset streak "
+            "reads 2 TRUE on THIS stream's trim-1 at the stamp]"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            events_dir = _t321_build_events_dir(
+                tmp, T322_EQUALITY_STREAMS, live=T322_EQUALITY_LIVE
+            )
+            wrap_assert.assert_fill_trim_streak(
+                true_text, events_dir, T322_EQUALITY_STAMP
+            )
+            with self.assertRaises(AssertionError) as ctx:
+                wrap_assert.assert_fill_trim_streak(
+                    "the strict post-reset streak reads 3 TRUE on THIS "
+                    "stream's trim-0 at the stamp",
+                    events_dir,
+                    T322_EQUALITY_STAMP,
+                )
+            msg = str(ctx.exception)
+            self.assertIn("reads 3", msg)
+            self.assertIn("the probed 2", msg)
+            self.assertIn("prior chain 2", msg)
+        # RED-proof on a copy: the `<=` -> `<` flip drops the equality
+        # leg from the at-stamp count.
+        with open(wrap_assert.__file__, "r", encoding="utf-8") as f:
+            pristine = f.read()
+        m4 = _mutant_wrap_assert(
+            pristine,
+            "        if ts <= stamp:",
+            "        if ts < stamp:",
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            events_dir = _t321_build_events_dir(
+                tmp, T322_EQUALITY_STREAMS, live=T322_EQUALITY_LIVE
+            )
+            with self.assertRaises(AssertionError) as ctx:
+                m4["assert_fill_trim_streak"](
+                    true_text, events_dir, T322_EQUALITY_STAMP
+                )
+            m_msg = str(ctx.exception)
+            self.assertIn("reads 2", m_msg)
+            self.assertIn("the probed 3", m_msg)
+        with open(wrap_assert.__file__, "r", encoding="utf-8") as f:
+            self.assertEqual(f.read(), pristine)
+
+    def test_scoping_identity_check_reads_only_the_walked_window(self):
+        # The T322 finding-1 scoping: the one-run_start identity check
+        # binds ONLY the files the chain walk inspects. (a) A legacy
+        # two-run_start file OLDER than the resetting stream — outside
+        # the walked window, the live main corpus's Sept-2026 shape that
+        # refused every T321-sweep fill — is never read and never
+        # identity-checked: the leg derives past it. (b) The same
+        # corruption INSIDE the window still fails closed BY NAME (the
+        # T320 precondition binds what the walk trusts). (c) An
+        # `events-tNNN-*` task-harvest file is excluded from the
+        # enumeration by the cycle-stream name shape — a two-run_start
+        # harvest file in the dir is never read either. RED-proofs: the
+        # walk-stop deleted (break -> pass) reaches the outside-window
+        # file and fires; the shape check deleted lets the harvest file
+        # into the enumeration (newest mtime, walked FIRST) and fires.
+        with open(wrap_assert.__file__, "r", encoding="utf-8") as f:
+            pristine = f.read()
+        scoping_text = (
+            "the strict post-reset streak reads 2 TRUE on THIS "
+            "stream's trim-0 at the stamp"
+        )
+        # (a) outside the walked window: no fire — the leg derives
+        # chain 1 (104500 trim-0), stops at the trim-1 stream 093000,
+        # TRUE 2 at the stamp.
+        with tempfile.TemporaryDirectory() as tmp:
+            events_dir = _t321_build_events_dir(
+                tmp, T322_SCOPING_STREAMS, live=T322_SCOPING_LIVE
+            )
+            corrupt = os.path.join(
+                events_dir, "events-20261105-080000.jsonl"
+            )
+            with open(corrupt, "a", encoding="utf-8") as f:
+                f.write(json.dumps(
+                    {"type": "run_start",
+                     "ts": "2026-11-05T07:10:00.000Z"}) + "\n")
+            # the append bumped the mtime to NOW — re-pin the fixture's
+            # stream-order mtime (the ls/mtime enumeration is the stream
+            # order; the corrupt file stays OLDEST, outside the window).
+            os.utime(corrupt, (1_700_000_000, 1_700_000_000))
+            wrap_assert.assert_fill_trim_streak(
+                scoping_text, events_dir, T322_SCOPING_STAMP
+            )
+            # RED-proof (a): the walk-stop deleted, the walk reads PAST
+            # the resetting stream — the outside-window corrupt file is
+            # reached and the identity fire names it.
+            m_break = _mutant_wrap_assert(
+                pristine,
+                "            resetter = (name, run_starts[0])\n"
+                "            break",
+                "            resetter = (name, run_starts[0])\n"
+                "            pass",
+            )
+            with self.assertRaises(AssertionError) as ctx:
+                m_break["assert_fill_trim_streak"](
+                    scoping_text, events_dir, T322_SCOPING_STAMP
+                )
+            self.assertIn(
+                "events-20261105-080000.jsonl", str(ctx.exception)
+            )
+            # (b) the same corruption INSIDE the window (the walk
+            # reaches the file before stopping) fails closed BY NAME.
+            with open(os.path.join(
+                events_dir, "events-20261105-104500.jsonl"
+            ), "a", encoding="utf-8") as f:
+                f.write(json.dumps(
+                    {"type": "run_start",
+                     "ts": "2026-11-05T09:40:00.000Z"}) + "\n")
+            os.utime(
+                os.path.join(events_dir, "events-20261105-104500.jsonl"),
+                (1_700_000_002, 1_700_000_002),
+            )
+            with self.assertRaises(AssertionError) as ctx:
+                wrap_assert.assert_fill_trim_streak(
+                    scoping_text, events_dir, T322_SCOPING_STAMP
+                )
+            msg = str(ctx.exception)
+            self.assertIn("events-20261105-104500.jsonl", msg)
+            self.assertIn("probed 2 run_start event(s)", msg)
+        # (c) the task-harvest name shape excluded from the enumeration.
+        with tempfile.TemporaryDirectory() as tmp:
+            events_dir = _t321_build_events_dir(
+                tmp, T322_SCOPING_STREAMS, live=T322_SCOPING_LIVE
+            )
+            harvest = os.path.join(events_dir, T322_HARVEST_NAME)
+            with open(harvest, "w", encoding="utf-8") as f:
+                f.write("\n".join([
+                    json.dumps({"type": "run_start",
+                                "ts": "2026-11-05T12:00:00.000Z"}),
+                    json.dumps({"type": "run_start",
+                                "ts": "2026-11-05T12:01:00.000Z"}),
+                ]) + "\n")
+            os.utime(harvest, (1_700_000_100, 1_700_000_100))
+            wrap_assert.assert_fill_trim_streak(
+                scoping_text, events_dir, T322_SCOPING_STAMP
+            )
+            # RED-proof (c): the shape check deleted, the harvest file
+            # enters the enumeration and the walk reads it FIRST.
+            m_shape = _mutant_wrap_assert(
+                pristine,
+                "        if _streak_is_cycle_stream_name(name):",
+                "        if True:",
+            )
+            with self.assertRaises(AssertionError) as ctx:
+                m_shape["assert_fill_trim_streak"](
+                    scoping_text, events_dir, T322_SCOPING_STAMP
+                )
+            m_msg = str(ctx.exception)
+            self.assertIn(T322_HARVEST_NAME, m_msg)
+            self.assertIn("probed 2 run_start event(s)", m_msg)
         with open(wrap_assert.__file__, "r", encoding="utf-8") as f:
             self.assertEqual(f.read(), pristine)
 

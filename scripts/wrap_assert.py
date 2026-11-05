@@ -3063,6 +3063,33 @@ def _streak_run_starts(events):
     return renderings
 
 
+# _streak_is_cycle_stream_name(name) — INTERNAL; e.g.
+# _streak_is_cycle_stream_name("events-20261105-184419.jsonl")
+def _streak_is_cycle_stream_name(name):
+    """The main-loop cycle-stream rotated-file name shape — TRUE exactly
+    for `events-<YYYYmmdd>-<HHMMSS>.jsonl` (an 8-digit date, a dash, a
+    6-digit time — 14 digits across the dash, 28 chars total).
+
+    The T322 scoping: the rotated enumeration reads main-loop cycle
+    streams ONLY. The plain `events-*.jsonl` glob the leg shipped with
+    also matched `events-tNNN-*` task-harvest files (612 in the live
+    corpus) — never main-loop predecessor streams — and swept them into
+    the identity check; the shape check rejects them BY NAME (the `t` of
+    the task id is not a digit) before any file is read. Hand-scanned
+    (the module stays import-free — no `re`), ASCII digits only."""
+    if len(name) != 28:
+        return False
+    if not name.startswith("events-") or not name.endswith(".jsonl"):
+        return False
+    if name[15] != "-":
+        return False
+    digits = "0123456789"
+    return (
+        all(ch in digits for ch in name[7:15])
+        and all(ch in digits for ch in name[16:22])
+    )
+
+
 # _streak_take_ws(text, p) — INTERNAL; e.g. _streak_take_ws(claim_text, i)
 def _streak_take_ws(text, p):
     """The position past the whitespace run at/after *p* (the _FILL_WS set
@@ -3230,28 +3257,49 @@ def assert_fill_trim_streak(text, events_dir, fill_stamp):
     the T305 doctrine bans, and an opt-in probed-arg is the T306/T312
     inert-leg shape): the TRUE streak is re-derived from the events files
     ALONE, never from committed corridor texts:
-      a. the rotated `events-*.jsonl` files in *events_dir* are
-         enumerated in stream order (mtime, then name — the `ls`/mtime
-         order; the rotation mechanism: each rotated file holds exactly
-         one predecessor stream);
-      b. EACH rotated file is verified to carry exactly ONE `run_start`
-         event (the T320 identity precondition — a file with zero or
-         multiple run_start events is rejected BY NAME, not silently
-         miscounted);
-      c. per file the WHOLE-FINAL trim count is read off the stream's
-         own flags (events of `type == "trim"`);
+      a. the rotated `events-<YYYYmmdd>-<HHMMSS>.jsonl` cycle-stream
+         files in *events_dir* are enumerated in stream order (mtime,
+         then name — the `ls`/mtime order; the rotation mechanism: each
+         rotated file holds exactly one predecessor stream). The T322
+         name-shape scoping: the plain `events-*.jsonl` glob the leg
+         first shipped with ALSO matched `events-tNNN-*` task-harvest
+         files — never main-loop predecessor streams — and swept them
+         into the identity check; the cycle-stream name shape
+         (`_streak_is_cycle_stream_name`) excludes them BY NAME, unread;
+      b. each rotated file the chain walk INSPECTS is verified to carry
+         exactly ONE `run_start` event (the T320 identity precondition —
+         a file with zero or multiple run_start events is rejected BY
+         NAME, not silently miscounted). The T322 scoping binds the
+         check to the walked window — the newest-first candidates down
+         to and INCLUDING the resetting stream, or the full predecessor
+         window when no resetter is reached; files older than the
+         walk's stop point are never read and never identity-checked.
+         The T321 sweep-everything shape refused the LIVE main corpus
+         every fill (the T322 finding probed it: 104 of 1,581 rotated
+         files violate the one-run_start identity — 7 legacy Sept-2026
+         cycle streams with 2 run_starts each, plus 97 task-harvest
+         streams the glob never should have swept — every one outside
+         the modern walked window), so the LOOP-SPEC doctrine it
+         amended could not verify in production; a legacy
+         multi-run_start file INSIDE the walked window still
+         fails closed by name — the precondition binds what the walk
+         trusts;
+      c. per inspected file the WHOLE-FINAL trim count is read off the
+         stream's own flags (events of `type == "trim"`);
       d. the TRUE prior chain = the count of consecutive whole-final
          trim-0 streams walking BACK from the current stream's
          predecessor, stopping BEFORE the first stream whose whole-final
          trim count is >= 1 (a trim>=1 whole-final RESETS the streak —
-         that stream is the resetting stream, named in every fire);
+         that stream is the resetting stream, named in every fire; the
+         boundary value 1 IS a resetter — the T322 fixture pins it);
       e. the stamp-scoped TRUE figure = chain + 1 when the CURRENT
          stream's trim count at *fill_stamp* is 0 (the current stream is
          the live `events.jsonl`; when the dir carries no live file the
          NEWEST rotated file is the current stream and the chain walks
          its predecessors — the derivation stays total). Trim legs scope
-         lexically (ts <= stamp, the stream anchors' own ISO-Z format;
-         a no-ts leg scopes as included, the stream_datum convention).
+         lexically (ts <= stamp — the EQUALITY arm included, T322-pinned
+         — the stream anchors' own ISO-Z format; a no-ts leg scopes as
+         included, the stream_datum convention).
 
     THE EXPECTATION IS EXTRACTED, NEVER PASSED IN (the T270/T288
     probed-expectation clause binds the expectation side): the API
@@ -3323,7 +3371,7 @@ def assert_fill_trim_streak(text, events_dir, fill_stamp):
         ) from err
     rotated = []
     for name in listing:
-        if name.startswith("events-") and name.endswith(".jsonl"):
+        if _streak_is_cycle_stream_name(name):
             rotated.append(
                 (
                     os_mod.stat(os_mod.path.join(events_dir, name)).st_mtime,
@@ -3332,8 +3380,36 @@ def assert_fill_trim_streak(text, events_dir, fill_stamp):
             )
     rotated.sort()
     rotated_names = [name for _, name in rotated]
-    streams = []
-    for name in rotated_names:
+    if "events.jsonl" in listing:
+        current_events = _streak_load_events(
+            os_mod.path.join(events_dir, "events.jsonl")
+        )
+        chain_names = rotated_names
+    elif rotated_names:
+        # no live file: the NEWEST rotated file is the current stream and
+        # the chain walks its predecessors (the derivation stays total).
+        # The current stream is READ for its stamp-scoped count but is
+        # not a walk candidate — the T320 identity check scopes to the
+        # walk (below), never to the stream being filled.
+        current_events = _streak_load_events(
+            os_mod.path.join(events_dir, rotated_names[-1])
+        )
+        chain_names = rotated_names[:-1]
+    else:
+        raise AssertionError(
+            f"assert_fill_trim_streak({events_dir!r}): the events corpus "
+            f"is absent — no live `events.jsonl` and no rotated "
+            f"`events-*.jsonl` file probed — the chain is re-derived "
+            f"from the events files ALONE, so an empty corpus fails "
+            f"closed and can never wave the fill's streak claim GREEN"
+        )
+    chain = 0
+    resetter = None
+    for name in reversed(chain_names):
+        # The T322 scoping: each candidate is READ (and identity-checked)
+        # only as the walk reaches it — newest-first, stopping at the
+        # resetting stream; files older than the walk's stop point are
+        # never read and never identity-checked.
         events = _streak_load_events(os_mod.path.join(events_dir, name))
         run_starts = _streak_run_starts(events)
         if len(run_starts) != 1:
@@ -3351,36 +3427,8 @@ def assert_fill_trim_streak(text, events_dir, fill_stamp):
                 f"interval) — the file is rejected BY NAME, never "
                 f"silently miscounted into the chain"
             )
-        streams.append(
-            (
-                name,
-                events,
-                run_starts[0] if run_starts else "<no run_start>",
-            )
-        )
-    live_name = "events.jsonl" if "events.jsonl" in listing else None
-    if live_name is not None:
-        current_name = live_name
-        current_events = _streak_load_events(
-            os_mod.path.join(events_dir, live_name)
-        )
-        predecessors = streams
-    elif streams:
-        current_events = streams[-1][1]
-        predecessors = streams[:-1]
-    else:
-        raise AssertionError(
-            f"assert_fill_trim_streak({events_dir!r}): the events corpus "
-            f"is absent — no live `events.jsonl` and no rotated "
-            f"`events-*.jsonl` file probed — the chain is re-derived "
-            f"from the events files ALONE, so an empty corpus fails "
-            f"closed and can never wave the fill's streak claim GREEN"
-        )
-    chain = 0
-    resetter = None
-    for name, events, run_start in reversed(predecessors):
         if _streak_trim_count(events) >= 1:
-            resetter = (name, run_start)
+            resetter = (name, run_starts[0])
             break
         chain += 1
     at_stamp = _streak_trim_count(current_events, fill_stamp)
