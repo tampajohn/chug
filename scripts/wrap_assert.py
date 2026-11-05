@@ -194,7 +194,8 @@ the T311 on-disk state-schema legs, and the T312 always-on marker legs, and
 the T316 Outcomes one-liner figure-audit legs, and the
 T317 fill trim-enumeration legs, and the
 T319 fill enumeration count-word legs, and the
-T321 fill trim-streak legs.
+T321 fill trim-streak legs, and the
+T323 fill eval-state-untracked legs.
 """
 
 __all__ = [
@@ -218,6 +219,7 @@ __all__ = [
     "assert_fill_enumeration_word",
     "assert_outcomes_one_liner",
     "assert_fill_trim_streak",
+    "assert_fill_eval_state_untracked",
 ]
 
 
@@ -3445,3 +3447,141 @@ def assert_fill_trim_streak(text, events_dir, fill_stamp):
         _fire_trim_streak_mismatch(
             problems, chain, resetter, true_figure, fill_stamp
         )
+
+
+# _EVAL_STATE_UNTRACKED_PAIR — the T260 disk-only pair this leg's scope is
+# pinned to: the scoped-walk state (`.chug/eval-state.md`, rewritten at
+# each wrap) and the delta (`.chug/eval-delta.md`, rebuilt by loopd before
+# every cycle). Both are `.gitignore:12`-covered and MUST stay untracked;
+# the harvest convention (the force-added `events-t*`/`LEDGER-t*`/
+# `verdict-t*` files) is the designed exception OUTSIDE this pair — the
+# leg's scope is EXACTLY the disk-only pair, never the whole `.chug/`
+# tree.
+_EVAL_STATE_UNTRACKED_PAIR = (".chug/eval-state.md", ".chug/eval-delta.md")
+
+
+# _fire_eval_state_tracked(tracked) — INTERNAL; e.g.
+# _fire_eval_state_tracked([".chug/eval-state.md"])
+def _fire_eval_state_tracked(tracked):
+    """The tracked-hit fire (T323) — split from the leg's body so the
+    RED-provability mutant is a ONE-LINE stash (the call swapped for
+    `pass` on a copy, the T310 `_fire_named_missing` idiom) rather than a
+    multi-line raise excision that cannot compile half-removed. Names
+    (i) each tracked path git reported, (ii) the consequence class (the
+    delta_bookkeeping_only chain-break), and (iii) the repair recipe (the
+    bb339d9/ac4994f precedent) — the module's invariant: the PROBED
+    actuals, never a bare mismatch."""
+    paths = ", ".join(tracked)
+    repairs = "; ".join(f"`git rm --cached {p}`" for p in tracked)
+    raise AssertionError(
+        f"assert_fill_eval_state_untracked: git reports the T260 "
+        f"disk-only state pair TRACKED — {len(tracked)} path(s) "
+        f"[{paths}] — a tracked disk-only state file breaks "
+        f"`delta_bookkeeping_only`'s file leg (the baseline..HEAD tree "
+        f"diff moves on a tracked path outside the bookkeeping set, so "
+        f"the delta reads book=no on EVERY subsequent cycle — the wrap's "
+        f"state rewrite touches the file each cycle — the T258 "
+        f"cheap-exit predicate can never hold, and the chain silently "
+        f"breaks into sustained forced launches, a SILENT sustained "
+        f"budget burn); the repair is {repairs} per the bb339d9/ac4994f "
+        f"precedent — the file byte-untouched on disk, `.gitignore:12` "
+        f"re-covering it"
+    )
+
+
+# assert_fill_eval_state_untracked(repo_root) — the REPO TOPLEVEL's PATH
+# (a str); e.g. assert_fill_eval_state_untracked(".")
+def assert_fill_eval_state_untracked(repo_root):
+    """The disk-only pair's GIT-STATE leg (T323 — the cycle-1427 class's
+    SECOND fire closed, the wrap corridor's git-state hygiene's last
+    un-asserted piece).
+
+    The filing fire (the cycle-3024 wrap): the wrap's notes commit
+    (11f26ea) force-added `.chug/eval-state.md` into git tracking —
+    self-caught at the notes commit's own stat read-back and repaired in
+    ac4994f per the bb339d9 precedent (`git rm --cached`, the file
+    byte-untouched on disk, the `.gitignore:12` ignore re-covering it,
+    `git ls-files .chug/eval-state.md` back to ZERO). Why tracking the
+    state file is a chain-break: loopd.sh's `delta_bookkeeping_only` file
+    leg reads the baseline..HEAD tree diff and returns book=no when ANY
+    tracked path outside the bookkeeping set moves — a tracked
+    `.chug/eval-state.md` is exactly such a path, and the wrap's state
+    rewrite touches it every cycle, so EVERY subsequent cycle's delta
+    reads book=no: the T258 cheap-exit predicate can never hold, every
+    cycle becomes a forced launch, and the chain stays broken until
+    someone repairs the tracking BY HAND. That is a SILENT sustained
+    budget burn (the whole point of the cheap-exit cascade is the $0
+    skip); the 3024 wrap caught the fire same-cycle, but the class's
+    detection path was an orchestrator self-catch, not a mechanical
+    guard. This leg IS the mechanical guard, wired into the fill compose
+    leg's pre-commit assert in the SAME leg as the commit (the
+    T309/T310/T317/T321 landing pattern — each new surface's firing arms
+    the compose-time leg for that surface; the disk-only-tracking surface
+    is the last un-asserted piece).
+
+    The gate (the T270/T288 probed-expectation clause satisfied by
+    CONSTRUCTION): the leg runs `git -C <repo_root> ls-files --
+    .chug/eval-state.md .chug/eval-delta.md` (an argv list, never a
+    shell string) and asserts the output EMPTY — both files untracked.
+    The expectation IS the probe's own output: no remembered expected
+    value is composed anywhere, the empty-set expectation is the probe's
+    own read. The leg asks GIT, never the filesystem and never the
+    model's say-so: a file PRESENT ON DISK but absent from the index is
+    the DESIGNED shape (the T260 disk-only convention — both files are
+    `.gitignore:12`-covered), and the harvest exception (the force-added
+    `events-t*`/`LEDGER-t*`/`verdict-t*` files) stays OUTSIDE the leg's
+    scope — the scope is EXACTLY the disk-only pair
+    (`_EVAL_STATE_UNTRACKED_PAIR`), never the whole `.chug/` tree.
+
+    *repo_root* is the repo toplevel's PATH (a str) — the caller passes
+    the repo the fill commits against; any other shape is the
+    call-signature slip shape and raises TypeError naming the accepted
+    shape. A git INVOCATION failure (a non-repo root, git missing) fails
+    CLOSED: AssertionError naming the probe and the error (the rc and
+    stderr, or the OS error of the spawn) — never a bare traceback and
+    never a silently-green pass (a probed-nothing run cannot wave the
+    fill's untracked claim GREEN). The fire is zero-mutation by
+    construction: the probe only ever runs git's read-side
+    (`ls-files`), the index and the files are only ever READ.
+    """
+    if not isinstance(repo_root, str):
+        probed = (
+            f"{len(repo_root)} probed path(s)"
+            if isinstance(repo_root, (list, tuple))
+            else repr(repo_root)
+        )
+        raise TypeError(
+            f"assert_fill_eval_state_untracked(repo_root): repo_root "
+            f"must be the REPO TOPLEVEL's PATH (a str — the git probe "
+            f"runs WITH `-C <repo_root>` so the caller passes the repo "
+            f"the fill commits against, and the tracked-path list is the "
+            f"PROBE'S output here, never the caller's input); probed "
+            f"repo_root {probed} (type {type(repo_root).__name__})"
+        )
+    probe = [
+        "git", "-C", repo_root, "ls-files", "--",
+        *_EVAL_STATE_UNTRACKED_PAIR,
+    ]
+    subprocess = __import__("subprocess")
+    try:
+        proc = subprocess.run(probe, capture_output=True, text=True)
+    except OSError as err:
+        raise AssertionError(
+            f"assert_fill_eval_state_untracked({repo_root!r}): the git "
+            f"probe failed — `{' '.join(probe)}` raised "
+            f"{type(err).__name__}: {err} — the leg asks git, never the "
+            f"model's say-so, so a failed probe fails closed and can "
+            f"never wave the fill's untracked claim GREEN"
+        ) from err
+    if proc.returncode != 0:
+        raise AssertionError(
+            f"assert_fill_eval_state_untracked({repo_root!r}): the git "
+            f"probe failed — `{' '.join(probe)}` rc {proc.returncode} "
+            f"({proc.stderr.strip()}) — the probe runs in the repo the "
+            f"caller names, so a non-repo root (or a missing git) fails "
+            f"closed: the disk-only pair's untracked state is PROBED, "
+            f"never assumed"
+        )
+    tracked = [line for line in proc.stdout.splitlines() if line.strip()]
+    if tracked:
+        _fire_eval_state_tracked(tracked)

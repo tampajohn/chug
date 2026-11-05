@@ -1152,6 +1152,15 @@ alike) has been harvested.
   finding — the composed streak misread across three consecutive
   establishments, the class's first firing on the streak surface) — the
   same compose-time catch for the streak surface. The fill compose leg's
+  pre-commit assert ALSO re-verifies the T260 disk-only pair stays
+  untracked at the fill stamp in the SAME leg (`git ls-files --
+  .chug/eval-state.md .chug/eval-delta.md` empty) via
+  `scripts/wrap_assert.py`'s eval-state-untracked leg
+  (`assert_fill_eval_state_untracked`, T323: the cycle-3024 wrap's
+  force-add fire — the notes commit tracked the state file and broke the
+  cheap-exit file leg until the ac4994f repair, the class's second fire)
+  — the same compose-time catch for the disk-only-tracking surface. The
+  fill compose leg's
   pre-commit assert ALSO runs `scripts/wrap_assert.py`'s on-disk
   state-schema leg (`assert_state_on_disk`, T311) against the committed
   `.chug/eval-state.md` AFTER the wrap's state write: the leg reads the

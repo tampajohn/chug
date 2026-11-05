@@ -3187,11 +3187,13 @@ class AssertOutcomesOneLinerTest(unittest.TestCase):
     def test_export_and_docstring_coverage_sentence_pinned(self):
         # The leg rides the module's __all__ (16 -> 17) and the docstring
         # coverage sentence names the T316 legs (the pin-surface extended,
-        # not re-shaped). The LAST-position pin moved with T321 (the
-        # T321 leg now rides last).
+        # not re-shaped). The LAST-position pin moved with T321 and again
+        # with T323 (the T323 leg now rides last).
         self.assertIn("assert_outcomes_one_liner", wrap_assert.__all__)
-        self.assertEqual(len(wrap_assert.__all__), 20)
-        self.assertEqual(wrap_assert.__all__[-1], "assert_fill_trim_streak")
+        self.assertEqual(len(wrap_assert.__all__), 21)
+        self.assertEqual(
+            wrap_assert.__all__[-1], "assert_fill_eval_state_untracked"
+        )
         self.assertIn(
             "T316 Outcomes one-liner figure-audit legs", wrap_assert.__doc__
         )
@@ -3446,10 +3448,10 @@ class AssertFillTrimTest(unittest.TestCase):
 
     def test_export_and_docstring_coverage_sentence_pinned(self):
         # The leg rides the module's __all__ (17 -> 18; T319 -> 19;
-        # T321 -> 20) and the docstring coverage sentence names the T317
-        # legs (the pin-surface extended, not re-shaped).
+        # T321 -> 20; T323 -> 21) and the docstring coverage sentence
+        # names the T317 legs (the pin-surface extended, not re-shaped).
         self.assertIn("assert_fill_trim", wrap_assert.__all__)
-        self.assertEqual(len(wrap_assert.__all__), 20)
+        self.assertEqual(len(wrap_assert.__all__), 21)
         self.assertIn("T317 fill trim-enumeration legs", wrap_assert.__doc__)
         self.assertIn("T321 fill trim-streak legs", wrap_assert.__doc__)
         # The extension, not a re-shape: the T316 sentence tail still rides.
@@ -3798,11 +3800,11 @@ class AssertFillEnumerationWordTest(unittest.TestCase):
             self.assertEqual(sorted(os.listdir(tmp)), before)
 
     def test_export_and_docstring_coverage_sentence_pinned(self):
-        # The leg rides the module's __all__ (18 -> 19; T321 -> 20) and
-        # the docstring coverage sentence names the T319 legs (the
-        # pin-surface extended, not re-shaped).
+        # The leg rides the module's __all__ (18 -> 19; T321 -> 20;
+        # T323 -> 21) and the docstring coverage sentence names the T319
+        # legs (the pin-surface extended, not re-shaped).
         self.assertIn("assert_fill_enumeration_word", wrap_assert.__all__)
-        self.assertEqual(len(wrap_assert.__all__), 20)
+        self.assertEqual(len(wrap_assert.__all__), 21)
         self.assertIn(
             "T319 fill enumeration count-word legs", wrap_assert.__doc__
         )
@@ -4410,12 +4412,17 @@ class AssertFillTrimStreakTest(unittest.TestCase):
             self.assertEqual(snapshot(), before)
 
     def test_export_and_docstring_coverage_sentence_pinned(self):
-        # The leg rides the module's __all__ (19 -> 20; T321) and the
-        # docstring coverage sentence names the T321 legs (the pin-surface
-        # extended, not re-shaped).
+        # The leg rides the module's __all__ (19 -> 20; T323 -> 21) and
+        # the docstring coverage sentence names the T321 legs (the
+        # pin-surface extended, not re-shaped).
         self.assertIn("assert_fill_trim_streak", wrap_assert.__all__)
-        self.assertEqual(len(wrap_assert.__all__), 20)
+        self.assertEqual(len(wrap_assert.__all__), 21)
         self.assertIn("T321 fill trim-streak legs", wrap_assert.__doc__)
+        # The T323 extension rides the docstring too (the newest leg's
+        # sentence, additive).
+        self.assertIn(
+            "T323 fill eval-state-untracked legs", wrap_assert.__doc__
+        )
         # The extension, not a re-shape: the T317/T319/T310 sentence
         # tails still ride.
         self.assertIn("T317 fill trim-enumeration legs",
@@ -4712,6 +4719,239 @@ class AssertFillTrimStreakTest(unittest.TestCase):
             m_msg = str(ctx.exception)
             self.assertIn(T322_HARVEST_NAME, m_msg)
             self.assertIn("probed 2 run_start event(s)", m_msg)
+        with open(wrap_assert.__file__, "r", encoding="utf-8") as f:
+            self.assertEqual(f.read(), pristine)
+
+
+# ---- T323: the fill eval-state-untracked leg (assert_fill_eval_state_untracked) ----
+
+# The cycle-3024 shape: the wrap's notes commit (11f26ea) force-added
+# `.chug/eval-state.md` into git tracking (self-caught at the notes
+# commit's own stat read-back; repaired in ac4994f per the bb339d9
+# precedent — `git rm --cached`, the file byte-untouched on disk, the
+# `.gitignore:12` ignore re-covering it, `git ls-files` back to ZERO).
+# The class's SECOND fire: a tracked disk-only state file breaks
+# `delta_bookkeeping_only`'s file leg (a tracked path outside the
+# bookkeeping set moves every cycle — the wrap's state rewrite touches
+# the file), so book=no on every subsequent cycle, the T258 cheap-exit
+# predicate can never hold, and the chain silently breaks into sustained
+# forced launches. The leg asks GIT, never the filesystem and never the
+# model's say-so; every fixture below is a THROWAWAY git repo in a temp
+# dir — the live repo's git state is never read, never mutated.
+#
+# _t323_git / _t323_init_repo — the fixture builders: a committed seed
+# tree, a `.gitignore` covering `.chug/` (the live repo's shape — the
+# repair story's re-covering line), and `.chug/` present on disk. The
+# force-add rides `git add -f` (the gitignore-covered path's only route
+# into the index — the 11f26ea shape).
+
+
+def _t323_git(repo, *args):
+    proc = subprocess.run(
+        ["git", "-C", repo, *args], capture_output=True, text=True
+    )
+    assert proc.returncode == 0, (
+        f"fixture git {' '.join(args)} failed: {proc.stderr}"
+    )
+    return proc
+
+
+def _t323_init_repo(tmp):
+    """A fixture git repo at *tmp*/repo: one committed seed tree
+    (`README.md` + the `.chug/`-covering `.gitignore`), `.chug/` present
+    on disk. Returns the repo path (the leg's repo_root argument)."""
+    repo = os.path.join(tmp, "repo")
+    os.makedirs(os.path.join(repo, ".chug"))
+    _t323_git(repo, "init", "-q")
+    _t323_git(repo, "config", "user.email", "t323@example.invalid")
+    _t323_git(repo, "config", "user.name", "T323 fixture")
+    _t323_git(repo, "config", "commit.gpgsign", "false")
+    _write(repo, "README.md", "the fixture's tracked seed\n")
+    _write(repo, ".gitignore", ".chug/\n")
+    _t323_git(repo, "add", "README.md", ".gitignore")
+    _t323_git(repo, "commit", "-qm", "seed")
+    return repo
+
+
+class AssertFillEvalStateUntrackedTest(unittest.TestCase):
+    """T323: the disk-only pair's GIT-STATE leg — the fill compose leg's
+    pre-commit assert re-verifies the T260 disk-only pair
+    (`.chug/eval-state.md` + `.chug/eval-delta.md`) stays untracked at
+    the fill stamp (the cycle-1427 class's SECOND fire closed: the
+    cycle-3024 wrap notes 11f26ea force-added the state file and broke
+    the cheap-exit file leg until the ac4994f repair)."""
+
+    def test_export_and_docstring_coverage_sentence_pinned(self):
+        # The leg rides the module's __all__ (20 -> 21) and the docstring
+        # coverage sentence names the T323 legs (the pin-surface
+        # extended, not re-shaped).
+        self.assertIn(
+            "assert_fill_eval_state_untracked", wrap_assert.__all__
+        )
+        self.assertEqual(len(wrap_assert.__all__), 21)
+        self.assertEqual(
+            wrap_assert.__all__[-1], "assert_fill_eval_state_untracked"
+        )
+        self.assertIn(
+            "T323 fill eval-state-untracked legs", wrap_assert.__doc__
+        )
+        # The extension, not a re-shape: the T321/T317 sentence tails
+        # still ride.
+        self.assertIn("T321 fill trim-streak legs", wrap_assert.__doc__)
+        self.assertIn("T317 fill trim-enumeration legs", wrap_assert.__doc__)
+
+    def test_fail_force_added_state_file_raises_naming_path_repair_consequence(
+        self,
+    ):
+        # FAIL path, the cycle-3024 shape exactly: the notes-commit
+        # force-add (`git add -f` through the gitignore) puts the state
+        # file in the index — the leg RAISES naming (i) the tracked path
+        # git reported, (ii) the consequence class
+        # (`delta_bookkeeping_only`'s file leg — book=no forever, the
+        # T258 cheap-exit predicate dead, the sustained forced-launch
+        # burn), and (iii) the repair recipe (`git rm --cached` per the
+        # bb339d9/ac4994f precedent, `.gitignore:12` re-covering).
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _t323_init_repo(tmp)
+            _write(repo, ".chug/eval-state.md", "schema: 1\n")
+            _t323_git(repo, "add", "-f", ".chug/eval-state.md")
+            with self.assertRaises(AssertionError) as ctx:
+                wrap_assert.assert_fill_eval_state_untracked(repo)
+        msg = str(ctx.exception)
+        self.assertIn(".chug/eval-state.md", msg)  # (i) the tracked path
+        self.assertIn("delta_bookkeeping_only", msg)  # (ii) the file leg
+        self.assertIn("book=no", msg)  # (ii) the consequence class
+        self.assertIn("cheap-exit", msg)  # (ii) the predicate it kills
+        self.assertIn(
+            "git rm --cached .chug/eval-state.md", msg
+        )  # (iii) the repair recipe
+        self.assertIn(".gitignore:12", msg)  # (iii) the re-covering line
+        self.assertIn("bb339d9", msg)  # the precedent named
+
+    def test_pass_present_on_disk_but_untracked(self):
+        # PASS path, the T260 disk-only convention: both files PRESENT ON
+        # DISK and absent from the index (gitignored) — the DESIGNED
+        # shape. The leg asks git, not the filesystem: on-disk presence
+        # alone never fires.
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _t323_init_repo(tmp)
+            _write(repo, ".chug/eval-state.md", "schema: 1\n")
+            _write(repo, ".chug/eval-delta.md", "delta\n")
+            self.assertTrue(os.path.exists(os.path.join(
+                repo, ".chug/eval-state.md"
+            )))
+            wrap_assert.assert_fill_eval_state_untracked(repo)
+
+    def test_fail_both_tracked_raises_naming_both_paths(self):
+        # FAIL path, the pair fully tracked: ONE assert covers the pair —
+        # the fire names BOTH tracked paths (the probed actuals, never a
+        # bare count).
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _t323_init_repo(tmp)
+            _write(repo, ".chug/eval-state.md", "schema: 1\n")
+            _write(repo, ".chug/eval-delta.md", "delta\n")
+            _t323_git(
+                repo, "add", "-f",
+                ".chug/eval-state.md", ".chug/eval-delta.md",
+            )
+            with self.assertRaises(AssertionError) as ctx:
+                wrap_assert.assert_fill_eval_state_untracked(repo)
+        msg = str(ctx.exception)
+        self.assertIn(".chug/eval-state.md", msg)
+        self.assertIn(".chug/eval-delta.md", msg)
+        self.assertIn("2 path(s)", msg)  # both probed actuals counted
+        self.assertIn(
+            "git rm --cached .chug/eval-delta.md", msg
+        )  # the repair names BOTH too
+
+    def test_fail_delta_alone_tracked_raises(self):
+        # FAIL path, the pair's OTHER half: `.chug/eval-delta.md` alone
+        # tracked raises the same fire (rebuilt by loopd before every
+        # cycle, so a tracked delta breaks the file leg identically) —
+        # and names ONLY the delta (the state file's absence from the
+        # fire is the probe's own output, never a hardcode).
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _t323_init_repo(tmp)
+            _write(repo, ".chug/eval-delta.md", "delta\n")
+            _t323_git(repo, "add", "-f", ".chug/eval-delta.md")
+            with self.assertRaises(AssertionError) as ctx:
+                wrap_assert.assert_fill_eval_state_untracked(repo)
+        msg = str(ctx.exception)
+        self.assertIn(".chug/eval-delta.md", msg)
+        self.assertNotIn(
+            ".chug/eval-state.md", msg
+        )  # only the tracked half named
+
+    def test_fail_non_repo_root_fails_closed(self):
+        # FAIL path, the invocation failure: a non-repo root sends git
+        # rc-nonzero — the leg FAILS CLOSED (AssertionError naming the
+        # probe and git's stderr), never a silently-green pass: a
+        # probed-nothing run cannot wave the fill's untracked claim
+        # GREEN.
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaises(AssertionError) as ctx:
+                wrap_assert.assert_fill_eval_state_untracked(tmp)
+        msg = str(ctx.exception)
+        self.assertIn("git", msg)  # the probe named
+        self.assertIn("ls-files", msg)  # the probe's command named
+        self.assertIn("not a git repository", msg)  # git's stderr named
+        self.assertIn("fails closed", msg)  # the fail-closed posture
+
+    def test_pass_harvest_exception_shape_stays_green(self):
+        # PASS path, the harvest exception: a tracked
+        # `.chug/events-t*` file (the force-added harvest convention —
+        # the DESIGNED exception) with the state/delta pair untracked
+        # rides GREEN — the leg's scope is EXACTLY the disk-only pair,
+        # never the whole `.chug/` tree.
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _t323_init_repo(tmp)
+            _write(repo, ".chug/eval-state.md", "schema: 1\n")
+            _write(repo, ".chug/eval-delta.md", "delta\n")
+            harvest = ".chug/events-t999-impl-20000101.jsonl"
+            _write(repo, harvest, '{"type":"run_start"}\n')
+            _t323_git(repo, "add", "-f", harvest)
+            _t323_git(repo, "commit", "-qm", "harvest")
+            wrap_assert.assert_fill_eval_state_untracked(repo)
+
+    def test_fail_non_str_repo_root_raises_type_error_naming_the_shape(self):
+        # The interface defense: *repo_root* is the REPO TOPLEVEL's PATH
+        # (a str — the probe runs `-C <repo_root>`); anything else is the
+        # call-signature slip shape and TypeErrors naming the accepted
+        # shape (the module's convention).
+        with self.assertRaises(TypeError) as ctx:
+            wrap_assert.assert_fill_eval_state_untracked(7)
+        msg = str(ctx.exception)
+        self.assertIn("REPO TOPLEVEL", msg)
+        self.assertIn("a str", msg)
+        self.assertIn("type int", msg)
+
+    def test_red_provability_mutant_runs_on_a_copy(self):
+        # RED-provability, hand-proved by a mutant run on a COPY: the
+        # module itself is never written (the mutation rides an
+        # in-memory exec of a mutated source string), and the on-disk
+        # module is re-read byte-identical after the run. M1 — the
+        # tracked-hit fire silent-passed: the cycle-3024 force-add shape
+        # goes red (no raise under the mutant, where the shipped leg
+        # raises).
+        with open(wrap_assert.__file__, "r", encoding="utf-8") as f:
+            pristine = f.read()
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _t323_init_repo(tmp)
+            _write(repo, ".chug/eval-state.md", "schema: 1\n")
+            _t323_git(repo, "add", "-f", ".chug/eval-state.md")
+            # The shipped module fires on this input (the leg above pins
+            # it; re-asserted here so the mutant contrast is
+            # self-contained).
+            with self.assertRaises(AssertionError):
+                wrap_assert.assert_fill_eval_state_untracked(repo)
+            m1 = _mutant_wrap_assert(
+                pristine,
+                "        _fire_eval_state_tracked(tracked)",
+                "        pass",
+            )
+            m1["assert_fill_eval_state_untracked"](repo)
+        # The module restored byte-identical after the run (nothing was
+        # ever written — re-read and compared against the pristine read).
         with open(wrap_assert.__file__, "r", encoding="utf-8") as f:
             self.assertEqual(f.read(), pristine)
 
