@@ -193,7 +193,8 @@ facade legs, the T309 fill-datum legs, and the T310 fill-enumeration legs,
 the T311 on-disk state-schema legs, and the T312 always-on marker legs, and
 the T316 Outcomes one-liner figure-audit legs, and the
 T317 fill trim-enumeration legs, and the
-T319 fill enumeration count-word legs.
+T319 fill enumeration count-word legs, and the
+T321 fill trim-streak legs.
 """
 
 __all__ = [
@@ -216,6 +217,7 @@ __all__ = [
     "assert_fill_trim",
     "assert_fill_enumeration_word",
     "assert_outcomes_one_liner",
+    "assert_fill_trim_streak",
 ]
 
 
@@ -2973,3 +2975,425 @@ def assert_outcomes_one_liner(full_text, one_liner_text):
             )
     if problems:
         _fire_one_liner_groups(problems)
+
+
+# ---- T321: the fill trim-streak leg (assert_fill_trim_streak) ----
+
+# _TRIM_STREAK_CHAIN_PROBE — the mechanical chain re-derivation the leg
+# OWNS (doctrine text, never executed here): the compose leg's prior-chain
+# re-read off the rotated events files' whole-final trim counts. Unlike the
+# sibling figure legs (the probed count rides argv/env IN, the T282 channel
+# half), the streak chain is a MULTI-file, multi-read derivation — exactly
+# the re-derived-per-wrap-under-time-pressure compose shape the T305
+# doctrine bans — so the derivation is OWNED in-module (the T312
+# owned-probe convention: the corridor's own call site left the T306
+# keyword off and the leg rode inert) and no call site can carry a
+# remembered chain in.
+_TRIM_STREAK_CHAIN_PROBE = (
+    "jq -c 'select(.type==\"run_start\") | .ts' .chug/events-*.jsonl  # "
+    "per rotated file: the T320 one-run_start identity, then jq -c "
+    "'select(.type==\"trim\")' for the whole-final trim count; the "
+    "current stream's count probed at the fill stamp"
+)
+
+
+# _streak_load_events(path) — INTERNAL; e.g. _streak_load_events(events_path)
+def _streak_load_events(path):
+    """The stream's parsed events; malformed lines drop silently.
+
+    The eval-digest's `fromjson?` convention (the stream_datum parity):
+    a line that is valid JSON but not an object drops too — it carries
+    no event shape to read. Reached with stdlib json through the lazy
+    `__import__` (the module stays import-free per the stdlib-only leg).
+    """
+    json_mod = __import__("json")
+    events = []
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                ev = json_mod.loads(line)
+            except ValueError:
+                continue
+            if isinstance(ev, dict):
+                events.append(ev)
+    return events
+
+
+# _streak_trim_count(events, stamp=None) — INTERNAL; e.g.
+# _streak_trim_count(events) / _streak_trim_count(events, fill_stamp)
+def _streak_trim_count(events, stamp=None):
+    """The stream's trim-fire count (events of `type == "trim"`).
+
+    *stamp* None reads the WHOLE-FINAL count (every trim leg in the
+    file — a rotated file is a completed stream); a stamp reads the
+    AT-STAMP count: the legs whose ts <= the stamp, string-compare (the
+    corpus convention — trim legs carry ISO-Z timestamps, the stream
+    anchors' own format). An event with no ts field scopes as "" <= any
+    stamp — included (an untimestamped leg cannot be proven
+    post-stamp), the stream_datum in_scope parity.
+    """
+    count = 0
+    for ev in events:
+        if ev.get("type") != "trim":
+            continue
+        if stamp is None:
+            count += 1
+            continue
+        ts = ev.get("ts")
+        if not isinstance(ts, str):
+            ts = ""
+        if ts <= stamp:
+            count += 1
+    return count
+
+
+# _streak_run_starts(events) — INTERNAL; e.g. _streak_run_starts(events)
+def _streak_run_starts(events):
+    """The run_start events' ts renderings (stream order) — the T320
+    identity precondition's probe (one per rotated file)."""
+    renderings = []
+    for ev in events:
+        if ev.get("type") != "run_start":
+            continue
+        ts = ev.get("ts")
+        renderings.append(ts if isinstance(ts, str) else "<no-ts>")
+    return renderings
+
+
+# _streak_take_ws(text, p) — INTERNAL; e.g. _streak_take_ws(claim_text, i)
+def _streak_take_ws(text, p):
+    """The position past the whitespace run at/after *p* (the _FILL_WS set
+    — the family's whitespace tolerance, so a wrapped commit message still
+    scans)."""
+    n = len(text)
+    while p < n and text[p] in _FILL_WS:
+        p += 1
+    return p
+
+
+# _streak_take_digits(text, p) — INTERNAL; e.g. _streak_take_digits("reads 5", 6)
+def _streak_take_digits(text, p):
+    """The digit span at *p* — (value, end) or (None, p) when no digits."""
+    n = len(text)
+    start = p
+    while p < n and text[p].isdigit():
+        p += 1
+    if p == start:
+        return None, p
+    return int(text[start:p]), p
+
+
+# _streak_claims(text) — INTERNAL; e.g. _streak_claims(composed_text)
+def _streak_claims(text):
+    """The figured trim-streak claims in *text* — (figure, phrase) pairs.
+
+    Hand-scanned (the module stays import-free — no `re`), anchored on the
+    corpus's fill-template keyword phrase since the increment semantics
+    were pinned (c7dacd7/e69701c): `post-reset` [optional word `trim`]
+    `streak`, then the claim verb — the spec-pinned shapes
+      - `reads N`      (the stamp-scoped form: "… streak reads 5 TRUE on
+                        THIS stream's trim-0 at the stamp"),
+      - `moves A -> B` (the increment form: "… streak moves 3 -> 4 TRUE …";
+                        both arrow spellings ride, `->` and `→`) — the
+                        asserted figure is the POST-move value B.
+    The anchor is boundary-checked on the left (a compound's tail —
+    `post-reset-…` glued — never reads as the anchor) and the verbs are
+    whitespace-delimited (a `readstreak` glue is prose). Every other
+    streak verb after the anchor (`HOLDS TRUE`, `closes TRUE`, `RESETS
+    A -> B`) is figure-less or handoff-shaped prose and is NOT extracted —
+    the corpus's figure-less TRUE fills (2943/2947/2951) and the
+    establishment-quote form (`the TRUE reading at the <N>th
+    establishment: reads 4`, whose anchor is `establishment:`, not the
+    streak keyword) must never sweep into the asserted surface (the
+    3020 fill's payload quotes BOTH forms — the own claim anchored, the
+    quoted reading not). Returns the (figure, matched phrase) pairs in
+    scan order; the caller asserts EVERY figure (the claims are
+    keyword-anchored — a quoted earlier reading under the streak keyword
+    would be a composed claim, exactly the falsification shape).
+    """
+    claims = []
+    n = len(text)
+    pos = 0
+    while True:
+        i = text.find("post-reset", pos)
+        if i < 0:
+            return claims
+        pos = i + len("post-reset")
+        if i > 0 and (text[i - 1].isalnum() or text[i - 1] == "-"):
+            continue
+        p = _streak_take_ws(text, pos)
+        if text.startswith("trim", p):
+            q = _streak_take_ws(text, p + len("trim"))
+            if q > p:
+                p = q
+        if not text.startswith("streak", p):
+            continue
+        p = _streak_take_ws(text, p + len("streak"))
+        figure = None
+        phrase_end = p
+        if text.startswith("reads", p):
+            after = _streak_take_ws(text, p + len("reads"))
+            value, dend = _streak_take_digits(text, after)
+            if value is not None:
+                figure = value
+                phrase_end = dend
+        elif text.startswith("moves", p):
+            after = _streak_take_ws(text, p + len("moves"))
+            _from, dend = _streak_take_digits(text, after)
+            if _from is not None:
+                q = _streak_take_ws(text, dend)
+                if text.startswith("->", q):
+                    q = _streak_take_ws(text, q + 2)
+                elif text.startswith("→", q):
+                    q = _streak_take_ws(text, q + 1)
+                else:
+                    q = None
+                if q is not None:
+                    to, dend2 = _streak_take_digits(text, q)
+                    if to is not None:
+                        figure = to
+                        phrase_end = dend2
+        if figure is not None:
+            claims.append((figure, text[i:phrase_end]))
+
+
+# _fire_trim_streak_mismatch(problems, chain, resetter, true_figure,
+#                            fill_stamp) — INTERNAL
+def _fire_trim_streak_mismatch(
+    problems, chain, resetter, true_figure, fill_stamp
+):
+    """The T321 fire — split from the leg's body so the RED-provability
+    mutant is a ONE-LINE stash (the call swapped for `pass` on a copy, the
+    T310 `_fire_named_missing` idiom) rather than a multi-line raise
+    excision that cannot compile half-removed."""
+    if resetter is not None:
+        resetter_named = (
+            f"the resetting stream's identity: rotated file "
+            f"{resetter[0]!r} (its run_start {resetter[1]!r})"
+        )
+    else:
+        resetter_named = (
+            "no resetting stream in the enumerated window (the chain "
+            "exhausts the rotated corpus)"
+        )
+    raise AssertionError(
+        f"assert_fill_trim_streak: the composed trim-streak claim(s) "
+        f"diverge from the mechanically re-derived streak at the fill "
+        f"stamp {fill_stamp!r} — " + " | ".join(problems) + f" — probed "
+        f"TRUE figure {true_figure} (the prior chain {chain} re-read off "
+        f"the rotated events files' whole-final trim counts, +1 only when "
+        f"the current stream's trim count at the stamp is 0); "
+        f"{resetter_named} — the figure must be RE-DERIVED in the SAME "
+        f"pre-commit leg (the cycle-3024 twelfth-sighting finding: the "
+        f"composed streak misread across three consecutive establishments "
+        f"— the 723rd/724th `HOLDS 0` against TRUE 1/2, the 725th `reads "
+        f"4` against TRUE 3 [the 3004 stream's whole-final trim 2 NOT a "
+        f"chain member], the 3020 fill's propagated `reads 5` against "
+        f"TRUE 4 at stamp): re-read the chain off "
+        f"`{_TRIM_STREAK_CHAIN_PROBE}` and compose the figure from the "
+        f"probed reading, never from the prior eval's committed reading"
+    )
+
+
+# assert_fill_trim_streak(text, events_dir, fill_stamp) — the composed TEXT
+# + the events dir the chain is re-read off + the stamp; e.g.
+# assert_fill_trim_streak(fill_text, ".chug", fill_stamp)
+def assert_fill_trim_streak(text, events_dir, fill_stamp):
+    """The fill's trim-streak figure equals the MECHANICALLY re-derived
+    chain (T321 — the corridor-figure falsification class's TWELFTH
+    sighting, the FIRST on the streak surface).
+
+    The cycle-3024 finding (the 726th eval, triage d1793906153-2): the
+    trim-streak accounting parenthetical in corridor texts is COMPOSED
+    from the prior eval's committed reading and never mechanically
+    derived, and it compounded across three consecutive establishments —
+    the 723rd eval committed `TRUE streak HOLDS 0` against TRUE 1 (moves
+    0 -> 1 under the increment semantics pinned at c7dacd7), the 724th
+    the same `HOLDS 0` against TRUE 2, the 725th `the strict post-reset
+    streak reads 4 [the 3004/3008/3012/3016 trim-0 chain]` against TRUE 3
+    (the 3004 stream's whole-final trim count is 2 — its own committed
+    record f8cf76b CONCURS — so it is NOT a chain member), and the 3020
+    wrap fill propagated the falsified reading into `reads 5` against
+    TRUE 4 at its stamp. ZERO machine consequence (the streak is
+    descriptive health accounting; every trim FIGURE is byte-TRUE and
+    T317-asserted) — but the designed watch caught it one chain later,
+    and this row is the compose-time tooth the class's landing pattern
+    arms for every NEW surface (assert_fill_datum T309,
+    assert_fill_enumeration T310, assert_fill_enumeration_word T319,
+    assert_fill_trim T317).
+
+    THE DERIVATION IS OWNED HERE (the T312 owned-probe convention — a
+    multi-file chain re-read is exactly the per-wrap re-derived compose
+    the T305 doctrine bans, and an opt-in probed-arg is the T306/T312
+    inert-leg shape): the TRUE streak is re-derived from the events files
+    ALONE, never from committed corridor texts:
+      a. the rotated `events-*.jsonl` files in *events_dir* are
+         enumerated in stream order (mtime, then name — the `ls`/mtime
+         order; the rotation mechanism: each rotated file holds exactly
+         one predecessor stream);
+      b. EACH rotated file is verified to carry exactly ONE `run_start`
+         event (the T320 identity precondition — a file with zero or
+         multiple run_start events is rejected BY NAME, not silently
+         miscounted);
+      c. per file the WHOLE-FINAL trim count is read off the stream's
+         own flags (events of `type == "trim"`);
+      d. the TRUE prior chain = the count of consecutive whole-final
+         trim-0 streams walking BACK from the current stream's
+         predecessor, stopping BEFORE the first stream whose whole-final
+         trim count is >= 1 (a trim>=1 whole-final RESETS the streak —
+         that stream is the resetting stream, named in every fire);
+      e. the stamp-scoped TRUE figure = chain + 1 when the CURRENT
+         stream's trim count at *fill_stamp* is 0 (the current stream is
+         the live `events.jsonl`; when the dir carries no live file the
+         NEWEST rotated file is the current stream and the chain walks
+         its predecessors — the derivation stays total). Trim legs scope
+         lexically (ts <= stamp, the stream anchors' own ISO-Z format;
+         a no-ts leg scopes as included, the stream_datum convention).
+
+    THE EXPECTATION IS EXTRACTED, NEVER PASSED IN (the T270/T288
+    probed-expectation clause binds the expectation side): the API
+    carries NO expected-figure argument — the claimed figure is read off
+    *text* at the keyword-anchored `reads N` / `moves A -> B` shapes
+    (`_streak_claims`; the asserted `moves` figure is the post-move
+    value). EVERY extracted claim must equal the probed TRUE figure; any
+    mismatch raises AssertionError naming the composed claim, the probed
+    TRUE figure AND the probed chain, and the resetting stream's
+    identity (the rotated filename and its run_start). A text carrying
+    NO figured claim is INERT — the corpus's figure-less TRUE shapes
+    (`streak HOLDS TRUE`, `streak closes TRUE`, the establishment-quote
+    `… reading … : HOLDS 0`) are prose-guarded, and a current stream
+    with a trim leg at/before the stamp legitimately composes no
+    stamp-scoped claim (the extension's precondition fails — TRUE reads
+    the bare chain); the named-missing fire would RED historically-TRUE
+    texts (the brittle-awk class the T320 boundary rejects), so the leg
+    closes the wrong-FIGURE shape, not the form-variation one.
+
+    *text* is the composed fill/wrap TEXT (a str); *events_dir* is the
+    events directory's PATH (a str — `.chug`); *fill_stamp* is the stamp
+    the current stream's count is probed at (a str). Any other shape is
+    the call-signature slip shape — TypeError naming the accepted shape.
+    A missing/unreadable *events_dir* fails CLOSED (AssertionError
+    naming the probed path) — a probe that read nothing can never wave
+    the claim GREEN. The fire is zero-mutation by construction: the
+    events files are only ever READ.
+    """
+    if not isinstance(text, str):
+        probed = (
+            f"{len(text)} probed line(s)"
+            if isinstance(text, (list, tuple))
+            else repr(text)
+        )
+        raise TypeError(
+            f"assert_fill_trim_streak(text, events_dir, fill_stamp): "
+            f"text must be the composed fill/wrap TEXT (a str — the "
+            f"streak figure the fill commits is asserted in memory, "
+            f"pre-write); probed text {probed} (type "
+            f"{type(text).__name__}) — the pre-split line list is the "
+            f"call-signature slip shape"
+        )
+    if not isinstance(events_dir, str):
+        raise TypeError(
+            f"assert_fill_trim_streak(text, events_dir, fill_stamp): "
+            f"events_dir must be the events directory's PATH (a str — "
+            f"the rotated corpus the chain is re-read off, `.chug` at "
+            f"the fill compose); probed events_dir {events_dir!r} (type "
+            f"{type(events_dir).__name__})"
+        )
+    if not isinstance(fill_stamp, str):
+        raise TypeError(
+            f"assert_fill_trim_streak(text, events_dir, fill_stamp): "
+            f"fill_stamp must be the stamp the current stream's trim "
+            f"count is probed at (a str — the fill stamp, ISO-Z form, "
+            f"the lexical-scope convention); probed fill_stamp "
+            f"{fill_stamp!r} (type {type(fill_stamp).__name__})"
+        )
+    os_mod = __import__("os")
+    try:
+        listing = os_mod.listdir(events_dir)
+    except OSError as err:
+        raise AssertionError(
+            f"assert_fill_trim_streak({events_dir!r}): the events "
+            f"directory is unreadable — {type(err).__name__}: {err} — the "
+            f"chain is re-derived from the events files ALONE, so a probe "
+            f"that read nothing fails closed and can never wave the "
+            f"fill's streak claim GREEN"
+        ) from err
+    rotated = []
+    for name in listing:
+        if name.startswith("events-") and name.endswith(".jsonl"):
+            rotated.append(
+                (
+                    os_mod.stat(os_mod.path.join(events_dir, name)).st_mtime,
+                    name,
+                )
+            )
+    rotated.sort()
+    rotated_names = [name for _, name in rotated]
+    streams = []
+    for name in rotated_names:
+        events = _streak_load_events(os_mod.path.join(events_dir, name))
+        run_starts = _streak_run_starts(events)
+        if len(run_starts) != 1:
+            probed_starts = (
+                ", ".join(run_starts) if run_starts else "none"
+            )
+            raise AssertionError(
+                f"assert_fill_trim_streak({events_dir!r}): the rotated "
+                f"events file {name!r} fails the T320 identity "
+                f"precondition — probed {len(run_starts)} run_start "
+                f"event(s) [{probed_starts}], expected exactly ONE (the "
+                f"rotation mechanism: "
+                f"each rotated file holds exactly one predecessor "
+                f"stream, its run_start beginning the stream's own "
+                f"interval) — the file is rejected BY NAME, never "
+                f"silently miscounted into the chain"
+            )
+        streams.append(
+            (
+                name,
+                events,
+                run_starts[0] if run_starts else "<no run_start>",
+            )
+        )
+    live_name = "events.jsonl" if "events.jsonl" in listing else None
+    if live_name is not None:
+        current_name = live_name
+        current_events = _streak_load_events(
+            os_mod.path.join(events_dir, live_name)
+        )
+        predecessors = streams
+    elif streams:
+        current_events = streams[-1][1]
+        predecessors = streams[:-1]
+    else:
+        raise AssertionError(
+            f"assert_fill_trim_streak({events_dir!r}): the events corpus "
+            f"is absent — no live `events.jsonl` and no rotated "
+            f"`events-*.jsonl` file probed — the chain is re-derived "
+            f"from the events files ALONE, so an empty corpus fails "
+            f"closed and can never wave the fill's streak claim GREEN"
+        )
+    chain = 0
+    resetter = None
+    for name, events, run_start in reversed(predecessors):
+        if _streak_trim_count(events) >= 1:
+            resetter = (name, run_start)
+            break
+        chain += 1
+    at_stamp = _streak_trim_count(current_events, fill_stamp)
+    true_figure = chain + (1 if at_stamp == 0 else 0)
+    claims = _streak_claims(text)
+    problems = []
+    for figure, phrase in claims:
+        if figure != true_figure:
+            problems.append(
+                f"the composed claim {phrase!r} reads {figure} against "
+                f"the probed {true_figure}"
+            )
+    if problems:
+        _fire_trim_streak_mismatch(
+            problems, chain, resetter, true_figure, fill_stamp
+        )

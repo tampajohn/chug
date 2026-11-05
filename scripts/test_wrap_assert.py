@@ -255,6 +255,8 @@ Run (the check line): python3 -m unittest scripts/test_wrap_assert.py -v
 """
 
 import ast
+import inspect
+import json
 import os
 import subprocess
 import sys
@@ -3185,9 +3187,11 @@ class AssertOutcomesOneLinerTest(unittest.TestCase):
     def test_export_and_docstring_coverage_sentence_pinned(self):
         # The leg rides the module's __all__ (16 -> 17) and the docstring
         # coverage sentence names the T316 legs (the pin-surface extended,
-        # not re-shaped).
+        # not re-shaped). The LAST-position pin moved with T321 (the
+        # T321 leg now rides last).
         self.assertIn("assert_outcomes_one_liner", wrap_assert.__all__)
-        self.assertEqual(wrap_assert.__all__[-1], "assert_outcomes_one_liner")
+        self.assertEqual(len(wrap_assert.__all__), 20)
+        self.assertEqual(wrap_assert.__all__[-1], "assert_fill_trim_streak")
         self.assertIn(
             "T316 Outcomes one-liner figure-audit legs", wrap_assert.__doc__
         )
@@ -3441,12 +3445,13 @@ class AssertFillTrimTest(unittest.TestCase):
             self.assertEqual(sorted(os.listdir(tmp)), before)
 
     def test_export_and_docstring_coverage_sentence_pinned(self):
-        # The leg rides the module's __all__ (17 -> 18; T319 -> 19) and the
-        # docstring coverage sentence names the T317 legs (the pin-surface
-        # extended, not re-shaped).
+        # The leg rides the module's __all__ (17 -> 18; T319 -> 19;
+        # T321 -> 20) and the docstring coverage sentence names the T317
+        # legs (the pin-surface extended, not re-shaped).
         self.assertIn("assert_fill_trim", wrap_assert.__all__)
-        self.assertEqual(len(wrap_assert.__all__), 19)
+        self.assertEqual(len(wrap_assert.__all__), 20)
         self.assertIn("T317 fill trim-enumeration legs", wrap_assert.__doc__)
+        self.assertIn("T321 fill trim-streak legs", wrap_assert.__doc__)
         # The extension, not a re-shape: the T316 sentence tail still rides.
         self.assertIn("T316 Outcomes one-liner figure-audit legs",
                       wrap_assert.__doc__)
@@ -3793,14 +3798,15 @@ class AssertFillEnumerationWordTest(unittest.TestCase):
             self.assertEqual(sorted(os.listdir(tmp)), before)
 
     def test_export_and_docstring_coverage_sentence_pinned(self):
-        # The leg rides the module's __all__ (18 -> 19) and the docstring
-        # coverage sentence names the T319 legs (the pin-surface extended,
-        # not re-shaped).
+        # The leg rides the module's __all__ (18 -> 19; T321 -> 20) and
+        # the docstring coverage sentence names the T319 legs (the
+        # pin-surface extended, not re-shaped).
         self.assertIn("assert_fill_enumeration_word", wrap_assert.__all__)
-        self.assertEqual(len(wrap_assert.__all__), 19)
+        self.assertEqual(len(wrap_assert.__all__), 20)
         self.assertIn(
             "T319 fill enumeration count-word legs", wrap_assert.__doc__
         )
+        self.assertIn("T321 fill trim-streak legs", wrap_assert.__doc__)
         # The extension, not a re-shape: the T317 and T310 sentence tails
         # still ride.
         self.assertIn("T317 fill trim-enumeration legs", wrap_assert.__doc__)
@@ -3850,6 +3856,578 @@ class AssertFillEnumerationWordTest(unittest.TestCase):
         m2["assert_fill_enumeration_word"](
             wordless_text, T319_PROBED_COUNT, T319_FILL_STAMP
         )
+        # The module restored byte-identical after each run (nothing was
+        # ever written — re-read and compared against the pristine read).
+        with open(wrap_assert.__file__, "r", encoding="utf-8") as f:
+            self.assertEqual(f.read(), pristine)
+
+
+# ---- T321: the fill trim-streak leg (assert_fill_trim_streak) ----
+
+# T321_STAMP — the 3016 wrap's fill stamp (the live 3016 stream's compose
+# moment in the acceptance fixture's geometry).
+T321_STAMP = "2026-11-05T16:38:22Z"
+# T321_3020_STAMP — the 3020 wrap's fill stamp (18:11:48.352Z committed as
+# 18:11:48Z; the 3020 stream's own trim leg 18:12:53.572Z post-dates it).
+T321_3020_STAMP = "2026-11-05T18:11:48Z"
+
+
+def _t321_stream_body(run_start_ts, trim_stamps):
+    """One stream's events lines: the run_start + the trim legs (the
+    stream's own flags) + two iteration events so the file reads as a
+    stream, not a stub."""
+    lines = [
+        json.dumps({"type": "run_start", "ts": run_start_ts}),
+        json.dumps({"type": "iteration", "ts": run_start_ts}),
+    ]
+    for ts in trim_stamps:
+        lines.append(json.dumps({"type": "trim", "ts": ts}))
+    lines.append(
+        json.dumps({"type": "iteration_end", "ts": trim_stamps[-1]
+                    if trim_stamps else run_start_ts})
+    )
+    return "\n".join(lines) + "\n"
+
+
+def _t321_build_events_dir(tmp, streams, live=None):
+    """Write the fixture events corpus: *streams* is a list of
+    (rotated_name, run_start_ts, [trim stamps]) written in stream order
+    (each file's mtime pinned ahead of the next's so the ls/mtime order
+    is the stream order regardless of write speed); *live* is the
+    (run_start_ts, [trim stamps]) of the live `events.jsonl` when given.
+    Returns the events dir path (a subdir of tmp)."""
+    events_dir = os.path.join(tmp, "chug-events")
+    os.mkdir(events_dir)
+    for i, (name, run_start_ts, trim_stamps) in enumerate(streams):
+        path = os.path.join(events_dir, name)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(_t321_stream_body(run_start_ts, trim_stamps))
+        os.utime(path, (1_700_000_000 + i, 1_700_000_000 + i))
+    if live is not None:
+        path = os.path.join(events_dir, "events.jsonl")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(_t321_stream_body(live[0], live[1]))
+        os.utime(path, (1_700_000_000 + len(streams),) * 2)
+    return events_dir
+
+
+# The acceptance fixture's geometry — the ACTUAL cycle-3024 finding, the
+# streams named by their real rotated files (the 3004 stream's whole-final
+# trim count 2 with its own two legs, per the 722nd eval's committed record
+# f8cf76b; the 3008/3012 trim-0 whole-final chain; the live 3016 stream
+# trim-0 at the 3016 wrap's fill stamp): the resetting stream sits three
+# streams back from the live current stream, chain = 2, TRUE figure 3.
+T321_3024_STREAMS = [
+    ("events-20261105-124928.jsonl", "2026-11-05T11:32:08.954Z",
+     ["2026-11-05T11:35:28.663Z", "2026-11-05T12:16:19.639Z"]),
+    ("events-20261105-140840.jsonl", "2026-11-05T12:49:28.417Z", []),
+    ("events-20261105-152533.jsonl", "2026-11-05T14:08:40.772Z", []),
+]
+T321_3024_LIVE = ("2026-11-05T15:25:33.643Z", [])
+
+# The 3020-fill geometry — the rotated corpus INCLUDING the 3016 stream
+# (171528, trim-0 whole-final) and the 3020 stream (184419, whose single
+# trim leg 18:12:53.572Z post-dates the 3020 fill stamp), NO live file
+# (the newest rotated file is the current stream): chain = 3, TRUE 4 at
+# the stamp — the actual 3020 wrap fill's falsified `reads 5` shape.
+T321_3020_STREAMS = T321_3024_STREAMS + [
+    ("events-20261105-171528.jsonl", "2026-11-05T15:25:33.643Z", []),
+    ("events-20261105-184419.jsonl", "2026-11-05T17:15:28.564Z",
+     ["2026-11-05T18:12:53.572Z"]),
+]
+
+
+def _t321_strip_run_start_lines(path):
+    """Rewrite the events file without its run_start lines (the
+    zero-run_start identity-corruption shape — a tail-spliced or
+    hand-truncated file)."""
+    with open(path, "r", encoding="utf-8") as f:
+        kept = [
+            line for line in f.read().splitlines()
+            if '"run_start"' not in line
+        ]
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("\n".join(kept) + "\n")
+
+
+class AssertFillTrimStreakTest(unittest.TestCase):
+    def test_red_the_falsified_cycle_3024_shape_fires(self):
+        # The acceptance RED: a fixture chain whose resetting stream
+        # (whole-final trim count 2, its OWN two legs) sits three streams
+        # back, followed by three trim-0 streams, against a text claiming
+        # `reads 4` — the 725th establishment's committed falsification
+        # shape. The fire names the composed claim AND the probed chain
+        # AND the resetting stream's identity (the rotated filename and
+        # its run_start).
+        with tempfile.TemporaryDirectory() as tmp:
+            events_dir = _t321_build_events_dir(
+                tmp, T321_3024_STREAMS, live=T321_3024_LIVE
+            )
+            falsified = (
+                "trim 0 == 0 [the T317 trim-enumeration leg probed 0 at "
+                "the stamp, asserted same-leg: the strict post-reset "
+                "streak reads 4 TRUE on THIS stream's trim-0 at the "
+                "stamp — running after the 3004/3008/3012/3016 trim-0 "
+                "chain per the TRUE chain [the TRUE reading at the 695th "
+                "establishment: reads 4, +THIS 5]]"
+            )
+            with self.assertRaises(AssertionError) as ctx:
+                wrap_assert.assert_fill_trim_streak(
+                    falsified, events_dir, T321_STAMP
+                )
+            msg = str(ctx.exception)
+            self.assertIn("reads 4", msg)  # the composed claim, named
+            self.assertIn("the probed 3", msg)  # the probed TRUE figure
+            self.assertIn("prior chain 2", msg)  # the probed chain
+            # the resetting stream's identity: the rotated filename AND
+            # its run_start (the stream whose whole-final trim count is 2
+            # is NOT a chain member — the 725th's falsified bracket
+            # included it).
+            self.assertIn("events-20261105-124928.jsonl", msg)
+            self.assertIn("2026-11-05T11:32:08.954Z", msg)
+            self.assertIn("resetting stream", msg)
+
+    def test_pass_the_true_cycle_3024_shape_reads_3(self):
+        # The acceptance PASS: the same fixture with a `reads 3` claim —
+        # the TRUE stamp-scoped figure (chain 2 + the live stream's
+        # trim-0 at the stamp) — rides green.
+        with tempfile.TemporaryDirectory() as tmp:
+            events_dir = _t321_build_events_dir(
+                tmp, T321_3024_STREAMS, live=T321_3024_LIVE
+            )
+            true_text = (
+                "trim 0 == 0 [the T317 trim-enumeration leg probed 0 at "
+                "the stamp, asserted same-leg: the strict post-reset "
+                "streak reads 3 TRUE on THIS stream's trim-0 at the "
+                "stamp — running after the 3008/3012 trim-0 chain per "
+                "the TRUE chain]"
+            )
+            wrap_assert.assert_fill_trim_streak(
+                true_text, events_dir, T321_STAMP
+            )
+
+    def test_pass_the_moves_increment_shapes_both_arrow_spellings(self):
+        # The `moves A -> B` shape (the corpus's fill template since
+        # c7dacd7) — the asserted figure is the POST-move value. The
+        # actual 3016 wrap fill's falsified `moves 3 -> 4` (TRUE 2 -> 3)
+        # fires; the TRUE `moves 2 -> 3` rides green in both arrow
+        # spellings (`->` and the unicode `→` the e69701c rendering
+        # carried).
+        with tempfile.TemporaryDirectory() as tmp:
+            events_dir = _t321_build_events_dir(
+                tmp, T321_3024_STREAMS, live=T321_3024_LIVE
+            )
+            falsified_3016_fill = (
+                "trim 0 == 0 [the T317 trim-enumeration leg probed 0 at "
+                "the stamp, asserted same-leg: the strict post-reset "
+                "streak moves 3 -> 4 TRUE on THIS stream's trim-0 "
+                "whole-final — running after the 2992 stream's trim-0 "
+                "whole-final per the TRUE chain [the TRUE reading at the "
+                "694th establishment: 3 -> 4]]"
+            )
+            with self.assertRaises(AssertionError) as ctx:
+                wrap_assert.assert_fill_trim_streak(
+                    falsified_3016_fill, events_dir, T321_STAMP
+                )
+            msg = str(ctx.exception)
+            self.assertIn("moves 3 -> 4", msg)
+            self.assertIn("the probed 3", msg)
+            true_text_ascii = (
+                "the strict post-reset streak moves 2 -> 3 TRUE on THIS "
+                "stream's trim-0 whole-final — running after the 3012 "
+                "stream's trim-0 whole-final per the TRUE chain"
+            )
+            true_text_unicode = true_text_ascii.replace("->", "\u2192")
+            for text in (true_text_ascii, true_text_unicode):
+                wrap_assert.assert_fill_trim_streak(
+                    text, events_dir, T321_STAMP
+                )
+
+    def test_red_the_3020_fill_propagated_reads_5_shape(self):
+        # The 3020 wrap fill's propagated falsification: the newest
+        # rotated file is the current stream (no live file — the
+        # fallback), its single trim leg 18:12:53.572Z post-dates the
+        # 18:11:48Z fill stamp, so the stamp-scoped figure extends the
+        # chain 3 by one = 4; the fill's composed `reads 5` fires naming
+        # composed 5 vs probed 4, and a TRUE `reads 4` rides green.
+        with tempfile.TemporaryDirectory() as tmp:
+            events_dir = _t321_build_events_dir(tmp, T321_3020_STREAMS)
+            falsified = (
+                "trim 0 == 0 [the T317 trim-enumeration leg probed 0 at "
+                "the stamp, asserted same-leg: the strict post-reset "
+                "streak reads 5 TRUE on THIS stream's trim-0 at the "
+                "stamp — running after the 3004/3008/3012/3016 trim-0 "
+                "chain per the TRUE chain [the TRUE reading at the 695th "
+                "establishment: reads 4, +THIS 5]]"
+            )
+            with self.assertRaises(AssertionError) as ctx:
+                wrap_assert.assert_fill_trim_streak(
+                    falsified, events_dir, T321_3020_STAMP
+                )
+            msg = str(ctx.exception)
+            self.assertIn("reads 5", msg)
+            self.assertIn("the probed 4", msg)
+            self.assertIn("prior chain 3", msg)
+            self.assertIn("events-20261105-124928.jsonl", msg)
+            true_text = falsified.replace(
+                "reads 5 TRUE", "reads 4 TRUE"
+            )
+            wrap_assert.assert_fill_trim_streak(
+                true_text, events_dir, T321_3020_STAMP
+            )
+
+    def test_stamp_scoped_extension_requires_trim_0_at_the_stamp(self):
+        # The stamp-scoped +1's negative branch: with the fill stamp
+        # moved ONTO the 3020 stream's own trim leg (18:12:53.572Z <=
+        # 18:12:53Z lexically — the stream anchors' own format), the
+        # current stream's at-stamp count is 1, the extension's
+        # precondition fails, and the TRUE figure reads the bare chain 3:
+        # a stale `reads 4` fires; `reads 3` passes.
+        with tempfile.TemporaryDirectory() as tmp:
+            events_dir = _t321_build_events_dir(tmp, T321_3020_STREAMS)
+            with self.assertRaises(AssertionError) as ctx:
+                wrap_assert.assert_fill_trim_streak(
+                    "the strict post-reset streak reads 4 TRUE on THIS "
+                    "stream's trim-0 at the stamp",
+                    events_dir,
+                    "2026-11-05T18:12:53Z",
+                )
+            msg = str(ctx.exception)
+            self.assertIn("the probed 3", msg)
+            self.assertIn("prior chain 3", msg)
+            wrap_assert.assert_fill_trim_streak(
+                "the strict post-reset streak reads 3 TRUE on THIS "
+                "stream's trim-0 at the stamp",
+                events_dir,
+                "2026-11-05T18:12:53Z",
+            )
+
+    def test_trim_at_stamp_leaves_figure_less_claims_inert(self):
+        # The 2955-fill shape: the current stream carries a trim leg at/
+        # before the stamp, so the stamp-scoped claim form is legitimately
+        # ABSENT — the corpus's figure-less TRUE renderings (`HOLDS TRUE`,
+        # `closes TRUE`, the establishment-quote `… : HOLDS 0`) and a
+        # text with NO streak mention at all ride green (no assertion);
+        # the leg closes the wrong-FIGURE shape, not the form-variation
+        # one (a named-missing fire would RED historically-TRUE texts —
+        # the brittle-awk class the T320 boundary rejects).
+        with tempfile.TemporaryDirectory() as tmp:
+            events_dir = _t321_build_events_dir(tmp, T321_3020_STREAMS)
+            figure_less = [
+                "trim 1 == 1 [the 18:12:53.572Z event — the harness's "
+                "automatic context trim; the TRUE trim-streak reading at "
+                "the 679th establishment: HOLDS 0 — THIS stream's trim "
+                "leg keeps it at 0]",
+                "trim 0 == 0 [the strict post-reset streak HOLDS TRUE on "
+                "THIS stream's trim-0 at the stamp]",
+                "trim 0 == 0 [the strict post-reset streak closes TRUE "
+                "on THIS stream's trim-0 whole-final]",
+                "eval: cycle-3020 wrap fill — no streak mention at all",
+            ]
+            for text in figure_less:
+                wrap_assert.assert_fill_trim_streak(
+                    text, events_dir, T321_3020_STAMP
+                )
+
+    def test_quoted_establishment_reading_is_not_swept(self):
+        # The extraction boundary: the 3020 fill's payload quotes BOTH
+        # forms — the own claim (keyword-anchored `reads N`) and the
+        # quoted establishment reading (`the TRUE reading at the 695th
+        # establishment: reads 4`). Only the KEYWORD-ANCHORED claim is
+        # the asserted surface: a fill whose own claim is TRUE (4) but
+        # whose payload QUOTES a divergent figure (reads 9) rides green —
+        # the quoted reading is not swept (the eval-side establishment
+        # texts are the NEXT eval's re-derivation watch, not this leg) —
+        # while the same payload with the own claim composed wrong (5)
+        # fires naming the OWN claim, never the quoted one.
+        with tempfile.TemporaryDirectory() as tmp:
+            events_dir = _t321_build_events_dir(tmp, T321_3020_STREAMS)
+            true_own_quoted_divergent = (
+                "the strict post-reset streak reads 4 TRUE on THIS "
+                "stream's trim-0 at the stamp — running after the "
+                "3008/3012/3016 trim-0 chain per the TRUE chain [the "
+                "TRUE reading at the 695th establishment: reads 9, "
+                "+THIS 5]"
+            )
+            wrap_assert.assert_fill_trim_streak(
+                true_own_quoted_divergent, events_dir, T321_3020_STAMP
+            )
+            with self.assertRaises(AssertionError) as ctx:
+                wrap_assert.assert_fill_trim_streak(
+                    true_own_quoted_divergent.replace(
+                        "streak reads 4 TRUE", "streak reads 5 TRUE"
+                    ),
+                    events_dir,
+                    T321_3020_STAMP,
+                )
+            msg = str(ctx.exception)
+            self.assertIn("reads 5", msg)  # the OWN claim, named
+            self.assertNotIn("reads 9", msg)  # the quote, never swept
+            # and a figure-less text quoting the divergent reading under
+            # the establishment anchor stays inert entirely.
+            wrap_assert.assert_fill_trim_streak(
+                "trim 0 == 0 [the reading at the 695th establishment: "
+                "reads 9, +THIS 5 — the strict post-reset streak carries "
+                "the TRUE reading]",
+                events_dir,
+                T321_3020_STAMP,
+            )
+
+    def test_doctrine_shape_with_trim_word_inserted_rides(self):
+        # The amended doctrine's own shape (`the strict post-reset trim
+        # streak reads N …` — the optional word `trim` between the anchor
+        # and `streak`) is a keyed claim: TRUE rides green, falsified
+        # fires.
+        with tempfile.TemporaryDirectory() as tmp:
+            events_dir = _t321_build_events_dir(
+                tmp, T321_3024_STREAMS, live=T321_3024_LIVE
+            )
+            wrap_assert.assert_fill_trim_streak(
+                "the fill compose leg's pre-commit assert ALSO "
+                "re-derives the strict post-reset trim streak reads 3 "
+                "at the fill stamp",
+                events_dir,
+                T321_STAMP,
+            )
+            with self.assertRaises(AssertionError) as ctx:
+                wrap_assert.assert_fill_trim_streak(
+                    "the strict post-reset trim streak reads 9 at the "
+                    "fill stamp",
+                    events_dir,
+                    T321_STAMP,
+                )
+            self.assertIn("the probed 3", str(ctx.exception))
+
+    def test_t320_identity_precondition_rejects_by_name(self):
+        # The T320 identity leg: a rotated file with ZERO run_start
+        # events (a tail-splice or a hand-truncated file) and one with
+        # TWO (a double-began stream) are each rejected BY NAME — the
+        # probed run_start count and ts values named, the file never
+        # silently miscounted into the chain.
+        with tempfile.TemporaryDirectory() as tmp:
+            events_dir = _t321_build_events_dir(
+                tmp, T321_3024_STREAMS, live=T321_3024_LIVE
+            )
+            zero_rs = os.path.join(
+                events_dir, "events-20261105-140840.jsonl"
+            )
+            _t321_strip_run_start_lines(zero_rs)
+            with self.assertRaises(AssertionError) as ctx:
+                wrap_assert.assert_fill_trim_streak(
+                    "the strict post-reset streak reads 3 TRUE",
+                    events_dir,
+                    T321_STAMP,
+                )
+            msg = str(ctx.exception)
+            self.assertIn("events-20261105-140840.jsonl", msg)
+            self.assertIn("probed 0 run_start event(s)", msg)
+            self.assertIn("[none]", msg)
+            self.assertIn("T320 identity precondition", msg)
+        with tempfile.TemporaryDirectory() as tmp:
+            events_dir = _t321_build_events_dir(
+                tmp, T321_3024_STREAMS, live=T321_3024_LIVE
+            )
+            double_rs = os.path.join(
+                events_dir, "events-20261105-152533.jsonl"
+            )
+            with open(double_rs, "a", encoding="utf-8") as f:
+                f.write(json.dumps(
+                    {"type": "run_start",
+                     "ts": "2026-11-05T14:10:00.000Z"}) + "\n")
+            with self.assertRaises(AssertionError) as ctx:
+                wrap_assert.assert_fill_trim_streak(
+                    "the strict post-reset streak reads 3 TRUE",
+                    events_dir,
+                    T321_STAMP,
+                )
+            msg = str(ctx.exception)
+            self.assertIn("events-20261105-152533.jsonl", msg)
+            self.assertIn("probed 2 run_start event(s)", msg)
+            self.assertIn("2026-11-05T14:08:40.772Z", msg)
+            self.assertIn("2026-11-05T14:10:00.000Z", msg)
+
+    def test_expectation_is_extracted_never_a_parameter(self):
+        # The T270/T288 probed-expectation clause binds the expectation
+        # side: the API carries NO expected-figure argument — the claimed
+        # figure is read off the text under assertion, and the TRUE
+        # figure is derived from the events files alone. The signature is
+        # pinned (text, events_dir, fill_stamp) and a caller attempting
+        # to pass a remembered constant positionally or by keyword hits
+        # the signature, not a silent pass.
+        params = list(
+            inspect.signature(
+                wrap_assert.assert_fill_trim_streak
+            ).parameters
+        )
+        self.assertEqual(params, ["text", "events_dir", "fill_stamp"])
+        with tempfile.TemporaryDirectory() as tmp:
+            events_dir = _t321_build_events_dir(
+                tmp, T321_3024_STREAMS, live=T321_3024_LIVE
+            )
+            falsified = (
+                "the strict post-reset streak reads 4 TRUE on THIS "
+                "stream's trim-0 at the stamp"
+            )
+            with self.assertRaises(TypeError):
+                wrap_assert.assert_fill_trim_streak(
+                    falsified, events_dir, T321_STAMP, 3
+                )
+            with self.assertRaises(TypeError):
+                wrap_assert.assert_fill_trim_streak(
+                    falsified, events_dir, T321_STAMP, true_figure=3
+                )
+            # and with the signature honored, the remembered-constant
+            # caller has nowhere to put the 3: the same call fires on the
+            # text's own composed claim (never waved green by a constant).
+            with self.assertRaises(AssertionError) as ctx:
+                wrap_assert.assert_fill_trim_streak(
+                    falsified, events_dir, T321_STAMP
+                )
+            self.assertIn("the probed 3", str(ctx.exception))
+
+    def test_non_str_arguments_type_error_naming_the_shape(self):
+        # The call-signature slip shapes: a pre-split line LIST for the
+        # text, a non-str events_dir, a non-str fill_stamp — each
+        # TypeError names the accepted shape.
+        with self.assertRaises(TypeError) as ctx:
+            wrap_assert.assert_fill_trim_streak(
+                ["line one", "line two"], ".chug", T321_STAMP
+            )
+        self.assertIn("text must be the composed fill/wrap TEXT", str(
+            ctx.exception))
+        self.assertIn("probed text 2 probed line(s)", str(ctx.exception))
+        with self.assertRaises(TypeError) as ctx:
+            wrap_assert.assert_fill_trim_streak(
+                "the strict post-reset streak reads 3", None, T321_STAMP
+            )
+        self.assertIn("events_dir must be the events directory's PATH",
+                      str(ctx.exception))
+        with self.assertRaises(TypeError) as ctx:
+            wrap_assert.assert_fill_trim_streak(
+                "the strict post-reset streak reads 3", ".chug", None
+            )
+        self.assertIn("fill_stamp must be the stamp", str(ctx.exception))
+
+    def test_unreadable_or_empty_events_dir_fails_closed(self):
+        # The fail-closed half: a missing events_dir names the probed
+        # path; an empty corpus (no live file, no rotated files) refuses
+        # to derive — a probe that read nothing can never wave the
+        # fill's streak claim GREEN.
+        with tempfile.TemporaryDirectory() as tmp:
+            absent = os.path.join(tmp, "no-such-chug")
+            with self.assertRaises(AssertionError) as ctx:
+                wrap_assert.assert_fill_trim_streak(
+                    "the strict post-reset streak reads 3 TRUE",
+                    absent,
+                    T321_STAMP,
+                )
+            self.assertIn(absent, str(ctx.exception))
+            self.assertIn("fails closed", str(ctx.exception))
+        with tempfile.TemporaryDirectory() as tmp:
+            empty = _t321_build_events_dir(tmp, [])
+            with self.assertRaises(AssertionError) as ctx:
+                wrap_assert.assert_fill_trim_streak(
+                    "the strict post-reset streak reads 3 TRUE",
+                    empty,
+                    T321_STAMP,
+                )
+            self.assertIn("events corpus", str(ctx.exception))
+
+    def test_fire_is_zero_mutation(self):
+        # The events files are only ever READ: the fixture's byte content
+        # is snapshot before a firing call and byte-identical after.
+        with tempfile.TemporaryDirectory() as tmp:
+            events_dir = _t321_build_events_dir(
+                tmp, T321_3024_STREAMS, live=T321_3024_LIVE
+            )
+
+            def snapshot():
+                state = {}
+                for name in sorted(os.listdir(events_dir)):
+                    with open(
+                        os.path.join(events_dir, name), "rb"
+                    ) as f:
+                        state[name] = f.read()
+                return state
+
+            before = snapshot()
+            with self.assertRaises(AssertionError):
+                wrap_assert.assert_fill_trim_streak(
+                    "the strict post-reset streak reads 9 TRUE",
+                    events_dir,
+                    T321_STAMP,
+                )
+            self.assertEqual(snapshot(), before)
+
+    def test_export_and_docstring_coverage_sentence_pinned(self):
+        # The leg rides the module's __all__ (19 -> 20; T321) and the
+        # docstring coverage sentence names the T321 legs (the pin-surface
+        # extended, not re-shaped).
+        self.assertIn("assert_fill_trim_streak", wrap_assert.__all__)
+        self.assertEqual(len(wrap_assert.__all__), 20)
+        self.assertIn("T321 fill trim-streak legs", wrap_assert.__doc__)
+        # The extension, not a re-shape: the T317/T319/T310 sentence
+        # tails still ride.
+        self.assertIn("T317 fill trim-enumeration legs",
+                      wrap_assert.__doc__)
+        self.assertIn("T319 fill enumeration count-word legs",
+                      wrap_assert.__doc__)
+        self.assertIn("T310 fill-enumeration legs", wrap_assert.__doc__)
+
+    def test_red_provability_mutants_run_on_a_copy(self):
+        # RED-provability, hand-proved by mutants run on a COPY: the
+        # module itself is never written (the mutation rides an in-memory
+        # exec of a mutated source string), and the on-disk module is
+        # re-read byte-identical after each run.
+        with open(wrap_assert.__file__, "r", encoding="utf-8") as f:
+            pristine = f.read()
+        falsified = (
+            "the strict post-reset streak reads 4 TRUE on THIS stream's "
+            "trim-0 at the stamp"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            events_dir = _t321_build_events_dir(
+                tmp, T321_3024_STREAMS, live=T321_3024_LIVE
+            )
+            # The shipped module fires on both inputs (the legs above pin
+            # it; re-asserted here so the mutant contrast is
+            # self-contained).
+            with self.assertRaises(AssertionError):
+                wrap_assert.assert_fill_trim_streak(
+                    falsified, events_dir, T321_STAMP
+                )
+            # M1 — the figure compare deleted (every composed claim
+            # redeems): the 3024-shape fire goes red (no raise under the
+            # mutant, where the shipped leg raises).
+            m1 = _mutant_wrap_assert(
+                pristine,
+                "        if figure != true_figure:",
+                "        if False:",
+            )
+            m1["assert_fill_trim_streak"](
+                falsified, events_dir, T321_STAMP
+            )
+            # M2 — the T320 identity check deleted (a zero-run_start
+            # rotated file silently miscounts into the chain): the
+            # identity fire goes red (no raise under the mutant, where
+            # the shipped leg raises on the same input — the corrupted
+            # file counted into the chain yields TRUE 3, which the
+            # claim matches, so ONLY the identity tooth separates the
+            # shipped leg's raise from the mutant's pass).
+            m2 = _mutant_wrap_assert(
+                pristine,
+                "        if len(run_starts) != 1:",
+                "        if False:",
+            )
+            zero_rs = os.path.join(
+                events_dir, "events-20261105-140840.jsonl"
+            )
+            _t321_strip_run_start_lines(zero_rs)
+            m2["assert_fill_trim_streak"](
+                "the strict post-reset streak reads 3 TRUE",
+                events_dir,
+                T321_STAMP,
+            )
         # The module restored byte-identical after each run (nothing was
         # ever written — re-read and compared against the pristine read).
         with open(wrap_assert.__file__, "r", encoding="utf-8") as f:

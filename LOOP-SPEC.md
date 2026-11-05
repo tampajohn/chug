@@ -1142,6 +1142,16 @@ alike) has been harvested.
   `trim 0 == 0` at its named stamp against the mechanical 1 — the class's
   fourth committed sighting, the second on the trim surface) — the same
   compose-time catch for the trim surface. The fill compose leg's
+  pre-commit assert ALSO re-derives the strict post-reset trim streak at
+  the fill stamp in the SAME leg (the prior chain re-read off the rotated
+  events files' whole-final trim counts — one `run_start` identity check
+  per rotated file, the T320 precondition — and the current stream's
+  trim count probed at the stamp) and verifies the fill text's streak
+  figure via `scripts/wrap_assert.py`'s streak leg
+  (`assert_fill_trim_streak`, T321: the cycle-3024 twelfth-sighting
+  finding — the composed streak misread across three consecutive
+  establishments, the class's first firing on the streak surface) — the
+  same compose-time catch for the streak surface. The fill compose leg's
   pre-commit assert ALSO runs `scripts/wrap_assert.py`'s on-disk
   state-schema leg (`assert_state_on_disk`, T311) against the committed
   `.chug/eval-state.md` AFTER the wrap's state write: the leg reads the
