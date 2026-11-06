@@ -846,13 +846,29 @@ fn loopd_builds_and_launches_the_release_binary() {
         "loopd.sh must not reference ./target/debug/chug anywhere — the \
          supervisor builds and launches the release binary (T78)"
     );
-    // (3) The cycle invocation launches the release binary, env-prefixed,
-    //     exactly once (the T47 prefix pin, restated at the release path).
+    // (3) The cycle invocation launches the release binary, env-prefixed —
+    //     TWO launch sites exist now (the orchestrator cycle + the T326
+    //     ideation child), so the prefix is pinned per SITE by its
+    //     distinguishing spec argument, each exactly once (the T47 prefix
+    //     pin, restated at the release path; a third site would have to
+    //     land its own site-level pin, never silently ride the prefix).
     count_eq(
         &loopd,
         "CARGO_TARGET_DIR=\"$ROOT/target-shared\" ./target/release/chug run",
+        2,
+        "loopd.sh env-prefixed release invocations — both launch sites (T78 + T326)",
+    );
+    count_eq(
+        &loopd,
+        "CARGO_TARGET_DIR=\"$ROOT/target-shared\" ./target/release/chug run --spec LOOP-SPEC.md",
         1,
-        "loopd.sh env-prefixed release invocation (T78)",
+        "the orchestrator cycle invocation is the LOOP-SPEC site (T78 + T326)",
+    );
+    count_eq(
+        &loopd,
+        "--spec \"$IDEATION_SPEC\" --goal \"$IDEATION_GOAL\"",
+        1,
+        "the ideation child launch is its own env-prefixed site (T326)",
     );
 }
 
