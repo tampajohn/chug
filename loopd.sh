@@ -1421,7 +1421,6 @@ ideation_state_write() { # stamp the ideation half AFTER a successful child:
 # Re-exporting per iteration is idempotent and harmless: it only affects
 # chug bash-tool calls, never the supervisor's own ./target build.
 export CHUG_BASH_TIMEOUT=300
-# own ./target build.
 
 ideation_cycle() { # the ONE launch the ideation timer schedules: while
   # dormant, on a quiet cycle, ONE glm ideation run executes the

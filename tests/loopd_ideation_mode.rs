@@ -101,6 +101,12 @@ static NOUL_CAPTURED: Mutex<Vec<String>> = Mutex::new(Vec::new());
 /// to its Content-Length, a canned JSON answer back). `answer` is the raw
 /// JSON body; `"yes"` marks the stub meta-class, `"no"` passes it.
 fn serve_noul(sock_path: &Path, answer: &str) {
+    serve_noul_status(sock_path, 200, answer)
+}
+
+/// The status-carrying variant (the F3 legs: a non-200 with a VALID body
+/// must still reject — the gate's fail-CLOSED is not status-blind).
+fn serve_noul_status(sock_path: &Path, status: u16, answer: &str) {
     use std::io::{Read, Write};
     let _ = std::fs::remove_file(sock_path);
     let listener = std::os::unix::net::UnixListener::bind(sock_path).expect("bind mock noul");
@@ -143,8 +149,9 @@ fn serve_noul(sock_path: &Path, answer: &str) {
                     .expect("captured map")
                     .push(body.to_string());
             }
+            let reason = if status == 200 { "OK" } else { "Service Unavailable" };
             let resp = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 answer.len(),
                 answer
             );
@@ -175,8 +182,11 @@ const CANNED_CORPUS: &str = concat!(
 );
 
 /// The ideate fixture's TODO.md: the shipped lane shape — a table header,
-/// one operator-approved row, one never-dispatch internal row (the
-/// P005-P007 marker), one OLD machine row (the amendment's flip input).
+/// two operator-approved rows (P001 hand-named + P002 hand-named — the F1
+/// class: the shipped lane's operator-filed rows carry NO `pNNN-` filename
+/// prefix, so the dedupe must take its keys from the row spec cells and the
+/// proposed dir AS THEY ARE, prefix or not), one never-dispatch internal row
+/// (the P005-P007 marker), one OLD machine row (the amendment's flip input).
 const IDEATE_TODO: &str = "| id | title | spec | pri | status | notes |\n\
 |----|-------|------|-----|--------|-------|\n\
 | T1 | title | specs/T1-slug.md | 2 | done | notes |\n\
@@ -188,6 +198,7 @@ Machine-maintained lane (T326): proposals land here with status `proposed`.\n\
 | id | title | spec | pri | status | notes |\n\
 |----|-------|------|-----|--------|-------|\n\
 | P001 | sandbox-deploy go-live | specs/proposed/sandbox-deploy-go-live.md | 3 | open | operator-approved 2026-11-06 (blanket approval) |\n\
+| P002 | F16 unpark decision | specs/proposed/f16-unpark-decision.md | 4 | open | operator-approved 2026-11-06 (blanket approval) — keep/kill memo |\n\
 | P005 | Pilot-team onboarding kit (internal) | specs/proposed/p005-pilot-onboarding-kit.md | 2 | proposed | APPROVED 2026-11-06 — owner fb011b00 (internal artifact, NOT loop work; do not dispatch): 2026-11-06 — Q4 deliverable |\n\
 | P011 | old machine row | specs/proposed/p011-old-machine-row.md | 2 | proposed | machine-filed 2020-01-01 (T326 cycle 2026-W01) — awaiting operator ratification |\n";
 
@@ -239,6 +250,7 @@ fn ideate_fixture() -> tempdir_holder::Temp {
     std::fs::write(root.path().join(".chug/decisions.jsonl"), CANNED_CORPUS).expect("fixture corpus");
     for (name, body) in [
         ("sandbox-deploy-go-live.md", "# P001 — sandbox-deploy go-live\n"),
+        ("f16-unpark-decision.md", "# P002 — F16 unpark decision\n"),
         ("p005-pilot-onboarding-kit.md", "# P005 — Pilot-team onboarding kit (internal)\n"),
         ("p011-old-machine-row.md", "# P011 — old machine row\n"),
     ] {
@@ -589,13 +601,23 @@ fn the_canned_packet_files_gated_stubs_idempotently() {
         out.contains("ideation auto-ratified (T326): P011"),
         "auto-ratify line missing: {out}"
     );
-    // Two gated filings (census + parked; ≤3), each with the printed name.
+    // One gated filing (≤3): the census candidate. The PARKED F16 candidate's
+    // slug (`f16-unpark-decision`) is ALREADY TAKEN — by the operator's
+    // hand-named P002 row + stub file, neither carrying a `pNNN-` prefix —
+    // so the cycle must NOT re-file it (the F1 duplicate class: the shipped
+    // lane's operator-filed rows P001-P003 use hand-named files, and a
+    // prefix-anchored dedupe re-files their proposals as duplicates, which
+    // the 7d sweep then auto-ratifies with zero operator involvement).
     let filed: Vec<&str> = out
         .lines()
         .filter(|l| l.starts_with("ideation filed (T326): "))
         .map(|l| &l["ideation filed (T326): ".len()..])
         .collect();
-    assert_eq!(filed.len(), 2, "expected 2 filings, got {filed:?}: {out}");
+    assert_eq!(filed.len(), 1, "expected 1 filing (F16 deduped), got {filed:?}: {out}");
+    assert!(
+        !filed.iter().any(|n| n.contains("f16-unpark-decision")),
+        "the F1 duplicate: the cycle re-filed the operator's hand-named P002 proposal: {filed:?}"
+    );
 
     // The stub FILES exist with the shape (5 content lines — title + 4
     // bullets — plus the blank separator, the seeded lane's exact shape).
@@ -637,32 +659,42 @@ fn the_canned_packet_files_gated_stubs_idempotently() {
                 .collect()
         })
         .collect();
-    assert_eq!(rows.len(), 5, "5 P-rows expected (3 seeded + 2 filed): {todo}");
+    assert_eq!(rows.len(), 5, "5 P-rows expected (4 seeded + 1 filed): {todo}");
     for (i, cells) in rows.iter().enumerate() {
         assert_eq!(cells.len(), 6, "row {i}: 6 cells, got {}", cells.len());
     }
-    assert_eq!(rows[3][0], "P012", "the filed ids continue the lane's numbering");
-    assert_eq!(rows[3][4], "proposed", "machine rows land as proposed");
+    assert_eq!(rows[4][0], "P012", "the filed ids continue the lane's numbering");
+    assert_eq!(rows[4][4], "proposed", "machine rows land as proposed");
     assert!(
-        rows[3][5].starts_with("machine-filed ") && rows[3][5].contains("(T326 cycle "),
-        "machine notes: {}", rows[3][5]
+        rows[4][5].starts_with("machine-filed ") && rows[4][5].contains("(T326 cycle "),
+        "machine notes: {}", rows[4][5]
     );
     assert!(
-        f.join(&rows[3][2]).is_file() && f.join(&rows[4][2]).is_file(),
-        "the spec cells name existing files: {} / {}",
-        rows[3][2],
+        f.join(&rows[4][2]).is_file(),
+        "the spec cell names an existing file: {}",
         rows[4][2]
     );
-    assert_eq!(rows[4][0], "P013", "sequential P-ids: {todo}");
+
+    // The hand-named P002 (the F1 dedupe key holder) is UNTOUCHED and the
+    // lane still holds exactly ONE f16-unpark-decision row — no duplicate
+    // filing, no duplicate id.
+    assert_eq!(rows[1][0], "P002");
+    assert_eq!(rows[1][4], "open", "the operator-approved P002 is never touched");
+    assert_eq!(rows[1][2], "specs/proposed/f16-unpark-decision.md");
+    assert_eq!(
+        todo.matches("f16-unpark-decision").count(),
+        1,
+        "the lane holds exactly ONE f16-unpark-decision row (no F1 duplicate): {todo}"
+    );
 
     // The never-dispatch row is untouched, and the auto-ratified row reads open.
-    assert_eq!(rows[1][0], "P005");
-    assert_eq!(rows[1][4], "proposed", "the internal-artifact row is NEVER flipped");
-    assert_eq!(rows[2][0], "P011");
-    assert_eq!(rows[2][4], "open", "the 7d-old machine row auto-ratified");
+    assert_eq!(rows[2][0], "P005");
+    assert_eq!(rows[2][4], "proposed", "the internal-artifact row is NEVER flipped");
+    assert_eq!(rows[3][0], "P011");
+    assert_eq!(rows[3][4], "open", "the 7d-old machine row auto-ratified");
     assert!(
-        rows[2][5].contains("auto-ratified") && rows[2][5].contains("(T326)"),
-        "the flip is logged on the row: {}", rows[2][5]
+        rows[3][5].contains("auto-ratified") && rows[3][5].contains("(T326)"),
+        "the flip is logged on the row: {}", rows[3][5]
     );
 
     // --- idempotence: the same week's re-run files nothing, flips nothing ----
@@ -681,6 +713,112 @@ fn the_canned_packet_files_gated_stubs_idempotently() {
     // --check passes over the post-cycle lane.
     let (check_out, check_code) = run_ideate(f.path(), &["--check"], Some(&sock));
     assert_eq!(check_code, 0, "--check failed: {check_out}");
+    assert!(check_out.contains("lane consistent"), "{check_out}");
+}
+
+// --- the F6 pin: an EMPTY lane files INSIDE the lane, never the next section ----
+
+/// The empty-lane TODO.md: the `## Proposed` lane exists with its table
+/// skeleton (header + separator) but ZERO P-rows, and a `## Open` section
+/// with its own table follows. The pre-fix insertion scan skipped the
+/// skeleton and landed the new row inside the NEXT section's table
+/// (immediately before `| T2 |`) — the F6 latent bug: cross-section
+/// bookkeeping corrupted the moment the lane ever empties.
+const TODO_EMPTY_LANE: &str = "| id | title | spec | pri | status | notes |\n\
+|----|-------|------|-----|--------|-------|\n\
+| T1 | title | specs/T1-slug.md | 2 | done | notes |\n\
+\n\
+## Proposed\n\
+\n\
+Machine-maintained lane (T326): proposals land here with status `proposed`.\n\
+\n\
+| id | title | spec | pri | status | notes |\n\
+|----|-------|------|-----|--------|-------|\n\
+\n\
+## Open\n\
+\n\
+| id | title | spec | pri | status | notes |\n\
+|----|-------|------|-----|--------|-------|\n\
+| T2 | an open row | specs/T2-open.md | 2 | open | notes |\n";
+
+#[test]
+fn an_empty_lane_files_inside_the_lane_not_the_next_section() {
+    let f = ideate_fixture();
+    std::fs::write(f.path().join("TODO.md"), TODO_EMPTY_LANE).expect("write empty-lane TODO");
+    let sock = f.join("noul.sock");
+    serve_noul(&sock, &noul_answer("no"));
+    let (out, code) = run_ideate(f.path(), &[], Some(&sock));
+    assert_eq!(code, 0, "ideate.py cycle exited {code}: {out}");
+    assert!(
+        out.contains("ideation filed (T326): "),
+        "the cycle filed at least one proposal: {out}"
+    );
+
+    let todo = std::fs::read_to_string(f.path().join("TODO.md")).expect("read TODO.md");
+    let lines: Vec<&str> = todo.lines().collect();
+
+    // The lane's own span: from the `## Proposed` heading, past its table
+    // separator, up to the next `## ` heading.
+    let lane_at = lines
+        .iter()
+        .position(|l| l.trim() == "## Proposed")
+        .expect("the lane heading survives");
+    let sep_at = lines
+        .iter()
+        .enumerate()
+        .skip_while(|(i, _)| *i <= lane_at)
+        .find(|(_, l)| l.trim_start().starts_with("|--"))
+        .map(|(i, _)| i)
+        .expect("the lane's table separator survives");
+    let open_at = lines
+        .iter()
+        .position(|l| l.trim() == "## Open")
+        .expect("the next section heading survives");
+
+    // EVERY P-row sits INSIDE the lane span — directly after the lane's own
+    // separator, never past the `## Open` boundary (the pre-fix bug landed
+    // the row before `| T2 |`, inside the Open table).
+    let prows: Vec<usize> = lines
+        .iter()
+        .enumerate()
+        .filter(|(_, l)| l.trim_start().starts_with("| P"))
+        .map(|(i, _)| i)
+        .collect();
+    assert!(
+        !prows.is_empty(),
+        "the cycle filed a row: {out}\n{todo}"
+    );
+    for i in &prows {
+        assert!(
+            *i > sep_at && *i < open_at,
+            "the filed row must land inside the `## Proposed` lane (after its \
+             separator at {sep_at}, before `## Open` at {open_at}) — probed row at \
+             line {}: {}\n{todo}",
+            i + 1,
+            lines[*i]
+        );
+    }
+    assert_eq!(
+        lines[sep_at + 1],
+        lines[*prows.first().expect("probed")],
+        "the first filed row sits DIRECTLY after the lane's separator"
+    );
+
+    // The `## Open` section is byte-untouched — its table still ends with
+    // the T2 row, unshifted, uncorrupted.
+    let open_tail = "## Open\n\
+\n\
+| id | title | spec | pri | status | notes |\n\
+|----|-------|------|-----|--------|-------|\n\
+| T2 | an open row | specs/T2-open.md | 2 | open | notes |\n";
+    assert!(
+        todo.contains(open_tail),
+        "the `## Open` section must be byte-identical after the filing: {todo}"
+    );
+
+    // And the post-cycle lane passes --check.
+    let (check_out, check_code) = run_ideate(f.path(), &["--check"], Some(&sock));
+    assert_eq!(check_code, 0, "--check failed over the empty-lane filing: {check_out}");
     assert!(check_out.contains("lane consistent"), "{check_out}");
 }
 
@@ -745,6 +883,63 @@ fn the_noul_gate_rejects_meta_and_passes_outward_fail_closed() {
     );
 }
 
+/// The F3 legs: the gate's fail-CLOSED is pinned on EVERY bad-daemon shape,
+/// not just daemon-ABSENT. Only an explicit confident "no" on a 200 passes;
+/// everything else — non-200, unparsable body, missing choice key, a hedge
+/// choice — rejects. Each leg names the mutant it kills.
+#[test]
+fn the_noul_gate_fails_closed_on_bad_daemon_answers() {
+    let f = ideate_fixture();
+    let outward = f.join("outward-stub.md");
+    std::fs::write(
+        &outward,
+        "# P901 — chug.sh cost dashboard\n\n\
+         - **User-visible value**: v\n\
+         - **First slice**: s\n\
+         - **Estimate class**: S.\n\
+         - **Source fact**: f\n",
+    )
+    .expect("write outward stub");
+
+    // Leg 1 (kills M7, the non-200 check dropped): a 503 carrying a VALID
+    // outward "no" body must STILL reject — the status alone fails closed.
+    // Without the status check the valid body would parse and PASS.
+    let s = f.join("noul-503.sock");
+    serve_noul_status(&s, 503, &noul_answer("no"));
+    let (out, code) = run_ideate_gate(f.path(), &outward, &s);
+    assert_eq!(code, 2, "a non-200 answer must fail CLOSED even with a valid body: {out}");
+
+    // Leg 2 (kills M2's wider family — the except-path): a 200 with an
+    // UNPARSABLE body rejects (json.loads raises → the gate's failure arm).
+    let s = f.join("noul-garbage.sock");
+    serve_noul(&s, "not-json-at-all");
+    let (out, code) = run_ideate_gate(f.path(), &outward, &s);
+    assert_eq!(code, 2, "a garbage body must fail CLOSED: {out}");
+
+    // Leg 3 (kills M3, the choice check loosened to != "yes"): a 200 with
+    // valid JSON whose meta_class answer carries NO choice key rejects.
+    // Under `!= "yes"` the missing key (None) would pass the gate.
+    let s = f.join("noul-nochoice.sock");
+    serve_noul(
+        &s,
+        "{\"model\":\"mock-noul\",\"answers\":{\"meta_class\":{\"type\":\"choice\",\"confidence\":0.93}},\"usage\":{}}",
+    );
+    let (out, code) = run_ideate_gate(f.path(), &outward, &s);
+    assert_eq!(code, 2, "a missing-choice body must fail CLOSED: {out}");
+
+    // Leg 4 (also kills M3): a 200 with choice "maybe" — neither the
+    // outward "no" nor the meta "yes" — rejects. Only an explicit
+    // confident "no" passes; a hedge is not an approval.
+    let s = f.join("noul-maybe.sock");
+    serve_noul(&s, &noul_answer("maybe"));
+    let (out, code) = run_ideate_gate(f.path(), &outward, &s);
+    assert_eq!(code, 2, "a hedged 'maybe' choice must fail CLOSED: {out}");
+    assert!(
+        out.contains("ideation reject (T326): meta-class chug.sh cost dashboard"),
+        "every fail-closed leg logs the spec's reject line: {out}"
+    );
+}
+
 /// `--gate-only` takes the stub file as its OWN argument (not the root).
 fn run_ideate_gate(root: &Path, stub: &Path, sock: &Path) -> (String, i32) {
     let out = Command::new("python3")
@@ -779,7 +974,9 @@ fn the_ratify_sweep_flips_only_eligible_rows() {
 | P013 | internal row | specs/proposed/p013-internal.md | 2 | proposed | APPROVED 2026-11-06 — owner fb011b00 (internal artifact, NOT loop work; do not dispatch): old |\n\
 | P014 | undated row | specs/proposed/p014-undated.md | 2 | proposed | hand-filed, no date on record |\n\
 | P015 | vetoed row | specs/proposed/p015-vetoed.md | 2 | vetoed | machine-filed 2020-01-01 — operator vetoed this one |\n\
-| P016 | second old row | specs/proposed/p016-second.md | 2 | proposed | machine-filed 2020-06-01 (T326 cycle 2026-W23) — awaiting operator ratification |\n";
+| P016 | second old row | specs/proposed/p016-second.md | 2 | proposed | machine-filed 2020-06-01 (T326 cycle 2026-W23) — awaiting operator ratification |\n\
+| P017 | aged never-dispatch row | specs/proposed/p017-aged-never.md | 2 | proposed | APPROVED 2020-01-01 — owner fb011b00 (internal artifact, NOT loop work; do not dispatch): aged past any boundary |\n\
+| P018 | aged operator-owned row | specs/proposed/p018-aged-owned.md | 2 | proposed | machine-filed 2020-02-02 (T326 cycle 2020-W05) — operator-owned: the operator executes this out-of-band |\n";
     std::fs::write(f.path().join("TODO.md"), todo).expect("write ratify TODO");
     for (n, slug) in [
         ("p011-old-machine-row.md", "old"),
@@ -788,6 +985,8 @@ fn the_ratify_sweep_flips_only_eligible_rows() {
         ("p014-undated.md", "undated"),
         ("p015-vetoed.md", "vetoed"),
         ("p016-second.md", "second"),
+        ("p017-aged-never.md", "aged never"),
+        ("p018-aged-owned.md", "aged owned"),
     ] {
         std::fs::write(f.join("specs/proposed").join(n), format!("# {slug}\n"))
             .expect("write ratify stub");
@@ -807,6 +1006,13 @@ fn the_ratify_sweep_flips_only_eligible_rows() {
         ("P013", "proposed", "never-dispatch row stays"),
         ("P014", "proposed", "undated row stays"),
         ("P015", "vetoed", "vetoed row stays vetoed"),
+        // The F2 legs: AGED marker rows — the marker skip, not the age
+        // check, is what keeps these proposed (both are years past the 7d
+        // boundary; removing the marker skip flips them). P017 carries the
+        // P005-P007 `do not dispatch` marker, P018 the `operator-owned`
+        // marker — each NEVER_FLIP_MARKERS entry gets its own aged row.
+        ("P017", "proposed", "aged do-not-dispatch row NEVER flips (the marker, not the age)"),
+        ("P018", "proposed", "aged operator-owned row NEVER flips (the marker, not the age)"),
     ] {
         let line = after
             .lines()
@@ -828,6 +1034,83 @@ fn the_ratify_sweep_flips_only_eligible_rows() {
         !out2.contains("ideation auto-ratified (T326):"),
         "the second sweep re-flipped: {out2}"
     );
+}
+
+// --- the amendment's boundary: exactly 7 days, pinned statically + dynamically -
+
+/// Today's UTC date and its -7d/-6d offsets as ISO strings (probed via
+/// python3 — the same clock ideate.py's sweep reads; no chrono dependency).
+fn today_utc_offsets() -> (String, String, String) {
+    let out = Command::new("python3")
+        .args([
+            "-c",
+            "import datetime; t=datetime.datetime.now(datetime.timezone.utc).date(); \
+             print(t.isoformat()); \
+             print((t-datetime.timedelta(days=7)).isoformat()); \
+             print((t-datetime.timedelta(days=6)).isoformat())",
+        ])
+        .output()
+        .expect("spawn python3 date probe");
+    assert!(
+        out.status.success(),
+        "date probe failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let lines: Vec<String> = String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .map(|s| s.trim().to_string())
+        .collect();
+    assert_eq!(lines.len(), 3, "date probe shape: {:?}", lines);
+    (lines[0].clone(), lines[1].clone(), lines[2].clone())
+}
+
+/// The F4 pin: the amendment's ratification boundary is EXACTLY 7 days —
+/// a row filed 7d ago flips (age >= 7), a row filed 6d ago stays. The 6d
+/// row IS the finding's 6d23h wall-age case: the sweep compares calendar
+/// dates, so a row filed yesterday-at-23:59 (wall age up to ~1d short of
+/// the boundary at probe time) reads `6` and must stay proposed. Mutants:
+/// `<=` (flips at 6) fails the P021 leg; RATIFY_AFTER_DAYS=8 fails both;
+/// both are also caught by the wiring test's static pins.
+#[test]
+fn the_ratify_boundary_is_exactly_seven_days() {
+    let f = ideate_fixture();
+    let (_today, d7, d6) = today_utc_offsets();
+    let todo = format!(
+        "| id | title | spec | pri | status | notes |\n\
+|----|-------|------|-----|--------|-------|\n\
+## Proposed\n\
+\n\
+| id | title | spec | pri | status | notes |\n\
+|----|-------|------|-----|--------|-------|\n\
+| P020 | boundary row | specs/proposed/p020-boundary.md | 2 | proposed | machine-filed {d7} (T326 cycle) — awaiting operator ratification |\n\
+| P021 | inside row | specs/proposed/p021-inside.md | 2 | proposed | machine-filed {d6}T23:59 (T326 cycle) — awaiting operator ratification |\n"
+    );
+    std::fs::write(f.path().join("TODO.md"), todo).expect("write boundary TODO");
+    for (n, body) in [
+        ("p020-boundary.md", "# P020 — boundary row\n"),
+        ("p021-inside.md", "# P021 — inside row\n"),
+    ] {
+        std::fs::write(f.join("specs/proposed").join(n), body).expect("write boundary stub");
+    }
+    let (out, code) = run_ideate(f.path(), &["--ratify-only"], None);
+    assert_eq!(code, 0, "ratify-only exited {code}: {out}");
+    assert!(
+        out.contains("ideation auto-ratified (T326): P020")
+            && !out.contains("P021"),
+        "exactly the 7d-old row flips; the 6d(-23h) row stays: {out}"
+    );
+    let after = std::fs::read_to_string(f.path().join("TODO.md")).expect("read TODO.md");
+    for (id, want, what) in [
+        ("P020", "open", "the exactly-7d-old row flips"),
+        ("P021", "proposed", "the 6d23h row stays proposed"),
+    ] {
+        let line = after
+            .lines()
+            .find(|l| l.starts_with(&format!("| {id} ")))
+            .unwrap_or_else(|| panic!("{id} row present"));
+        let cells: Vec<&str> = line.split('|').skip(1).map(|c| c.trim()).collect();
+        assert_eq!(cells[4], want, "{what}: {line}");
+    }
 }
 
 // --- spec bullet 3: the loopd fixture legs --------------------------------------
@@ -989,6 +1272,55 @@ fn an_ideation_child_failure_is_never_stamped() {
     );
 }
 
+// --- the T325-F1 anchor-max shape: the ideation timer takes the NEWER half ------
+
+/// The F5 pin: the ideation timer's anchor is the NEWER of the record half
+/// (last_ideation_ts) and the git half (newest specs/proposed commit) — the
+/// T325-F1 max shape. Every prior ideation leg had the two halves EQUAL, so
+/// a max->min mutation (M5) stayed green. Each leg here makes the halves
+/// DIFFER, and in both directions the newer half must decide:
+///   (a) stale record + fresh git → the landed-commit corrective wins → the
+///       timer is NOT due (mirrors the dormant battery's
+///       a_landed_audit_stops_the_duplicate_the_next_cycle_despite_the_stale_latch);
+///   (b) fresh record + stale git → the stamp wins → NOT due.
+/// Under max->min BOTH legs take the STALE half → due → launch → RED.
+#[test]
+fn the_ideation_timer_takes_the_newer_half_despite_the_stale_other() {
+    // (a) the stale-record leg: the stamp was lost/never landed (30d old),
+    // but a lane commit landed 1d ago — the git anchor stops the duplicate.
+    let f = fixture();
+    f.backdate_anchor(2 * DAY);
+    f.wraps(4);
+    f.seed_lane(DAY); // the git half: FRESH (1d)
+    f.latch_ideation(30 * DAY); // the record half: STALE (30d)
+    f.run_one_pass();
+    assert!(
+        !f.path().join("child-argv.txt").exists(),
+        "a fresh git anchor must stop the timer despite the stale record half \
+         (max->min takes the stale half and launches): {}",
+        f.fixture_log()
+    );
+    assert!(
+        !f.fixture_log().contains("ideation cycle (T326): timer due"),
+        "no ideation launch line when the newer (git) half is fresh: {}",
+        f.fixture_log()
+    );
+
+    // (b) the mirror leg: the record half is fresh (1d — a stamped timer),
+    // the git half is stale (30d). The newer (record) half decides → NOT due.
+    let f2 = fixture();
+    f2.backdate_anchor(2 * DAY);
+    f2.wraps(4);
+    f2.seed_lane(30 * DAY); // the git half: STALE (30d)
+    f2.latch_ideation(DAY); // the record half: FRESH (1d)
+    f2.run_one_pass();
+    assert!(
+        !f2.path().join("child-argv.txt").exists(),
+        "a fresh record half must stop the timer despite the stale git half: {}",
+        f2.fixture_log()
+    );
+}
+
 // --- spec bullet 4: the proposed-lane safety -------------------------------------
 
 #[test]
@@ -1119,6 +1451,22 @@ fn the_ideation_wiring_is_pinned_in_loopd_sh() {
     count_eq(&ideate, "NEVER_FLIP_MARKERS = (\"do not dispatch\", \"operator-owned\")", 1, "the never-flip markers");
     count_eq(&ideate, "ideation reject (T326): meta-class", 2, "the reject log line (both the filing path and --gate-only)");
     count_eq(&ideate, "ideation auto-ratified (T326): ", 1, "the ratify log line");
+    // The amendment's boundary is EXACTLY 7d (the F4 pins): the knob's value
+    // and the comparison shape are BOTH pinned — a `<=` mutant flips at 6d.
+    count_eq(
+        &ideate,
+        "RATIFY_AFTER_DAYS = 7",
+        1,
+        "the amendment's 7d ratify boundary (the sweep's only age knob)",
+    );
+    count_eq(
+        &ideate,
+        "if (today - filed).days < RATIFY_AFTER_DAYS:",
+        1,
+        "the boundary comparison (age >= 7d flips; a <= mutant flips at 6d)",
+    );
+    // The empty-lane insert anchor is its own named helper, defined once (F6).
+    count_eq(&ideate, "def _lane_insert_at(", 1, "the F6 empty-lane insert anchor");
 
     // The child's spec exists and carries the check line.
     let spec = read("specs/ideation-cycle.md");

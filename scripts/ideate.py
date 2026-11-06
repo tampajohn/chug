@@ -79,20 +79,30 @@ P_ID_RE = re.compile(r"P(\d+)")
 
 # --- TODO.md row plumbing (the T279 shapes, mirrored from todo_flip.py) -------
 
-def _row_cells(line):
-    """Parse one physical line into table cells, mirroring the T8 guard's
-    `table_cells` so the two parsers cannot drift apart. Non-row lines
-    (no leading `|` after trim) return None; header (first cell `id`) and
-    all-dash separator rows return None."""
+def _row_kind(line):
+    """One physical line's row kind: 'header' (first cell `id`), 'sep'
+    (all-dash cells), 'data', or None (not a table row). The data-row parser
+    and the lane-skeleton walk share this classifier so the two cannot drift
+    apart."""
     stripped = line.strip()
     if not stripped.startswith("|"):
         return None
     cells = [cell.strip() for cell in stripped.strip("|").split("|")]
     if cells and cells[0] == "id":
-        return None
+        return "header"
     if cells and all(cell != "" and all(ch == "-" for ch in cell) for cell in cells):
+        return "sep"
+    return "data"
+
+
+def _row_cells(line):
+    """Parse one physical line into table cells, mirroring the T8 guard's
+    `table_cells` so the two parsers cannot drift apart. Non-row lines
+    (no leading `|` after trim) return None; header and all-dash separator
+    rows return None."""
+    if _row_kind(line) != "data":
         return None
-    return cells
+    return [cell.strip() for cell in line.strip().strip("|").split("|")]
 
 
 def read_todo_lines(root):
@@ -472,22 +482,40 @@ def proposed_dir(root):
     return os.path.join(root, "specs", "proposed")
 
 
+def _spec_slug(name):
+    """The dedupe key of one spec filename: the stem, an OPTIONAL `pNNN-`
+    prefix stripped, lowercased. `p013-next-release-train.md` and
+    `f16-unpark-decision.md` are BOTH legal lane filenames — the shipped
+    lane's operator-filed rows (P001-P003) use hand-named files with no
+    prefix, and a prefix-anchored extraction misses them (the F1 bug: the
+    cycle re-filed their proposals as duplicates, which the 7d sweep then
+    auto-ratified with zero operator involvement). A non-.md name yields
+    None (never a key)."""
+    if not name.lower().endswith(".md"):
+        return None
+    stem = name[: -len(".md")]
+    stem = re.sub(r"^p\d+-", "", stem).strip("-").lower()
+    return stem or None
+
+
 def filed_slugs(lines, root):
-    """The dedupe keys already taken: slugs of the filed spec files AND of
-    the TODO.md P-rows' spec cells (a row whose file was removed still
-    holds the slug — the row is the ledger)."""
+    """The dedupe keys already taken: the slug of EVERY specs/proposed file
+    and of EVERY TODO.md P-row spec cell — hand-named files included (the
+    slug is the stem, an optional pNNN- prefix stripped; see _spec_slug). A
+    row whose file was removed still holds the slug — the row is the
+    ledger."""
     slugs = set()
     pdir = proposed_dir(root)
     if os.path.isdir(pdir):
         for name in os.listdir(pdir):
-            m = re.fullmatch(r"p\d+-([a-z0-9-]+)\.md", name)
-            if m:
-                slugs.add(m.group(1))
+            slug = _spec_slug(name)
+            if slug:
+                slugs.add(slug)
     for _, cells in p_rows(lines):
-        base = os.path.basename(cells[2]) if len(cells) > 2 else ""
-        m = re.fullmatch(r"p\d+-([a-z0-9-]+)\.md", base)
-        if m:
-            slugs.add(m.group(1))
+        if len(cells) > 2:
+            slug = _spec_slug(os.path.basename(cells[2].strip()))
+            if slug:
+                slugs.add(slug)
     return slugs
 
 
@@ -504,6 +532,33 @@ def next_p_number(lines, root):
             if m:
                 nums.append(int(m.group(1)))
     return (max(nums) + 1) if nums else 1
+
+
+def _lane_insert_at(lines):
+    """The zero-P-row lane's insertion index (F6): directly after the lane's
+    OWN table skeleton (header + separator) — INSIDE the `## Proposed`
+    section, never past the next `## ` heading. The old forward scan skipped
+    the skeleton hunting the first data row and, with an empty lane, landed
+    the new row inside the NEXT section's table (reproduced: inserted before
+    `| T2 |` under `## Open`). A degenerate lane with no table at all
+    inserts directly under the heading."""
+    lane_at = None
+    for i, line in enumerate(lines):
+        if line.strip() == "## Proposed":
+            lane_at = i
+            break
+    if lane_at is None:
+        raise AssertionError("ideate filing: the lane vanished mid-cycle")
+    end = len(lines)
+    for i in range(lane_at + 1, len(lines)):
+        if lines[i].lstrip().startswith("## "):
+            end = i
+            break
+    at = lane_at
+    for i in range(lane_at + 1, end):
+        if _row_kind(lines[i]) in ("header", "sep"):
+            at = i
+    return at + 1
 
 
 def stub_text(pid, cand):
@@ -535,9 +590,11 @@ def proposal_row(pid, cand, fname, today, week):
 
 
 def file_proposal(root, lines, cand, pnum, today, week):
-    """One filing: write the stub file, then append the row after the last
-    P-row (pre-write asserts, then the write — the T279 order). Returns
-    (new_lines, printed_name) or raises with the file untouched."""
+    """One filing: the pre-write asserts fire FIRST (the hazard check, the
+    byte-carry, the row shape — the T279 order: assert, then write), and
+    only then do the stub file and the row land together, so a late raise
+    strands neither a row-less stub nor a half-edited TODO.md. Returns
+    (new_lines, printed_name)."""
     pid = f"P{pnum:03d}"
     fname = f"p{pnum:03d}-{cand['slug']}.md"
     text = stub_text(pid, cand)
@@ -553,29 +610,11 @@ def file_proposal(root, lines, cand, pnum, today, week):
                     f"{hazard!r} — the T8 split hazard; nothing written"
                 )
     row = "| " + " | ".join(cells) + " |"
-    pdir = proposed_dir(root)
-    os.makedirs(pdir, exist_ok=True)
-    with open(os.path.join(pdir, fname), "w", encoding="utf-8") as f:
-        f.write(text)
-    # Append the row after the LAST P-row (the lane's rows are contiguous
-    # at the section's end; with no P-rows, after the separator row that
-    # follows the lane's table header).
+    # Append the row after the LAST P-row (the lane's rows are contiguous at
+    # the section's end); with no P-rows, inside the lane's own table
+    # skeleton (the F6 anchor — never the next section's table).
     pidx = [i for i, _ in p_rows(lines)]
-    if pidx:
-        at = pidx[-1] + 1
-    else:
-        at = None
-        for i, line in enumerate(lines):
-            if line.strip() == "## Proposed":
-                at = i
-                break
-        if at is None:
-            raise AssertionError("ideate filing: the lane vanished mid-cycle")
-        at += 1
-        while at < len(lines) and not _row_cells(lines[at]):
-            at += 1
-        at = min(at, len(lines))
-    others_before = lines[:at] + lines[at + 1:]
+    at = pidx[-1] + 1 if pidx else _lane_insert_at(lines)
     # INSERT semantics — the row lands BETWEEN lines, nothing is replaced
     # (a splice-replace at `at` would destroy the line there: the smoke run
     # lost the trailing newline element exactly this way). Every original
@@ -583,8 +622,12 @@ def file_proposal(root, lines, cand, pnum, today, week):
     # subsequence (the T279 carry discipline, position-free).
     new_lines = lines[:at] + [row] + lines[at:]
     assert_byte_carry(lines, new_lines)
-    assert_byte_carry(others_before, new_lines[:at] + new_lines[at + 1:])
     _assert_row_shape(row, pid, "filing")
+    # Every assert has fired — the writes come last, back to back.
+    pdir = proposed_dir(root)
+    os.makedirs(pdir, exist_ok=True)
+    with open(os.path.join(pdir, fname), "w", encoding="utf-8") as f:
+        f.write(text)
     with open(os.path.join(root, "TODO.md"), "w", encoding="utf-8") as f:
         f.write("\n".join(new_lines))
     return new_lines, fname
