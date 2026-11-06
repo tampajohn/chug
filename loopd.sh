@@ -81,6 +81,13 @@ loopd_load_env_file
 LOOP_ORCH_MODEL="${LOOP_ORCH_MODEL:-anthropic-system.ai.kimi-k3}"
 LOOP_ROUTINE_MODEL="${LOOP_ROUTINE_MODEL:-anthropic-system.ai.glm-5-3-flash}"
 
+# T326 — the ideation child's model: glm-5-3-flash (the spec's call — the
+# ideation leg is a ~2k-token structured task, never kimi). The T81 knob
+# shape: one env override, the FULL provider-routed id (model ids go
+# verbatim into the API request body — there is no alias layer), never a
+# bare shorthand.
+LOOP_IDEATION_MODEL="${LOOP_IDEATION_MODEL:-anthropic-system.ai.glm-5-3-flash}"
+
 # The mechanical half of LOOP-SPEC Phase 1's freshness rule ("skip
 # evaluation if TODO.md has `todo` rows AND EVALUATION.md is fresh (same
 # UTC day)"), evaluated by the supervisor BEFORE launch so the
@@ -607,10 +614,121 @@ dormant_state_write() { # (re)arm the latch's timer: last_eval_ts = the git
   # (due) — an unknown anchor must never suppress the audit. Best-effort
   # like every state write: a latch that cannot land leaves the loop
   # awake, which errs toward MORE launches (the safe side).
-  local ts
+  local ts ige
   ts=$(dormant_newest_eval_ts)
   case "$ts" in ''|*[!0-9]*) ts=0 ;; esac
-  printf '{"last_eval_ts": %s}\n' "$ts" > "$STATE/dormant-state.json" || true
+  # T326 — the ideation half rides the SAME latch file: this write would
+  # clobber a recorded last_ideation_ts, so the half is read BEFORE the
+  # write and carried through; absent stays absent (the ideation timer
+  # then reads its own git anchor — the newest specs/proposed commit —
+  # and an absent half over a missing anchor leaves the timer unarmed).
+  ige=$(ideation_state_ts)
+  case "$ige" in ''|*[!0-9]*)
+    printf '{"last_eval_ts": %s}\n' "$ts" > "$STATE/dormant-state.json" || true
+    return 0 ;;
+  esac
+  printf '{"last_eval_ts": %s, "last_ideation_ts": %s}\n' "$ts" "$ige" > "$STATE/dormant-state.json" || true
+}
+
+# T326 — ideation mode. While DORMANT, the loop proposes outward-facing
+# features instead of only going quiet: when `now - last_ideation_ts` is
+# 7d or more (state in the same .chug/loopd/dormant-state.json latch: one
+# extra key, `last_ideation_ts`), the supervisor launches ONE glm ideation
+# run (never kimi — a ~2k-token structured task) executing
+# scripts/ideate.py, the deterministic ideas-packet builder (FEATURES.md
+# parked items, deferred/blocked threads in LEDGER + docs, the eval-triage
+# class census from decisions.jsonl, site/mod staleness facts) whose every
+# proposal passes the Laya noul meta-class gate (fail CLOSED — daemon
+# unavailable rejects the cycle's filings) before it may land in the
+# `## Proposed` lane. The operator flips `proposed` rows to `open`; the
+# loop never self-flips — EXCEPT the 2026-11-06 amendment's
+# auto-ratification, which ideate.py itself performs on the 7d-old rows
+# the operator blanket-approved (never the internal-artifact rows: the
+# never-dispatch marker is never flipped, never dispatched).
+IDEATION_SECS=604800 # 7d — the ideation timer's only knob
+IDEATION_SPEC=specs/ideation-cycle.md
+IDEATION_GOAL="T326 ideation cycle, exactly per the spec: (1) run python3 scripts/ideate.py — it is deterministic (no network); it auto-ratifies eligible Proposed rows (the amendment's 7d sweep) and files at most 3 noul-gated outward-facing stubs; (2) run python3 scripts/ideate.py --check — it must exit 0; (3) commit ONLY what the script changed (TODO.md and/or specs/proposed/) with subject: eval: ideation cycle (T326): <the script's printed disposition lines, joined by ;> ; (4) push. NEVER hand-edit a proposal, NEVER flip a proposed row yourself (the loop never self-flips), NEVER implement a proposal — a rejected proposal stays rejected."
+ideation_state_ts() { # the latch's last_ideation_ts — a clean base-10
+  # integer, or EMPTY when the record is missing/unreadable (an unknown
+  # half; the timer then falls to the git anchor — the dormant_state_ts
+  # shape, built on the SAME latch file T325 armed)
+  [ -f "$STATE/dormant-state.json" ] || return 0
+  awk '{
+    if (match($0, /"last_ideation_ts"[ \t]*:[ \t]*[0-9]+/)) {
+      v = substr($0, RSTART, RLENGTH)
+      sub(/.*:[ \t]*/, "", v)
+      printf "%d\n", v
+      exit
+    }
+  }' "$STATE/dormant-state.json"
+}
+ideation_newest_lane_ts() { # the git anchor: newest commit touching the
+  # Proposed lane (specs/proposed); empty = unknown (non-git cwd, no lane)
+  git log -1 --format=%ct -- specs/proposed 2>/dev/null || true
+}
+ideation_timer_ts() { # the timer's EFFECTIVE anchor (the T325-F1 shape):
+  # the newer of the record (last_ideation_ts) and the git source (the
+  # newest specs/proposed commit). A landed ideation commit moves the
+  # anchor half even when the record stamp failed, so the next cycle never
+  # re-fires the same cycle; a crashed child (nothing landed, both halves
+  # stale) simply re-fires. The T325 difference: both halves unknown is
+  # UNARMED (printed empty) — ideation needs its lane; an unknown clock
+  # must never launch into a nonexistent lane.
+  local lt gt
+  lt=$(ideation_state_ts)
+  case "$lt" in ''|*[!0-9]*) lt=0 ;; esac
+  gt=$(ideation_newest_lane_ts)
+  case "$gt" in ''|*[!0-9]*) gt=0 ;; esac
+  if [ "$lt" -eq 0 ] && [ "$gt" -eq 0 ]; then
+    printf '%s\n' ""
+    return 0
+  fi
+  if [ "$gt" -gt "$lt" ]; then printf '%s\n' "$gt"; else printf '%s\n' "$lt"; fi
+}
+ideation_due() { # the timer's due decision: now - anchor >= IDEATION_SECS.
+  # Unarmed (both halves unknown) is never due.
+  local its
+  its=$(ideation_timer_ts)
+  case "$its" in ''|*[!0-9]*) return 1 ;; esac
+  [ "$(( $(date -u +%s) - its ))" -ge "$IDEATION_SECS" ]
+}
+ideation_state_write() { # stamp the ideation half AFTER a successful child:
+  # last_ideation_ts = NOW (the ideation cycle has no eval: anchor of its
+  # own; the specs/proposed git anchor is the newer-half corrective a
+  # landed commit provides — the T325-F1 shape). The eval half is
+  # PRESERVED from the record, never invented (0 = unknown, the due side
+  # the eval timer's max-shape already tolerates). Best-effort like every
+  # state write: a latch that cannot land leaves the ideation timer due,
+  # which errs toward MORE launches (the safe side for the operator's
+  # complaint was silence, never a proposal).
+  local let_ts ige
+  let_ts=$(dormant_state_ts)
+  case "$let_ts" in ''|*[!0-9]*) let_ts=0 ;; esac
+  ige=$(date -u +%s)
+  printf '{"last_eval_ts": %s, "last_ideation_ts": %s}\n' "$let_ts" "$ige" > "$STATE/dormant-state.json" || true
+}
+ideation_cycle() { # the ONE launch the ideation timer schedules: while
+  # dormant, on a quiet cycle, ONE glm ideation run executes the
+  # deterministic ideate.py (the ideas packet, the noul meta-class gate,
+  # the lane filing, the amendment's auto-ratification sweep). The stamp
+  # lands AFTER the child returns (the T325-F1 shape): a crashed child is
+  # never stamped — the timer stays due and the cycle re-fires — while a
+  # landed commit moves the anchor half and stops the duplicate even if
+  # the stamp never ran.
+  ideation_due || return 0
+  local ilog="$STATE/ideation-$(date -u +%Y%m%d-%H%M%S).log" rc=0
+  echo "$(ts) ideation cycle (T326): timer due — launching $IDEATION_SPEC on $LOOP_IDEATION_MODEL (log $ilog)" >> "$LOG"
+  CARGO_TARGET_DIR="$ROOT/target-shared" ./target/release/chug run \
+    --spec "$IDEATION_SPEC" --goal "$IDEATION_GOAL" \
+    --model "$LOOP_IDEATION_MODEL" --max-iters 16 --max-minutes 15 \
+    > "$ilog" 2>&1 || rc=$?
+  if [ "$rc" -eq 0 ]; then
+    ideation_state_write
+    echo "$(ts) ideation cycle (T326): child ok — timer stamped (last_ideation_ts=$(ideation_state_ts))" >> "$LOG"
+  else
+    echo "$(ts) ideation cycle (T326): child FAILED (rc=$rc) — timer NOT stamped, re-fires next cycle" >> "$LOG"
+  fi
+  return 0
 }
 
 # T258 — the eval-cycle gate: the disposition predicate, computed by the
@@ -1346,6 +1464,12 @@ while [ ! -f "$STOP" ]; do
       # the predicate happened to look empty.
       if [ "$gate_dormant" = "suspended-valve" ]; then
         echo "$(ts) dormant cheap-exit (T325): streak=$gate_streak suspended-valve" >> "$LOG"
+        # T326 — the ideation cycle rides the quiet cycles: while dormant,
+        # when the ideation timer is due, ONE glm launch runs
+        # scripts/ideate.py (the audit arm never reaches here — the one
+        # launch dormancy schedules for the EVALUATION side is the audit;
+        # ideation launches only on a skipped cycle, never alongside it).
+        ideation_cycle
       fi
       echo "$(ts) cheap-exit disposition (T258): ${gate#skip } — launch skipped" >> "$LOG"
       if loopd_write_disposition "$gate"; then
