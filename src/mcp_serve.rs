@@ -370,6 +370,13 @@ fn chug_collect_schema() -> Value {
 /// exact) plus the two optional budgets carrying loopd's ceilings
 /// (200 iters / 240 minutes) in the schema itself. Advertised only under
 /// `--allow-launch`.
+///
+/// Fleet-session-env: three more optional pass-throughs to the ONE delegate
+/// launch path — `env` (the allowlisted child-env map, including the two
+/// exact BRIDGE identity keys), `resume` (append `--resume`), and
+/// `mcp_config` (append `--mcp-config <path>`; a caller-selected MCP config
+/// file overrides the cwd's own config discovery). All validated HERE
+/// first, in this tool's voice, so the seam-side re-validation is a no-op.
 fn chug_launch_schema() -> Value {
     json!({
         "name": CHUG_LAUNCH_TOOL,
@@ -421,6 +428,39 @@ fn chug_launch_schema() -> Value {
                     "description":
                         "Optional wall-clock budget in minutes, 1..=240 — a \
                          value above the 240 ceiling is rejected, not clamped"
+                },
+                "env": {
+                    "type": "object",
+                    "additionalProperties": {"type": "string"},
+                    "description":
+                        "Optional map of environment variables passed to the \
+                         CHILD process at spawn. Keys must match \
+                         ^(CARGO_|CHUG_|RUST)[A-Z0-9_]*$ plus exactly \
+                         BRIDGE_SESSION_ID or BRIDGE_ADMIN_TOKEN (per-session \
+                         remote-bridge identity; arbitrary BRIDGE_* keys are \
+                         refused) — at most 16 entries, values at most 4 KiB \
+                         with no NUL bytes; anything else (PATH, HOME, DYLD_*, \
+                         lowercase, empty) is rejected naming the key. Applied \
+                         after the inherited-env target-dir scrub, so an \
+                         explicit CARGO_TARGET_DIR here wins. The launch \
+                         payload names the applied KEYS only, never values."
+                },
+                "resume": {
+                    "type": "boolean",
+                    "description":
+                        "Optional: true appends --resume to the child argv — \
+                         continue the child's prior run from its \
+                         .chug/transcript.jsonl instead of starting fresh; \
+                         absent/false starts fresh"
+                },
+                "mcp_config": {
+                    "type": "string",
+                    "description":
+                        "Optional absolute path to an existing readable MCP \
+                         config JSON file, passed to the child as \
+                         --mcp-config <path> (overrides the cwd's own MCP \
+                         config discovery); absent means the child's default \
+                         discovery"
                 }
             },
             "required": ["cwd", "spec", "goal", "model"]
@@ -823,10 +863,20 @@ fn validate_launch_request(args: &Value) -> Result<Value, String> {
         ));
     }
     let (max_iters, max_minutes) = parse_launch_budgets(args)?;
+    // Fleet-session-env: the three optional pass-throughs, each validated
+    // HERE first (this tool's voice, the received value named) so the
+    // seam-side re-validation is a no-op.
+    let env = parse_launch_env(args)?;
+    let resume = parse_launch_resume(args)?;
+    let mcp_config = parse_launch_mcp_config(args)?;
     // The delegate launch input, assembled: exactly the fields the seam
     // reads. Absent budgets are OMITTED (the delegate defaults 40/35 then
     // apply seam-side — same as a human's flagless launch);
-    // `max_tokens`/`resume` pass-through is out of T129's scope.
+    // `max_tokens` pass-through is out of T129's scope. `env`/`resume`/
+    // `mcp_config` are likewise omitted when absent — the delegate defaults
+    // then apply seam-side (fresh child, no env entries, the cwd's own MCP
+    // config discovery) and the child argv is byte-identical to the
+    // pre-change launch.
     let mut input = serde_json::Map::new();
     input.insert("cwd".to_string(), json!(cwd.display().to_string()));
     input.insert("spec".to_string(), json!(spec.display().to_string()));
@@ -837,6 +887,15 @@ fn validate_launch_request(args: &Value) -> Result<Value, String> {
     }
     if let Some(mins) = max_minutes {
         input.insert("max_minutes".to_string(), json!(mins));
+    }
+    if let Some(env) = env {
+        input.insert("env".to_string(), env);
+    }
+    if resume {
+        input.insert("resume".to_string(), json!(true));
+    }
+    if let Some(config) = mcp_config {
+        input.insert("mcp_config".to_string(), json!(config.display().to_string()));
     }
     Ok(Value::Object(input))
 }
@@ -878,6 +937,121 @@ fn parse_launch_budgets(args: &Value) -> Result<(Option<u64>, Option<u64>), Stri
     let max_iters = parse_launch_budget(args, "max_iters", CHUG_LAUNCH_MAX_ITERS_CEILING)?;
     let max_minutes = parse_launch_budget(args, "max_minutes", CHUG_LAUNCH_MAX_MINUTES_CEILING)?;
     Ok((max_iters, max_minutes))
+}
+
+/// Fleet-session-env: one optional launch `env` map — absent (or JSON null)
+/// → `None` (the child env is byte-identical to a launch without it);
+/// present → the JSON object as received, validated with the SAME rules the
+/// delegate seam enforces ([`crate::delegate::DELEGATE_ENV_MAX_ENTRIES`]
+/// entries, [`crate::delegate::DELEGATE_ENV_VALUE_MAX_BYTES`] per value,
+/// the shared [`crate::delegate::env_key_allowlisted`] predicate — one
+/// allowlist, both surfaces, no drift) so the seam-side re-validation is a
+/// no-op: every violation is refused HERE first, in `chug_launch` voice,
+/// naming the RECEIVED value (the phase-1 error shape). KEYS are
+/// allowlisted, never values — the launch payload the seam returns names
+/// the applied keys only, and nothing here ever copies a value into an
+/// error.
+fn parse_launch_env(args: &Value) -> Result<Option<Value>, String> {
+    let Some(value) = args.get("env") else {
+        return Ok(None);
+    };
+    if value.is_null() {
+        return Ok(None);
+    }
+    let Some(map) = value.as_object() else {
+        return Err(format!(
+            "{CHUG_LAUNCH_TOOL}: `env` must be an object mapping env-var names to string values, got {value}"
+        ));
+    };
+    if map.len() > crate::delegate::DELEGATE_ENV_MAX_ENTRIES {
+        return Err(format!(
+            "{CHUG_LAUNCH_TOOL}: `env` must carry at most {} entries, got {}",
+            crate::delegate::DELEGATE_ENV_MAX_ENTRIES,
+            map.len()
+        ));
+    }
+    for (key, value) in map {
+        if !crate::delegate::env_key_allowlisted(key) {
+            return Err(format!(
+                "{CHUG_LAUNCH_TOOL}: `env` key {key:?} is not allowlisted — keys must match \
+                 ^(CARGO_|CHUG_|RUST)[A-Z0-9_]*$ plus exactly BRIDGE_SESSION_ID or \
+                 BRIDGE_ADMIN_TOKEN (so a goal cannot rewrite PATH/HOME/DYLD_* on the child)"
+            ));
+        }
+        let Some(text) = value.as_str() else {
+            return Err(format!(
+                "{CHUG_LAUNCH_TOOL}: `env` value for {key:?} must be a string, got {value}"
+            ));
+        };
+        if text.len() > crate::delegate::DELEGATE_ENV_VALUE_MAX_BYTES {
+            return Err(format!(
+                "{CHUG_LAUNCH_TOOL}: `env` value for {key:?} is {} bytes — the cap is {} (4 KiB)",
+                text.len(),
+                crate::delegate::DELEGATE_ENV_VALUE_MAX_BYTES
+            ));
+        }
+        if text.contains('\0') {
+            return Err(format!(
+                "{CHUG_LAUNCH_TOOL}: `env` value for {key:?} contains a NUL byte"
+            ));
+        }
+    }
+    Ok(Some(value.clone()))
+}
+
+/// Fleet-session-env: one optional launch `resume` flag — absent (or JSON
+/// null) → `false` (a fresh child, the delegate seam's own default);
+/// `true` → `true` (pass-through: `--resume` is appended to the child
+/// argv). A non-boolean value is refused naming the RECEIVED value, never
+/// a silent fresh start — a caller that asked to resume and got a fresh
+/// child would silently throw away the prior run's context (the delegate
+/// parse rule, re-served here so the seam-side re-validation is a no-op).
+fn parse_launch_resume(args: &Value) -> Result<bool, String> {
+    match args.get("resume") {
+        None | Some(Value::Null) => Ok(false),
+        Some(value) => value.as_bool().ok_or_else(|| {
+            format!(
+                "{CHUG_LAUNCH_TOOL}: `resume` must be a boolean (true = continue the child's prior run with --resume), got {value}"
+            )
+        }),
+    }
+}
+
+/// Fleet-session-env: one optional launch `mcp_config` path — absent (or
+/// JSON null) → `None` (the child's own MCP config discovery, argv
+/// byte-identical to the pre-change launch); present → an absolute path to
+/// an existing readable FILE, the same probe shape the `spec` leg serves
+/// (`File::open` is the readability ground truth), passed through as
+/// `--mcp-config <path>` in the child argv — the caller-selected MCP
+/// config, so a per-run config file (e.g. a 0600 file under the target's
+/// `.chug/`) overrides the cwd's config discovery without editing a
+/// project-checked-in config or putting a token in the repo. Every refusal
+/// names the RECEIVED value (the phase-1 error shape).
+fn parse_launch_mcp_config(args: &Value) -> Result<Option<PathBuf>, String> {
+    let Some(value) = args.get("mcp_config") else {
+        return Ok(None);
+    };
+    if value.is_null() {
+        return Ok(None);
+    }
+    let Some(raw) = value.as_str() else {
+        return Err(format!(
+            "{CHUG_LAUNCH_TOOL}: `mcp_config` must be a string path to an MCP config JSON file, got {value}"
+        ));
+    };
+    let path = PathBuf::from(raw);
+    if !path.is_absolute() {
+        return Err(format!(
+            "{CHUG_LAUNCH_TOOL}: mcp_config must be an absolute path, got {raw:?}"
+        ));
+    }
+    if !(path.is_file() && fs::File::open(&path).is_ok()) {
+        return Err(format!(
+            "{CHUG_LAUNCH_TOOL}: mcp_config does not exist or is not a readable file: {}",
+            path.display()
+        ));
+    }
+    Ok(Some(path))
 }
 
 // ---------------------------------------------------------------------------

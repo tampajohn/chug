@@ -7,7 +7,7 @@
 // env leg: 14 → 15. T183 added the env-map legs: 15 → 19. T197
 // added the target-dir drift legs — 8 pure-seam unit legs + 1
 // dispatch-level launch leg: 19 → 28.)
-pub(super) const TEST_COUNT: usize = 28;
+pub(super) const TEST_COUNT: usize = 29;
     use super::*; // the shared harness (delegate::tests) + delegate's own imports
 
     /// End-to-end with a stub binary: `CHUG_DELEGATE_BIN` points at a script
@@ -674,8 +674,78 @@ pub(super) const TEST_COUNT: usize = 28;
         unsafe { std::env::remove_var("CHUG_DELEGATE_BIN") };
     }
 
+    /// Fleet-session-env end-to-end: launch with `mcp_config` (plus
+    /// `resume: true`) → the child's argv ends with the `--mcp-config <path>`
+    /// pair, AFTER `--resume`, and the return text stays a normal launch
+    /// payload. NON-VACUOUSNESS: dropping the argv append fails the dump
+    /// assert; the absent-side byte-identity is pinned in the argv family.
+    #[test]
+    fn delegate_launch_with_mcp_config_appends_flag_to_child_argv() {
+        // T151: hold the shared timing domain FIRST (before the env lock —
+        // see crate::testsupport's lock-order rule) across the spawn → poll →
+        // cleanup body: this leg's outcome rides a child-spawn deadline.
+        let _timing = crate::testsupport::timing_guard();
 
-    // ---- T115: the launch result's goal-integrity echoes ----
+        let _guard = DELEGATE_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let child_dir = tempfile::tempdir().unwrap();
+        let ctx_cwd = tempfile::tempdir().unwrap();
+        // The per-run config file, under the ctx dir — the same shape
+        // remote-bridge keeps under the target's .chug/ (the file is only
+        // probed for existence/readability here; the stub child dumps argv).
+        let config = ctx_cwd.path().join("mcp-config.json");
+        fs::write(&config, "{\"mcpServers\":{}}").unwrap();
+        // SAFETY: serialized by DELEGATE_ENV_LOCK; no other test reads this var.
+        unsafe { std::env::set_var("CHUG_DELEGATE_BIN", write_argv_stub(ctx_cwd.path())) };
+        // T103: the spec probe needs a real file (see ensure_spec_file).
+        ensure_spec_file("/tmp/chug-stub-spec.md");
+        let launch = dispatch(
+            &delegate_ctx(ctx_cwd.path()),
+            "delegate",
+            &json!({
+                "action": "launch",
+                "cwd": child_dir.path(),
+                "spec": "/tmp/chug-stub-spec.md",
+                "goal": "g",
+                "model": "m",
+                "resume": true,
+                "mcp_config": config.display().to_string(),
+            }),
+        );
+        assert!(!launch.is_error, "{}", launch.content);
+        let argv = wait_for_argv_dump(child_dir.path(), &launch);
+        let config_text = config.display().to_string();
+        let pos = argv
+            .iter()
+            .position(|a| a == "--mcp-config")
+            .expect("--mcp-config in the child argv");
+        assert_eq!(
+            argv[pos + 1], config_text,
+            "--mcp-config must carry the config path verbatim: {}",
+            argv.join(" | ")
+        );
+        assert_eq!(
+            argv.last().map(String::as_str),
+            Some(config_text.as_str()),
+            "--mcp-config <path> must be the child argv's very tail: {}",
+            argv.join(" | ")
+        );
+        // `--resume` is still present, BEFORE the config pair (the argv
+        // builder's documented order).
+        let resume_pos = argv
+            .iter()
+            .position(|a| a == "--resume")
+            .expect("--resume in the child argv");
+        assert!(
+            resume_pos < pos,
+            "--resume must precede --mcp-config: {}",
+            argv.join(" | ")
+        );
+        let pid = spawn_pid_of(&launch);
+        kill_pid_group(pid);
+        // SAFETY: serialized by DELEGATE_ENV_LOCK; no other test reads this var.
+        unsafe { std::env::remove_var("CHUG_DELEGATE_BIN") };
+    }
+
 
     /// T115 long-goal leg: the launch result reports the goal's integrity
     /// surface over the exact goal string passed to the child argv —
