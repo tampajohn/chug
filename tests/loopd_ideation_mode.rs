@@ -33,7 +33,10 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 fn repo_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+    // T48: resolve the repo root at RUNTIME — cargo runs test binaries with
+    // cwd = the package root; the compile-time macro false-redded the
+    // cycle-21 post-merge gates under the T47 shared cache.
+    std::env::current_dir().expect("cargo sets the test cwd to the package root")
 }
 
 fn read(rel: &str) -> String {
