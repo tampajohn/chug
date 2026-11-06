@@ -244,6 +244,42 @@ impl Fixture {
         }
     }
 
+    /// Backdate the GIT ANCHOR — the newest EVALUATION.md-touching commit's
+    /// committer epoch — to `now - age_secs`. Must run BEFORE `wraps()`
+    /// (an amend rewrites the commit; children would orphan). The T325-F1
+    /// battery's anchor control: the timer's due decision reads the NEWER
+    /// of the record and the anchor, so a timer leg that means "8d old"
+    /// must stale BOTH halves — a landed audit moves the anchor (the
+    /// duplicate stops), a crashed one does not (the audit re-fires).
+    fn backdate_anchor(&self, age_secs: u64) {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_secs();
+        let when = format!("@{} +0000", now - age_secs);
+        let out = Command::new("git")
+            .args(["-c", "user.name=t325", "-c", "user.email=t325@example.test"])
+            .arg("-C")
+            .arg(self.path())
+            .env("GIT_COMMITTER_DATE", &when)
+            .args(["commit", "--amend", "--no-edit", "-q"])
+            .output()
+            .expect("spawn git amend");
+        assert!(
+            out.status.success(),
+            "anchor amend failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    /// The git anchor's committer epoch — the value the gate's timer half
+    /// reads straight from git (`git log -1 --format=%ct -- EVALUATION.md`).
+    fn anchor_ts(&self) -> i64 {
+        git_out(self.path(), &["log", "-1", "--format=%ct", "--", "EVALUATION.md"])
+            .parse()
+            .expect("the anchor epoch parses")
+    }
+
     /// Arm the dormancy latch with `last_eval_ts = now - age_secs` — the
     /// T325 battery's timer control ("last_eval N ago"): the value the
     /// gate reads, as the run loop would have written it at latch time.
@@ -399,9 +435,13 @@ fn field_of(gate: &str, key: &str) -> String {
 
 /// The T325 battery's dormant fixture: empty queue, `streak` wrap-notes
 /// past the trip (the valve WOULD fire on the awake path — that is the
-/// leak), and the latch armed with the timer `age_secs` old.
+/// leak), and the timer `age_secs` old on BOTH halves — the latch record
+/// AND the git anchor (the T325-F1 gate reads the NEWER of the two, so a
+/// timer leg must stale both: the anchor half is what a landed audit
+/// moves and a crashed one leaves).
 fn dormant_fixture(streak: usize, age_secs: u64) -> Fixture {
     let f = fixture();
+    f.backdate_anchor(age_secs);
     f.wraps(streak);
     f.latch(age_secs);
     f
@@ -484,8 +524,12 @@ fn the_audit_launch_never_consults_the_triage_layer() {
 }
 
 /// An unknown timer degrades to the AUDIT, never to a skip — the safe-side
-/// rule: every unknown degrades to a launch. A corrupted latch record is
-/// exactly that unknown.
+/// rule: an unknown clock must never suppress the audit. A corrupted latch
+/// record is an unknown HALF (it degrades to 0, the due side); with the
+/// git anchor stale too, the timer is unknown-overall and the audit fires.
+/// (A corrupt record over a FRESH anchor is not an unknown timer — git is
+/// the source and proves the week restarted; that stop is the F1 fix's
+/// own regression leg below.)
 #[test]
 fn an_unknown_timer_degrades_to_the_audit_not_the_skip() {
     let f = dormant_fixture(4, 8 * DAY);
@@ -591,24 +635,31 @@ fn a_dormant_cycle_skips_the_launch_and_writes_the_suspended_valve_disposition()
     );
 }
 
-/// The weekly audit pass: the timer restarts BEFORE the launch (a crashed
-/// audit re-audits next cycle instead of re-auditing forever), the log
-/// names the audit line with DORMANT=1, and the stub cycle child observes
-/// DORMANT=1 in its env — the read-only audit's contract flag.
+/// The weekly audit pass: the launch names itself and carries DORMANT=1 to
+/// the child (the LOOP-SPEC read-only contract flag), and the RECORD
+/// re-arms AFTER the child returns — from the git anchor, never a
+/// launch-time stamp (the T325-F1 fix: the launch rewrite read the
+/// PRE-audit anchor, kept the stale week, and re-fired a duplicate; the
+/// restart is the audit's OWN eval: commit, so a crashed audit — the
+/// anchor unmoved — re-arms stale and simply re-audits next cycle).
 #[test]
 fn the_dormant_weekly_audit_launches_the_child_with_dormant_1() {
     let f = dormant_fixture(4, 8 * DAY);
-    let before = f.latch_ts().expect("the fixture latch is armed");
+    let anchor = f.anchor_ts();
     let child_env = f.install_run_stubs();
     f.run_one_pass();
     let log = f.fixture_log();
     assert!(
-        log.contains("dormant weekly audit (T325):"),
+        log.contains("dormant weekly audit (T325): due — read-only audit launching, DORMANT=1"),
         "the audit launch is named in the log: {log}"
     );
     assert!(
         log.contains("DORMANT=1"),
         "the audit log line names the env flag: {log}"
+    );
+    assert!(
+        log.contains("dormant weekly audit (T325): timer re-armed from the git anchor"),
+        "the record re-arm is named in the log (after the child): {log}"
     );
     assert!(
         log.contains("cycle start ->"),
@@ -620,10 +671,12 @@ fn the_dormant_weekly_audit_launches_the_child_with_dormant_1() {
         "DORMANT=1",
         "the child env carries DORMANT=1 (the LOOP-SPEC dormant paragraph's flag): {captured}"
     );
-    let after = f.latch_ts().expect("the audit rewrote the latch");
-    assert!(
-        after > before,
-        "the timer restarted at the audit launch (before {before}, after {after})"
+    assert_eq!(
+        f.latch_ts(),
+        Some(anchor),
+        "the record re-arms from the git anchor the audit has NOT moved yet — \
+         never a launch-time stamp (T325-F1: the restart is the audit's own \
+         eval: commit, so a crashed audit's re-fire stays live)"
     );
 }
 
@@ -729,7 +782,10 @@ fn the_dormancy_wiring_precedes_the_valve_and_anchors_the_timer_in_git() {
         body.contains("verb=launch; model=$LOOP_ORCH_MODEL; dormant=audit"),
         "the audit arm resolves the FULL orchestrator id (the F1 rule)"
     );
-    // The timer: one constant, one anchor, one read.
+    // The timer: one constant, one anchor, one read — and the T325-F1
+    // due decision: the gate reads the max helper, the record re-arms
+    // AFTER the child returns (a launch-time restart re-reads the
+    // pre-audit anchor and re-fires a duplicate).
     count_eq(
         &loopd,
         "DORMANT_AUDIT_SECS=604800",
@@ -744,9 +800,36 @@ fn the_dormancy_wiring_precedes_the_valve_and_anchors_the_timer_in_git() {
     );
     count_eq(
         &loopd,
+        "dormant_timer_ts() {",
+        1,
+        "the effective-anchor max helper is defined once"
+    );
+    count_eq(
+        &loopd,
+        "dts=$(dormant_timer_ts)",
+        1,
+        "the gate's due decision reads the NEWER of record and git anchor \
+         (T325-F1) — never the record alone"
+    );
+    count_eq(
+        &loopd,
         "printf '{\"last_eval_ts\": %s}\\n' \"$ts\" > \"$STATE/dormant-state.json\"",
         1,
         "the latch write is one site (the file is the record, never the authority)"
+    );
+    let export_at = loopd.find("export DORMANT=1").expect("the audit env write exists");
+    let chug_at = loopd
+        .find("chug_out=\"$(CARGO_TARGET_DIR=")
+        .expect("the cycle child launch exists");
+    let rearm_at = loopd[chug_at..]
+        .find("dormant_state_write")
+        .map(|i| chug_at + i)
+        .expect("the audit's record re-arm exists");
+    assert!(
+        export_at < chug_at && chug_at < rearm_at,
+        "the audit's record re-arm sits AFTER the child returns (T325-F1): a \
+         launch-time restart re-reads the PRE-audit anchor, keeps the stale \
+         week, and re-fires the audit — the duplicate this fix removes"
     );
     // The run loop: routing-time maintenance before the mode branch; the
     // child env write at the launch site.
@@ -806,16 +889,24 @@ fn the_dormant_log_lines_are_named_once_each() {
     );
     count_eq(
         &loopd,
-        "dormant weekly audit (T325): timer restarted",
+        "dormant weekly audit (T325): due — read-only audit launching, DORMANT=1",
         1,
-        "the audit launch logs the timer restart"
+        "the audit launch names the env flag and defers the restart to the \
+         audit's own eval: commit"
+    );
+    count_eq(
+        &loopd,
+        "dormant weekly audit (T325): timer re-armed from the git anchor",
+        1,
+        "the post-child re-arm names the anchor — the record never claims a \
+         restart the audit did not land"
     );
     count_eq(
         &loopd,
         "dormant_state_write",
         3,
         "the latch write helper is called at exactly three sites: the entry \
-         arm, the audit restart, and its own definition"
+         arm, the post-child audit re-arm, and its own definition"
     );
 }
 
@@ -861,6 +952,10 @@ fn loop_spec_carries_the_dormant_paragraph() {
         "`.chug/loopd/dormant-state.json`",
         "written from the newest `eval:` commit's timestamp",
         "no new authority, git is the source",
+        "The gate's due decision reads the NEWER of the record and the git anchor",
+        "a landed audit's own `eval:` commit restarts the week for the very next cycle",
+        "a crashed audit (nothing landed) simply re-fires",
+        "the launch never stamps the timer itself",
         "launches with `DORMANT=1` in the env and is READ-ONLY",
         "gates green (build, clippy, test), pins verified, site-sync freshness, daemon and Langfuse liveness",
         "files TODO rows ONLY on observed breakage",
@@ -917,6 +1012,61 @@ fn git_out(root: &Path, args: &[&str]) -> String {
         String::from_utf8_lossy(&out.stderr)
     );
     String::from_utf8_lossy(&out.stdout).trim().to_string()
+}
+
+/// THE T325-F1 REGRESSION — the duplicate-audit storm, end to end, at the
+/// gate. The anchor is 8d old → cycle D launches the audit. The audit
+/// LANDS (an `eval:` commit touches EVALUATION.md seconds later) while the
+/// latch still holds the stale PRE-audit ts — the exact state the old
+/// launch-time rewrite left behind — and cycle D+1 must SKIP: the gate's
+/// timer reads max(record, anchor), the landed commit moves the anchor
+/// half, the week has restarted, and no second audit fires. Before the
+/// fix the stale record alone read 8d-old and cycle D+1 re-launched — one
+/// duplicate READ-ONLY audit per weekly event, forever.
+#[test]
+fn a_landed_audit_stops_the_duplicate_the_next_cycle_despite_the_stale_latch() {
+    let f = fixture();
+    f.backdate_anchor(8 * DAY);
+    f.wraps(4);
+    f.latch(8 * DAY); // the stale pre-audit record (the old launch-time rewrite's state)
+    let gate = run_predicate(f.path(), &[("CHUG_ROUTINE_TODAY", FRESH_DAY)]);
+    assert_eq!(
+        verb_of(&gate), "launch",
+        "cycle D: the audit is due on the 8d-old timer: {gate}"
+    );
+    assert_eq!(field_of(&gate, "dormant="), "audit", ": {gate}");
+    // The crash mirror, BEFORE the landing: the audit ran and died —
+    // nothing landed, nothing moved — so the timer is still due and the
+    // audit simply re-fires next cycle (the restart-on-crash property the
+    // anchor-max fix must preserve: no fabricated `now`, no suppression).
+    let gate = run_predicate(f.path(), &[("CHUG_ROUTINE_TODAY", FRESH_DAY)]);
+    assert_eq!(
+        verb_of(&gate), "launch",
+        "a crashed audit (nothing landed) re-fires next cycle: {gate}"
+    );
+    assert_eq!(field_of(&gate, "dormant="), "audit", ": {gate}");
+    // The audit LANDS: an `eval:` commit touches EVALUATION.md NOW. The
+    // latch is deliberately LEFT at the stale ts (the F1 state).
+    f.commit_tree(
+        "eval: cycle-101 dormant weekly audit (T325): gates=green pins=23/23 site=fresh daemon=ok filings=0",
+        None,
+        Some("# eval — the audit's artifacts\n"),
+    );
+    assert!(
+        f.anchor_ts() > f.latch_ts().expect("the stale latch is armed"),
+        "the landing moved the anchor past the stale record (the F1 state)"
+    );
+    let gate = run_predicate(f.path(), &[("CHUG_ROUTINE_TODAY", FRESH_DAY)]);
+    assert_eq!(
+        verb_of(&gate), "skip",
+        "cycle D+1: the landed audit stopped the duplicate — the storm ends \
+         at zero extras: {gate}"
+    );
+    assert_eq!(
+        field_of(&gate, "dormant="),
+        "suspended-valve",
+        "the quiet cycle names the suspension, not a fresh timer: {gate}"
+    );
 }
 
 /// The suspension outranks the mechanical inputs: a death after the

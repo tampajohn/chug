@@ -553,10 +553,15 @@ laya_record() { # T259 req 4 — the decision_log record per triage + the
 # dispositions are EMPTY commits and never touch the file, so the loop can
 # never refresh its own timer; the audit's eval moves it, restarting the
 # week. State rides in .chug/loopd/dormant-state.json (`last_eval_ts`,
-# written from that git epoch at latch time — the file is the RECORD, the
-# routing always re-derives; an unreadable record is an UNKNOWN timer and
-# degrades to the audit, the safe side: every unknown degrades to a
-# launch, never to a skip).
+# written from that git epoch — the file is the RECORD, the routing always
+# re-derives). T325-F1: the re-derivation takes the NEWER of the record
+# and the git anchor (dormant_timer_ts below) — the record is rewritten
+# before the audit's own eval: commit lands, so a record-only read lags a
+# landed audit by the whole elapsed week and re-fires a duplicate; the
+# anchor half stops the duplicate the very next cycle, while a crashed
+# audit (no eval: commit, both halves stale) simply re-audits. An unknown
+# half — an unreadable record, an unanchorable clock — degrades to 0, the
+# due side: an unknown clock must never suppress the audit.
 DORMANT_AUDIT_SECS=604800 # 7d — the weekly audit timer's only knob
 dormant_newest_eval_ts() { # the git anchor: newest EVALUATION.md-touching
   # commit's committer epoch; empty = unknown (non-git cwd, never examined)
@@ -564,7 +569,7 @@ dormant_newest_eval_ts() { # the git anchor: newest EVALUATION.md-touching
 }
 dormant_state_ts() { # the latch's last_eval_ts — a clean base-10 integer
   # (leading zeros stripped: bash arithmetic would read them as octal), or
-  # EMPTY when the record is missing/unreadable (an unknown timer)
+  # EMPTY when the record is missing/unreadable (an unknown half)
   [ -f "$STATE/dormant-state.json" ] || return 0
   awk '{
     if (match($0, /"last_eval_ts"[ \t]*:[ \t]*[0-9]+/)) {
@@ -575,11 +580,33 @@ dormant_state_ts() { # the latch's last_eval_ts — a clean base-10 integer
     }
   }' "$STATE/dormant-state.json"
 }
+dormant_timer_ts() { # the timer's EFFECTIVE anchor (T325-F1): the newer of
+  # the record (the latch's last_eval_ts) and the git source (the newest
+  # EVALUATION.md-touching commit). The record is rewritten before the
+  # audit's eval: commit lands, so a record-only read lags a landed audit
+  # by the whole elapsed week and the next cycle re-fires the audit — the
+  # duplicate. The git half stops it the moment the commit lands (git is
+  # the source, the record the cache) and leaves the crashed audit's
+  # re-fire untouched (no eval: commit, both halves stale, the timer stays
+  # due). Either half unknown degrades to 0 — the due side; an unknown
+  # clock never suppresses the audit.
+  local lt gt
+  lt=$(dormant_state_ts)
+  case "$lt" in ''|*[!0-9]*) lt=0 ;; esac
+  gt=$(dormant_newest_eval_ts)
+  case "$gt" in ''|*[!0-9]*) gt=0 ;; esac
+  if [ "$gt" -gt "$lt" ]; then printf '%s\n' "$gt"; else printf '%s\n' "$lt"; fi
+}
 dormant_state_write() { # (re)arm the latch's timer: last_eval_ts = the git
-  # anchor's epoch, read from the record, never invented; an unanchorable
-  # clock writes 0 (due) — an unknown anchor must never suppress the audit.
-  # Best-effort like every state write: a latch that cannot land leaves the
-  # loop awake, which errs toward MORE launches (the safe side).
+  # anchor's epoch, read from the record, never invented — called at the
+  # dormant ENTRY (the anchor the empty queue starts from) and AFTER the
+  # audit child returns (the re-arm: fresh when the audit's eval: commit
+  # landed, unchanged when it crashed); NEVER at the audit launch, where
+  # the anchor is still the pre-audit commit a record-only restart would
+  # keep stale (the T325-F1 duplicate). An unanchorable clock writes 0
+  # (due) — an unknown anchor must never suppress the audit. Best-effort
+  # like every state write: a latch that cannot land leaves the loop
+  # awake, which errs toward MORE launches (the safe side).
   local ts
   ts=$(dormant_newest_eval_ts)
   case "$ts" in ''|*[!0-9]*) ts=0 ;; esac
@@ -739,11 +766,14 @@ eval_gate() { # the T258/T259 decision for a would-be eval cycle, one line:
   # timer: a real eval (the FULL orchestrator-model id) launches only when
   # the timer is due, and the audit never consults the triage layer — the
   # launch is mandated mechanically, and a confident-empty verdict must
-  # not cancel the one evaluation dormancy schedules. An unknown timer
-  # degrades to the audit (the safe side), never to a skip.
+  # not cancel the one evaluation dormancy schedules. The due decision
+  # reads the NEWER of the record and the git anchor (T325-F1: a landed
+  # audit's own eval: commit restarts the week for the very next cycle);
+  # an unknown half degrades to the due side — the audit — never to a
+  # skip.
   local dormant="no" dts
   if [ "$(todo_rows TODO.md)" -eq 0 ] && [ -f "$STATE/dormant-state.json" ]; then
-    dts=$(dormant_state_ts)
+    dts=$(dormant_timer_ts)
     if [ -z "$dts" ] || [ "$(( $(date -u +%s) - dts ))" -ge "$DORMANT_AUDIT_SECS" ]; then
       verb=launch; model=$LOOP_ORCH_MODEL; dormant=audit
     else
@@ -1343,9 +1373,13 @@ while [ ! -f "$STOP" ]; do
     fi
   fi
   # T325 — the dormant weekly audit: the ONE launch dormancy schedules. The
-  # timer restarts here (the audit's own eval: commit will move the git
-  # anchor within the hour; the rewrite keeps the latch the single record
-  # and a crashed audit simply re-audits next cycle), the child env carries
+  # timer does NOT restart here — the T325-F1 lesson: a launch-time rewrite
+  # re-reads the anchor BEFORE the audit's eval: commit lands, so a
+  # record-only restart keeps the stale week and the next cycle re-fires
+  # the audit (the duplicate this fix removes). The restart is the audit's
+  # OWN eval: commit; the gate reads the newer of record and anchor
+  # (dormant_timer_ts), and the record re-arms AFTER the child returns
+  # (the re-arm block below the launch). The child env carries
   # DORMANT=1 (LOOP-SPEC's dormant paragraph: the audit is READ-ONLY —
   # gates green, pins verified, site-sync freshness, daemon/Langfuse
   # liveness — filing rows only on observed breakage, never loop-tooling
@@ -1354,8 +1388,7 @@ while [ ! -f "$STOP" ]; do
   # iterations (the T47 lesson; DORMANT affects no build, but the unset
   # keeps every non-audit child env honest).
   if [ "$gate_dormant" = "audit" ]; then
-    dormant_state_write
-    echo "$(ts) dormant weekly audit (T325): timer restarted (last_eval_ts=$(dormant_state_ts)) — read-only audit, DORMANT=1" >> "$LOG"
+    echo "$(ts) dormant weekly audit (T325): due — read-only audit launching, DORMANT=1 (the restart is the audit's own eval: commit)" >> "$LOG"
     export DORMANT=1
   else
     unset DORMANT
@@ -1442,6 +1475,18 @@ while [ ! -f "$STOP" ]; do
     --model "$orch_model" --max-iters 200 --max-minutes 360 --ctx-warn-at-tokens 100000 \
     2>> "$cycle_log")" || chug_rc=$?
   printf '%s\n' "$chug_out" >> "$cycle_log"
+  # T325-F1 — the audit's record re-arm, AFTER the child returns: the
+  # restart is the anchor the audit itself moved, so the record re-derives
+  # from git here — fresh when the audit's eval: commit landed (the next
+  # cycle's gate reads max(record, anchor) and the duplicate never fires),
+  # unchanged when the child crashed (both halves stale — the timer stays
+  # due and the audit simply re-fires next cycle). The value is read from
+  # the anchor, never invented: a fabricated `now` would suppress a
+  # crashed audit's re-fire for a week.
+  if [ "$gate_dormant" = "audit" ]; then
+    dormant_state_write
+    echo "$(ts) dormant weekly audit (T325): timer re-armed from the git anchor (last_eval_ts=$(dormant_state_ts))" >> "$LOG"
+  fi
   if [ "$chug_rc" -eq 0 ]; then
     echo "[loopd $(ts)] verdict: goal complete (rc=$chug_rc)" >> "$cycle_log"
   else

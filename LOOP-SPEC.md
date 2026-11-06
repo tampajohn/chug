@@ -168,7 +168,11 @@ evaluation launches only when the last evaluation commit is 7 or more
 days old. The timer's state rides in `.chug/loopd/dormant-state.json`
 (`last_eval_ts`, written from the newest `eval:` commit's timestamp — no
 new authority, git is the source; the loop's own dispositions never
-refresh it). The weekly audit launches with `DORMANT=1` in the env and is
+refresh it). The gate's due decision reads the NEWER of the record and
+the git anchor — a landed audit's own `eval:` commit restarts the week
+for the very next cycle, and a crashed audit (nothing landed) simply
+re-fires; the launch never stamps the timer itself. The weekly audit
+launches with `DORMANT=1` in the env and is
 READ-ONLY: gates green (build, clippy, test), pins verified, site-sync
 freshness, daemon and Langfuse liveness. It files TODO rows ONLY on
 observed breakage — a red gate, a stale site, a dead daemon — exactly one
