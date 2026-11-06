@@ -965,7 +965,7 @@ fn the_triage_threshold_lives_in_one_place_with_a_pointer() {
     );
     // The cascade's routing literals live exactly once each — the fail-open
     // default and the two launch arms keep their T258 shapes.
-    count_eq(&loopd, "verb=launch; model=$LOOP_ORCH_MODEL", 2, "both kimi arms unchanged");
+    count_eq(&loopd, "verb=launch; model=$LOOP_ORCH_MODEL", 3, "the kimi arms: valve trip + mechanical launch + the T325 dormant audit");
     count_eq(
         &loopd,
         "verb=launch; model=$LOOP_ROUTINE_MODEL",

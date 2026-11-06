@@ -541,6 +541,51 @@ laya_record() { # T259 req 4 — the decision_log record per triage + the
   fi
 }
 
+# T325 — dormant mode. When the queue is empty (zero `todo`/`open` rows),
+# the loop is DORMANT: the T247 forced-eval leg is suspended (the valve's
+# 4th-TRUE trip was the leak — with an empty backlog the forced eval audits
+# nothing outward and files meta-work about the loop's own machinery) and
+# is replaced by a WEEKLY AUDIT TIMER: a real evaluation launches only when
+# the last evaluation commit is DORMANT_AUDIT_SECS (7d) or more old. The
+# timer's anchor is GIT, never a new authority: the newest commit touching
+# EVALUATION.md — the T258 baseline, the last examination of loop state, an
+# `eval:` commit in every production shape. The loop's own dormancy
+# dispositions are EMPTY commits and never touch the file, so the loop can
+# never refresh its own timer; the audit's eval moves it, restarting the
+# week. State rides in .chug/loopd/dormant-state.json (`last_eval_ts`,
+# written from that git epoch at latch time — the file is the RECORD, the
+# routing always re-derives; an unreadable record is an UNKNOWN timer and
+# degrades to the audit, the safe side: every unknown degrades to a
+# launch, never to a skip).
+DORMANT_AUDIT_SECS=604800 # 7d — the weekly audit timer's only knob
+dormant_newest_eval_ts() { # the git anchor: newest EVALUATION.md-touching
+  # commit's committer epoch; empty = unknown (non-git cwd, never examined)
+  git log -1 --format=%ct -- EVALUATION.md 2>/dev/null || true
+}
+dormant_state_ts() { # the latch's last_eval_ts — a clean base-10 integer
+  # (leading zeros stripped: bash arithmetic would read them as octal), or
+  # EMPTY when the record is missing/unreadable (an unknown timer)
+  [ -f "$STATE/dormant-state.json" ] || return 0
+  awk '{
+    if (match($0, /"last_eval_ts"[ \t]*:[ \t]*[0-9]+/)) {
+      v = substr($0, RSTART, RLENGTH)
+      sub(/.*:[ \t]*/, "", v)
+      printf "%d\n", v
+      exit
+    }
+  }' "$STATE/dormant-state.json"
+}
+dormant_state_write() { # (re)arm the latch's timer: last_eval_ts = the git
+  # anchor's epoch, read from the record, never invented; an unanchorable
+  # clock writes 0 (due) — an unknown anchor must never suppress the audit.
+  # Best-effort like every state write: a latch that cannot land leaves the
+  # loop awake, which errs toward MORE launches (the safe side).
+  local ts
+  ts=$(dormant_newest_eval_ts)
+  case "$ts" in ''|*[!0-9]*) ts=0 ;; esac
+  printf '{"last_eval_ts": %s}\n' "$ts" > "$STATE/dormant-state.json" || true
+}
+
 # T258 — the eval-cycle gate: the disposition predicate, computed by the
 # supervisor BEFORE any launch so an empty delta costs zero LLM calls. The
 # T247 chain rule decides when a skipped-eval chain must STOP (the valve);
@@ -665,13 +710,18 @@ eval_gate() { # the T258/T259 decision for a would-be eval cycle, one line:
   #                              there is no alias layer, so `--model glm`
   #                              would die at the first call)
   # fields: rows= new= deaths= bookkeeping= fresh= base= streak=
-  #         closed= laya= conf= route=
+  #         closed= laya= conf= route= dormant=
   #   laya=none          the triage layer did not run (the mechanical layer
   #                      settled the cycle, or a stale evaluation is due)
   #   laya=down          fail-open (daemon absent/error/timeout) — T258
   #                      routing stands verbatim
   #   laya=yes|no conf=<c> route=skip|glm|kimi — the triage verdict, its
   #                      confidence, and the route TAKEN
+  #   dormant=no         the loop is awake (T325) — the T258/T259 arms below
+  #   dormant=suspended-valve   dormant cheap exit: the T247 valve is
+  #                      suspended, the skip fires whatever the streak
+  #   dormant=audit      the weekly audit timer is due: the one launch
+  #                      dormancy schedules, read-only (DORMANT=1 in env)
   local base new deaths book fresh streak verb model
   base=$(last_eval_commit)
   new=$(new_todo_rows "$base")
@@ -681,6 +731,24 @@ eval_gate() { # the T258/T259 decision for a would-be eval cycle, one line:
   streak=$(empty_wrap_streak)
   local closed laya="laya=none"
   closed=$(closed_todo_rows "$base")
+  # T325 — DORMANCY FIRST, before the T247 valve leg: with the queue empty
+  # (zero `todo`/`open` rows — the same count the field echo carries as
+  # rows=) AND the dormancy latch present (the run loop arms it at cycle
+  # routing time), the cheap exit fires on EVERY cycle whatever the TRUE
+  # streak and the valve's 4th-TRUE trip is replaced by the weekly audit
+  # timer: a real eval (the FULL orchestrator-model id) launches only when
+  # the timer is due, and the audit never consults the triage layer — the
+  # launch is mandated mechanically, and a confident-empty verdict must
+  # not cancel the one evaluation dormancy schedules. An unknown timer
+  # degrades to the audit (the safe side), never to a skip.
+  local dormant="no" dts
+  if [ "$(todo_rows TODO.md)" -eq 0 ] && [ -f "$STATE/dormant-state.json" ]; then
+    dts=$(dormant_state_ts)
+    if [ -z "$dts" ] || [ "$(( $(date -u +%s) - dts ))" -ge "$DORMANT_AUDIT_SECS" ]; then
+      verb=launch; model=$LOOP_ORCH_MODEL; dormant=audit
+    else
+      verb=skip; model=-; dormant=suspended-valve
+    fi
   # the valve FIRST (T247): the 4th consecutive empty cycle runs the real
   # evaluation whatever the delta says — the chain converts itself. A trip
   # is a REAL evaluation: the orchestrator model (the full $LOOP_ORCH_MODEL
@@ -692,7 +760,7 @@ eval_gate() { # the T258/T259 decision for a would-be eval cycle, one line:
   # the daily full evaluation is due, and the T258 doctrine keeps it on
   # the orchestrator model — the verdict is still recorded, the taken
   # route reads kimi. Every other answer, and a fail-open, launches.
-  if [ "$streak" -ge 3 ]; then
+  elif [ "$streak" -ge 3 ]; then
     verb=launch; model=$LOOP_ORCH_MODEL
     laya_triage "$new" "$closed" "$deaths" "$(changed_files_by_class "$base")" "$(digest_stats)" "$streak" "$book" "$fresh" yes
     laya="$(laya_fields)"
@@ -744,7 +812,7 @@ eval_gate() { # the T258/T259 decision for a would-be eval cycle, one line:
     # are the shapes the T258 routing already decided mechanically.
     verb=launch; model=$LOOP_ORCH_MODEL
   fi
-  echo "$verb $model rows=$(todo_rows TODO.md) new=$new deaths=$deaths bookkeeping=$book fresh=$fresh base=${base:-none} streak=$streak closed=$closed $laya"
+  echo "$verb $model rows=$(todo_rows TODO.md) new=$new deaths=$deaths bookkeeping=$book fresh=$fresh base=${base:-none} streak=$streak closed=$closed $laya dormant=$dormant"
 }
 loopd_write_disposition() { # T258 — the supervisor writes the one-line
   # disposition ITSELF (the cheap exit, no LLM): an empty commit whose
@@ -757,12 +825,13 @@ loopd_write_disposition() { # T258 — the supervisor writes the one-line
   # cancelled the launch (the triage on a borderline cycle, or the triage
   # on a valve trip) must be legible in the git record; a mechanical skip
   # keeps the T258 subject byte-identical.
-  local t1="empty-delta" t2="disposition" streak snext fields rc=0 verdict conf reason
+  local t1="empty-delta" t2="disposition" streak snext fields rc=0 verdict conf reason dormant
   # strip "skip - " (the verb + the no-model placeholder) — the fields line
   # in the subject starts at the predicate inputs
   fields=${1#skip - }
   verdict=$(laya_gate_field laya= "$fields")
   conf=$(laya_gate_field conf= "$fields")
+  dormant=$(laya_gate_field dormant= "$fields")
   streak=$(empty_wrap_streak)
   reason="(T258 mechanical: predicate empty, launch skipped)"
   case "$verdict" in
@@ -774,6 +843,14 @@ loopd_write_disposition() { # T258 — the supervisor writes the one-line
       fi
       ;;
   esac
+  # T325: the dormant skip's disposition names the suspension — the valve
+  # did NOT bind this cycle; the T237 token and the TRUE-streak handoff
+  # still ride the subject, so the chain's bookkeeping stays continuous
+  # through dormancy (the streak walk counts it; the wake cycle resumes
+  # the valve from the carried count).
+  if [ "$dormant" = "suspended-valve" ]; then
+    reason="(T325 dormant: streak=$streak suspended-valve — the weekly audit timer replaces the valve)"
+  fi
   snext=$((streak + 1))
   git commit --allow-empty -m "eval: loopd cheap-exit ${t1} ${t2} ${reason} — TRUE streak ${streak}→${snext}; ${fields}; next cycle re-checks, the T247 valve still binds on the TRUE count" >/dev/null 2>&1 || rc=$?
   return "$rc"
@@ -1193,17 +1270,53 @@ while [ ! -f "$STOP" ]; do
   routing="$(route TODO.md EVALUATION.md)"
   mode=${routing%% *}
   orch_model=${routing#* }
+  # T325 — dormancy latch maintenance, at cycle routing time BEFORE the
+  # T247 valve leg (the gate below reads the latch). An empty queue arms
+  # dormancy — the timer anchor is written ONCE, from git's newest eval:
+  # commit, so the loop's own cheap-exit dispositions (empty commits) can
+  # never refresh it and the week actually elapses; any open row disarms
+  # it and logs the wake on the transition cycle. The latch is supervisor
+  # state (the STOP/HALTED shape), never a routing authority: the gate
+  # re-derives dormancy from the LIVE row count every cycle, so an armed
+  # latch cannot out-vote real queue work.
+  open_rows=$(todo_rows TODO.md)
+  if [ "$open_rows" -eq 0 ]; then
+    if [ ! -f "$STATE/dormant-state.json" ]; then
+      dormant_state_write
+      echo "$(ts) dormant entry (T325): open=0 — the weekly audit timer replaces the T247 valve (last_eval_ts=$(dormant_state_ts))" >> "$LOG"
+    fi
+  elif [ -f "$STATE/dormant-state.json" ]; then
+    rm -f "$STATE/dormant-state.json"
+    echo "$(ts) dormant exit (T325): open=$open_rows" >> "$LOG"
+  fi
+  # T325: the dormancy verdict rides the gate line (eval mode only — these
+  # start empty so the launch-site export block below reads them safely on
+  # routine cycles, where the gate is never consulted).
+  gate_dormant=""
+  gate_streak=""
   if [ "$mode" = eval ]; then
     gate="$(eval_gate)"
     gate_verb=${gate%% *}
     gate_rest=${gate#* }
     gate_model=${gate_rest%% *}
+    # T325: the dormancy verdict rides the gate line — the skip arm names
+    # the suspension in loopd.log, the audit arm carries DORMANT=1 to the
+    # launch site below.
+    gate_dormant=$(laya_gate_field dormant= "$gate")
+    gate_streak=$(laya_gate_field streak= "$gate")
     # T259: the triage's decision record (the state pack verbatim, the
     # verdict, the confidence, the route taken) + the previous triage's
     # outcome backfill — run mode only, best-effort, before the skip or
     # launch the record describes.
     laya_record "$gate"
     if [ "$gate_verb" = skip ]; then
+      # T325: the dormant skip names the suspension in its own line BEFORE
+      # the T258 disposition record — the loop went quiet ON PURPOSE (the
+      # valve is suspended behind the weekly audit timer), never because
+      # the predicate happened to look empty.
+      if [ "$gate_dormant" = "suspended-valve" ]; then
+        echo "$(ts) dormant cheap-exit (T325): streak=$gate_streak suspended-valve" >> "$LOG"
+      fi
       echo "$(ts) cheap-exit disposition (T258): ${gate#skip } — launch skipped" >> "$LOG"
       if loopd_write_disposition "$gate"; then
         fails=0
@@ -1228,6 +1341,24 @@ while [ ! -f "$STOP" ]; do
       echo "$(ts) eval gate (T258): ${gate#launch } -> $gate_model orchestrator" >> "$LOG"
       orch_model=$gate_model
     fi
+  fi
+  # T325 — the dormant weekly audit: the ONE launch dormancy schedules. The
+  # timer restarts here (the audit's own eval: commit will move the git
+  # anchor within the hour; the rewrite keeps the latch the single record
+  # and a crashed audit simply re-audits next cycle), the child env carries
+  # DORMANT=1 (LOOP-SPEC's dormant paragraph: the audit is READ-ONLY —
+  # gates green, pins verified, site-sync freshness, daemon/Langfuse
+  # liveness — filing rows only on observed breakage, never loop-tooling
+  # meta-work), and every other cycle launches with DORMANT explicitly
+  # unset — an export inside this loop would otherwise persist across
+  # iterations (the T47 lesson; DORMANT affects no build, but the unset
+  # keeps every non-audit child env honest).
+  if [ "$gate_dormant" = "audit" ]; then
+    dormant_state_write
+    echo "$(ts) dormant weekly audit (T325): timer restarted (last_eval_ts=$(dormant_state_ts)) — read-only audit, DORMANT=1" >> "$LOG"
+    export DORMANT=1
+  else
+    unset DORMANT
   fi
   echo "$(ts) routing: todo_rows=$(todo_rows TODO.md) eval_fresh=$(eval_fresh EVALUATION.md && echo yes || echo no) -> $mode cycle on $orch_model" >> "$LOG"
   echo "$(ts) cycle start -> $cycle_log ($mode cycle, orchestrator $orch_model)" >> "$LOG"

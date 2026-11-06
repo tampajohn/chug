@@ -158,6 +158,30 @@ evaluation landed the artifacts and did not when the next look still
 finds the baseline unchanged — the F13 distillation corpus, joined by
 scripts/decisions-export.sh.
 
+**Dormant mode (T325).** When the queue is empty — zero `todo`/`open` rows
+in TODO.md, the same count the cheap exit already computes — the loop is
+DORMANT, and dormancy outranks the chain rule: the supervisor's gate
+suspends the valve, the cheap exit fires on every cycle whatever the TRUE
+streak (the disposition names the suspension: `suspended-valve`), and the
+valve's 4th-TRUE trip is replaced by a weekly audit timer — a real
+evaluation launches only when the last evaluation commit is 7 or more
+days old. The timer's state rides in `.chug/loopd/dormant-state.json`
+(`last_eval_ts`, written from the newest `eval:` commit's timestamp — no
+new authority, git is the source; the loop's own dispositions never
+refresh it). The weekly audit launches with `DORMANT=1` in the env and is
+READ-ONLY: gates green (build, clippy, test), pins verified, site-sync
+freshness, daemon and Langfuse liveness. It files TODO rows ONLY on
+observed breakage — a red gate, a stale site, a dead daemon — exactly one
+row per observed breakage; a green audit files zero rows. It MUST NOT
+file loop-tooling items: the wrap_assert/fixture/citation-hygiene meta
+class is precisely the manufactured work dormancy exists to stop. The
+audit's disposition line names the class: `dormant audit (T325):
+gates=green pins=23/23 site=fresh daemon=ok filings=0`. Any open row —
+operator-filed or breakage-filed — exits dormancy immediately and the
+normal T247 valve semantics resume; the supervisor logs the transition
+(`dormant exit (T325): open=1`). An empty backlog must make the loop
+nearly free; it must never make the loop invent meta-work.
+
 Commit the evaluation artifacts (`eval: ...`) before
 dispatching.
 
