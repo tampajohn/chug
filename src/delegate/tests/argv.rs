@@ -4,7 +4,7 @@
 // T109 req 4 count-pin anchor (see mod.rs's pin): this family's
 // #[test] fn count — a dropped `mod argv;` line fails the pin's
 // reference to this const to compile.
-pub(super) const TEST_COUNT: usize = 2;
+pub(super) const TEST_COUNT: usize = 3;
     use super::*; // the shared harness (delegate::tests) + delegate's own imports
 
     // ---- T39: delegate launch optional max_tokens passthrough ----
@@ -32,7 +32,7 @@ pub(super) const TEST_COUNT: usize = 2;
         // Absent: byte-identical to pre-T39/pre-T58 — no `--max-tokens`
         // anywhere, no `--resume`.
         assert_eq!(
-            delegate_child_argv(&spec, "g", "m", 40, 35, None, false),
+            delegate_child_argv(&spec, "g", "m", 40, 35, None, false, None),
             base,
             "absent max_tokens must not change the child argv"
         );
@@ -41,7 +41,7 @@ pub(super) const TEST_COUNT: usize = 2;
         with.push(OsString::from("--max-tokens"));
         with.push(OsString::from("250000"));
         assert_eq!(
-            delegate_child_argv(&spec, "g", "m", 40, 35, Some(250_000), false),
+            delegate_child_argv(&spec, "g", "m", 40, 35, Some(250_000), false, None),
             with
         );
         // Boundary: 1 is accepted and passes through verbatim.
@@ -49,7 +49,7 @@ pub(super) const TEST_COUNT: usize = 2;
         one.push(OsString::from("--max-tokens"));
         one.push(OsString::from("1"));
         assert_eq!(
-            delegate_child_argv(&spec, "g", "m", 40, 35, Some(1), false),
+            delegate_child_argv(&spec, "g", "m", 40, 35, Some(1), false, None),
             one
         );
     }
@@ -78,7 +78,7 @@ pub(super) const TEST_COUNT: usize = 2;
         ];
         // Absent (parsed to false upstream) == false == pre-T58, whole list.
         assert_eq!(
-            delegate_child_argv(&spec, "g", "m", 40, 35, None, false),
+            delegate_child_argv(&spec, "g", "m", 40, 35, None, false, None),
             base,
             "resume=false must not change the child argv"
         );
@@ -86,7 +86,7 @@ pub(super) const TEST_COUNT: usize = 2;
         let mut resumed = base.clone();
         resumed.push(OsString::from("--resume"));
         assert_eq!(
-            delegate_child_argv(&spec, "g", "m", 40, 35, None, true),
+            delegate_child_argv(&spec, "g", "m", 40, 35, None, true, None),
             resumed,
             "--resume must be appended after all other flags"
         );
@@ -96,9 +96,51 @@ pub(super) const TEST_COUNT: usize = 2;
         tokens_then_resume.push(OsString::from("250000"));
         tokens_then_resume.push(OsString::from("--resume"));
         assert_eq!(
-            delegate_child_argv(&spec, "g", "m", 40, 35, Some(250_000), true),
+            delegate_child_argv(&spec, "g", "m", 40, 35, Some(250_000), true, None),
             tokens_then_resume,
             "--resume must stay last even after the --max-tokens pair"
         );
     }
 
+    /// Fleet-session-env: the pure argv builder with `mcp_config` —
+    /// `Some(path)` appends the `--mcp-config <path>` pair as the very tail
+    /// (after any `--resume`), purely additive: the child CLI's own override
+    /// of its cwd's MCP config discovery. `None` produces the pre-change
+    /// argv byte-for-byte (whole-list pin, T39/T58 style) — the child's
+    /// default config discovery, unchanged.
+    #[test]
+    fn delegate_child_argv_appends_mcp_config_pair_only_when_present() {
+        let spec = PathBuf::from("/tmp/spec.md");
+        let base = vec![
+            OsString::from("run"),
+            OsString::from("--spec"),
+            OsString::from("/tmp/spec.md"),
+            OsString::from("--goal"),
+            OsString::from("g"),
+            OsString::from("--model"),
+            OsString::from("m"),
+            OsString::from("--max-iters"),
+            OsString::from("40"),
+            OsString::from("--max-minutes"),
+            OsString::from("35"),
+        ];
+        // Absent: byte-identical — no `--mcp-config` anywhere.
+        assert_eq!(
+            delegate_child_argv(&spec, "g", "m", 40, 35, None, false, None),
+            base,
+            "absent mcp_config must not change the child argv"
+        );
+        // The flag pair lands at the very tail, verbatim — after `--resume`.
+        let config = PathBuf::from("/tmp/run/.chug/mcp.json");
+        let mut with = base;
+        with.push(OsString::from("--max-tokens"));
+        with.push(OsString::from("250000"));
+        with.push(OsString::from("--resume"));
+        with.push(OsString::from("--mcp-config"));
+        with.push(OsString::from("/tmp/run/.chug/mcp.json"));
+        assert_eq!(
+            delegate_child_argv(&spec, "g", "m", 40, 35, Some(250_000), true, Some(&config)),
+            with,
+            "--mcp-config must be the child argv's last pair"
+        );
+    }
