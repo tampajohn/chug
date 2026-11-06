@@ -1021,8 +1021,22 @@ and Langfuse liveness — it files TODO rows ONLY on observed breakage
 meta-work. Any open row — operator-filed or breakage-filed — exits
 dormancy immediately (`dormant exit (T325): open=N`) and normal valve
 semantics resume. An empty backlog makes the loop nearly free; it never
-makes the loop invent meta-work. (The sibling lane — outward-facing
-feature proposals the operator ratifies — is T326.)
+makes the loop invent meta-work.
+
+**Ideation cycle (T326).** Dormancy is not silence: while dormant, when
+the ideation timer (7 days, the same `dormant-state.json` latch, the
+newer of its record and the newest `specs/proposed` commit) is due, the
+supervisor launches ONE glm run of `scripts/ideate.py` — a deterministic,
+no-network ideas packet (FEATURES.md parked items, deferred threads, the
+eval-triage friction census, release-lag facts) whose every proposal must
+pass the Laya noul meta-class gate (is this about the loop's own
+tooling? YES → rejected; daemon unavailable → fail closed to rejection)
+before it may file ≤3 five-line stubs in TODO.md's `## Proposed` lane.
+The operator flips `proposed` rows to `open` — the loop never
+self-flips, except the 2026-11-06 amendment's auto-ratification: a
+proposal the operator leaves untouched for 7 days flips itself, and
+every auto-flip is logged in the cycle disposition. Internal-artifact
+rows (the operator-owned marker) are never auto-flipped or dispatched.
 
 Per cycle: the orchestrator's model is per-phase (T81) — kimi-k3
 orchestrates fresh-eval cycles, glm-5-3-flash routine ones, decided by
