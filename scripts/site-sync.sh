@@ -76,6 +76,27 @@
 # a link to a page that was not rendered. Each bootstrap is idempotent by its
 # own needle and commits once.
 #
+# T327: the page also carries a COST region — <!-- COST:BEGIN/END --> around a
+# live-stats section between RELEASE and STATS — the daily Langfuse spend of
+# the chug project, baked into the static page at sync time (no API keys, no
+# public Langfuse; the numbers are static once written). The collector runs
+# the hand-verified ClickHouse recipe (docker exec langfuse-clickhouse-1 ...
+# — Langfuse is local where the sync runs) through the INJECTABLE
+# CHUG_COST_CH_CMD override (fixtures/tests never shell out to docker), and
+# the sync renders the tile (yesterday's total, 7-day average, a pre-rendered
+# 14-character sparkline — no JS — and the TRUE streak read from the newest
+# cheap-exit disposition in .chug/loopd/loopd.log) plus the per-day table on
+# docs.html. Fail-closed (the T217 letter): a collector that cannot reach
+# ClickHouse, returns nothing, or returns rows that do not parse PRODUCES NO
+# NUMBERS — a region with previously published content keeps it byte-identical
+# (stale beats blank), a fresh region gets the explicit n/a placeholder, and
+# a fabricated $0.00 is never rendered. The failure never fails the sync
+# (req 5): every other region still lands. Markers are BOOTSTRAPPED here with
+# the T240 mechanics (the script NEVER injects markers into a malformed page
+# — malformed markers are warn + skip). The tile's "as of" stamp is the one
+# clock the COST tile carries (spec req 3): the region regenerates on every
+# sync run by design, unlike the clock-free STATS/TIMELINE/FEATURES regions.
+#
 # Usage:
 #   scripts/site-sync.sh [--bootstrap] [SITE_DIR] [CHUG_ROOT]
 #     --bootstrap  skip the T217 input guard (first-ever run on a genuinely
@@ -87,6 +108,10 @@
 #   CHUG_SYNC_NOW=<date|iso>  pin the sync date for the commit message/subject
 #                             (CHUG_DIGEST_NOW pattern; tests pin this)
 #   CHUG_SITE_SYNC_NO_PUSH=1  skip the push (fixture tests, offline runs)
+#   CHUG_COST_CH_CMD=<cmd>    T327: the collector command whose stdout is the
+#                             ClickHouse recipe's TSV rows (date \t model \t
+#                             count \t cost). Unset = the docker exec recipe
+#                             verbatim (Langfuse-local hosts only).
 set -u
 export LC_ALL=C
 
@@ -106,6 +131,7 @@ set -- ${ARGS[@]+"${ARGS[@]}"}
 SITE="${1:-${CHUG_SITE_DIR:-$HOME/workspace/chug-site}}"
 CHUG="${2:-$(cd "$(dirname "$0")/.." && pwd)}"
 SYNC_DATE="$(printf '%s' "${CHUG_SYNC_NOW:-$(date -u +%Y-%m-%d)}" | cut -c1-10)"
+SYNC_TS="${CHUG_SYNC_NOW:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"   # T327: the COST tile's as-of stamp
 
 warn() { printf 'site-sync: %s\n' "$1" >&2; }
 
@@ -715,6 +741,261 @@ bootstrap_release() { # T240 req 4: markers + section skeleton + nav anchor
   return 0
 }
 
+# --- T327: COST region — the daily Langfuse spend, public --------------------
+# The collector runs the hand-verified recipe verbatim (spec, 2026-11-06);
+# CHUG_COST_CH_CMD replaces the invocation for fixtures/tests (never docker
+# in tests) and anywhere else the sync runs off the Langfuse-local host.
+#
+# NULL tolerance is part of the recipe's own arithmetic: the live
+# `GROUP BY 1,2` output carries `\N` (ClickHouse TSV NULL) model names for
+# uncosted, non-generation observations, and a `\N` cost when a group has no
+# recorded cost at all. The hand-verified per-day total sums every group's
+# cost with NULL contributing nothing — so the parser reproduces exactly
+# that: a `\N` cost adds 0 (never a fabricated figure, the recipe's own sum
+# semantics), a `\N` model name lands outside the kimi/glm split (its calls
+# and cost still count). Any OTHER unparseable cell is fail-closed: no
+# numbers at all (stale/placeholder), never a partial render.
+COST_CH_QUERY="SELECT toDate(start_time), provided_model_name, count(), sum(total_cost) FROM observations WHERE project_id='chug' AND start_time >= now() - INTERVAL 14 DAY GROUP BY 1,2"
+COST_STALE_NOTE="keeping any previously published COST region content (stale beats blank, never a fabricated zero)"
+
+# true_streak — the newest cheap-exit disposition's streak (goal note 6):
+# the last .chug/loopd/loopd.log line carrying both the disposition tag and
+# `streak=<n>`; "" when the log is unreadable or no disposition carries one
+# — the tile omits the field, never fabricates.
+true_streak() { # -> "<n>" | ""
+  local log="$CHUG/.chug/loopd/loopd.log" line
+  [ -r "$log" ] || return 0
+  line=$(grep 'cheap-exit disposition' "$log" 2>/dev/null | grep -E 'streak=[0-9]+' | tail -n 1)
+  [ -n "$line" ] || return 0
+  printf '%s' "$line" | sed -n 's/.*streak=\([0-9][0-9]*\).*/\1/p'
+}
+
+# cost_collect OUTFILE — run the collector and canonicalize its rows into
+# per-day lines `DATE \t CALLS \t KIMI \t GLM \t TOTAL` (ascending by date,
+# raw sums at fixed precision). Exit 0 = usable data; nonzero = fail-closed
+# (unreachable, empty, malformed — never a partial render).
+cost_collect() { # outfile
+  local out="$1" rc
+  if [ -n "${CHUG_COST_CH_CMD:-}" ]; then
+    bash -c "$CHUG_COST_CH_CMD" > "$TMPD/cost-raw" 2>/dev/null
+  else
+    docker exec langfuse-clickhouse-1 clickhouse-client -q "$COST_CH_QUERY" > "$TMPD/cost-raw" 2>/dev/null
+  fi
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    warn "cost collector failed (Langfuse/ClickHouse unreachable, rc=$rc) — $COST_STALE_NOTE"
+    return 1
+  fi
+  awk '
+    BEGIN { FS = "\t" }
+    NF < 4 { bad = 1; next }
+    {
+      d = $1
+      if (d !~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]$/) { bad = 1; next }
+      if ($3 !~ /^[0-9]+$/) { bad = 1; next }                    # count(): never NULL, never negative
+      c = $4
+      if (c == "\\N") { x = 0 }                                  # NULL cost: no recorded cost in the group
+      else if (c ~ /^[-+]?[0-9]+([.][0-9]+)?([eE][-+]?[0-9]+)?$/) x = c + 0
+      else { bad = 1; next }
+      m = tolower($2)
+      calls[d] += ($3 + 0)
+      tot[d] += x
+      if (index(m, "kimi")) kimi[d] += x
+      else if (index(m, "glm")) glm[d] += x
+      n++
+    }
+    END {
+      if (bad || n == 0) exit 3
+      nd = 0
+      for (d in calls) ds[++nd] = d
+      for (i = 2; i <= nd; i++) {          # insertion sort ascending — YYYY-MM-DD sorts chronologically
+        v = ds[i]; j = i - 1
+        while (j >= 1 && ds[j] > v) { ds[j + 1] = ds[j]; j-- }
+        ds[j + 1] = v
+      }
+      for (i = 1; i <= nd; i++) {
+        d = ds[i]
+        printf "%s\t%d\t%.10f\t%.10f\t%.10f\n", d, calls[d] + 0, kimi[d] + 0, glm[d] + 0, tot[d] + 0
+      }
+    }
+  ' "$TMPD/cost-raw" > "$out"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    warn "cost collector output unusable (empty or malformed rows) — $COST_STALE_NOTE"
+    return 1
+  fi
+  return 0
+}
+
+# cost_generate OUTFILE YJ STREAK TS — the index.html tile from the canonical
+# per-day lines. YJ = yesterday's Julian day number (the tile window ends on
+# the last COMPLETE day — a partial today never renders in the tile); the
+# 14-slot sparkline covers [YJ-13 .. YJ] with observed absence as the lowest
+# glyph (the collector reached ClickHouse: no rows that day is a fact, not a
+# fallback). STREAK = the true_streak() value ("" omits the field); TS = the
+# as-of stamp (spec req 3 — the one clock the tile carries).
+cost_generate() { # outfile yj streak ts
+  awk -v yj="$2" -v streak="$3" -v ts="$4" '
+    function jdn(d,   y, m, dd, a, yy) {   # Fliegel–Van Flandern, the day_key idiom (no date(1) dialects)
+      y = substr(d, 1, 4) + 0; m = substr(d, 6, 2) + 0; dd = substr(d, 9, 2) + 0
+      a = int((14 - m) / 12); yy = y + 4800 - a
+      return dd + int((153 * (m + 12 * a - 3) + 2) / 5) + yy * 365 \
+        + int(yy / 4) - int(yy / 100) + int(yy / 400) - 32045
+    }
+    function jdn_date(j,   l, n, i, jj, dd, m, y) {   # the inverse — JDN back to YYYY-MM-DD
+      l = j + 68569
+      n = int((4 * l) / 146097)
+      l = l - int((146097 * n + 3) / 4)
+      i = int((4000 * (l + 1)) / 1461001)
+      l = l - int((1461 * i) / 4) + 31
+      jj = int((80 * l) / 2447)
+      dd = l - int((2447 * jj) / 80)
+      l = int(jj / 11)
+      m = jj + 2 - 12 * l
+      y = 100 * (n - 49) + i + l
+      return sprintf("%04d-%02d-%02d", y, m, dd)
+    }
+    function money(x) {
+      if (x > 0 && x < 0.005) return sprintf("$%.6f", x)   # near-zero stays legible
+      return sprintf("$%.2f", x)
+    }
+    function glyph(v, mx,   lv) {              # the pre-rendered-character sparkline idiom — no JS
+      lv = 1
+      if (mx > 0) {
+        lv = 1 + int((v / mx) * 7 + 0.5)
+        if (lv > 8) lv = 8
+        if (lv < 1) lv = 1
+      }
+      if (lv >= 8) return "█"
+      if (lv == 7) return "▇"
+      if (lv == 6) return "▆"
+      if (lv == 5) return "▅"
+      if (lv == 4) return "▄"
+      if (lv == 3) return "▃"
+      if (lv == 2) return "▂"
+      return "▁"
+    }
+    BEGIN { FS = "\t" }
+    {
+      j = jdn($1)
+      calls[j] = $2 + 0; tot[j] = $5 + 0
+    }
+    END {
+      yt = tot[yj] + 0
+      s7 = 0
+      for (k = 0; k < 7; k++) s7 += tot[yj - k] + 0
+      mx = 0
+      for (k = 0; k < 14; k++) { v = tot[yj - k] + 0; if (v > mx) mx = v }
+      spark = ""
+      for (k = 13; k >= 0; k--) spark = spark glyph(tot[yj - k] + 0, mx)
+      streaktxt = (streak == "") ? "" : sprintf(" · TRUE streak %d", streak + 0)
+      printf "<div class=\"stats\">\n"
+      printf "  <div class=\"stat\"><b>%s</b><span>Langfuse spend yesterday (%s UTC) · 7-day avg %s/day%s · as of %s</span></div>\n", \
+        money(yt), jdn_date(yj), money(s7 / 7), streaktxt, ts
+      printf "  <div class=\"stat\"><b>%s</b><span>14-day spend shape, oldest → newest — daily total from Langfuse (chug project); per-day table on the <a href=\"https://chug.sh/docs.html#cost\">docs page</a></span></div>\n", spark
+      printf "</div>\n"
+    }
+  ' "$COST_DAYS" > "$1"
+}
+
+# cost_placeholder — the fail-closed shape (T217 letter): no numbers, ever.
+# Timestamp-free on purpose — a persistently-down collector must not re-commit
+# an unchanged placeholder every sync; the region regenerates with data (and
+# its as-of stamp) when the collector recovers.
+cost_placeholder() { # outfile
+  cat <<'PH'
+<div class="stats">
+  <div class="stat"><b>n/a</b><span>Langfuse spend — no cost data at this sync (collector unreachable, empty, or malformed); previously published numbers are kept rather than replaced with zeros</span></div>
+</div>
+PH
+}
+
+# cost_docs_section OUTFILE — docs.html's per-day table (date, calls, kimi $,
+# glm $, total $ — the spec's exact columns), newest first, capped at the 14
+# days the collector covers. Rendered only from usable data (fail-closed):
+# no collector output, no table — never a table of zeros.
+cost_docs_section() { # outfile
+  {
+    printf '<section id="cost"><div class="wrap">\n'
+    printf '  <p class="kicker"><span class="hash">##</span> cost · Langfuse daily spend, chug project — baked at sync time by scripts/site-sync.sh</p>\n'
+    printf '  <div class="doctext">\n'
+    printf '    <table>\n'
+    printf '      <thead><tr><th>date</th><th>calls</th><th>kimi</th><th>glm</th><th>total</th></tr></thead>\n'
+    printf '      <tbody>\n'
+    awk -v cap=14 '
+      function money(x) {
+        if (x > 0 && x < 0.005) return sprintf("$%.6f", x)
+        return sprintf("$%.2f", x)
+      }
+      { n++; d[n] = $1; c[n] = $2; k[n] = $3; g[n] = $4; t[n] = $5 }
+      END {
+        for (i = n; i >= 1 && i > n - cap; i--)
+          printf "        <tr><td>%s</td><td>%d</td><td>%s</td><td>%s</td><td>%s</td></tr>\n", \
+            d[i], c[i] + 0, money(k[i] + 0), money(g[i] + 0), money(t[i] + 0)
+      }
+    ' "$COST_DAYS"
+    printf '      </tbody>\n'
+    printf '    </table>\n'
+    printf '  </div>\n</div></section>\n'
+  } > "$1"
+}
+
+# bootstrap_cost — T327 req 2, the T240 mechanics verbatim: markers + section
+# skeleton + nav anchor, one bootstrap commit; malformed markers (or a
+# hand-built cost section without markers) are warn + skip, never a cycle
+# failure. The section sits between RELEASE and STATS (the live-stats band
+# order on the page) and the nav anchor rides directly before the stats link
+# (the nav mirrors the section order, req 4).
+bootstrap_cost() { # T327 req 2
+  local nb ne nl sl indent
+  nb=$(grep -cE "^[[:space:]]*<!-- COST:BEGIN -->[[:space:]]*\$" "$INDEX" 2>/dev/null) || nb=0
+  ne=$(grep -cE "^[[:space:]]*<!-- COST:END -->[[:space:]]*\$" "$INDEX" 2>/dev/null) || ne=0
+  if [ "$nb" -eq 1 ] && [ "$ne" -eq 1 ]; then return 0; fi
+  if [ "$nb" -ne 0 ] || [ "$ne" -ne 0 ]; then
+    warn "index.html has malformed COST markers (found $nb/$ne, expected 0 or 1/1) — skipping the COST region"
+    return 1
+  fi
+  if grep -q '<section id="cost"' "$INDEX"; then
+    warn "a cost section exists in index.html without COST markers — wrap its region with the markers by hand, skipping the COST region"
+    return 1
+  fi
+  nl=$(grep -n 'href="#stats">stats</a>' "$INDEX" 2>/dev/null | head -1 | cut -d: -f1)
+  if [ -z "$nl" ]; then
+    warn "no <a href=\"#stats\">stats</a> nav link in index.html — cannot place the cost anchor, skipping the COST region"
+    return 1
+  fi
+  sl=$(grep -nE '^<section id="stats"' "$INDEX" 2>/dev/null | head -1 | cut -d: -f1)
+  if [ -z "$sl" ]; then
+    warn "no <section id=\"stats\"> in index.html — cannot bootstrap the COST region"
+    return 1
+  fi
+  indent=$(sed -n "${nl}s/[^ ].*//p" "$INDEX")
+  awk -v nl="$nl" -v sl="$sl" -v indent="$indent" '
+    NR == nl { print indent "<a href=\"#cost\">cost</a>" }
+    NR == sl {
+      print "<section id=\"cost\" class=\"live-stats\"><div class=\"wrap\">"
+      print "  <p class=\"kicker\"><span class=\"hash\">##</span> cost · synced from Langfuse by scripts/site-sync.sh</p>"
+      print "<!-- COST:BEGIN -->"
+      print "<!-- COST:END -->"
+      print "</div></section>"
+    }
+    { print }' "$INDEX" > "$TMPD/boot-cost"
+  cat "$TMPD/boot-cost" > "$INDEX" \
+    || { warn "COST bootstrap page write failed — index.html may be truncated, NOT committing"; return 1; }
+  if ! git -C "$SITE" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    warn "$SITE is not a git work tree — COST markers written but not committed"
+    return 0
+  fi
+  git -C "$SITE" add index.html
+  if git -C "$SITE" commit -q -m "site: COST region markers bootstrap (T327)" \
+    -m "scripts/site-sync.sh (T327) req 2: <section id=\"cost\"> inserted between the releases and stats sections with its markers, plus the cost nav anchor directly before the stats link (the nav mirrors the section order). The region is empty until the next sync fills it from Langfuse."; then
+    echo "site-sync: bootstrapped COST markers + nav anchor ($(git -C "$SITE" rev-parse --short HEAD 2>/dev/null))"
+  else
+    warn "COST bootstrap commit failed (git identity?) — markers written but uncommitted"
+  fi
+  return 0
+}
+
 # --- T241: docs.html — the second page, fully machine-rendered ----------------
 # Sources, and the only home of the curated docs content (never the site
 # repo): the README's `## Quickstart` section (LEADS the page) and every
@@ -956,6 +1237,17 @@ docs_generate() {
     warn "no '## Quickstart' section in README.md — docs.html ships without its quickstart section"
   fi
   : > "$TMPD/docs-index-li"; : > "$TMPD/docs-sections"
+  # T327: the per-day cost table — fresh from the collector when it produced
+  # data; otherwise the PREVIOUSLY PUBLISHED table rides again byte-identical
+  # (stale beats blank: a collector blip must never gut the published table —
+  # the T217 class). A page with no published table stays without one.
+  : > "$TMPD/docs-cost"
+  if [ "$COST_HAVE" = 1 ]; then
+    cost_docs_section "$TMPD/docs-cost"
+  elif [ -f "$SITE/docs.html" ]; then
+    sed -n '/^<section id="cost">/,/<\/section>$/p' "$SITE/docs.html" > "$TMPD/docs-cost" 2>/dev/null || :
+    [ -s "$TMPD/docs-cost" ] && warn "no usable collector data this sync — docs.html keeps its previously published cost table (stale beats blank)"
+  fi
   for f in $DOCS_FILES; do
     if [ ! -r "$f" ]; then warn "runbook not readable: $f — skipped (fail-closed)"; continue; fi
     b=$(basename "$f" .md)
@@ -1033,6 +1325,9 @@ STYLE
       printf '      <li><a href="#quickstart">Quickstart — install, build, first run</a></li>\n'
     fi
     cat "$TMPD/docs-index-li"
+    if [ -s "$TMPD/docs-cost" ]; then
+      printf '      <li><a href="#cost">Cost — daily Langfuse spend</a></li>\n'
+    fi
     printf '    </ul>\n  </div>\n</div></header>\n'
     if [ "$DOCS_QS" -eq 1 ]; then
       printf '<section id="quickstart"><div class="wrap">\n'
@@ -1044,6 +1339,13 @@ STYLE
       printf '  </div>\n</div></section>\n'
     fi
     cat "$TMPD/docs-sections"
+    # T327: the per-day cost table rides at the page's end — the quickstart
+    # still LEADS (the T241 doctrine) and the runbooks stay in corpus order.
+    # Rendered from usable collector data, or kept from the published page
+    # when the collector blipped (stale beats blank); never a table of zeros.
+    if [ -s "$TMPD/docs-cost" ]; then
+      cat "$TMPD/docs-cost"
+    fi
     printf '<footer><div class="wrap">\n'
     printf '  chug docs — regenerated from the repo README quickstart and runbooks/ at every sync; never hand-edited.<br>\n'
     printf '  <a href="%s">home</a> · <a href="https://github.com/tampajohn/chug">source</a> · <a href="%s">README</a> · <a href="%s">runbooks/</a>\n' "$DOCS_HOME" "${DOCS_GH_BLOB}README.md" "$DOCS_GH_TREE"
@@ -1437,6 +1739,7 @@ TMP_NEW="$TMPD/splice-stats"              # spliced after each region, in turn
 TMP_NEW2="$TMPD/splice-timeline"
 TMP_NEW3="$TMPD/splice-features"
 TMP_NEW4="$TMPD/splice-release"
+TMP_NEW5="$TMPD/splice-cost"               # T327: the COST region splices last
 TMP_CARD="$TMPD/card"                     # current card chunk (features walk)
 TMP_TLITEM="$TMPD/tlitem"                 # current tl-item chunk (timeline walk)
 {
@@ -1517,13 +1820,7 @@ region_extract() { # src out name
 bootstrap_region TIMELINE tl || true
 bootstrap_region FEATURES grid || true
 bootstrap_release || true
-
-# --- T241: docs.html — the second page ----------------------------------------
-# The page is rendered FIRST; only a rendered page earns its nav link + the
-# get-started pointer (never a link to a page that is not rendered — the
-# fail-closed missing-runbooks leg, req 5).
-docs_generate
-if [ "$DOCS_STATE" = ok ]; then ensure_docs_nav || true; fi
+bootstrap_cost || true
 
 # region_ok NAME — the region is generatable iff exactly one BEGIN/END pair
 # exists, in order (malformed => warn + skip, best-effort, req 3)
@@ -1536,6 +1833,32 @@ region_ok() { # name
   el=$(grep -nE "^[[:space:]]*<!-- $1:END -->[[:space:]]*\$" "$INDEX" | head -1 | cut -d: -f1)
   [ -n "$bl" ] && [ -n "$el" ] && [ "$bl" -lt "$el" ]
 }
+
+# --- T327: collect the cost facts once, before the docs render (both consume).
+# The collector runs only when something can render it (the COST region's
+# markers or the docs corpus) — never a Langfuse probe on a page that cannot
+# carry the numbers. YJ, yesterday's Julian day number, comes from the sync
+# clock (the same CHUG_SYNC_NOW the tests pin); an unparseable clock leaves
+# the tile window unknown and the region fails closed with it.
+COST_DAYS="$TMPD/cost-days"; : > "$COST_DAYS"
+COST_HAVE=0; COST_STATE=skip
+if region_ok COST || [ -d "$CHUG/runbooks" ]; then
+  if cost_collect "$COST_DAYS"; then COST_HAVE=1; fi
+fi
+YJ="$(awk -v d="$SYNC_DATE" 'BEGIN {
+  if (d !~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]$/) exit 1
+  y = substr(d, 1, 4) + 0; m = substr(d, 6, 2) + 0; dd = substr(d, 9, 2) + 0
+  a = int((14 - m) / 12); yy = y + 4800 - a
+  print dd + int((153 * (m + 12 * a - 3) + 2) / 5) + yy * 365 \
+    + int(yy / 4) - int(yy / 100) + int(yy / 400) - 32045 - 1
+}')"
+
+# --- T241: docs.html — the second page ----------------------------------------
+# The page is rendered FIRST; only a rendered page earns its nav link + the
+# get-started pointer (never a link to a page that is not rendered — the
+# fail-closed missing-runbooks leg, req 5).
+docs_generate
+if [ "$DOCS_STATE" = ok ]; then ensure_docs_nav || true; fi
 
 # --- T99: regenerate the TIMELINE and FEATURES regions ------------------------
 TL_STATE=skip; FT_STATE=skip
@@ -1556,6 +1879,30 @@ if region_ok RELEASE; then
   release_generate "$TMPD/rel-out" && REL_STATE=ok
 else
   warn "no well-formed RELEASE markers in index.html — release not updated"
+fi
+# --- T327: regenerate the COST region — data, placeholder, or stale -----------
+# ok          usable collector data -> the tile regenerates (with its as-of stamp)
+# placeholder usable-collector-miss on an EMPTY region -> the explicit n/a shape
+# stale       usable-collector-miss over PUBLISHED content -> untouched bytes
+#             (stale beats blank — the T327 test letter); never a fabricated zero
+# skip        no well-formed COST markers -> nothing touched
+COST_HAS_CONTENT=0
+if region_ok COST; then
+  region_extract "$INDEX" "$TMPD/cost-region" COST
+  [ -n "$(tr -d '[:space:]' < "$TMPD/cost-region")" ] && COST_HAS_CONTENT=1
+  if [ "$COST_HAVE" = 1 ] && [ -n "$YJ" ]; then
+    cost_generate "$TMPD/cost-out" "$YJ" "$(true_streak)" "$SYNC_TS" && COST_STATE=ok
+  fi
+  if [ "$COST_STATE" != ok ]; then
+    if [ "$COST_HAS_CONTENT" = 1 ]; then
+      COST_STATE=stale
+      warn "cost region keeps its previously published content (no usable collector data this sync) — stale beats blank"
+    else
+      cost_placeholder > "$TMPD/cost-out" && COST_STATE=placeholder
+    fi
+  fi
+else
+  warn "no well-formed COST markers in index.html — cost region not updated"
 fi
 
 # --- splice: replace ONLY each marked region, in turn -------------------------
@@ -1582,14 +1929,25 @@ awk -v blkfile="$TMP_BLOCK" '
   "^[[:space:]]*<!-- RELEASE:BEGIN -->[[:space:]]*\$" \
   "^[[:space:]]*<!-- RELEASE:END -->[[:space:]]*\$" "$TMPD/rel-out" \
   || cp "$TMP_NEW3" "$TMP_NEW4"
+# T327: the COST region splices only when the sync has something to write —
+# data (ok) or the fresh-region placeholder. skip/stale pass the bytes through
+# untouched.
+if [ "$COST_STATE" = ok ] || [ "$COST_STATE" = placeholder ]; then
+  splice_region "$TMP_NEW4" "$TMP_NEW5" \
+    "^[[:space:]]*<!-- COST:BEGIN -->[[:space:]]*\$" \
+    "^[[:space:]]*<!-- COST:END -->[[:space:]]*\$" "$TMPD/cost-out" \
+    || cp "$TMP_NEW4" "$TMP_NEW5"
+else
+  cp "$TMP_NEW4" "$TMP_NEW5"
+fi
 
-if cmp -s "$TMP_NEW4" "$INDEX" && [ "$DOCS_CHANGED" != 1 ]; then
+if cmp -s "$TMP_NEW5" "$INDEX" && [ "$DOCS_CHANGED" != 1 ]; then
   echo "site-sync: page unchanged — no commit"
   exit 0
 fi
-if ! cmp -s "$TMP_NEW4" "$INDEX"; then
-  cat "$TMP_NEW4" > "$INDEX"   # in place: keeps the inode and the page's permissions
-  echo "site-sync: rewrote the marked regions of $INDEX (items $DONE/$TOTAL, tests $TEST_N, cycles $CYC_N, last eval $EVAL_D)"
+if ! cmp -s "$TMP_NEW5" "$INDEX"; then
+  cat "$TMP_NEW5" > "$INDEX"   # in place: keeps the inode and the page's permissions
+  echo "site-sync: rewrote the marked regions of $INDEX (items $DONE/$TOTAL, tests $TEST_N, cycles $CYC_N, last eval $EVAL_D, cost $COST_STATE)"
 fi
 # T241 req 3: docs.html is ADD/OVERWRITE — written in the same sync, committed
 # in the same commit as index.html when either changed (req 5)
@@ -1614,7 +1972,7 @@ fi
 git -C "$SITE" add index.html
 if [ "$DOCS_CHANGED" = 1 ]; then git -C "$SITE" add docs.html; fi  # T241 finding 1: stage docs.html only when THIS sync rendered it — a fail-closed leg never sweeps a stray file, a failed write never commits a partial
 if ! git -C "$SITE" commit -q -m "site: stats sync $SYNC_DATE" \
-  -m "scripts/site-sync.sh (T98+T99), deterministic — items $DONE/$TOTAL (TODO.md), tests $TEST_N ($TEST_SRC${TEST_REF:+, $TEST_REF}), cycles $CYC_N ($CYC_SRC), last eval $EVAL_D; last-5 landed: $LANDED_REFS; timeline: $TL_STATE (cap $TL_CAP), features: $FT_STATE; release: ${RELEASE_TAG:-none}; docs: $DOCS_NOTE"; then
+  -m "scripts/site-sync.sh (T98+T99), deterministic — items $DONE/$TOTAL (TODO.md), tests $TEST_N ($TEST_SRC${TEST_REF:+, $TEST_REF}), cycles $CYC_N ($CYC_SRC), last eval $EVAL_D; last-5 landed: $LANDED_REFS; timeline: $TL_STATE (cap $TL_CAP), features: $FT_STATE; release: ${RELEASE_TAG:-none}; cost: $COST_STATE; docs: $DOCS_NOTE"; then
   warn "commit failed (git identity?) — page updated but uncommitted"
   exit 0
 fi

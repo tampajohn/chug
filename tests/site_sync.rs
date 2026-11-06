@@ -148,6 +148,12 @@ fn run_sync(f: &Fixture, no_push: bool) -> Output {
     let mut c = Command::new("bash");
     c.arg(script_path()).arg(&f.site).arg(&f.chug);
     c.env("CHUG_SYNC_NOW", NOW);
+    // T327: every fixture test drives the cost collector through the
+    // injectable CHUG_COST_CH_CMD — never docker (this box may or may not
+    // have a live Langfuse ClickHouse; the fixtures must not care). A failing
+    // stub exercises the fail-closed leg; the T327 tests below override it
+    // with their own canned collector commands.
+    c.env("CHUG_COST_CH_CMD", "false");
     if no_push {
         c.env("CHUG_SITE_SYNC_NO_PUSH", "1");
     }
@@ -2442,4 +2448,399 @@ fn outside_pre(html: &str) -> String {
     }
     out.push_str(rest);
     out
+}
+
+// --- T327 — the COST region: daily Langfuse spend on the public page ---------
+//
+// The collector runs the hand-verified ClickHouse recipe (docker exec
+// langfuse-clickhouse-1 ... on the Langfuse-local host); every fixture here
+// drives it through the INJECTABLE CHUG_COST_CH_CMD instead — never docker.
+// Fail-closed (the T217 letter): a collector that cannot reach ClickHouse,
+// returns nothing, or returns rows that do not parse produces NO NUMBERS — a
+// region with published content keeps it byte-identical (stale beats blank),
+// a fresh region gets the explicit n/a placeholder, and a fabricated $0.00
+// is never rendered. The failure never fails the sync.
+//
+// The canned rows mirror the REAL recipe output shapes: `anthropic-system.ai.
+// kimi-*` / `glm-*` model names (the split is a contains-match), a
+// `laya-local` row (calls + total only, outside the kimi/glm split), and the
+// `\N` (ClickHouse TSV NULL) cells the live `GROUP BY 1,2` prints for
+// uncosted non-generation groups — a NULL cost sums as 0 (the recipe's own
+// sum() semantics), a NULL model lands outside the split.
+
+/// The canned ClickHouse rows: the exact TSV shape the recipe prints
+/// (toDate \t provided_model_name \t count() \t sum(total_cost)). Sync-now
+/// pins 2026-11-20, so yesterday = 2026-11-19 ($0.50) and the tile window is
+/// 2026-11-06..=2026-11-19 (max day 2026-11-07 at $1.50).
+const T327_TSV: &str = concat!(
+    "2026-11-06\tkimi-k2-0905-preview\t10\t0.5\n",
+    "2026-11-06\tglm-4.6\t20\t0.25\n",
+    "2026-11-07\tkimi-k2-0905-preview\t30\t1.5\n",
+    "2026-11-12\tglm-4.6\t5\t0.0002\n",
+    "2026-11-18\tlaya-local\t40\t0\n",
+    "2026-11-19\tkimi-k2-0905-preview\t7\t0.35\n",
+    "2026-11-19\tglm-4.6\t3\t0.15\n",
+    "2026-11-19\t\\N\t5\t\\N\n", // the live NULL shape: 5 uncosted calls, no recorded cost
+    "2026-11-20\tkimi-k2-0905-preview\t2\t0.05\n", // today's partial: in the table, never in the tile
+);
+
+/// The supervisor's own cheap-exit disposition record (goal note 6): the
+/// tile's TRUE streak reads the newest such line's `streak=` field.
+const T327_DISPOSITION: &str = "2026-11-19T10:00:00Z cheap-exit disposition (T258): - glm rows=0 new=0 deaths=0 bookkeeping=1 fresh=1 base=abc1234 streak=4 closed=0 laya=no dormant=no — launch skipped\n";
+
+/// chug half of the T327 fixture: the standard facts fixture plus an optional
+/// canned collector file (returned path) and an optional disposition line.
+/// The site half is site_fixture_t240 — the nav + stats-section shape whose
+/// bootstraps (T240 RELEASE, then T327 COST) fire.
+fn fixture_t327(tsv: Option<&str>, disposition: Option<&str>) -> (Fixture, std::path::PathBuf) {
+    let keep = tempfile::tempdir().unwrap();
+    let chug = keep.path().join("chug");
+    let site = keep.path().join("site");
+    std::fs::create_dir_all(&chug).unwrap();
+    std::fs::create_dir_all(&site).unwrap();
+    git(&chug, &["-c", "init.defaultBranch=main", "init", "-q"], None);
+    git(&site, &["-c", "init.defaultBranch=main", "init", "-q"], None);
+    chug_fixture(&chug);
+    if let Some(d) = disposition {
+        let log = chug.join(".chug/loopd/loopd.log");
+        let mut cur = std::fs::read_to_string(&log).unwrap();
+        cur.push_str(d);
+        std::fs::write(&log, cur).unwrap();
+    }
+    site_fixture_t240(&site);
+    // the docs corpus + shared style base: the T327 tile tests also pin the
+    // docs.html per-day table, so the fixture carries the corpus the T241
+    // fail-closed legs require (a <style> block in index.html, runbooks/*.md,
+    // a README quickstart)
+    let idx = site.join("index.html");
+    let cur = std::fs::read_to_string(&idx).unwrap();
+    std::fs::write(
+        &idx,
+        cur.replace(
+            "<html><body>\n",
+            "<html><head>\n<style>\n:root{--wrap:1060px}\n</style>\n</head><body>\n",
+        ),
+    )
+    .unwrap();
+    let rb = chug.join("runbooks");
+    std::fs::create_dir_all(&rb).unwrap();
+    std::fs::write(
+        rb.join("alpha.md"),
+        "# Runbook: alpha\n\nUse when the loop stalls.\n\n```\necho hi\n```\n",
+    )
+    .unwrap();
+    std::fs::write(
+        chug.join("README.md"),
+        "# chug\n\n## Quickstart\n\ncargo install --path .\n",
+    )
+    .unwrap();
+    commit(&chug, "docs: t327 fixture corpus", None, "2026-09-22", false);
+    let tsv_path = keep.path().join("ch.tsv");
+    if let Some(t) = tsv {
+        std::fs::write(&tsv_path, t).unwrap();
+    }
+    (
+        Fixture {
+            _keep: keep,
+            chug,
+            site,
+        },
+        tsv_path,
+    )
+}
+
+/// The T327 runner: pinned sync-now (the tile's as-of stamp rides it) and an
+/// injectable collector command (None = a failing stub — the unreachable leg).
+fn run_sync_t327(f: &Fixture, tsv: Option<&std::path::Path>, now: &str) -> Output {
+    let mut c = Command::new("bash");
+    c.arg(script_path()).arg(&f.site).arg(&f.chug);
+    c.env("CHUG_SYNC_NOW", now).env("CHUG_SITE_SYNC_NO_PUSH", "1");
+    match tsv {
+        Some(p) => c.env("CHUG_COST_CH_CMD", format!("cat {}", p.display())),
+        None => c.env("CHUG_COST_CH_CMD", "false"),
+    };
+    c.output().expect("spawn scripts/site-sync.sh")
+}
+
+/// Req 1+2: usable collector data renders the tile (yesterday's total, the
+/// 7-day average, the TRUE streak, the as-of stamp) and the 14-character
+/// pre-rendered sparkline; docs.html carries the per-day table (date, calls,
+/// kimi $, glm $, total $), newest first; the region bootstraps between
+/// RELEASE and STATS with the nav mirroring that order; the commit records
+/// cost: ok; unchanged inputs are byte-identical with no second commit.
+#[test]
+fn t327_cost_data_renders_tile_sparkline_and_docs_table() {
+    let (f, tsv) = fixture_t327(Some(T327_TSV), Some(T327_DISPOSITION));
+    let out = run_sync_t327(&f, Some(&tsv), "2026-11-20");
+    assert!(
+        out.status.success(),
+        "run 1: {:?}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let html = page(&f);
+    // bootstrap: the cost section sits between the releases and stats
+    // sections; the nav mirrors the order (req 4, the T240 mechanics)
+    assert_eq!(count(&html, "<!-- COST:BEGIN -->"), 1);
+    assert_eq!(count(&html, "<!-- COST:END -->"), 1);
+    let rel_sec = html.find("<section id=\"releases\"").expect("releases bootstrapped");
+    let cost_sec = html.find("<section id=\"cost\"").expect("cost section bootstrapped");
+    let stats_sec = html.find("<section id=\"stats\"").expect("stats section present");
+    assert!(rel_sec < cost_sec && cost_sec < stats_sec, "the cost section sits between RELEASE and STATS:\n{html}");
+    let nav_rel = html.find("href=\"#releases\">releases</a>").expect("releases anchor");
+    let nav_cost = html.find("href=\"#cost\">cost</a>").expect("cost anchor");
+    let nav_stats = html.find("href=\"#stats\">stats</a>").expect("stats link");
+    assert!(nav_rel < nav_cost && nav_cost < nav_stats, "the nav mirrors the section order:\n{html}");
+    // the tile: yesterday's total (2026-11-19 = $0.35 kimi + $0.15 glm + the
+    // NULL-cost group's 0), the 7-day average ($0.50 over the 7 COMPLETE days
+    // ending yesterday — today's partial $0.05 never leaks in), the TRUE
+    // streak from the disposition record, the as-of stamp
+    let cost = region(&html, "COST");
+    assert!(
+        cost.contains("<b>$0.50</b><span>Langfuse spend yesterday (2026-11-19 UTC) · 7-day avg $0.07/day · TRUE streak 4 · as of 2026-11-20</span>"),
+        "the tile renders yesterday/avg/streak/as-of:\n{cost}"
+    );
+    // the sparkline: 14 pre-rendered characters, oldest → newest, no JS —
+    // 11-06 $0.75 → ▅, 11-07 $1.50 (max) → █, 11-08..11-18 (incl. the $0.00
+    // laya day and the near-$0.0002 day) → ▁, 11-19 $0.50 → ▃
+    assert!(
+        cost.contains("<b>▅█▁▁▁▁▁▁▁▁▁▁▁▃</b><span>14-day spend shape"),
+        "the pre-rendered sparkline:\n{cost}"
+    );
+    assert!(!cost.contains("<script"), "no JS anywhere in the region");
+    // the per-day table lives in docs.html — never on the home page
+    assert!(!html.contains("<tr><td>"), "no table rows on the home page:\n{html}");
+    let docs_html = docs(&f);
+    assert!(docs_html.contains("<section id=\"cost\">"), "docs cost section rendered");
+    let rows = [
+        "<tr><td>2026-11-20</td><td>2</td><td>$0.05</td><td>$0.00</td><td>$0.05</td></tr>",
+        "<tr><td>2026-11-19</td><td>15</td><td>$0.35</td><td>$0.15</td><td>$0.50</td></tr>",
+        "<tr><td>2026-11-18</td><td>40</td><td>$0.00</td><td>$0.00</td><td>$0.00</td></tr>",
+        "<tr><td>2026-11-12</td><td>5</td><td>$0.00</td><td>$0.000200</td><td>$0.000200</td></tr>",
+        "<tr><td>2026-11-07</td><td>30</td><td>$1.50</td><td>$0.00</td><td>$1.50</td></tr>",
+        "<tr><td>2026-11-06</td><td>30</td><td>$0.50</td><td>$0.25</td><td>$0.75</td></tr>",
+    ];
+    for r in rows {
+        assert!(docs_html.contains(r), "docs table row missing:\n{r}\n{docs_html}");
+    }
+    // newest first: today's partial (11-20) leads, 11-06 trails
+    let i20 = docs_html.find("2026-11-20").unwrap();
+    let i19 = docs_html.find("2026-11-19</td>").unwrap();
+    let i06 = docs_html.find("2026-11-06</td>").unwrap();
+    assert!(i20 < i19 && i19 < i06, "the table is newest-first:\n{docs_html}");
+    // the NULL-shape pins: 11-19 counted 15 calls (7+3+5, the \N group's 5
+    // included) at $0.50 (the \N cost summed as 0 — the recipe's own sum());
+    // the laya-local day shows $0.00 with its 40 calls (data said zero, the
+    // collector reached ClickHouse — that is an observed zero, not a fallback)
+    assert!(docs_html.contains("<tr><td>2026-11-19</td><td>15</td>"), "the \\N group's calls count:\n{docs_html}");
+    // the near-zero day never rounds away: $0.0002 renders at 6 decimals
+    assert!(docs_html.contains("$0.000200"), "near-zero stays legible:\n{docs_html}");
+    // the docs index gains the entry
+    assert!(docs_html.contains("<li><a href=\"#cost\">Cost — daily Langfuse spend</a></li>"), "docs index entry:\n{docs_html}");
+    // commits: one bootstrap commit + one sync commit recording cost: ok
+    let subjects = all_commit_subjects(&f);
+    assert!(
+        subjects.iter().any(|s| s.contains("site: COST region markers bootstrap (T327)")),
+        "bootstrap commit missing: {subjects:?}"
+    );
+    assert_eq!(sync_commits(&f), 1, "one sync commit for the filled region");
+    let log = git(&f.site, &["log", "-1", "--format=%B"], None);
+    assert!(
+        String::from_utf8_lossy(&log.stdout).contains("cost: ok"),
+        "the sync commit records the cost state:\n{}",
+        String::from_utf8_lossy(&log.stdout)
+    );
+    // idempotence: unchanged inputs (same pinned stamp) are byte-identical
+    let before = page(&f);
+    let docs_before = docs(&f);
+    let n = all_commit_subjects(&f).len();
+    let out2 = run_sync_t327(&f, Some(&tsv), "2026-11-20");
+    assert!(out2.status.success());
+    assert_eq!(page(&f), before, "second run byte-identical (req 1 idempotence)");
+    assert_eq!(docs(&f), docs_before, "docs byte-identical too");
+    assert_eq!(all_commit_subjects(&f).len(), n, "no commit when unchanged");
+}
+
+/// The empty-output leg: the collector REACHES ClickHouse and returns zero
+/// rows (an empty project, a wrong project_id, a wiped table) — the fresh
+/// region gets the explicit placeholder, never a table/tile of fabricated
+/// zeros, and the sync otherwise succeeds.
+#[test]
+fn t327_empty_collector_output_renders_placeholder_never_zeros() {
+    let (f, tsv) = fixture_t327(Some(""), Some(T327_DISPOSITION));
+    let out = run_sync_t327(&f, Some(&tsv), "2026-11-20");
+    assert!(
+        out.status.success(),
+        "empty CH output must not fail the sync: {:?}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let cost = region(&page(&f), "COST");
+    assert!(cost.contains("<b>n/a</b>"), "the placeholder shape:\n{cost}");
+    assert!(cost.contains("no cost data at this sync"), "the placeholder names the condition:\n{cost}");
+    assert!(!cost.contains("$0."), "no fabricated dollar figures:\n{cost}");
+    assert!(!cost.contains("TRUE streak"), "no streak without data to render beside");
+    assert!(!docs(&f).contains("<section id=\"cost\">"), "no docs table from empty output:\n{}", docs(&f));
+    assert_eq!(sync_commits(&f), 1);
+    let log = git(&f.site, &["log", "-1", "--format=%B"], None);
+    assert!(
+        String::from_utf8_lossy(&log.stdout).contains("cost: placeholder"),
+        "the sync commit records the placeholder:\n{}",
+        String::from_utf8_lossy(&log.stdout)
+    );
+}
+
+/// The stale leg: a collector that was healthy and then cannot reach
+/// ClickHouse leaves the PUBLISHED region content untouched, byte-identical —
+/// stale beats blank — and never fails the sync (the region must never break
+/// the deploy).
+#[test]
+fn t327_collector_failure_keeps_published_region_and_sync_succeeds() {
+    let (f, tsv) = fixture_t327(Some(T327_TSV), Some(T327_DISPOSITION));
+    assert!(run_sync_t327(&f, Some(&tsv), "2026-11-20").status.success());
+    let before = page(&f);
+    assert!(region(&before, "COST").contains("$0.50"), "published content present");
+    let n = all_commit_subjects(&f).len();
+    let out = run_sync_t327(&f, None, "2026-11-20"); // the collector "goes down"
+    assert!(
+        out.status.success(),
+        "a down collector must never fail the sync: {:?}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(page(&f), before, "stale beats blank: the published region is untouched");
+    assert_eq!(all_commit_subjects(&f).len(), n, "no commit for a stale-region run");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("stale beats blank"), "the warn names the doctrine: {err}");
+    assert!(String::from_utf8_lossy(&out.stdout).contains("unchanged"), "the run is a no-op");
+}
+
+/// The unreachable leg on a FRESH region (nothing published yet): the
+/// placeholder lands, the sync succeeds, the commit records it.
+#[test]
+fn t327_collector_failure_on_a_fresh_region_writes_placeholder() {
+    let (f, _tsv) = fixture_t327(None, Some(T327_DISPOSITION));
+    let out = run_sync_t327(&f, None, "2026-11-20");
+    assert!(
+        out.status.success(),
+        "a down collector must never fail the sync: {:?}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let cost = region(&page(&f), "COST");
+    assert!(cost.contains("<b>n/a</b>"), "the placeholder shape:\n{cost}");
+    assert!(!cost.contains("$0."), "no fabricated zeros:\n{cost}");
+    assert_eq!(sync_commits(&f), 1);
+    let log = git(&f.site, &["log", "-1", "--format=%B"], None);
+    assert!(
+        String::from_utf8_lossy(&log.stdout).contains("cost: placeholder"),
+        "the sync commit records the placeholder:\n{}",
+        String::from_utf8_lossy(&log.stdout)
+    );
+}
+
+/// Malformed collector rows fail CLOSED: no partial render from a response
+/// that does not match the recipe's shape — the region keeps published
+/// content (or shows the placeholder when fresh), never the parseable subset.
+#[test]
+fn t327_malformed_collector_rows_fail_closed() {
+    // a garbage row ahead of two good ones: the good rows must NOT render
+    let (f, tsv) = fixture_t327(
+        Some("not-a-date\tkimi\t3\t0.5\n2026-11-19\tkimi\t7\t0.35\n2026-11-19\tglm\t3\tzzz\n"),
+        Some(T327_DISPOSITION),
+    );
+    let out = run_sync_t327(&f, Some(&tsv), "2026-11-20");
+    assert!(out.status.success(), "malformed rows must not fail the sync");
+    let cost = region(&page(&f), "COST");
+    assert!(cost.contains("<b>n/a</b>"), "fail-closed placeholder:\n{cost}");
+    assert!(!cost.contains("0.35"), "no partial numbers from the parseable rows:\n{cost}");
+    // the same shape over PUBLISHED content: the content survives
+    let (f2, tsv2) = fixture_t327(Some(T327_TSV), Some(T327_DISPOSITION));
+    assert!(run_sync_t327(&f2, Some(&tsv2), "2026-11-20").status.success());
+    let before = page(&f2);
+    std::fs::write(&tsv2, "garbage line\n").unwrap();
+    let out2 = run_sync_t327(&f2, Some(&tsv2), "2026-11-20");
+    assert!(out2.status.success());
+    assert_eq!(page(&f2), before, "malformed rows never gut published content");
+}
+
+/// The TRUE streak comes from the newest cheap-exit disposition's `streak=`
+/// field in the supervisor's own log; with no such record (or a disposition
+/// line without the field) the tile omits it — never a fabricated streak.
+#[test]
+fn t327_missing_disposition_streak_omits_the_field() {
+    let (f, tsv) = fixture_t327(Some(T327_TSV), None);
+    assert!(run_sync_t327(&f, Some(&tsv), "2026-11-20").status.success());
+    let cost = region(&page(&f), "COST");
+    assert!(cost.contains("$0.50"), "the tile still renders:\n{cost}");
+    assert!(!cost.contains("TRUE streak"), "no streak field without a disposition record:\n{cost}");
+    // a disposition line WITHOUT a streak= field: the newest record carrying
+    // one wins — here none does, so the field stays omitted
+    let (f2, tsv2) = fixture_t327(
+        Some(T327_TSV),
+        Some("2026-11-19T11:00:00Z cheap-exit disposition (T258): triage confidently empty — launch skipped\n"),
+    );
+    assert!(run_sync_t327(&f2, Some(&tsv2), "2026-11-20").status.success());
+    assert!(
+        !region(&page(&f2), "COST").contains("TRUE streak"),
+        "a disposition without streak= omits the field:\n{}",
+        region(&page(&f2), "COST")
+    );
+}
+
+/// The marker-pair contract (T99 req 4 / T240 mechanics): malformed COST
+/// markers are warn + skip — no section bootstrapped, the page untouched
+/// around them, the stats sync still lands, the sync still succeeds.
+#[test]
+fn t327_malformed_cost_markers_are_warn_and_skip() {
+    let (f, tsv) = fixture_t327(Some(T327_TSV), Some(T327_DISPOSITION));
+    let html = page(&f);
+    // a stray BEGIN with no END: malformed (1/0)
+    std::fs::write(
+        f.site.join("index.html"),
+        html.replace("<section id=\"stats\"", "<!-- COST:BEGIN -->\n<section id=\"stats\""),
+    )
+    .unwrap();
+    commit(&f.site, "operator: stray cost marker", None, "2026-09-26", false);
+    let out = run_sync_t327(&f, Some(&tsv), "2026-11-20");
+    assert!(
+        out.status.success(),
+        "malformed COST markers must not fail: {:?}",
+        out.status.code()
+    );
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("malformed COST markers"), "warn names the fault: {err}");
+    assert!(err.contains("skipping"), "best-effort skip: {err}");
+    let html2 = page(&f);
+    assert_eq!(count(&html2, "<!-- COST:BEGIN -->"), 1, "the stray marker stays");
+    assert_eq!(count(&html2, "<!-- COST:END -->"), 0);
+    assert_eq!(count(&html2, "<section id=\"cost\""), 0, "no section bootstrapped");
+    assert!(html2.contains("<b>2/3</b>"), "stats still synced");
+    assert_eq!(sync_commits(&f), 1, "the sync still lands once");
+    // the docs table still renders (the collector ran; only the home region skipped)
+    assert!(docs(&f).contains("<section id=\"cost\">"), "the docs table is independent of the home markers");
+}
+
+/// The docs table caps at the 14 days the collector covers: 16 days of canned
+/// data render exactly 14 rows (newest first) — and the tile's 14-slot
+/// sparkline covers its own complete-day window.
+#[test]
+fn t327_docs_table_caps_at_14_days() {
+    let mut tsv = String::new();
+    for d in 1..=16 {
+        tsv.push_str(&format!("2026-11-{d:02}\tkimi-k2-0905-preview\t1\t0.10\n"));
+    }
+    let (f, tsv_path) = fixture_t327(Some(&tsv), Some(T327_DISPOSITION));
+    let out = run_sync_t327(&f, Some(&tsv_path), "2026-11-17");
+    assert!(out.status.success(), "run: {:?}", String::from_utf8_lossy(&out.stderr));
+    let docs = docs(&f);
+    assert_eq!(count(&docs, "<tr><td>"), 14, "the table caps at 14 rows:\n{docs}");
+    assert!(docs.contains("<tr><td>2026-11-16</td>"), "the newest day leads:\n{docs}");
+    assert!(docs.contains("<tr><td>2026-11-03</td>"), "the 14th-newest day is the tail:\n{docs}");
+    assert!(!docs.contains("2026-11-02"), "day 15 is cut:\n{docs}");
+    assert!(!docs.contains("2026-11-01"), "day 16 is cut:\n{docs}");
+    // the tile window: the 14 complete days ending yesterday (11-03..11-16),
+    // all equal — 14 identical max glyphs
+    let cost = region(&page(&f), "COST");
+    assert!(cost.contains("<b>██████████████</b>"), "14 flat max glyphs:\n{cost}");
+    assert!(
+        cost.contains("<b>$0.10</b><span>Langfuse spend yesterday (2026-11-16 UTC) · 7-day avg $0.10/day"),
+        "yesterday and the 7-day average over the complete-day window:\n{cost}"
+    );
 }
