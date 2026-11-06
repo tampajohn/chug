@@ -59,6 +59,12 @@ const TODO_TWO_DONE: &str = "| id | title | spec | pri | status | notes |\n\
      |----|-------|------|-----|--------|-------|\n\
      | T1 | title | specs/T1-slug.md | 2 | done | notes |\n\
      | T2 | title | specs/T2-slug.md | 2 | done | notes |\n";
+/// One OPEN row — real queue work (T325: an `open` row gates the cheap-exit
+/// routing, so the run loop's dormancy latch never arms over it). The queue
+/// half of the awake shape.
+const TODO_ONE_OPEN: &str = "| id | title | spec | pri | status | notes |\n\
+     |----|-------|------|-----|--------|-------|\n\
+     | T1 | title | specs/T1-slug.md | 2 | open | notes |\n";
 /// The canned /judge answer the fake daemon serves: the daemon's response
 /// shape (answers.<qid>.choice + confidence) at the caller's verdict.
 fn judge_answer(choice: &str, conf: f64) -> String {
@@ -165,21 +171,6 @@ fn git(root: &Path, args: &[&str]) {
         "git {args:?} failed: {}",
         String::from_utf8_lossy(&out.stderr)
     );
-}
-
-fn git_out(root: &Path, args: &[&str]) -> String {
-    let out = Command::new("git")
-        .arg("-C")
-        .arg(root)
-        .args(args)
-        .output()
-        .expect("spawn git");
-    assert!(
-        out.status.success(),
-        "git {args:?} failed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    String::from_utf8_lossy(&out.stdout).trim().to_string()
 }
 
 fn write_exec(path: &Path, body: &str) {
@@ -335,6 +326,23 @@ fn borderline_fixture() -> Fixture {
         None,
     );
     f.pin_eval_mtime(FRESH_EPOCH);
+    f
+}
+
+/// The AWAKE trip fixture (the T325 sweep): under T325 an empty queue arms
+/// dormancy and the suspended-valve skip never consults the judge, so a
+/// run-mode leg that intends the consult must model the awake shape
+/// explicitly — the 3-empty-delta chain (the T247 trip), one OPEN row in
+/// the working tree (real queue work; the latch never arms), and a STALE
+/// evaluation day (mode=eval, so the gate is reached). A confident empty on
+/// a stale day cannot cancel the trip (the T259 doctrine): the verdict is
+/// still recorded, the taken route reads kimi, and the real evaluation
+/// launches — the consult, its record, and its park all run end to end.
+fn awake_trip_fixture() -> Fixture {
+    let f = fixture();
+    f.disposition_chain(3);
+    std::fs::write(f.path().join("TODO.md"), TODO_ONE_OPEN).expect("write fixture TODO.md");
+    f.pin_eval_mtime(FRESH_EPOCH - 3 * 86_400);
     f
 }
 
@@ -777,17 +785,23 @@ fn the_state_pack_and_the_one_question_ride_the_judge_request() {
 
 // --- req 4 + req 6: run mode — the disposition, the corpus, the backfill --------
 
-/// End-to-end: a confident-empty borderline cycle writes the triaged
-/// disposition (the subject names the verdict), records ONE laya-triage
-/// decision (the state pack verbatim + verdict + confidence + route), notes
-/// exactly one triage line, and — on the NEXT look, which the fixture keeps
-/// BORDERLINE (the production quiet-day rhythm: the T2 row is still new
-/// against the unchanged baseline, so the gate triages AGAIN) — backfills
-/// the outcome naming that id (landed-clean: the delta stayed
-/// bookkeeping-only). The F13 corpus, end to end.
+/// End-to-end (the T325 awake shape): a run-mode consult now reaches the
+/// judge only on a T247 valve trip over REAL queue work — an empty queue
+/// arms dormancy and the suspended-valve skip never consults (the T325
+/// battery pins that skip's disposition). The fixture keeps the consult
+/// BORDERLINE-JUDGED: the confident-empty verdict is recorded (ONE
+/// laya-triage decision: the state pack verbatim + verdict + confidence +
+/// the route TAKEN), notes exactly one triage line — and because the day
+/// is STALE, a confident-empty cannot cancel the trip: the real evaluation
+/// launches on the orchestrator model (the stub-less chug dies — a verdict
+/// death, not a crash) and no disposition is written. On the NEXT look the
+/// trip persists (the launch died without a wrap), the gate consults
+/// AGAIN, and the parked triage backfills its outcome naming that id
+/// (fixed-up: the launch landed no artifacts — the baseline is unchanged).
+/// Corpus order: triage₁, outcome₁, triage₂. The F13 corpus, end to end.
 #[test]
 fn the_triaged_skip_writes_the_disposition_and_the_decision_records_end_to_end() {
-    let f = borderline_fixture();
+    let f = awake_trip_fixture();
     let sock = f.path().join(".chug/daemon.sock");
     serve_judge(&sock, judge_answer("no", 0.93));
     let out = run_one_pass(&f, &sock);
@@ -800,29 +814,31 @@ fn the_triaged_skip_writes_the_disposition_and_the_decision_records_end_to_end()
     assert_eq!(
         log.matches("laya triage (T259): needs_eval=no conf=0.93 (HIGH=0.85) -> route=skip").count(),
         1,
-        "exactly one triage note for the cycle: {log}"
-    );
-    let subject = git_out(f.path(), &["log", "-1", "--format=%s"]);
-    assert!(
-        subject.contains("empty-delta disposition"),
-        "the T237 token rides the triaged subject too: {subject}"
+        "exactly one triage note for the cycle — the note carries the consult's \
+         raw cascade route (skip); the STALE day blocks the cancel, so the \
+         route TAKEN (the record, the launch) reads kimi: {log}"
     );
     assert!(
-        subject.contains("T259 laya triage: needs-eval=no conf=0.93"),
-        "the triage verdict is legible in the git record: {subject}"
+        log.contains(&format!("-> eval cycle on {KIMI_ID}")),
+        "the trip's real evaluation launched on the orchestrator model: {log}"
     );
     assert!(
-        subject.contains("TRUE streak 0→1"),
-        "the streak handoff is unchanged: {subject}"
+        log.contains("cycle ended WITHOUT goal complete"),
+        "the launch really ran (the stub-less chug dies as a verdict, not a crash): {log}"
+    );
+    assert!(
+        !log.contains("cheap-exit disposition (T258):"),
+        "a consult that launched writes no disposition — the stale trip \
+         cannot be cancelled: {log}"
     );
     let decisions = fixture_decisions(&f);
     assert_eq!(decisions.len(), 1, "one decision record after pass 1: {decisions:?}");
     for needle in [
         "\"class\":\"laya-triage\"",
-        "\"choice\":\"skip\"",
+        "\"choice\":\"kimi\"",
         "\"confidence\":0.93",
-        "valve_tripped\\\":\\\"no\\\"",
-        "verdict=needs_eval:no conf=0.93 route=skip",
+        "valve_tripped\\\":\\\"yes\\\"",
+        "verdict=needs_eval:no conf=0.93 route=kimi",
     ] {
         assert!(
             decisions[0].contains(needle),
@@ -835,11 +851,11 @@ fn the_triaged_skip_writes_the_disposition_and_the_decision_records_end_to_end()
         "the triage id is parked for the next look's backfill"
     );
 
-    // Pass 2: the delta is STILL borderline (the T2 row is new against the
-    // unchanged baseline — the production quiet-day rhythm), so the gate
-    // triages again AND the parked pass-1 triage gets its outcome backfill:
-    // the delta stayed bookkeeping-only through the next look, so the skip
-    // held (landed-clean). Corpus order: triage₁, outcome₁, triage₂.
+    // Pass 2: the trip persists (the launch died without a wrap, the
+    // streak still reads 3), so the gate consults again AND the parked
+    // pass-1 triage gets its outcome backfill: the launch landed no
+    // artifacts (the baseline is unchanged), so the launch did not hold
+    // (fixed-up). Corpus order: triage₁, outcome₁, triage₂.
     let out = run_one_pass(&f, &sock);
     assert!(
         out.status.success(),
@@ -868,7 +884,7 @@ fn the_triaged_skip_writes_the_disposition_and_the_decision_records_end_to_end()
     for needle in [
         "\"class\":\"outcome\"",
         &format!("\"subject\":\"{first_id}\""),
-        "\"choice\":\"landed-clean\"",
+        "\"choice\":\"fixed-up\"",
         "what the loop found when it looked",
     ] {
         assert!(
@@ -878,7 +894,7 @@ fn the_triaged_skip_writes_the_disposition_and_the_decision_records_end_to_end()
         );
     }
     assert!(
-        decisions[2].contains("\"class\":\"laya-triage\"") && decisions[2].contains("\"choice\":\"skip\""),
+        decisions[2].contains("\"class\":\"laya-triage\"") && decisions[2].contains("\"choice\":\"kimi\""),
         "the second cycle recorded its own triage: {}",
         decisions[2]
     );
@@ -888,12 +904,14 @@ fn the_triaged_skip_writes_the_disposition_and_the_decision_records_end_to_end()
     );
 }
 
-/// End-to-end, fail-open: daemon down, a borderline cycle still launches
-/// glm (T258 exactly) and notes EXACTLY ONE fail-open line per cycle — one
-/// after the first pass, two after the second, never a storm.
+/// End-to-end, fail-open (the T325 awake shape): daemon down, an awake trip
+/// still consults — the consult fails open to EXACTLY the T247/T258 trip
+/// routing (the real evaluation on the orchestrator model) and notes
+/// EXACTLY ONE fail-open line per cycle — one after the first pass, two
+/// after the second, never a storm.
 #[test]
 fn the_fail_open_notes_one_line_per_cycle_never_a_storm() {
-    let f = borderline_fixture();
+    let f = awake_trip_fixture();
     let sock = f.path().join(".chug/no-daemon.sock");
     let out = run_one_pass(&f, &sock);
     assert!(
@@ -908,12 +926,9 @@ fn the_fail_open_notes_one_line_per_cycle_never_a_storm() {
         "exactly one fail-open note for the cycle: {log}"
     );
     assert!(
-        log.contains("eval gate (T258):"),
-        "the borderline launch routed through the gate line: {log}"
-    );
-    assert!(
-        log.contains(&format!("-> {GLM_ID}")),
-        "fail-open keeps the T258 glm routing: {log}"
+        log.contains(&format!("-> eval cycle on {KIMI_ID}")),
+        "fail-open on a trip keeps the T258 kimi routing — the real evaluation \
+         launches: {log}"
     );
     let out = run_one_pass(&f, &sock);
     assert!(out.status.success(), "the second pass exits clean");
@@ -1094,16 +1109,19 @@ fn the_laya_triage_curl_is_bounded_at_two_seconds() {
     count_eq(&body, "--max-time 2", 1, "the triage call's fail-open bound");
 }
 
-/// m7-launch-backfill-flip, held side: a LAUNCHED triage (route=glm) whose
-/// evaluation lands its artifacts — the baseline MOVES — backfills
-/// landed-clean on the next look. Run mode end to end: pass 1 triages
-/// yes/0.9, launches glm (the fixture's launch fails, a verdict death — the
-/// record and the pending park regardless), the test then commits a fresh
-/// EVALUATION.md (an `eval:` bookkeeping commit) so the next look's baseline
-/// differs from the parked one.
+/// m7-launch-backfill-flip, held side: a LAUNCHED triage whose evaluation
+/// lands its artifacts — the baseline MOVES — backfills landed-clean on the
+/// next look. Run mode end to end, the T325 awake shape: pass 1 is the trip
+/// consult (streak 3 over an open row, stale day), the judge says work
+/// (yes, 0.9), and the valve's real evaluation launches on the orchestrator
+/// model (the fixture's launch fails, a verdict death — the record and the
+/// pending park regardless); the test then commits a fresh EVALUATION.md
+/// (an `eval:` bookkeeping commit) so the next look's baseline differs from
+/// the parked one, and re-drains the row so that look is a dormant skip
+/// (laya=none — the backfill, and nothing else).
 #[test]
 fn a_launched_triage_backfills_landed_clean_when_the_baseline_moved() {
-    let f = borderline_fixture();
+    let f = awake_trip_fixture();
     let sock = f.path().join(".chug/daemon.sock");
     serve_judge(&sock, judge_answer("yes", 0.9));
     let out = run_one_pass(&f, &sock);
@@ -1115,8 +1133,8 @@ fn a_launched_triage_backfills_landed_clean_when_the_baseline_moved() {
     let decisions = fixture_decisions(&f);
     assert_eq!(decisions.len(), 1, "pass 1 recorded its triage: {decisions:?}");
     assert!(
-        decisions[0].contains("\"choice\":\"glm\""),
-        "the triage took the glm launch route: {}",
+        decisions[0].contains("\"choice\":\"kimi\""),
+        "the trip's launch route is the route TAKEN (the valve never downgrades a trip): {}",
         decisions[0]
     );
     let first_id: String = decisions[0]
@@ -1131,7 +1149,11 @@ fn a_launched_triage_backfills_landed_clean_when_the_baseline_moved() {
     );
 
     // The evaluation's artifacts land: an `eval:` commit touching
-    // EVALUATION.md — the baseline moves.
+    // EVALUATION.md — the baseline moves. The open row re-drains first (the
+    // commit sweeps the working tree), so the next look's empty queue arms
+    // dormancy: the look is a dormant skip (laya=none) — the backfill, and
+    // nothing else.
+    std::fs::write(f.path().join("TODO.md"), TODO_ONE_DONE).expect("re-drain the open row");
     f.commit_tree(
         "eval: cycle-102 fresh eval — the launched evaluation's artifacts",
         None,
@@ -1169,10 +1191,15 @@ fn a_launched_triage_backfills_landed_clean_when_the_baseline_moved() {
 
 /// m7, not-held side: the same launch, but the next look still finds the
 /// baseline UNCHANGED (no evaluation artifacts landed) — the launch did not
-/// hold, and the backfill reads fixed-up.
+/// hold, and the backfill reads fixed-up. The T325 awake shape: the trip
+/// consults (streak 3 over an open row, stale day), the judge says work,
+/// and the valve's real evaluation launches on the orchestrator model (the
+/// fixture's launch fails, a verdict death — the record and the pending
+/// park regardless); the launch died without a wrap, so the second look
+/// trips again and consults once more.
 #[test]
 fn a_launched_triage_backfills_fixed_up_when_the_baseline_did_not_move() {
-    let f = borderline_fixture();
+    let f = awake_trip_fixture();
     let sock = f.path().join(".chug/daemon.sock");
     serve_judge(&sock, judge_answer("yes", 0.9));
     let out = run_one_pass(&f, &sock);
@@ -1186,8 +1213,8 @@ fn a_launched_triage_backfills_fixed_up_when_the_baseline_did_not_move() {
         .map(String::from)
         .expect("the triage record has an id");
 
-    // Pass 2, no baseline move: the delta is still borderline (T2 new, the
-    // pass-1 death after the baseline), the gate triages again — and the
+    // Pass 2, no baseline move: the trip persists (the launch died without
+    // a wrap, the streak still reads 3), the gate consults again — and the
     // parked launch triage backfills fixed-up first.
     let out = run_one_pass(&f, &sock);
     assert!(out.status.success(), "pass 2 exits clean");
@@ -1222,23 +1249,26 @@ const TODO_ONE_TODO: &str = "| id | title | spec | pri | status | notes |\n\
 /// park survives an intervening NON-triage cycle (a routine-mode cycle never
 /// calls laya_record), and the next EVAL look consumes it exactly once — the
 /// rm after the backfill means a look that backfills but parks NOTHING (a
-/// mechanical skip: laya=none) leaves no stale park behind, so a fourth look
-/// can never double-backfill the same id. Four bounded passes:
-///   1. borderline triaged skip -> parks id X;
+/// laya=none look: a dormant skip under T325) leaves no stale park behind,
+/// so a fourth look can never double-backfill the same id. Four bounded
+/// passes:
+///   1. the awake trip consult -> parks id X;
 ///   2. routine mode (a `todo` row + fresh eval, a green stub cycle) — no
 ///      laya_record, X survives;
-///   3. MECHANICAL skip (predicate empty, laya=none) — the look still
-///      backfills X once, and parks nothing: the pending file is GONE;
-///   4. mechanical skip again — nothing left to backfill.
+///   3. DORMANT skip (the re-drained queue arms T325 dormancy, laya=none) —
+///      the look still backfills X once, and parks nothing: the pending
+///      file is GONE;
+///   4. dormant skip again — nothing left to backfill.
 ///
 /// A mutant that drops the rm re-backfills X on pass 4 — a second outcome
 /// record naming X and a surviving pending file — and both pins fail.
 #[test]
 fn a_pending_surviving_an_intervening_non_triage_cycle_backfills_exactly_once() {
-    let f = borderline_fixture();
+    let f = awake_trip_fixture();
     let sock = f.path().join(".chug/daemon.sock");
     serve_judge(&sock, judge_answer("no", 0.93));
-    // Pass 1: the triaged skip parks X.
+    // Pass 1: the trip consult parks X (the consult records and parks; the
+    // launch itself dies on the stub-less chug — a verdict death).
     let out = run_one_pass(&f, &sock);
     assert!(out.status.success(), "pass 1 exits clean");
     let decisions = fixture_decisions(&f);
@@ -1253,6 +1283,7 @@ fn a_pending_surviving_an_intervening_non_triage_cycle_backfills_exactly_once() 
     // Pass 2: ROUTINE mode — a `todo` row plus the fresh evaluation; the
     // stubbed cycle child exits green (no death line, no commits). The
     // gate/laya_record never run; the parked X survives untouched.
+    f.pin_eval_mtime(FRESH_EPOCH);
     f.commit_tree(
         "eval: cycle-103 fresh eval — a row lands, the queue works",
         Some(TODO_ONE_TODO),
@@ -1269,9 +1300,11 @@ fn a_pending_surviving_an_intervening_non_triage_cycle_backfills_exactly_once() 
     let out = run_one_pass(&f, &sock);
     assert!(out.status.success(), "pass 2 (routine) exits clean");
     let log = fixture_log(&f);
-    assert!(
-        !log.contains("cycle ended WITHOUT goal complete"),
-        "the stub cycle exits green — no death line reshapes pass 3's gate: {log}"
+    assert_eq!(
+        log.matches("cycle ended WITHOUT goal complete").count(),
+        1,
+        "the stub cycle exits green — the routine pass adds no death (pass 1's \
+         consult launch died on the stub-less chug; that line predates pass 2): {log}"
     );
     let decisions = fixture_decisions(&f);
     assert_eq!(
@@ -1284,8 +1317,8 @@ fn a_pending_surviving_an_intervening_non_triage_cycle_backfills_exactly_once() 
         "the park survives the intervening non-triage cycle"
     );
 
-    // Pass 3: eval again, predicate EMPTY (the row re-drained, no deaths) —
-    // the mechanical skip arm, laya=none. The look still consumes the park:
+    // Pass 3: eval again, the queue re-drained (no deaths added) — the
+    // DORMANT skip arm (T325), laya=none. The look still consumes the park:
     // X backfills exactly once, and NOTHING is parked after it.
     f.commit_tree(
         "eval: cycle-104 fresh eval — the queue re-drained",
@@ -1331,15 +1364,16 @@ fn a_pending_surviving_an_intervening_non_triage_cycle_backfills_exactly_once() 
     );
 }
 
-/// m11-tripped-flag-dead: the record's valve_tripped derivation is live — a
-/// run-mode trip-cancel (streak 3, fresh, confident-empty) records
-/// valve_tripped:"yes" in the triage record's state pack, and the
-/// disposition subject names the trip cancellation.
+/// m11-tripped-flag-dead: the record's valve_tripped derivation is live —
+/// a run-mode trip consult (streak 3) records valve_tripped:"yes" in the
+/// triage record's state pack. The T325 awake shape: the consult reaches
+/// the judge only over real queue work on a stale day, and a confident
+/// empty cannot cancel a STALE trip — the verdict is recorded, the taken
+/// route reads kimi, and the real evaluation launches (the T259 stale-trip
+/// doctrine, end to end in run mode).
 #[test]
 fn a_trip_cancel_records_valve_tripped_yes_in_the_record() {
-    let f = fixture();
-    f.disposition_chain(3);
-    f.pin_eval_mtime(FRESH_EPOCH);
+    let f = awake_trip_fixture();
     let sock = f.path().join(".chug/daemon.sock");
     serve_judge(&sock, judge_answer("no", 0.95));
     let out = run_one_pass(&f, &sock);
@@ -1348,16 +1382,17 @@ fn a_trip_cancel_records_valve_tripped_yes_in_the_record() {
         "the bounded pass exits clean: {}",
         String::from_utf8_lossy(&out.stderr)
     );
-    let subject = git_out(f.path(), &["log", "-1", "--format=%s"]);
+    let log = fixture_log(&f);
     assert!(
-        subject.contains("T259 laya trip: needs-eval=no conf=0.95"),
-        "the cancelled trip's disposition names the trip reason: {subject}"
+        log.contains("laya triage (T259): needs_eval=no conf=0.95 (HIGH=0.85) -> route=skip"),
+        "the consult answered confident-empty (its raw cascade route is skip) — \
+         the STALE day blocks the cancel, so the route TAKEN reads kimi: {log}"
     );
     let decisions = fixture_decisions(&f);
     assert_eq!(decisions.len(), 1, "one triage record: {decisions:?}");
     assert!(
-        decisions[0].contains("\"choice\":\"skip\""),
-        "the cancelled trip took the skip route: {}",
+        decisions[0].contains("\"choice\":\"kimi\""),
+        "the taken route is the launch (a stale trip cannot be cancelled): {}",
         decisions[0]
     );
     assert!(
@@ -1382,7 +1417,7 @@ fn a_trip_cancel_records_valve_tripped_yes_in_the_record() {
 /// the pre-fix loopd.sh (the duplicate id) and passes on the fixed one.
 #[test]
 fn an_outcome_record_mints_its_own_id_never_the_parked_triage_id() {
-    let f = borderline_fixture();
+    let f = awake_trip_fixture();
     let sock = f.path().join(".chug/daemon.sock");
     serve_judge(&sock, judge_answer("no", 0.93));
     // Pass 1: the triaged skip parks triage id X.
@@ -1396,10 +1431,9 @@ fn an_outcome_record_mints_its_own_id_never_the_parked_triage_id() {
     assert_eq!(decisions.len(), 1, "pass 1 recorded its triage: {decisions:?}");
     let x_id = record_field(&decisions[0], "id").expect("the triage record has an id");
 
-    // Pass 2: the gate triages again (the delta is still borderline — the
-    // production quiet-day rhythm) and the parked X gets its outcome
-    // backfill before triage₂ lands. Corpus order: triage₁, outcome₁,
-    // triage₂.
+    // Pass 2: the trip persists (the launch died without a wrap), the gate
+    // consults again, and the parked X gets its outcome backfill before
+    // triage₂ lands. Corpus order: triage₁, outcome₁, triage₂.
     let out = run_one_pass(&f, &sock);
     assert!(
         out.status.success(),
@@ -1439,7 +1473,7 @@ fn an_outcome_record_mints_its_own_id_never_the_parked_triage_id() {
 /// happily wrote the duplicate instead of warning.
 #[test]
 fn a_self_subject_backfill_warns_and_writes_nothing() {
-    let f = borderline_fixture();
+    let f = awake_trip_fixture();
     pin_fake_clock(&f, FRESH_EPOCH);
     let sock = f.path().join(".chug/daemon.sock");
     serve_judge(&sock, judge_answer("no", 0.93));
@@ -1508,7 +1542,7 @@ fn a_self_subject_backfill_warns_and_writes_nothing() {
 /// triage₂) is checked.
 #[test]
 fn the_minted_outcome_id_follows_the_triage_id_convention() {
-    let f = borderline_fixture();
+    let f = awake_trip_fixture();
     let sock = f.path().join(".chug/daemon.sock");
     serve_judge(&sock, judge_answer("no", 0.93));
     let out = run_one_pass(&f, &sock);
@@ -1555,10 +1589,10 @@ fn the_minted_outcome_id_follows_the_triage_id_convention() {
 /// pin fails; with the guard, exactly 1.
 #[test]
 fn an_out_of_band_outcome_consumes_the_park_silently_without_a_second_backfill() {
-    let f = borderline_fixture();
+    let f = awake_trip_fixture();
     let sock = f.path().join(".chug/daemon.sock");
     serve_judge(&sock, judge_answer("no", 0.93));
-    // Pass 1: the triaged skip parks triage id X (the consult record).
+    // Pass 1: the trip consult parks triage id X (the consult record).
     let out = run_one_pass(&f, &sock);
     assert!(
         out.status.success(),
@@ -1601,10 +1635,10 @@ fn an_out_of_band_outcome_consumes_the_park_silently_without_a_second_backfill()
         "the parked subject carries exactly one outcome BEFORE the look: {decisions:?}"
     );
 
-    // Pass 2: a MECHANICAL skip look (the row re-drained — new=0 over the
-    // untouched baseline, bookkeeping-only, fresh; laya=none, so nothing
-    // re-parks after it). The look still consumes the park: the probe
-    // HITS, so ZERO new records land and the park is consumed silently.
+    // Pass 2: a DORMANT skip look (the row re-drained — the empty queue
+    // arms T325 dormancy; laya=none, so nothing re-parks after it). The
+    // look still consumes the park: the probe HITS, so ZERO new records
+    // land and the park is consumed silently.
     f.commit_tree(
         "eval: cycle-105 fresh eval — the queue re-drained",
         Some(TODO_ONE_DONE),
