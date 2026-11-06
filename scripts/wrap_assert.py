@@ -2754,9 +2754,16 @@ def _ol_establishment_anchor(text):
     The FIRST `establishment` occurrence whose follow is neither the `\'s`
     back-reference (`the 665th establishment\'s committed figure` — the
     close\'s establishment, an EARLIER cycle\'s) nor the `hands off` handoff
-    (the NEXT cycle\'s). The own shapes all pass: `The 668th establishment —
-    reading` full, `the 669th establishment [` / `the 640th establishment (`
-    compacted.
+    (the NEXT cycle\'s), and whose front carries an adjacent `<N>th` ordinal
+    (T324 — the 21st fire): a bare prose mention (`the establishment figure
+    125/3,411 unaffected and TRUE` — the cycle-3008 full entry's
+    carried-figure triage prose, no ordinal adjacent) or a hyphenated
+    compound (`the 695th-establishment anchor-label slip` — the hyphen
+    breaks the adjacency) is NOT the group anchor. The scan tries
+    subsequent occurrences until a real anchor is found; none → (-1, None)
+    — the fail-closed detail. The own shapes all pass: `The 668th
+    establishment — reading` full, `the 669th establishment [` / `the 640th
+    establishment (` compacted.
     """
     start = 0
     while True:
@@ -2768,6 +2775,9 @@ def _ol_establishment_anchor(text):
         while p < n and text[p] in _ONE_LINER_WS:
             p += 1
         if text.startswith("'s", p) or text.startswith("hands", p):
+            start = idx + len("establishment")
+            continue
+        if _ol_ordinal_before(text, idx) is None:
             start = idx + len("establishment")
             continue
         return (idx, "establishment")
@@ -2789,7 +2799,7 @@ def _ol_establishment_figures(text):
     """
     idx, _ = _ol_establishment_anchor(text)
     if idx < 0:
-        return (None, "no own-establishment anchor probed (the `establishment` occurrence is a `'s` back-reference or a `hands off` handoff)")
+        return (None, "no own-establishment anchor probed (the `establishment` occurrence is a `'s` back-reference, a `hands off` handoff, or a bare non-anchor mention with no adjacent `<N>th` ordinal; T324)")
     ordinal = _ol_ordinal_before(text, idx)
     if ordinal is None:
         return (None, "no `<N>th` ordinal adjacent before the establishment anchor")
@@ -2815,25 +2825,73 @@ def _ol_establishment_figures(text):
 def _ol_rearm_figure(text):
     """Group 5 — the re-arm group: the ordinal (`re-arm <ord>`).
 
-    The FIRST `re-arm` occurrence (boundary-checked — `pre-arm` is refused)
-    and the first number after it (`re-arm 597th DISCHARGED EXACT` full,
-    `re-arm 598th discharged EXACT` compacted). The own discharge is the
-    first mention: the wrap's `the re-arm spot-watch discharges` and the
-    handoff's `re-arm <next>th DUE` both follow it. Returns (ordinal,);
+    The FIRST `re-arm` occurrence that is neither boundary-blocked
+    (`pre-arm` is refused) nor a non-anchor mention (T324 — the 19th/20th
+    fires): a retrospective clause-mention `re-arm(ed)? at the`
+    (case-insensitive — `the class re-armed at the FIFTH` / `the class
+    re-armed at the 15th`) or a backtick-quoted term mention (the term
+    wrapped in backticks inside TRIAGE prose naming the extractor's own
+    surface) — the class-accounting/triage prose, never the discharge
+    anchor. The scan tries subsequent occurrences until a real anchor is
+    found; none → the fail-closed detail. The own discharge is the first
+    anchor: the wrap's `the re-arm spot-watch discharges` and the handoff's
+    `re-arm <next>th DUE` both follow it. Returns (ordinal,);
     (None, detail) fail-closed.
     """
     start = 0
     while True:
         idx = text.find("re-arm", start)
         if idx < 0:
-            return (None, "no `re-arm` anchor probed")
+            return (None, "no own-`re-arm` discharge anchor probed (the probed occurrence(s) were boundary-blocked, retrospective `re-arm(ed)? at the` clause-mentions, or backtick-quoted term mentions; T324)")
         if idx > 0 and (text[idx - 1].isalnum() or text[idx - 1] == "-"):
+            start = idx + len("re-arm")
+            continue
+        if _ol_rearm_clause_at(text, idx):
+            start = idx + len("re-arm")
+            continue
+        if _ol_rearm_quoted_at(text, idx):
             start = idx + len("re-arm")
             continue
         num = _ol_next_number(text, idx + len("re-arm"))
         if num is None:
             return (None, "no figure after the `re-arm` anchor")
         return ((num[0],), None)
+
+
+# _ol_rearm_clause_at(text, idx) — INTERNAL; e.g. _ol_rearm_clause_at("the class re-armed at the FIFTH", 11)
+def _ol_rearm_clause_at(text, idx):
+    """Is the `re-arm` occurrence at *idx* a retrospective clause-mention?
+
+    T324: `re-arm(ed)? at the` (case-insensitive) — the class-accounting
+    prose (`the class re-armed at the FIFTEENTH`, `the class re-armed at
+    the 15th`), never the discharge anchor (`re-arm 626th DISCHARGED EXACT`
+    full, `re-arm 598th discharged EXACT` compacted, `re-arm <next>th DUE`
+    handoff — none carry the `at the` follow).
+    """
+    p = idx + len("re-arm")
+    if text[p:p + 2] == "ed":
+        p += 2
+    q = p
+    n = len(text)
+    while q < n and text[q] in _ONE_LINER_WS:
+        q += 1
+    return text[q:q + 6].lower() == "at the"
+
+
+# _ol_rearm_quoted_at(text, idx) — INTERNAL; e.g. _ol_rearm_quoted_at("the first-`re-arm` coverage gap", 11)
+def _ol_rearm_quoted_at(text, idx):
+    """Is the `re-arm` occurrence at *idx* a backtick-quoted term mention?
+
+    T324 (the same non-anchor-mention class — the live-corpus smoke's
+    fourth instance): the TRIAGE prose naming the extractor's own surface
+    wraps the term in backticks (first-backtick + `re-arm` + backtick +
+    ` coverage gap` in the committed shape). The discharge anchors are
+    plain prose (never backtick-adjacent), so a backtick on either side
+    marks the mention.
+    """
+    before = text[idx - 1:idx]
+    after = text[idx + len("re-arm"):idx + len("re-arm") + 1]
+    return "`" in (before, after)
 
 
 # Wire the group registry (the extractors are defined above).
