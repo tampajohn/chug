@@ -337,7 +337,7 @@
 
 Machine-maintained lane (T326): proposals land here with status `proposed`; the operator flips a row to `open` to activate it. The loop must never self-flip or implement proposed rows. P-ids do not consume T-numbers until ratified.
 
-| P001 | vampflake go-live | specs/proposed/vampflake-go-live.md | 3 | open | operator-approved 2026-11-06 (blanket approval) — originally hand-seeded 2026-11-06 — 3 operator steps, parked since 2026-09 |
+| P001 | sandbox-deploy go-live | specs/proposed/sandbox-deploy-go-live.md | 3 | open | operator-approved 2026-11-06 (blanket approval) — originally hand-seeded 2026-11-06 — 3 operator steps, parked since 2026-09 |
 | P002 | F16 unpark decision | specs/proposed/f16-unpark-decision.md | 4 | open | operator-approved 2026-11-06 (blanket approval) — originally hand-seeded 2026-11-06 — keep/kill memo |
 | P003 | SCR spike (SGLang suffix-cache-reuse) | specs/proposed/scr-spike.md | 4 | open | operator-approved 2026-11-06 (blanket approval) — originally hand-seeded 2026-11-06 — blocked on spark GPU headroom since 2026-10-01 |
 | P004 | Marketplace presence (chug + chug-watch listing) | specs/proposed/p004-marketplace.md | 3 | open | operator-approved 2026-11-06 (blanket approval) — originally hand-seeded 2026-11-06 — Q4 deliverable #4 |

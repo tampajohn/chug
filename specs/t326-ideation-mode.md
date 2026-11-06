@@ -24,7 +24,7 @@ compete with manufactured meta-work.
    ~2k-token structured task) running `scripts/ideate.py`.
 2. **Ideas packet** (`scripts/ideate.py` builds, deterministic, no network):
    - FEATURES.md statuses (parked items: F16),
-   - deferred/blocked threads named in LEDGER + docs (vampflake go-live, SCR
+   - deferred/blocked threads named in LEDGER + docs (sandbox-deploy go-live, SCR
      spike),
    - eval-triage class census from `decisions.jsonl` (top recurring friction
      classes = dogfood pain),
@@ -40,7 +40,7 @@ compete with manufactured meta-work.
    `ideation reject (T326): meta-class <title>`. Daemon unavailable → fail
    CLOSED to rejection for this cycle (better silent than meta).
 5. **Seed the lane at ship time**: write the `## Proposed` section with three
-   hand-filed stubs (vampflake go-live; F16 unpark decision; SCR spike
+   hand-filed stubs (sandbox-deploy go-live; F16 unpark decision; SCR spike
    pending spark GPU) so the lane exists before the first machine cycle.
 
 ## Tests

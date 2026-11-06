@@ -43,6 +43,6 @@ as operator-supplied profile files, not committed content).
 
 ## Out of scope
 
-- Company/VA profile contents (operator-distributed, P005's kit).
+- Company profile contents (operator-distributed, P005's kit).
 - Secret storage backends beyond the `*_CMD` escape hatch.
 - Model health probing at install time (loopd already degrades gracefully).
