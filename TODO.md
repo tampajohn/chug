@@ -337,10 +337,10 @@
 
 Machine-maintained lane (T326): proposals land here with status `proposed`; the operator flips a row to `open` to activate it. The loop must never self-flip or implement proposed rows. P-ids do not consume T-numbers until ratified.
 
-| P001 | vampflake go-live | specs/proposed/vampflake-go-live.md | 3 | proposed | hand-seeded 2026-11-06 — 3 operator steps, parked since 2026-09 |
-| P002 | F16 unpark decision | specs/proposed/f16-unpark-decision.md | 4 | proposed | hand-seeded 2026-11-06 — keep/kill memo |
-| P003 | SCR spike (SGLang suffix-cache-reuse) | specs/proposed/scr-spike.md | 4 | proposed | hand-seeded 2026-11-06 — blocked on spark GPU headroom since 2026-10-01 |
-| P004 | Marketplace presence (chug + chug-watch listing) | specs/proposed/p004-marketplace.md | 3 | proposed | hand-seeded 2026-11-06 — Q4 deliverable #4 |
-| P005 | Pilot-team onboarding kit (internal: Confluence + proxy profile, never in public repo) | specs/proposed/p005-pilot-onboarding-kit.md | 2 | proposed | hand-seeded 2026-11-06 — Q4 deliverables #1/#5 |
-| P006 | Langfuse adoption dashboard (internal, per-team) | specs/proposed/p006-adoption-dashboard.md | 3 | proposed | hand-seeded 2026-11-06 — Q4 deliverable #6 |
-| P007 | Three-altitudes positioning memo (internal: desk/fleet/product) | specs/proposed/p007-three-altitudes.md | 4 | proposed | hand-seeded 2026-11-06 — Q4 narrative, Raju alignment |
+| P001 | vampflake go-live | specs/proposed/vampflake-go-live.md | 3 | open | operator-approved 2026-11-06 (blanket approval) — originally hand-seeded 2026-11-06 — 3 operator steps, parked since 2026-09 |
+| P002 | F16 unpark decision | specs/proposed/f16-unpark-decision.md | 4 | open | operator-approved 2026-11-06 (blanket approval) — originally hand-seeded 2026-11-06 — keep/kill memo |
+| P003 | SCR spike (SGLang suffix-cache-reuse) | specs/proposed/scr-spike.md | 4 | open | operator-approved 2026-11-06 (blanket approval) — originally hand-seeded 2026-11-06 — blocked on spark GPU headroom since 2026-10-01 |
+| P004 | Marketplace presence (chug + chug-watch listing) | specs/proposed/p004-marketplace.md | 3 | open | operator-approved 2026-11-06 (blanket approval) — originally hand-seeded 2026-11-06 — Q4 deliverable #4 |
+| P005 | Pilot-team onboarding kit (internal: Confluence + proxy profile, never in public repo) | specs/proposed/p005-pilot-onboarding-kit.md | 2 | proposed | APPROVED 2026-11-06 — owner fb011b00 (internal artifact, NOT loop work; do not dispatch): 2026-11-06 — Q4 deliverables #1/#5 |
+| P006 | Langfuse adoption dashboard (internal, per-team) | specs/proposed/p006-adoption-dashboard.md | 3 | proposed | APPROVED 2026-11-06 — owner fb011b00 (internal artifact, NOT loop work; do not dispatch): 2026-11-06 — Q4 deliverable #6 |
+| P007 | Three-altitudes positioning memo (internal: desk/fleet/product) | specs/proposed/p007-three-altitudes.md | 4 | proposed | APPROVED 2026-11-06 — owner fb011b00 (internal artifact, NOT loop work; do not dispatch): 2026-11-06 — Q4 narrative, Raju alignment |

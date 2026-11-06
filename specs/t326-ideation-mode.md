@@ -61,3 +61,18 @@ compete with manufactured meta-work.
 - Web/ecosystem scanning as an idea source (no network in the loop; the
   operator seeds ecosystem items by hand into `## Proposed`).
 - The first three seed proposals' implementations (operator flips decide).
+
+## Amendment (2026-11-06, operator blanket delegation)
+
+The operator approved all current proposals and delegated ratification
+going forward: **a proposal with no operator response is approved.** The
+lane therefore auto-ratifies: at each ideation cycle, any `proposed` row
+older than 7 days flips to `open` automatically unless the operator has
+vetoed it (veto = delete the row or set status `vetoed`). Every auto-flip
+is logged in the cycle disposition (`ideation auto-ratified (T326): P###,
+P###`) so the action stays visible in the git log. The meta-class noul
+gate still runs BEFORE filing — auto-ratification never bypasses the
+outward-facing requirement. Internal-artifact proposals (company content
+that must not enter the public repo) are filed with an `operator-owned`
+note and are NEVER auto-flipped or dispatched; they wait for the operator
+or their Claude session to execute them out-of-band.
