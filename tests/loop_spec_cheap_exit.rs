@@ -1104,16 +1104,29 @@ fn the_gate_orders_the_valve_before_the_skip_and_refuses_unknown_baselines() {
         .map(|i| gate_at + i)
         .expect("eval_gate closes");
     let body = &loopd[gate_at..=gate_end];
+    // T325: the dormancy arm decides FIRST (an empty queue suspends the
+    // valve); the valve still precedes the MECHANICAL skip arm on the awake
+    // path — the trip converts the 4th empty cycle whatever the delta says.
+    let dormant_skip = body
+        .find("dormant=suspended-valve")
+        .expect("the dormant skip arm is wired");
     let valve = body
         .find("[ \"$streak\" -ge 3 ]")
         .expect("the valve arm is wired");
-    let skip = body
-        .find("verb=skip")
-        .expect("the skip arm is wired");
+    let mech = body
+        .find("[ \"$new\" = 0 ] && [ \"$deaths\" = 0 ] && [ \"$book\" = yes ] && [ \"$fresh\" = yes ]")
+        .expect("the mechanical skip arm is wired");
     assert!(
-        valve < skip,
-        "the valve arm must precede the skip arm — the 4th consecutive empty \
-         cycle runs the real evaluation even on a quiet delta (req 1)"
+        dormant_skip < valve,
+        "dormancy decides BEFORE the T247 valve leg (T325): with the queue \
+         empty the cheap exit fires on every cycle and the valve is \
+         suspended — the valve arm may not run before the dormancy arm"
+    );
+    assert!(
+        valve < mech,
+        "the valve arm must precede the mechanical skip arm — the 4th \
+         consecutive empty cycle runs the real evaluation even on a quiet \
+         delta (req 1)"
     );
     count_eq(
         &loopd,
@@ -1250,8 +1263,9 @@ fn the_gate_launch_arms_resolve_full_model_ids_never_shorthands() {
     count_eq(
         &loopd,
         "verb=launch; model=$LOOP_ORCH_MODEL",
-        2,
-        "both kimi arms (valve trip + work delta/stale/unknown) resolve the orchestrator model"
+        3,
+        "the kimi arms resolve the orchestrator model: the valve trip, the \
+         work delta/stale/unknown arm, and the T325 dormant weekly audit"
     );
     count_eq(
         &loopd,
