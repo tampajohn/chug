@@ -1006,6 +1006,24 @@ triage verdict is recorded to `.chug/decisions.jsonl` (class
 distillation corpus). These layers sit above the per-phase routing
 below: they can skip or re-route what it would have launched.
 
+**Dormant mode (T325).** When the queue is empty — zero open rows in
+TODO.md — the loop is DORMANT and dormancy outranks the valve: the
+cheap exit fires on every cycle whatever the TRUE streak (the T247
+forced-eval valve is suspended; the disposition names it
+`suspended-valve`), and the valve's 4th-TRUE paid trip is replaced by a
+weekly audit timer — a real evaluation launches only when the newest
+EVALUATION.md-touching commit is 7+ days old (git is the source; the
+loop's own empty dispositions never refresh the timer, and a crashed
+audit simply re-fires). The weekly audit launches with `DORMANT=1` and
+is READ-ONLY: gates green, pins verified, site-sync freshness, daemon
+and Langfuse liveness — it files TODO rows ONLY on observed breakage
+(one row per breakage, zero on green) and never files loop-tooling
+meta-work. Any open row — operator-filed or breakage-filed — exits
+dormancy immediately (`dormant exit (T325): open=N`) and normal valve
+semantics resume. An empty backlog makes the loop nearly free; it never
+makes the loop invent meta-work. (The sibling lane — outward-facing
+feature proposals the operator ratifies — is T326.)
+
 Per cycle: the orchestrator's model is per-phase (T81) — kimi-k3
 orchestrates fresh-eval cycles, glm-5-3-flash routine ones, decided by
 `loopd.sh` before launch from LOOP-SPEC's freshness rule (a non-empty queue
