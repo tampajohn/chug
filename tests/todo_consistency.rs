@@ -8,7 +8,11 @@
 
 use std::collections::HashSet;
 
-const STATUSES: [&str; 4] = ["todo", "in-progress", "blocked", "done"];
+// The dormant-era vocabulary (operator backlog filing, cycle-3070 wrap:
+// T325–T328 + the T326 Proposed lane) extends the original four — `open`
+// is the operator's active-backlog state (the Proposed lane flips to it
+// on activation), `proposed` the dormant lane's resting state.
+const STATUSES: [&str; 6] = ["todo", "in-progress", "blocked", "done", "open", "proposed"];
 
 /// Cells of one TODO.md table row, or `None` for anything that is not a
 /// data row: non-`|` lines, the header row, and the dash separator. Shared
@@ -56,7 +60,7 @@ fn row_label(row: usize, id: &str) -> String {
 /// skipped; non-table lines (incl. blank trailing lines) are ignored.
 fn validate_todo_table(md: &str, spec_exists: impl Fn(&str) -> bool) -> Vec<String> {
     let mut problems = Vec::new();
-    let mut seen_ids: HashSet<u64> = HashSet::new();
+    let mut seen_ids: HashSet<String> = HashSet::new();
     for (idx, raw) in md.lines().enumerate() {
         let cells = match table_cells(raw) {
             Some(cells) => cells,
@@ -74,20 +78,22 @@ fn validate_todo_table(md: &str, spec_exists: impl Fn(&str) -> bool) -> Vec<Stri
         let [id, _title, spec, pri, status, _notes]: [&str; 6] =
             cells.try_into().expect("length checked above");
 
-        // id: ^T[0-9]+$, unique.
+        // id: ^[TP][0-9]+$, unique within its own letter space (T-rows are
+        // the machine queue; P-rows are the operator's Proposed lane, T326).
+        let id_prefix = id.chars().next().unwrap_or(' ');
         let id_num = match id
-            .strip_prefix('T')
+            .strip_prefix(|c| c == 'T' || c == 'P')
             .filter(|digits| !digits.is_empty() && digits.chars().all(|c| c.is_ascii_digit()))
             .and_then(|digits| digits.parse::<u64>().ok())
         {
             Some(n) => n,
             None => {
-                problems.push(format!("{name}: id '{id}' must match ^T[0-9]+$"));
+                problems.push(format!("{name}: id '{id}' must match ^[TP][0-9]+$"));
                 continue;
             }
         };
-        if !seen_ids.insert(id_num) {
-            problems.push(format!("{name}: duplicate id 'T{id_num}'"));
+        if !seen_ids.insert(id.to_string()) {
+            problems.push(format!("{name}: duplicate id '{id}'"));
         }
 
         // pri: an integer.
@@ -102,12 +108,22 @@ fn validate_todo_table(md: &str, spec_exists: impl Fn(&str) -> bool) -> Vec<Stri
             ));
         }
 
-        // spec: ^specs/t<N>-[a-z0-9-]+\.md$ with N == the row's id number
-        // (case-insensitive on the `t`).
-        if !spec_ref_matches_id(spec, id_num) {
-            problems.push(format!(
-                "{name}: spec '{spec}' must match specs/t{id_num}-<slug>.md"
-            ));
+        // spec: T-rows keep the id-number coupling
+        // (^specs/t<N>-[a-z0-9-]+\.md$ with N == the row's id number,
+        // case-insensitive on the `t`); P-rows carry the Proposed lane's
+        // shape instead (^specs/proposed/[a-z0-9-]+\.md$, no id coupling).
+        let spec_ok = if id_prefix == 'P' {
+            proposed_spec_ref_matches(spec)
+        } else {
+            spec_ref_matches_id(spec, id_num)
+        };
+        if !spec_ok {
+            let want = if id_prefix == 'P' {
+                "specs/proposed/<slug>.md".to_string()
+            } else {
+                format!("specs/t{id_num}-<slug>.md")
+            };
+            problems.push(format!("{name}: spec '{spec}' must match {want}"));
         } else if !spec_exists(spec) {
             problems.push(format!("{name}: spec file '{spec}' does not exist"));
         }
@@ -142,6 +158,21 @@ fn spec_ref_matches_id(spec: &str, id_num: u64) -> bool {
 
 fn row(id: &str, spec: &str, pri: &str, status: &str) -> String {
     format!("| {id} | some title | {spec} | {pri} | {status} | notes |\n")
+}
+
+/// `specs/proposed/<slug>.md` — the T326 Proposed lane's spec shape:
+/// P-rows carry no id-number coupling; the slug is free `[a-z0-9-]+`.
+fn proposed_spec_ref_matches(spec: &str) -> bool {
+    let Some(slug) = spec.strip_prefix("specs/proposed/") else {
+        return false;
+    };
+    let Some(slug) = slug.strip_suffix(".md") else {
+        return false;
+    };
+    !slug.is_empty()
+        && slug
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
 }
 
 fn table(rows: &str) -> String {
@@ -192,7 +223,7 @@ fn malformed_rows_are_rejected_naming_the_row() {
         "row 5 (T1): status 'donee'",
         "row 6 (T2): spec 'specs/t3-wrong-number.md' must match specs/t2-<slug>.md",
         "row 7 (T4): spec file 'specs/t4-gone.md' does not exist",
-        "row 8 (Tx): id 'Tx' must match ^T[0-9]+$",
+        "row 8 (Tx): id 'Tx' must match ^[TP][0-9]+$",
         "row 9 (T5): pri 'high' is not an integer",
         "row 10 (T5): duplicate id 'T5'",
         "row 11 (T6): expected exactly 6 cells, got 4",

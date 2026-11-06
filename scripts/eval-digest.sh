@@ -123,11 +123,16 @@ if [ -f "$TODO_FILE" ]; then
     /^\|/ {
       s = $6
       gsub(/^[ \t]+|[ \t]+$/, "", s)
-      if (s == "todo" || s == "in-progress" || s == "blocked" || s == "done") c[s]++
+      if (s == "todo" || s == "in-progress" || s == "blocked" || s == "done" || s == "open" || s == "proposed") c[s]++
     }
     END {
-      printf "todo=%d in-progress=%d blocked=%d done=%d",
-        c["todo"] + 0, c["in-progress"] + 0, c["blocked"] + 0, c["done"] + 0
+      out = sprintf("todo=%d in-progress=%d blocked=%d done=%d",
+        c["todo"] + 0, c["in-progress"] + 0, c["blocked"] + 0, c["done"] + 0)
+      # The dormant-era states (T325/T326) render only when present, so the
+      # pinned four-state fixture shape stays byte-stable.
+      if (c["open"] + 0 > 0 || c["proposed"] + 0 > 0)
+        out = out sprintf(" open=%d proposed=%d", c["open"] + 0, c["proposed"] + 0)
+      printf "%s", out
     }' "$TODO_FILE")
 fi
 EVAL_LINE="EVALUATION.md missing (never evaluated)"

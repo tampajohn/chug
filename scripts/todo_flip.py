@@ -54,7 +54,7 @@ EXPECTED_CELLS = 6
 # The legal status vocabulary, copied from the T8 guard's own STATUSES
 # (tests/todo_consistency.rs) — a status outside it fails the guard
 # post-write, so it is rejected pre-write here.
-LEGAL_STATUSES = ("todo", "in-progress", "blocked", "done")
+LEGAL_STATUSES = ("todo", "in-progress", "blocked", "done", "open", "proposed")
 
 
 def _row_cells(line):

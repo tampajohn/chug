@@ -88,11 +88,13 @@ LOOP_ROUTINE_MODEL="${LOOP_ROUTINE_MODEL:-anthropic-system.ai.glm-5-3-flash}"
 # orchestrator's own Phase-1 decision (same predicate, same files, one
 # single-driver writer) always agrees with it. CHUG_ROUTINE_TODAY pins the
 # "today" side for tests, the eval-digest.sh CHUG_DIGEST_NOW pattern.
-todo_rows() { # count of TODO.md data rows whose status cell is `todo`
+todo_rows() { # count of TODO.md data rows whose status cell is `todo` or
+  # `open` (the operator's dormant-era active-backlog state, T325 — an
+  # open row is real queue work and must gate the cheap-exit routing).
   [ -f "$1" ] || { echo 0; return; }
   awk -F'|' '/^[|]/ {
     id=$2; gsub(/[ \t]/, "", id)
-    if (id ~ /^T[0-9]+$/) { s=$6; gsub(/[ \t]/, "", s); if (s == "todo") n++ }
+    if (id ~ /^T[0-9]+$/) { s=$6; gsub(/[ \t]/, "", s); if (s == "todo" || s == "open") n++ }
   } END { print n + 0 }' "$1"
 }
 eval_fresh() { # EVALUATION.md was written today (same UTC day)
@@ -219,7 +221,7 @@ triage_route() { # the pure cascade: <choice> <confidence> -> skip | glm | kimi
   }'
 }
 
-closed_todo_rows() { # baseline `todo` rows no longer `todo` (closed,
+closed_todo_rows() { # baseline `todo`/`open` rows no longer `todo` (closed,
   # re-statused, or removed) — the pack's rows-closed half. Same shape as
   # new_todo_rows: the baseline copy from git, an unknown baseline
   # degrading to 0 (the bookkeeping leg catches the dirty-delta shape).
@@ -230,7 +232,7 @@ closed_todo_rows() { # baseline `todo` rows no longer `todo` (closed,
   awk -F'|' '
     NR == FNR {
       id = $2; gsub(/[ \t]/, "", id)
-      if (id ~ /^T[0-9]+$/) { s = $6; gsub(/[ \t]/, "", s); if (s == "todo") was[id] = 1 }
+      if (id ~ /^T[0-9]+$/) { s = $6; gsub(/[ \t]/, "", s); if (s == "todo" || s == "open") was[id] = 1 }
       next
     }
     {
