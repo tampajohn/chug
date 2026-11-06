@@ -4956,5 +4956,433 @@ class AssertFillEvalStateUntrackedTest(unittest.TestCase):
             self.assertEqual(f.read(), pristine)
 
 
+# ---- T324: the one-liner anchor skip-rule (the T316 first-occurrence
+# coverage gap) — the 19th/20th/21st production exercises' guard-fires
+# (the re-arm `re-arm(ed)? at the` clause-mention latches at the
+# cycle-3024/3025 wraps, the establishment bare-prose-mention latch at
+# the cycle-3029 wrap), each adjudicated EQUAL BY HAND at zero casualty;
+# the skip-rule makes the pair extraction mechanical for the FUTURE
+# compactions. No committed text is edited. ----
+
+# The three production fires: (cycle, the EVALUATION.md commit carrying
+# the full entry the guard exercised, the exercise number). The full
+# entry side lives in git history (the compaction shed it); the
+# one-liner side is the committed line in the live tree.
+_T324_FIRES = (
+    (3000, "d26e221", 19),  # the cycle-3024 wrap: the re-arm clause latch
+    (3004, "deea924", 20),  # the cycle-3025 wrap: the re-arm clause latch
+    (3008, "9ae8c1a", 21),  # the cycle-3029 wrap: the establishment prose latch
+)
+
+
+def _t324_repo_root():
+    """The repo root — this test file lives at <root>/scripts/."""
+    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def _t324_git_eval_text(ref):
+    """EVALUATION.md's text at *ref* — the committed corpus, probed at
+    test time (the T312 probe-then-assert discipline). Fails CLOSED with
+    a named detail when git refuses (the ref absent, not a repo)."""
+    proc = subprocess.run(
+        ["git", "-C", _t324_repo_root(), "show", f"{ref}:EVALUATION.md"],
+        capture_output=True, text=True,
+    )
+    if proc.returncode != 0 or not proc.stdout:
+        raise AssertionError(
+            f"the T324 committed-corpus probe failed — `git show "
+            f"{ref}:EVALUATION.md` rc {proc.returncode} "
+            f"({proc.stderr.strip()})"
+        )
+    return proc.stdout
+
+
+def _t324_live_eval_text():
+    """The LIVE tree's EVALUATION.md — the corpus the guard exercises at
+    every wrap prep (the T324 spec's leg (d) brings it into the battery;
+    the corpus region asserted is the template-era surface only)."""
+    path = os.path.join(_t324_repo_root(), "EVALUATION.md")
+    with open(path, "r", encoding="utf-8") as f:
+        return f.read()
+
+
+def _t324_entry_lines(text):
+    """The `### Cycle ` Outcomes entry lines of an EVALUATION.md text."""
+    return [l for l in text.splitlines() if l.startswith("### Cycle ")]
+
+
+def _t324_one_liner(entries, cycle):
+    """The committed one-liner entry for *cycle* — exactly one line
+    carrying the last-6-compaction marker (the corpus convention)."""
+    hits = [
+        l for l in entries
+        if l.startswith(f"### Cycle {cycle} ")
+        and "one line per the last-6 compaction" in l
+    ]
+    if len(hits) != 1:
+        raise AssertionError(
+            f"the T324 one-liner probe for cycle {cycle} expected exactly "
+            f"one committed one-liner line, probed {len(hits)}"
+        )
+    return hits[0]
+
+
+def _t324_current_full_set(entries, count=6):
+    """The current kept-full set — the FIRST *count* entry lines that do
+    NOT carry the compaction marker (the last-6 convention: the six
+    newest entries stay full, everything older is one-lined)."""
+    fulls = [l for l in entries if "one line per the last-6 compaction" not in l]
+    if len(fulls) < count:
+        raise AssertionError(
+            f"the T324 live-corpus smoke expected >= {count} full entries "
+            f"in the live tree, probed {len(fulls)}"
+        )
+    return fulls[:count]
+
+
+def _t324_discharged_ordinal(text):
+    """The own discharge's ordinal derived INDEPENDENTLY of the extractor:
+    the first uppercase `DISCHARGED` keyword (the corpus's own-discharge
+    rendering `re-arm <N>th DISCHARGED EXACT`), the `<N>th` token walked
+    back over whitespace. Fails closed with a named detail."""
+    i = text.find("DISCHARGED")
+    if i < 0:
+        raise AssertionError(
+            "the T324 DISCHARGED-derived cross-check found no `DISCHARGED` "
+            "keyword in the entry"
+        )
+    j = i
+    while j > 0 and text[j - 1] in " \t":
+        j -= 1
+    k = j
+    while k > 0 and text[k - 1].isalpha():
+        k -= 1
+    if text[k:j] not in ("st", "nd", "rd", "th"):
+        raise AssertionError(
+            "the T324 DISCHARGED-derived cross-check found no `<N>th` "
+            "ordinal token before the first `DISCHARGED` keyword"
+        )
+    m = k
+    while m > 0 and text[m - 1].isdigit():
+        m -= 1
+    if m == k:
+        raise AssertionError(
+            "the T324 DISCHARGED-derived cross-check found no digits in "
+            "the ordinal token before the first `DISCHARGED` keyword"
+        )
+    return int(text[m:k])
+
+
+# The composed full-entry shapes (legs a/b/c) — minimal, mirroring the
+# committed renderings, each carrying exactly one non-anchor occurrence
+# where the shape demands it.
+
+# (a) the establishment bare prose mention BEFORE the real group anchor
+# (the 21st fire's shape — the cycle-3008 full entry's carried-figure
+# triage prose).
+_T324_FULL_ESTABLISHMENT_MENTION = (
+    "### Cycle 3999 (2099-01-01) — the fire replay: ONE eval-triage record "
+    "d1799999999-2 (the carried-figure class's sighting, the FIRST on the "
+    "fill-datum-citation surface: the committed citation FALSIFIED vs the "
+    "fill message's TRUE datum; ZERO consequence [the establishment figure "
+    "125/3,411 unaffected and TRUE; the falsified figure contained to the "
+    "corridor text]; weighed -> DECLINED a doctrine row). The eval: the "
+    "692nd establishment (3004 stream 108/2,707 re-derived CONCURS off "
+    "events-20990101; ok:false 2 == 2; goal 1; the 102-bound FIRES [108 >= "
+    "the bound — the census 47 -> 48, the non-fire streak RESETS 3 -> 0]). "
+    "Verdict: eval + 0 rows, queue EMPTY."
+)
+
+# (b) the retrospective re-arm clause-mention BEFORE the discharge anchor
+# (the 19th/20th fires' shape — the class-accounting prose, then the own
+# discharge; a stray digit rides between them so the pre-change
+# first-occurrence probe provably latches the WRONG figure).
+_T324_FULL_REARM_CLAUSE = (
+    "### Cycle 3998 (2099-01-01) — the fire replay: ONE eval-triage record "
+    "(the carried-figure class's sighting — DECLINED, the class re-armed "
+    "at the FIFTH per the 21st production exercise); the second net -> "
+    "551. The eval: re-arm 619th DISCHARGED EXACT (2935 slot 90/1,509 per "
+    "the lattice's 619th slot committed; (b) NEGATIVE — 90 < the 102 "
+    "bound [the watch HOLDS 63]). Verdict: eval + 0 rows, queue EMPTY."
+)
+
+# (c) the non-anchor-only texts — the vacuous-pass class stays closed:
+# each carries ONLY non-anchor occurrences, so the extractor must fail
+# closed with the T324-named detail.
+_T324_ONLY_ESTABLISHMENT_MENTION = (
+    "### Cycle 3997 (2099-01-01) — the mention-only replay: ZERO "
+    "consequence [the establishment figure 125/3,411 unaffected and TRUE]."
+)
+_T324_ONLY_ESTABLISHMENT_COMPOUND = (
+    "### Cycle 3996 (2099-01-01) — the compound-only replay: the cycle "
+    "carried the 695th-establishment anchor-label slip observation."
+)
+_T324_ONLY_REARM_CLAUSE = (
+    "### Cycle 3995 (2099-01-01) — the clause-only replay: DECLINED, the "
+    "class re-armed at the FIFTH."
+)
+_T324_ONLY_REARM_QUOTED = (
+    "### Cycle 3994 (2099-01-01) — the quoted-only replay: the triage "
+    "named the first-`re-arm` coverage gap and filed the skip-rule."
+)
+
+
+class AssertOutcomesOneLinerAnchorSkipRuleTest(unittest.TestCase):
+    """T324: the anchor skip-rule — the extractor probes the group's OWN
+    anchor past non-anchor mentions, and still fails closed when only
+    non-anchor occurrences exist."""
+
+    def test_pass_composed_establishment_mention_probes_group_anchor(self):
+        # Leg (a): the bare `the establishment figure 125/3,411` prose
+        # mention rides BEFORE the real group anchor — the extractor must
+        # probe the group anchor's ordinal/stream/figures/census, not the
+        # mention's figures and not a failure.
+        value, detail = wrap_assert._ol_establishment_figures(
+            _T324_FULL_ESTABLISHMENT_MENTION
+        )
+        self.assertIsNone(detail)
+        self.assertEqual(value, (692, 3004, 108, 2707, 47, 48))
+
+    def test_pass_composed_rearm_clause_probes_discharge_anchor(self):
+        # Leg (b): the retrospective `the class re-armed at the FIFTH`
+        # clause rides BEFORE the own discharge anchor (with a stray
+        # `21st` digit between) — the extractor must probe the discharge
+        # ordinal 619, not the clause region's stray figure.
+        value, detail = wrap_assert._ol_rearm_figure(_T324_FULL_REARM_CLAUSE)
+        self.assertIsNone(detail)
+        self.assertEqual(value, (619,))
+
+    def test_fail_closed_only_non_anchor_occurrences(self):
+        # Leg (c): texts whose ONLY occurrences are non-anchors — the
+        # vacuous-pass class stays closed: fail-closed with the T324-named
+        # detail (the detail NAMES the skip classes, so the assertion is
+        # RED against the pre-change detail strings too).
+        value, detail = wrap_assert._ol_establishment_figures(
+            _T324_ONLY_ESTABLISHMENT_MENTION
+        )
+        self.assertIsNone(value)
+        self.assertIn("no own-establishment anchor probed", detail)
+        self.assertIn("T324", detail)
+        self.assertIn("no adjacent `<N>th` ordinal", detail)
+        value, detail = wrap_assert._ol_establishment_figures(
+            _T324_ONLY_ESTABLISHMENT_COMPOUND
+        )
+        self.assertIsNone(value)
+        self.assertIn("no own-establishment anchor probed", detail)
+        self.assertIn("T324", detail)
+        for only_text in (_T324_ONLY_REARM_CLAUSE, _T324_ONLY_REARM_QUOTED):
+            value, detail = wrap_assert._ol_rearm_figure(only_text)
+            self.assertIsNone(value)
+            self.assertIn("no own-`re-arm` discharge anchor probed", detail)
+            self.assertIn("T324", detail)
+            self.assertIn("clause-mentions", detail)
+
+    def test_pass_3008_compaction_pair_mechanical_equal(self):
+        # The acceptance's named reproduction: the EXACT text pair that
+        # guard-fired at the cycle-3029 wrap — the 3008 full entry (the
+        # committed corpus at 9ae8c1a, probed from git) against the
+        # committed 3008 one-liner (the live tree) — passes MECHANICALLY,
+        # no by-hand adjudication.
+        full = _t324_entry_lines(_t324_git_eval_text("9ae8c1a"))
+        one_liner = _t324_one_liner(_t324_entry_lines(_t324_live_eval_text()), 3008)
+        wrap_assert.assert_outcomes_one_liner(
+            next(l for l in full if l.startswith("### Cycle 3008 ")), one_liner
+        )
+
+    def test_pass_3000_3004_compaction_pairs_mechanical_equal(self):
+        # The 19th/20th exercises' pairs (the re-arm clause-mention
+        # latches at the cycle-3024/3025 wraps) — mechanically equal the
+        # same way.
+        entries = _t324_entry_lines(_t324_live_eval_text())
+        for cycle, ref, _fire in _T324_FIRES[:2]:
+            full = _t324_entry_lines(_t324_git_eval_text(ref))
+            one_liner = _t324_one_liner(entries, cycle)
+            wrap_assert.assert_outcomes_one_liner(
+                next(l for l in full if l.startswith(f"### Cycle {cycle} ")),
+                one_liner,
+            )
+
+    def test_red_proof_establishment_skip_disabled_3008_pair_fires(self):
+        # RED provability (in-battery, the mutant idiom): with the
+        # establishment ordinal-adjacency skip disabled, the 3008 pair
+        # FIRES naming the establishment group and the extraction
+        # failure; the shipped module passes the same pair. The module is
+        # byte-identical after (the mutation rides an in-memory exec).
+        with open(wrap_assert.__file__, "r", encoding="utf-8") as f:
+            pristine = f.read()
+        full = next(
+            l for l in _t324_entry_lines(_t324_git_eval_text("9ae8c1a"))
+            if l.startswith("### Cycle 3008 ")
+        )
+        one_liner = _t324_one_liner(
+            _t324_entry_lines(_t324_live_eval_text()), 3008
+        )
+        wrap_assert.assert_outcomes_one_liner(full, one_liner)
+        skip_line = "        if _ol_ordinal_before(text, idx) is None:"
+        self.assertEqual(pristine.count(skip_line), 1)
+        mutant = _mutant_wrap_assert(pristine, skip_line, "        if False:")
+        with self.assertRaises(AssertionError) as caught:
+            mutant["assert_outcomes_one_liner"](full, one_liner)
+        message = str(caught.exception)
+        self.assertIn("'establishment'", message)
+        self.assertIn("no `<N>th` ordinal adjacent", message)
+        with open(wrap_assert.__file__, "r", encoding="utf-8") as f:
+            self.assertEqual(f.read(), pristine)
+
+    def test_red_proof_rearm_clause_skip_disabled_pairs_fire(self):
+        # RED provability: with the clause-mention skip disabled, the
+        # 3004/3000 pairs FIRE naming the re-arm group with the clause
+        # region's wrong latched figures vs the one-liner's own discharge
+        # ordinals (the exact adjudicated divergence); the shipped module
+        # passes the same pairs.
+        with open(wrap_assert.__file__, "r", encoding="utf-8") as f:
+            pristine = f.read()
+        entries = _t324_entry_lines(_t324_live_eval_text())
+        clause_line = "        if _ol_rearm_clause_at(text, idx):"
+        self.assertEqual(pristine.count(clause_line), 1)
+        mutant = _mutant_wrap_assert(pristine, clause_line, "        if False:")
+        for cycle, ref, _fire in _T324_FIRES[:2]:
+            full = next(
+                l for l in _t324_entry_lines(_t324_git_eval_text(ref))
+                if l.startswith(f"### Cycle {cycle} ")
+            )
+            one_liner = _t324_one_liner(entries, cycle)
+            wrap_assert.assert_outcomes_one_liner(full, one_liner)
+            with self.assertRaises(AssertionError) as caught:
+                mutant["assert_outcomes_one_liner"](full, one_liner)
+            message = str(caught.exception)
+            self.assertIn("'re-arm ordinal'", message)
+        with open(wrap_assert.__file__, "r", encoding="utf-8") as f:
+            self.assertEqual(f.read(), pristine)
+
+    def test_red_proof_quoted_mention_skip_disabled_probes_wrong_figure(self):
+        # RED provability (the live-corpus smoke's 4th-instance shape —
+        # the committed 3025 full entry's backtick-quoted
+        # `first-re-arm` TRIAGE prose): with the quoted-mention skip
+        # disabled, the own-discharge cross-check diverges (the quoted
+        # mention latches the record id's digits); the shipped module
+        # probes the own discharge 625.
+        with open(wrap_assert.__file__, "r", encoding="utf-8") as f:
+            pristine = f.read()
+        full_3025 = next(
+            l for l in _t324_current_full_set(_t324_entry_lines(_t324_live_eval_text()))
+            if l.startswith("### Cycle 3025 ")
+        )
+        value, detail = wrap_assert._ol_rearm_figure(full_3025)
+        self.assertIsNone(detail)
+        self.assertEqual(value, (625,))
+        quoted_line = "        if _ol_rearm_quoted_at(text, idx):"
+        self.assertEqual(pristine.count(quoted_line), 1)
+        mutant = _mutant_wrap_assert(pristine, quoted_line, "        if False:")
+        value, detail = mutant["_ol_rearm_figure"](full_3025)
+        self.assertIsNotNone(value)
+        self.assertNotEqual(value, (625,))
+        with open(wrap_assert.__file__, "r", encoding="utf-8") as f:
+            self.assertEqual(f.read(), pristine)
+
+    def test_live_corpus_smoke_six_full_set_extracts_and_cross_checks(self):
+        # Leg (d) — the live-corpus smoke: the CURRENT kept-full set's
+        # committed entries (the six newest full entries, re-derived from
+        # the live tree at test time). For each: the establishment group
+        # extracts and the re-arm group extracts EQUAL to the
+        # independently DISCHARGED-derived own-discharge ordinal (the
+        # wrong-latch class fires here, not at a future prep).
+        # RED-proven via the two skip-disabled mutants above: with the
+        # establishment skip disabled the 3029/3025 entries' extraction
+        # fails; with the clause/quoted skips disabled the 3029/3025/
+        # 3016/3012 entries' cross-checks diverge.
+        fulls = _t324_current_full_set(_t324_entry_lines(_t324_live_eval_text()))
+        probed = 0
+        for full in fulls:
+            cycle = full[len("### Cycle "):].split(" ")[0]
+            value, detail = wrap_assert._ol_establishment_figures(full)
+            if detail is not None:
+                raise AssertionError(
+                    f"the T324 live-corpus smoke: cycle {cycle}'s "
+                    f"establishment group failed to extract ({detail})"
+                )
+            self.assertIsInstance(value, tuple)
+            rearm, rearm_detail = wrap_assert._ol_rearm_figure(full)
+            if rearm_detail is not None:
+                raise AssertionError(
+                    f"the T324 live-corpus smoke: cycle {cycle}'s re-arm "
+                    f"group failed to extract ({rearm_detail})"
+                )
+            expected = _t324_discharged_ordinal(full)
+            self.assertEqual(
+                rearm, (expected,),
+                f"the T324 live-corpus smoke: cycle {cycle}'s re-arm "
+                f"figure {rearm} != the DISCHARGED-derived own discharge "
+                f"({expected},)",
+            )
+            probed += 1
+        self.assertEqual(probed, 6)
+
+    def test_live_corpus_smoke_exercised_one_liners_still_extract(self):
+        # Leg (d), the one-liner side: every one-liner the guard is
+        # exercised against (the three production fires' committed
+        # one-liners) still extracts ALL five groups — the extraction
+        # result the guard compares EQUAL against its full entry (the
+        # pair legs above pin the equality).
+        entries = _t324_entry_lines(_t324_live_eval_text())
+        for cycle, _ref, _fire in _T324_FIRES:
+            one_liner = _t324_one_liner(entries, cycle)
+            for group, extract in wrap_assert._ONE_LINER_GROUPS:
+                value, detail = extract(one_liner)
+                if detail is not None:
+                    raise AssertionError(
+                        f"the T324 live-corpus smoke: the cycle {cycle} "
+                        f"one-liner's {group!r} group failed to extract "
+                        f"({detail})"
+                    )
+                self.assertIsInstance(value, tuple)
+
+    def test_no_behavior_change_when_first_occurrence_is_the_anchor(self):
+        # The acceptance's no-behavior-change pin, dynamic over the live
+        # corpus: with ALL THREE skips disabled (the pre-change
+        # first-occurrence scan), every one-liner in the tree extracts
+        # the SAME values as the shipped module — wherever the pre-change
+        # scan succeeded, the shipped scan succeeds with the identical
+        # figure (fail-detail rewordings and designed extra-probe
+        # recoveries are the only permitted deltas).
+        with open(wrap_assert.__file__, "r", encoding="utf-8") as f:
+            pristine = f.read()
+        skip_line = "        if _ol_ordinal_before(text, idx) is None:"
+        clause_line = "        if _ol_rearm_clause_at(text, idx):"
+        quoted_line = "        if _ol_rearm_quoted_at(text, idx):"
+        for needle in (skip_line, clause_line, quoted_line):
+            self.assertEqual(pristine.count(needle), 1)
+        disabled = "        if False:  # the T324 skip disabled"
+        mutated = (
+            pristine.replace(skip_line, disabled)
+            .replace(clause_line, disabled)
+            .replace(quoted_line, disabled)
+        )
+        mutant = {"__name__": "wrap_assert_mutant"}
+        exec(compile(mutated, "<wrap_assert-mutant>", "exec"), mutant)
+        one_liners = [
+            l for l in _t324_entry_lines(_t324_live_eval_text())
+            if "one line per the last-6 compaction" in l
+        ]
+        self.assertGreaterEqual(len(one_liners), 200)
+        checked = 0
+        for one_liner in one_liners:
+            for idx, (group, extract) in enumerate(
+                wrap_assert._ONE_LINER_GROUPS
+            ):
+                shipped_value, _ = extract(one_liner)
+                prior_value, _ = mutant["_ONE_LINER_GROUPS"][idx][1](one_liner)
+                if prior_value is None:
+                    continue
+                self.assertEqual(
+                    shipped_value, prior_value,
+                    f"the T324 no-behavior-change pin: a one-liner's "
+                    f"extraction changed for group {group!r} (pre-change "
+                    f"{prior_value} vs shipped {shipped_value})",
+                )
+                checked += 1
+        self.assertGreater(checked, 500)
+
+
 if __name__ == "__main__":
     unittest.main()
