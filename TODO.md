@@ -328,6 +328,10 @@
 | T326 | Ideation mode: dormant loop proposes outward-facing features to a Proposed lane; operator flips, loop never self-flips | specs/t326-ideation-mode.md | 2 | open | operator-filed 2026-11-06 — the empty-backlog feature-ideation expectation formalized; depends T325 |
 | T327 | chug.sh cost dashboard: daily Langfuse spend in a COST region (tile + sparkline + 14-day table) | specs/t327-chugsh-cost-dashboard.md | 2 | open | operator-filed 2026-11-06 — makes the cost program publicly legible |
 | T328 | chug-watch daemon-socket provider: local chugd probe chain with SSH fallback; finish T219's deferred half | specs/t328-chugwatch-daemon-provider.md | 3 | open | operator-filed 2026-11-06 |
+| T329 | chug.sh Adopt page: quickstart + mental model + first-feature walkthrough + FAQ (training content, public-safe) | specs/t329-adopt-training-page.md | 2 | open | operator-filed 2026-11-06 — Q4 company-expansion goal: training is the adoption bottleneck |
+| T330 | install.sh profiles: --profile contract for LLM-proxy config (company values ship out-of-band) | specs/t330-install-profiles.md | 2 | open | operator-filed 2026-11-06 — Q4 deliverable: one-command install against tools-proxy |
+| T331 | risk-gate story page: gates + validators + decision gate + cost guardrails, written for a skeptical staff engineer | specs/t331-risk-gate-story.md | 3 | open | operator-filed 2026-11-06 — Q4 deliverable: the leadership-review answer |
+| T332 | decision-model provider abstraction: proxy Jev alongside local Laya; pilot boxes need no daemon | specs/t332-decision-provider-abstraction.md | 2 | open | operator-filed 2026-11-06 — databricks proxy now exposes jev; discovery probe first |
 
 ## Proposed
 
@@ -336,3 +340,7 @@ Machine-maintained lane (T326): proposals land here with status `proposed`; the 
 | P001 | vampflake go-live | specs/proposed/vampflake-go-live.md | 3 | proposed | hand-seeded 2026-11-06 — 3 operator steps, parked since 2026-09 |
 | P002 | F16 unpark decision | specs/proposed/f16-unpark-decision.md | 4 | proposed | hand-seeded 2026-11-06 — keep/kill memo |
 | P003 | SCR spike (SGLang suffix-cache-reuse) | specs/proposed/scr-spike.md | 4 | proposed | hand-seeded 2026-11-06 — blocked on spark GPU headroom since 2026-10-01 |
+| P004 | Marketplace presence (chug + chug-watch listing) | specs/proposed/p004-marketplace.md | 3 | proposed | hand-seeded 2026-11-06 — Q4 deliverable #4 |
+| P005 | Pilot-team onboarding kit (internal: Confluence + proxy profile, never in public repo) | specs/proposed/p005-pilot-onboarding-kit.md | 2 | proposed | hand-seeded 2026-11-06 — Q4 deliverables #1/#5 |
+| P006 | Langfuse adoption dashboard (internal, per-team) | specs/proposed/p006-adoption-dashboard.md | 3 | proposed | hand-seeded 2026-11-06 — Q4 deliverable #6 |
+| P007 | Three-altitudes positioning memo (internal: desk/fleet/product) | specs/proposed/p007-three-altitudes.md | 4 | proposed | hand-seeded 2026-11-06 — Q4 narrative, Raju alignment |
