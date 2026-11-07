@@ -2055,17 +2055,41 @@ fn emit_validation_blocked(sink: &mut dyn EventSink, command: &str) {
     });
 }
 
-/// First `check: <shell command>` line in the spec text, if any.
+/// The spec's `check: <shell command>` line, if any.
+///
+/// T335: plain first-match-wins loses to markdown-wrapped prose — the t334
+/// spec's Tests bullet wrapped onto a line that began with `check:`
+/// (`  check:-contract sentence.`, spec line 53) and the goal gate ran that
+/// garbage instead of the real command at line 73, rejecting a
+/// `goal_complete` whose validation had already landed its written PASS
+/// verdict. The corpus convention (t285/t333/t334) puts the real check line
+/// under a `## check:` section header, so when that header exists the scan
+/// starts AFTER it: prose above the section can no longer win. A header
+/// line itself is never the command (its trimmed form starts with `##`, so
+/// the `check:` prefix never strips — the t333 gate ran green with one
+/// present; t52's command-on-the-header-line shape still parses to None).
+/// No header, or no `check:` line after it, falls back to the historical
+/// whole-spec first match — byte-identical to the pre-T335 parse for every
+/// input except the prose-collision shape (t309/t310's bare line-3 check
+/// included).
 pub fn parse_check_command(spec: &str) -> Option<String> {
-    spec.lines().find_map(|line| {
-        let rest = line.trim().strip_prefix("check:")?;
-        let command = rest.trim();
-        if command.is_empty() {
-            None
-        } else {
-            Some(command.to_string())
-        }
-    })
+    let after_header = spec
+        .lines()
+        .skip_while(|line| !line.trim().starts_with("## check:"))
+        .skip(1) // the header line itself is never the command
+        .find_map(check_command_of_line);
+    after_header.or_else(|| spec.lines().find_map(check_command_of_line))
+}
+
+/// One line's `check: <shell command>`, if the line carries a non-empty one.
+fn check_command_of_line(line: &str) -> Option<String> {
+    let rest = line.trim().strip_prefix("check:")?;
+    let command = rest.trim();
+    if command.is_empty() {
+        None
+    } else {
+        Some(command.to_string())
+    }
 }
 
 /// Stuck tripwire: the last 3 tool results are all errors with identical
