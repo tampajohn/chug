@@ -70,4 +70,4 @@ the gate chain is unpiped).
 
 ## check:
 
-check: cd /Users/jadams/workspace/chug && cargo test --release --test loop_subcommand
+check: cargo test --release --test loop_subcommand
