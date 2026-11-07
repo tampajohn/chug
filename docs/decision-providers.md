@@ -44,11 +44,23 @@ retrying.
   (default): local daemon socket when present and healthy, else proxy when
   configured, else the call site's existing no-provider behavior. `local`:
   daemon only. `proxy`: proxy only (a proxy call without configured
-  endpoint/token fails the call site's existing degrade path).
-- Proxy endpoint/token ride the T330 profile contract
-  (`profiles/<name>.env` → `CHUG_DECISION_PROXY_URL`,
-  `CHUG_DECISION_PROXY_TOKEN`) and never land in the repo (the 2026-10
-  scrub + the T249 lint are the guard).
+  endpoint/token fails the call site's existing degrade path). Unset,
+  blank, or unknown-case/whitespace variants resolve per the
+  trim+lowercase rule; any OTHER value is a hard error naming the valid
+  modes (Rust: `decision_mode`; the shell/ideate mirrors refuse the same
+  way and take the call site's degrade path).
+- `CHUG_DECISION_PROXY_URL` — the proxy base URL (`<base>/v1/systemone` is
+  posted; a trailing slash is tolerated). `CHUG_DECISION_PROXY_TOKEN` —
+  the credential, sent as `Authorization: Bearer …` (a tokenless call is
+  legal at the wire level and answers 401 = the degrade path).
+- All three ride the T330 profile contract as OPTIONAL pass-through keys:
+  `install.sh --profile` accepts them (a profile owns the required LLM
+  keys plus these), and both loopd loaders export them verbatim with
+  explicit env winning — `~/.chug/profile.env` via
+  `scripts/loopd_profile_loader.sh`, `~/.chug/loopd.env` via
+  `scripts/loopd_env_loader.sh`. `profiles/decision-proxy.env` is the
+  placeholder-values example. The real endpoint/token never land in the
+  repo (the 2026-10 scrub + the T249 lint are the guard).
 
 ## Local daemon (the first provider, unchanged)
 

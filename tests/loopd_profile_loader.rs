@@ -10,7 +10,8 @@
 //! `bash -c` with fixture profiles in tempdirs — no supervisor spawn — the
 //! tests/loopd_env_loader.rs pattern (the T213/T205 seam): the mapping
 //! (base URL/key → ANTHROPIC_*, the model pair → LOOP_*, CHUG_LANGFUSE_* →
-//! LANGFUSE_*), the *_CMD escape hatch (fetch-once, value never logged),
+//! LANGFUSE_*, the T332 decision-provider keys → themselves as identity
+//! pass-throughs), the *_CMD escape hatch (fetch-once, value never logged),
 //! already-shaped-env-wins, the absent-profile no-op (today's behavior,
 //! no flag day), count-only hygiene, and the missing-required-keys log.
 //!
@@ -52,12 +53,16 @@ const FX_FROMENV: &str = "fromenv";
 const FX_FOREIGN_KEY: &str = "NOT_PROFILE_OWNED";
 const FX_FOREIGN_VALUE: &str = "foreign-value-should-not-apply";
 const FX_MALFORMED: &str = "this line has no equals sign";
+// T332 — the decision-provider pass-throughs (all fake values).
+const FX_DECISION_PROVIDER: &str = "auto";
+const FX_DECISION_URL: &str = "http://127.0.0.1:8443";
+const FX_DECISION_TOKEN: &str = "decision-FIXTURE-TOKEN-42";
 
 /// The probed keys — the NATIVE env the loader translates into — printed as
 /// `PROBE <key>=<value>` after the load. Each is `env_remove`d from the
 /// child unless the leg presets it, so no host environment can leak into a
 /// leg's expectation.
-const PROBE_KEYS: [&str; 8] = [
+const PROBE_KEYS: [&str; 11] = [
     "ANTHROPIC_BASE_URL",
     "ANTHROPIC_AUTH_TOKEN",
     "LOOP_ORCH_MODEL",
@@ -66,6 +71,9 @@ const PROBE_KEYS: [&str; 8] = [
     "LANGFUSE_HOST",
     "LANGFUSE_PUBLIC_KEY",
     "LANGFUSE_SECRET_KEY",
+    "CHUG_DECISION_PROVIDER",
+    "CHUG_DECISION_PROXY_URL",
+    "CHUG_DECISION_PROXY_TOKEN",
 ];
 
 /// Run the REAL fragment under the supervisor's shell regime: source it,
@@ -195,6 +203,54 @@ fn the_full_profile_maps_to_the_native_env() {
         log_text(&log).is_none(),
         "no log write when nothing is skipped"
     );
+}
+
+/// T332 — the decision-provider keys pass through the profile verbatim
+/// (they ARE the native env names): applied from the profile, explicit env
+/// winning per key, and the loader stays silent when everything it saw was
+/// owned.
+#[test]
+fn decision_provider_keys_pass_through_the_profile() {
+    let tmp = tempfile::tempdir().unwrap();
+    let profile = tmp.path().join("profile.env");
+    std::fs::write(
+        &profile,
+        format!(
+            "CHUG_LLM_BASE_URL={FX_BASE_URL}\n\
+             CHUG_LLM_API_KEY={FX_TOKEN}\n\
+             CHUG_MODEL_REASONING={FX_REASONING}\n\
+             CHUG_MODEL_CODING={FX_CODING}\n\
+             export CHUG_DECISION_PROVIDER={FX_DECISION_PROVIDER}\n\
+             CHUG_DECISION_PROXY_URL=\"{FX_DECISION_URL}\"\n\
+             CHUG_DECISION_PROXY_TOKEN='{FX_DECISION_TOKEN}'\n"
+        ),
+    )
+    .unwrap();
+    let log = tmp.path().join("loopd.log");
+    let out = run_loader(&profile, &[], &log);
+    assert_ok(&out, "decision pass-through leg");
+    let ps = probes(&out);
+    assert_eq!(probe_value(&ps, "CHUG_DECISION_PROVIDER"), FX_DECISION_PROVIDER);
+    assert_eq!(probe_value(&ps, "CHUG_DECISION_PROXY_URL"), FX_DECISION_URL);
+    assert_eq!(probe_value(&ps, "CHUG_DECISION_PROXY_TOKEN"), FX_DECISION_TOKEN);
+    // nothing skipped -> nothing logged (the decision lines were owned)
+    assert!(
+        log_text(&log).is_none(),
+        "no log write when nothing is skipped"
+    );
+
+    // explicit env wins, per key
+    let log2 = tmp.path().join("loopd2.log");
+    let out2 = run_loader(
+        &profile,
+        &[("CHUG_DECISION_PROVIDER", FX_FROMENV)],
+        &log2,
+    );
+    assert_ok(&out2, "explicit-env leg");
+    let ps2 = probes(&out2);
+    assert_eq!(probe_value(&ps2, "CHUG_DECISION_PROVIDER"), FX_FROMENV);
+    assert_eq!(probe_value(&ps2, "CHUG_DECISION_PROXY_URL"), FX_DECISION_URL);
+    assert_eq!(probe_value(&ps2, "CHUG_DECISION_PROXY_TOKEN"), FX_DECISION_TOKEN);
 }
 
 #[test]
@@ -492,6 +548,9 @@ fn the_fragment_implements_exactly_the_profile_contract() {
         "CHUG_LLM_API_KEY",
         "CHUG_MODEL_REASONING",
         "CHUG_MODEL_CODING",
+        "CHUG_DECISION_PROVIDER",
+        "CHUG_DECISION_PROXY_URL",
+        "CHUG_DECISION_PROXY_TOKEN",
     ] {
         assert!(
             frag.contains(&format!("{key}=*")),

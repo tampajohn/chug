@@ -13,6 +13,10 @@
 #   CHUG_MODEL_REASONING   -> LOOP_ORCH_MODEL      (fresh-eval/judgment cycles)
 #   CHUG_MODEL_CODING      -> LOOP_ROUTINE_MODEL   (routine/coding cycles)
 #   CHUG_LANGFUSE_*        -> LANGFUSE_*           (optional observability)
+#   CHUG_DECISION_PROVIDER / CHUG_DECISION_PROXY_URL / CHUG_DECISION_PROXY_TOKEN
+#                          -> themselves (the T332 decision-provider keys are
+#                             already native env names — identity pass-through,
+#                             docs/decision-providers.md)
 # Nothing else is profile-owned: any other key is counted and skipped.
 #
 # Hygiene (the T205 gate): the file's CONTENTS never reach the log — only
@@ -50,7 +54,7 @@ if [ -f "$PROFILE_ENV_FILE" ]; then
     case "$_line" in ''|\#*) continue ;; esac
     _line="${_line#export }"
     case "$_line" in
-      CHUG_LLM_BASE_URL=*|CHUG_LLM_API_KEY=*|CHUG_LLM_API_KEY_CMD=*|CHUG_MODEL_REASONING=*|CHUG_MODEL_CODING=*|CHUG_LANGFUSE_*)
+      CHUG_LLM_BASE_URL=*|CHUG_LLM_API_KEY=*|CHUG_LLM_API_KEY_CMD=*|CHUG_MODEL_REASONING=*|CHUG_MODEL_CODING=*|CHUG_DECISION_PROVIDER=*|CHUG_DECISION_PROXY_URL=*|CHUG_DECISION_PROXY_TOKEN=*|CHUG_LANGFUSE_*)
         _key="${_line%%=*}"
         _val="${_line#*=}"
         case "$_val" in
@@ -64,6 +68,11 @@ if [ -f "$PROFILE_ENV_FILE" ]; then
           CHUG_MODEL_REASONING) _prof_seen_reasoning=1; loopd_profile_apply LOOP_ORCH_MODEL "$_val" ;;
           CHUG_MODEL_CODING)    _prof_seen_coding=1;  loopd_profile_apply LOOP_ROUTINE_MODEL "$_val" ;;
           CHUG_LANGFUSE_*)      loopd_profile_apply "${_key#CHUG_}" "$_val" ;;
+          # T332 — the decision-provider keys are native env names already
+          # (loopd.sh, scripts/ideate.py, src/decision/ read them as-is): the
+          # pass-through is the identity, no translation, explicit env wins.
+          CHUG_DECISION_PROVIDER|CHUG_DECISION_PROXY_URL|CHUG_DECISION_PROXY_TOKEN)
+                                loopd_profile_apply "$_key" "$_val" ;;
         esac
         ;;
       *) _prof_skipped=$((_prof_skipped + 1)) ;;

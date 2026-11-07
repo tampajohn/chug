@@ -49,8 +49,9 @@ LOOPD_STARTED="$(ts)"
 # edit + restart), and the orchestrator + delegate children + the spawned
 # judge daemon all inherit the exports. Format: KEY=VALUE lines, `#`
 # comments, optional `export ` prefix and one pair of surrounding quotes.
-# ONLY the allowlisted judge keys are applied (a secret file must not
-# inject arbitrary env into every cycle), and only when the operator has
+# ONLY the allowlisted keys are applied (the T205 judge keys, then the T332
+# decision-provider pass-throughs — a secret file must not inject arbitrary
+# env into every cycle), and only when the operator has
 # not already set them in the environment (explicit env wins). The file's
 # CONTENTS are never echoed or logged (the T205 hygiene gate — tokens were
 # once spilled by an env dump); only the path and a skipped-line COUNT may
