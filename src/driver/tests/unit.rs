@@ -24,6 +24,96 @@ fn check_line_parsing() {
     );
 }
 
+/// T335 killing test (RED pre-fix): the t334 spec's Tests bullet wrapped so
+/// a continuation line began with `check:` — `  check:-contract sentence.`
+/// at spec line 53 — and first-match-wins extracted the prose as the gate
+/// command (pre-fix extraction: `Some("-contract sentence.")`, so the gate
+/// ran `sh -c '-contract sentence.'` and rejected a goal_complete whose
+/// validation had already landed its written PASS verdict). The real line
+/// sat at 73 under the `## check:` header at 71; the header-anchored scan
+/// must return it.
+#[test]
+fn parse_check_command_prose_continuation_loses_to_real_line_after_header() {
+    let t334_prefix_shape = "\
+- Scaffold validity: the generated TODO.md parses under the
+  todo_consistency rules; the generated LOOP-SPEC.md contains the
+  check:-contract sentence.
+- run fixture: missing scaffold exits 2 with the init hint; with
+  scaffold, the supervisor is invoked with cwd = the temp repo (assert
+  via a stubbed exec).
+
+The tests land under `tests/loop_subcommand.rs` — that filename is the
+gate contract (the filing-time check line names it, the c06a555 lesson:
+the gate chain is unpiped).
+
+## Out of scope
+
+- Porting loopd.sh to Rust (the subcommand may exec the script; a Rust
+  rewrite is a separate item if ever wanted).
+
+## check:
+
+check: cargo test --release --test loop_subcommand
+";
+    assert_eq!(
+        parse_check_command(t334_prefix_shape),
+        Some("cargo test --release --test loop_subcommand".to_string())
+    );
+}
+
+/// T335: a `## check:` section header line is itself never the command —
+/// its trimmed form starts with `##`, so the `check:` prefix never strips
+/// (the t333 gate ran green with a `## check:` header present; t52's
+/// command-on-the-header-line shape stays None, byte-identical pre/post).
+#[test]
+fn parse_check_command_section_header_itself_is_never_the_command() {
+    assert_eq!(
+        parse_check_command("## check:\n\ncheck: echo ok\n"),
+        Some("echo ok".to_string())
+    );
+    // t52's shape: the command rode ON the header line — never selected.
+    assert_eq!(
+        parse_check_command("## check: cargo test --test shared_target_dir\n"),
+        None
+    );
+    // Header with nothing after it (t285's shape): None, as before T335.
+    assert_eq!(parse_check_command("## check:\n"), None);
+}
+
+/// T335: the t309/t310 shape — a single `check:` line near the top, no
+/// `## check:` header — extracts byte-identically to the pre-T335
+/// first-match parse (no header → the historical whole-spec scan).
+#[test]
+fn parse_check_command_single_occurrence_no_header_unchanged() {
+    let spec = "\
+Title line.
+
+check: python3 scripts/test_wrap_assert.py && grep -q 'assert_fill_datum' \
+scripts/wrap_assert.py && grep -q 'T309' LOOP-SPEC.md
+";
+    assert_eq!(
+        parse_check_command(spec),
+        Some(
+            "python3 scripts/test_wrap_assert.py && grep -q 'assert_fill_datum' \
+             scripts/wrap_assert.py && grep -q 'T309' LOOP-SPEC.md"
+                .to_string()
+        )
+    );
+}
+
+/// T335: a bare `check:` (empty command, before or inside the check
+/// section) is still skipped — None when it is the only occurrence, and
+/// the next real line wins when one follows.
+#[test]
+fn parse_check_command_empty_command_still_none_or_skipped() {
+    assert_eq!(parse_check_command("check:"), None);
+    assert_eq!(parse_check_command("check:   \n"), None);
+    assert_eq!(
+        parse_check_command("## check:\ncheck:\ncheck: echo ok\n"),
+        Some("echo ok".to_string())
+    );
+}
+
 #[test]
 fn system_prompt_contains_all_sections() {
     let prompt = build_system_prompt("SPEC TEXT", "do the thing", "# Ledger\n...", "");
