@@ -20,8 +20,8 @@
 #                     ~/.chug/profiles/<name>.env (private values, win),
 #                     validate it BEFORE anything is written (a bad profile
 #                     installs nothing and never writes ~/.chug/profile.env),
-#                     copy it there (mode 600) for loopd.sh to load at
-#                     supervisor startup, and print the loopd launch line.
+#                     copy it there (mode 600) for the loop supervisor to
+#                     load at startup, and print the loop launch line.
 set -eu
 export LC_ALL=C
 
@@ -225,8 +225,9 @@ if [ -n "$profile_name" ]; then
     *) printf '  note:      the profile carries a literal CHUG_LLM_API_KEY — prefer CHUG_LLM_API_KEY_CMD (a vault fetch) so the key never rests in a file\n' ;;
   esac
   printf '\n'
-  printf '  launch the loop with:\n'
-  printf '    ./loopd.sh                 # sources %s (profile %s)\n' "$HOME/.chug/profile.env" "$profile_name"
+  printf '  launch the loop in a repo of yours (no clone of chug needed):\n'
+  printf '    cd <your-repo> && chug loop init && chug loop run\n'
+  printf '    # the loop sources %s (profile %s)\n' "$HOME/.chug/profile.env" "$profile_name"
   printf '\n'
 else
   printf '\n'

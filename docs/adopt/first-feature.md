@@ -9,8 +9,9 @@ The whole arc:
 2. **File the TODO row** — one line in `TODO.md`: id, title, spec path,
    priority, status `open`. That row is the contract; there is nothing
    to assign to anyone.
-3. **Let the loop pick it up** — under `./loopd.sh` the next cycle takes
-   the highest-priority open row; or run it directly:
+3. **Let the loop pick it up** — under `chug loop run` (after
+   `chug loop init`) the next cycle takes the highest-priority open row;
+   or run it directly:
    `chug run --spec specs/tNNN-short-slug.md --goal "Land X"`.
 4. **Read the harvest** — the landed commit, the validation verdict, the
    merged LEDGER, and the artifacts under `.chug/` (events, ledgers,

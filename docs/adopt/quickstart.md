@@ -54,16 +54,29 @@ adds the live dashboard to either.
 
 ## The continuous loop
 
-Single runs are one item. The supervisor makes it a queue that works
-itself: clone the repo and start `loopd.sh` — cycles run back-to-back,
-each wrap feeding the next cycle, all state in files:
+Single runs are one item. The loop makes it a queue that works itself —
+scaffolded and started in any repo of yours, with no clone of chug
+anywhere in the flow. The loop's queue is YOUR repo's TODO.md: it files,
+lands, and commits in your repo's branches, and an empty queue idles
+(a $0 dormant cycle — it never invents work to stay busy):
 
 ```bash
-git clone https://github.com/tampajohn/chug && cd chug
-nohup ./loopd.sh > /dev/null 2>&1 &   # start (detached)
-./loopd.sh status                     # liveness + recent cycle activity
-./loopd.sh stop                       # exits after the current cycle
+cd <your-repo>
+chug loop init                          # one-time: LOOP-SPEC.md + TODO.md + .chug/
+nohup chug loop run > /dev/null 2>&1 &  # start (detached; no clone required)
+.chug/loopd/loopd.sh status             # liveness + recent cycle activity
+.chug/loopd/loopd.sh stop               # exits after the current cycle
 ```
+
+`chug loop init` is idempotent — run it again and every existing file is
+reported `kept`, never clobbered (`--force` overwrites with a `.bak`
+backup beside each file). It scaffolds a GENERIC loop contract you are
+meant to edit: `LOOP-SPEC.md` states the queue rules, the check:-line
+contract, and the gate expectations for YOUR repo; `TODO.md` starts
+empty. File a row — a spec under `specs/` with a mechanical `check:`
+line, then one line in `TODO.md` — and the next cycle picks it up. The
+loop's model provider comes from the same env as `chug run` (a profile
+installed with `install.sh --profile <name>` is loaded automatically).
 
 ## What healthy looks like (first 10 minutes)
 
@@ -76,7 +89,7 @@ nohup ./loopd.sh > /dev/null 2>&1 &   # start (detached)
 - `chug ledger` prints LEDGER.md — the run's external memory
 - the first eval lands as a fresh `EVALUATION.md` body — the loop
   examining its own recent cycles, dated same-UTC-day at the top
-- under loopd: `.chug/loopd/loopd.log` gains one `cycle OK` line per
-  completed cycle (plus a `cheap-exit disposition` line on empty days —
-  a $0 cycle), `.chug/loopd/cycle-*.log` holds each cycle's stream, and
-  `./loopd.sh status` answers "is it alive"
+- under the loop: `.chug/loopd/loopd.log` gains one `cycle OK` line per
+  completed cycle (and a `queue empty — dormant` line when there is
+  nothing to do — a $0 cycle), `.chug/loopd/cycle-*.log` holds each
+  cycle's stream, and `.chug/loopd/loopd.sh status` answers "is it alive"
