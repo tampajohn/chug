@@ -25,6 +25,18 @@ your `PATH`; never uses sudo):
 curl -fsSL https://chug.sh/install.sh | sh
 ```
 
+**Wire up a model provider in the same command** — `--profile <name>` copies
+`~/.chug/profiles/<name>.env` (or `profiles/<name>.env` from the repo) to
+`~/.chug/profile.env`, validates it before writing anything (missing keys are
+named, never half-written), and prints the loopd launch line with the profile
+sourced. A profile exports the provider contract: `CHUG_LLM_BASE_URL`,
+`CHUG_LLM_API_KEY` (or `CHUG_LLM_API_KEY_CMD`, a fetch command for secret
+backends), `CHUG_MODEL_REASONING`, `CHUG_MODEL_CODING`, and optional
+`CHUG_LANGFUSE_*` — see `docs/install-profiles.md`; the committed
+`profiles/local-openai-compat.env` is executable documentation. loopd sources
+the profile automatically when present (explicit env still wins); without a
+profile, today's hand-configured env works unchanged.
+
 Or install straight from the latest tarball for your platform:
 
 ```bash
