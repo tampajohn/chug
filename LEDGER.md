@@ -1,12 +1,20 @@
 # Ledger
 
 ## Done
-- Cycle-3079 Phase-1 disposition: loopd 16:45:02Z routing — routine glm cycle (todo_rows=1 eval_fresh=yes) → predicate HOLDS on the todo-rows half → Phase 1 SKIPPED per the routing switch (glm never evaluates). Phase-2 triage: the ONE open row T328 (chug-watch daemon-socket provider) re-verified BLOCKED fleet-side THIS cycle — ~/workspace has only chug/, chug-dashboard/, chug-site/; no chug-watch tree on host (the row's own blocker text: "redispatch when the tree is reachable"). No dispatchable rows → honest act is wrap (T81 anti-sprint-burn: nothing mergeable, nothing launchable).
-- Housekeeping: stale worktrees /tmp/chug-loop-t331+t334+t335 verified merged+harvested (all work in main; harvests 12 files in .chug/) then removed — git worktree list clean (main only). Single-driver verified (only pid 294 = this run).
-- Wrap tail progress (THIS run, resumed after the prior run's mid-wrap death): Outcomes 3079 full entry verified accurate against re-derived facts (pins battery 213/213 seen in /tmp/eval-3079-pins1.log 17.013s — the dead run's claim TRUE); the T316-leg EXECUTED (3071 one-lined — the DESIGNED guard-fire confirmed all-5-groups-unextractable, the 24 carried figures verified count>=1 both texts, the entry's phrasing corrected to the actual standard); the T261 batch ONE APPENDED (d1794070994-2 ← the routing d1794070994-1 landed-clean — the dead run claimed it in prose, grep count-0, now real); LIVE_CTX compacted 414KB→67KB at the 100k warn (3 attempts: 2 rejections — a mid-block regex split + a pair-boundary split — the third landed line-based pair-safe).
+- (nothing yet)
 
-## Next (the wrap tail, in order)
-- Prep commit (EVALUATION.md + LEDGER.md) → eval-state rewrite (keyed to prep, validate_state + T311 on-disk) → token-free wrap notes + T257 color → post-notes probe → fill (datum FINAL + T309/T310/T317/T321/T323 asserts) → push → flips → goal_complete.
+## Next
+- Phase 1 disposition (routine glm skip) -> Phase 2 (nothing dispatchable) -> Phase 3 wrap
 
 ## Blockers
-- none (T328 stays BLOCKED fleet-side; P001-P004 stay parked operator lane)
+- T328 BLOCKED fleet-side (no chug-watch tree on host)
+
+## Wrap-state note (T207, cycle 3080 — written at the stop-dispatch boundary)
+
+- merged-but-unflipped rows: NONE (zero items landed this cycle; T328 stays open-blocked, its row already carries the blocker text)
+- unharvested worktrees: NONE (git worktree list clean — main only; the t331/t334/t335 worktrees were harvested+removed at the 3079 wrap)
+- unpushed commits: 0 at the boundary (HEAD 741db0f == origin/main, pushed at the 3079 wrap)
+- missing decision records: NONE owed from prior cycles (the 3079 batch ONE closed the cycle's own; this cycle's routing record d1794072532-1 filed, its outcome backfill rides THIS wrap's batch)
+- single-driver: verified (pid 61768 only — this run; no other chug run/chat)
+- phase-1 disposition: routine glm skip (loopd 17:26:18Z routing todo_rows=1 eval_fresh=yes; delta STATE-HIT bookkeeping-only since marker 105f025; glm never evaluates; eval-routing record d1794072532-1)
+- phase-2: NOTHING dispatchable — the ONE open row T328 re-verified BLOCKED fleet-side THIS cycle (no ~/workspace/chug-watch tree); P001-P004 parked operator lane; P006/P007 internal-not-loop-work (never dispatch); the T81 honest act: nothing mergeable, nothing launchable -> wrap
