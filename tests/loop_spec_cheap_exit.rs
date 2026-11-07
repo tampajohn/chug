@@ -59,6 +59,9 @@
 
 #![cfg(unix)]
 
+#[path = "common/mod.rs"]
+mod common;
+
 use std::io::{Read, Write};
 use std::os::unix::net::UnixListener;
 use std::path::{Path, PathBuf};
@@ -200,22 +203,11 @@ struct Fixture(TempDir);
 
 fn fixture() -> Fixture {
     let tmp = tempfile::tempdir().expect("tempdir");
-    std::fs::write(
-        tmp.path().join("loopd.sh"),
-        std::fs::read_to_string(repo_root().join("loopd.sh")).expect("loopd.sh readable"),
-    )
-    .expect("copy loopd.sh into fixture dir");
-    // T213: loopd.sh sources scripts/loopd_env_loader.sh relative to its own
-    // path — without the fragment beside the copy the sourcing dies under
-    // set -euo pipefail before any mode dispatch (the routing fixture's
-    // lesson, reused verbatim).
-    let scripts = tmp.path().join("scripts");
-    std::fs::create_dir_all(&scripts).expect("fixture scripts dir");
-    std::fs::copy(
-        repo_root().join("scripts/loopd_env_loader.sh"),
-        scripts.join("loopd_env_loader.sh"),
-    )
-    .expect("copy loopd_env_loader.sh into fixture dir");
+    // T213/T330: loopd.sh sources scripts/*.sh fragments relative to its own
+    // path — the fixture copies loopd.sh plus the DERIVED fragment set
+    // (common::copy_loopd_fixture), so a new fragment never re-breaks this
+    // fixture silently (the routing fixture's lesson, generalized).
+    common::copy_loopd_fixture(tmp.path());
     // The supervisor's state dir must never dirty the gate's delta walk: a
     // COMMITTED loopd.log (or cycle log) is a non-bookkeeping file and would
     // flip bookkeeping=no on every later fixture commit. Same ignore set the
@@ -695,18 +687,9 @@ fn a_missing_loopd_log_is_never_quiet() {
 #[test]
 fn an_unknown_baseline_degrades_to_a_launch() {
     let tmp = tempfile::tempdir().expect("tempdir");
-    std::fs::write(
-        tmp.path().join("loopd.sh"),
-        read("loopd.sh").as_bytes(),
-    )
-    .expect("copy loopd.sh into a non-git fixture dir");
-    let scripts = tmp.path().join("scripts");
-    std::fs::create_dir_all(&scripts).expect("fixture scripts dir");
-    std::fs::copy(
-        repo_root().join("scripts/loopd_env_loader.sh"),
-        scripts.join("loopd_env_loader.sh"),
-    )
-    .expect("copy loopd_env_loader.sh into fixture dir");
+    // T213/T330: the DERIVED fragment copy (common::copy_loopd_fixture) —
+    // a new self-relative source in loopd.sh never re-breaks this fixture.
+    common::copy_loopd_fixture(tmp.path());
     std::fs::write(tmp.path().join("TODO.md"), TODO_ONE_DONE).expect("write fixture TODO.md");
     let gate = run_predicate(tmp.path(), &[("CHUG_ROUTINE_TODAY", FRESH_DAY)]);
     assert_eq!(

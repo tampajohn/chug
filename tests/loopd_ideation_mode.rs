@@ -27,6 +27,9 @@
 //! 7d-old `proposed` rows auto-flip unless never-dispatch or vetoed) and
 //! the static pins (`the_ideation_wiring_is_pinned_in_loopd_sh`).
 
+#[path = "common/mod.rs"]
+mod common;
+
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Mutex;
@@ -295,18 +298,11 @@ struct Fixture(tempfile::TempDir);
 
 fn fixture() -> Fixture {
     let tmp = tempfile::tempdir().expect("tempdir");
-    std::fs::write(
-        tmp.path().join("loopd.sh"),
-        std::fs::read_to_string(repo_root().join("loopd.sh")).expect("loopd.sh readable"),
-    )
-    .expect("copy loopd.sh into fixture dir");
-    let scripts = tmp.path().join("scripts");
-    std::fs::create_dir_all(&scripts).expect("fixture scripts dir");
-    std::fs::copy(
-        repo_root().join("scripts/loopd_env_loader.sh"),
-        scripts.join("loopd_env_loader.sh"),
-    )
-    .expect("copy loopd_env_loader.sh into fixture dir");
+    // T213/T330: loopd.sh sources scripts/*.sh fragments relative to its own
+    // path — the fixture copies loopd.sh plus the DERIVED fragment set
+    // (common::copy_loopd_fixture), so a new fragment never re-breaks this
+    // fixture silently (the routing fixture's lesson, generalized).
+    common::copy_loopd_fixture(tmp.path());
     std::fs::write(tmp.path().join(".gitignore"), "/.chug/\n/target-shared/\n/bin/\n")
         .expect("write fixture .gitignore");
     git(tmp.path(), &["init", "-q"]);
