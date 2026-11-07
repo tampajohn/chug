@@ -64,6 +64,23 @@ LOOPD_ENV_FILE="${CHUG_LOOPD_ENV:-$HOME/.chug/loopd.env}"
 . "$(dirname "$0")/scripts/loopd_env_loader.sh"
 loopd_load_env_file
 
+# T330 — the LLM profile (docs/install-profiles.md): `install.sh --profile`
+# writes the operator's chosen profile to $HOME/.chug/profile.env and the
+# supervisor loads it ONCE at startup (the T47 lesson — no env mutation
+# inside the cycle loop). The loader translates the profile's owned keys to
+# the loop's native env BEFORE the model defaults below apply:
+# CHUG_LLM_BASE_URL/CHUG_LLM_API_KEY(_CMD) land on ANTHROPIC_BASE_URL/
+# ANTHROPIC_AUTH_TOKEN (src/auth.rs reads those), CHUG_MODEL_REASONING/
+# CHUG_MODEL_CODING land on LOOP_ORCH_MODEL/LOOP_ROUTINE_MODEL, and
+# CHUG_LANGFUSE_* lands on LANGFUSE_*. Already-shaped env wins everywhere
+# (an operator-exported LOOP_ORCH_MODEL or ANTHROPIC_AUTH_TOKEN is never
+# overridden) and an absent profile is a silent no-op — today's behavior,
+# no flag day. Override the path with CHUG_PROFILE_ENV. The fragment is
+# resolved relative to THIS script's own path, never the cwd.
+PROFILE_ENV_FILE="${CHUG_PROFILE_ENV:-$HOME/.chug/profile.env}"
+. "$(dirname "$0")/scripts/loopd_profile_loader.sh"
+loopd_load_profile
+
 # T81 — per-phase model routing (operator-approved 2026-09-26). The
 # ORCHESTRATOR's model is per-cycle and the switch is the freshness rule —
 # never model judgment: when the queue holds `todo` rows AND EVALUATION.md

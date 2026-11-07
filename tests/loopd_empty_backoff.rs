@@ -26,6 +26,9 @@
 
 #![cfg(unix)]
 
+#[path = "common/mod.rs"]
+mod common;
+
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use tempfile::TempDir;
@@ -95,22 +98,11 @@ fn git(root: &Path, args: &[&str]) {
 /// routing-fixture pattern; no repo file is touched).
 fn fixture_repo(subjects: &[&str]) -> TempDir {
     let tmp = tempfile::tempdir().expect("tempdir");
-    std::fs::write(
-        tmp.path().join("loopd.sh"),
-        std::fs::read_to_string(repo_root().join("loopd.sh")).expect("loopd.sh readable"),
-    )
-    .expect("copy loopd.sh into fixture dir");
-    // T213: loopd.sh sources scripts/loopd_env_loader.sh relative to its own
-    // path — without the fragment beside the copy the sourcing dies under
-    // set -euo pipefail before any mode dispatch (the routing fixture's
-    // lesson, reused verbatim).
-    let scripts = tmp.path().join("scripts");
-    std::fs::create_dir_all(&scripts).expect("fixture scripts dir");
-    std::fs::copy(
-        repo_root().join("scripts/loopd_env_loader.sh"),
-        scripts.join("loopd_env_loader.sh"),
-    )
-    .expect("copy loopd_env_loader.sh into fixture dir");
+    // T213/T330: loopd.sh sources scripts/*.sh fragments relative to its own
+    // path — the fixture copies loopd.sh plus the DERIVED fragment set
+    // (common::copy_loopd_fixture), so a new fragment never re-breaks this
+    // fixture silently (the routing fixture's lesson, generalized).
+    common::copy_loopd_fixture(tmp.path());
     git(tmp.path(), &["init", "-q"]);
     for subject in subjects {
         git(tmp.path(), &["commit", "--allow-empty", "-m", subject]);

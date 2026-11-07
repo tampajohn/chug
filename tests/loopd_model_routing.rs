@@ -25,6 +25,10 @@
 
 #![cfg(unix)]
 
+
+#[path = "common/mod.rs"]
+mod common;
+
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
@@ -377,23 +381,12 @@ fn todo_table(rows: &[(&str, &str)]) -> String {
 /// fixtures. Returns the TempDir guard (RAII cleanup); use `.path()`.
 fn fixture_dir(todo: Option<String>) -> tempfile::TempDir {
     let tmp = tempfile::tempdir().expect("tempdir");
-    std::fs::write(
-        tmp.path().join("loopd.sh"),
-        std::fs::read_to_string(repo_root().join("loopd.sh")).expect("loopd.sh readable"),
-    )
-    .expect("copy loopd.sh into fixture dir");
-    // T213: loopd.sh sources scripts/loopd_env_loader.sh relative to its own
-    // path (the M4 loader extraction) — the fixture copy needs the fragment
-    // beside it or the sourcing dies under set -euo pipefail before any
-    // mode dispatch (the reaper + daemon_ensure sandboxes copy scripts/
-    // wholesale; this minimal fixture copies exactly what loopd.sh needs).
-    let scripts = tmp.path().join("scripts");
-    std::fs::create_dir_all(&scripts).expect("fixture scripts dir");
-    std::fs::copy(
-        repo_root().join("scripts/loopd_env_loader.sh"),
-        scripts.join("loopd_env_loader.sh"),
-    )
-    .expect("copy loopd_env_loader.sh into fixture dir");
+    // T213/T330: the DERIVED fragment copy (common::copy_loopd_fixture) —
+    // loopd.sh plus every scripts/*.sh fragment it sources, so a new
+    // fragment never breaks this fixture silently (five opaque exit-1s
+    // was the T330 bite).
+    common::copy_loopd_fixture(tmp.path());
+
     if let Some(todo) = todo {
         std::fs::write(tmp.path().join("TODO.md"), todo).expect("write fixture TODO.md");
     }

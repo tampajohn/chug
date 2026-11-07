@@ -14,6 +14,14 @@
 #   CHUG_INSTALL_PLATFORM  force the platform token (skips the uname mapping)
 #   CHUG_INSTALL_DIR       install dir        (default $HOME/.local/bin)
 #   CHUG_RELEASE_URL_BASE  asset base URL     (default …/releases/latest/download)
+#
+# Flag (T330 — the LLM profile contract, docs/install-profiles.md):
+#   --profile <name>  resolve profiles/<name>.env (repo checkout) or
+#                     ~/.chug/profiles/<name>.env (private values, win),
+#                     validate it BEFORE anything is written (a bad profile
+#                     installs nothing and never writes ~/.chug/profile.env),
+#                     copy it there (mode 600) for loopd.sh to load at
+#                     supervisor startup, and print the loopd launch line.
 set -eu
 export LC_ALL=C
 
@@ -57,6 +65,96 @@ case "$platform" in
   macos-arm64|linux-x86_64|linux-aarch64) ;;
   *) fail "no prebuilt binary for platform '$platform' (os=$os arch=$mach) — supported: macos-arm64, linux-x86_64, linux-aarch64; build from source: git clone \"https://github.com/$REPO\" && cd chug && cargo install --path ." ;;
 esac
+
+# --- T330: the --profile leg (docs/install-profiles.md) -----------------------
+# Runs BEFORE any download so a bad profile fails fast and offline: resolve,
+# validate every contract rule, then copy. The launch-line print happens in
+# the footer, after the binary lands.
+profile_name=
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --profile)
+      [ $# -ge 2 ] || fail "--profile needs a profile name — usage: install.sh --profile <name> (docs/install-profiles.md)"
+      profile_name=$2
+      shift 2
+      ;;
+    --profile=*)
+      profile_name=${1#--profile=}
+      [ -n "$profile_name" ] || fail "--profile= needs a profile name — usage: install.sh --profile <name> (docs/install-profiles.md)"
+      shift
+      ;;
+    *)
+      fail "unknown argument '$1' — the only flag is --profile <name> (point the loop at a model provider; docs/install-profiles.md)"
+      ;;
+  esac
+done
+
+profile_file=
+if [ -n "$profile_name" ]; then
+  case "$profile_name" in
+    ''|.|..|*/*|*.env) fail "invalid profile name '$profile_name' — a profile is the file's NAME without .env (e.g. --profile local-openai-compat); profiles live at ~/.chug/profiles/<name>.env or ./profiles/<name>.env (docs/install-profiles.md)" ;;
+  esac
+  # Private values win: ~/.chug/profiles/ before a repo checkout's profiles/.
+  for profile_cand in "$HOME/.chug/profiles/$profile_name.env" "./profiles/$profile_name.env"; do
+    if [ -f "$profile_cand" ]; then
+      profile_file=$profile_cand
+      break
+    fi
+  done
+  [ -n "$profile_file" ] || fail "profile '$profile_name' not found — looked in ~/.chug/profiles/$profile_name.env (private values) and ./profiles/$profile_name.env (repo checkout); start from profiles/local-openai-compat.env in the repo — docs/install-profiles.md"
+
+  # Validate BEFORE anything is written (never a half-written profile). The
+  # parse mirrors the loopd loader's tolerance (optional `export ` prefix,
+  # one pair of surrounding quotes, CRLF, `#` comments, blank lines); empty
+  # values count as absent, matching src/auth.rs's resolution rule.
+  p_cr=$(printf '\r')
+  p_base= p_key= p_cmd= p_reason= p_coding= p_unknown=
+  while IFS= read -r p_line || [ -n "$p_line" ]; do
+    p_line=${p_line%"$p_cr"}
+    case "$p_line" in ''|\#*) continue ;; esac
+    p_line=${p_line#export }
+    case "$p_line" in
+      *=*)
+        p_k=${p_line%%=*}
+        p_v=${p_line#*=}
+        case "$p_v" in
+          \"*\") p_v=${p_v#\"}; p_v=${p_v%\"} ;;
+          \'*\') p_v=${p_v#\'}; p_v=${p_v%\'} ;;
+        esac
+        case "$p_k" in
+          CHUG_LLM_BASE_URL)    p_base=$p_v ;;
+          CHUG_LLM_API_KEY)     p_key=$p_v ;;
+          CHUG_LLM_API_KEY_CMD) p_cmd=$p_v ;;
+          CHUG_MODEL_REASONING) p_reason=$p_v ;;
+          CHUG_MODEL_CODING)    p_coding=$p_v ;;
+          CHUG_LANGFUSE_*)      ;; # the optional observability class
+          *) p_unknown="$p_unknown $p_k" ;;
+        esac
+        ;;
+      *)
+        fail "profile '$profile_name': every non-comment line must be KEY=VALUE — fix or remove the malformed line (docs/install-profiles.md)"
+        ;;
+    esac
+  done < "$profile_file"
+
+  profile_missing=
+  [ -n "$p_base" ]   || profile_missing="$profile_missing CHUG_LLM_BASE_URL"
+  [ -n "$p_reason" ] || profile_missing="$profile_missing CHUG_MODEL_REASONING"
+  [ -n "$p_coding" ] || profile_missing="$profile_missing CHUG_MODEL_CODING"
+  if [ -z "$p_key" ] && [ -z "$p_cmd" ]; then
+    profile_missing="$profile_missing CHUG_LLM_API_KEY (or CHUG_LLM_API_KEY_CMD)"
+  fi
+  [ -z "$profile_missing" ] || fail "profile '$profile_name' is missing required key(s):$profile_missing — nothing installed and ~/.chug/profile.env NOT written; add them and retry (docs/install-profiles.md)"
+  if [ -n "$p_key" ] && [ -n "$p_cmd" ]; then
+    fail "profile '$profile_name' sets BOTH CHUG_LLM_API_KEY and CHUG_LLM_API_KEY_CMD — the contract takes exactly one; comment the other out and retry (docs/install-profiles.md)"
+  fi
+  [ -z "$p_unknown" ] || fail "profile '$profile_name' sets non-profile-owned key(s):$p_unknown — a profile owns exactly CHUG_LLM_BASE_URL, CHUG_LLM_API_KEY (or CHUG_LLM_API_KEY_CMD), CHUG_MODEL_REASONING, CHUG_MODEL_CODING, CHUG_LANGFUSE_*; nothing installed (docs/install-profiles.md)"
+
+  mkdir -p "$HOME/.chug" || fail "cannot create $HOME/.chug — check \$HOME permissions (this script never elevates)"
+  cp "$profile_file" "$HOME/.chug/profile.env" || fail "cannot write $HOME/.chug/profile.env — check write permission (this script never elevates)"
+  # A profile may carry a literal CHUG_LLM_API_KEY — never group/world-readable.
+  chmod 600 "$HOME/.chug/profile.env" || fail "cannot restrict $HOME/.chug/profile.env to mode 600 — a profile may carry a literal key; check permissions (this script never elevates)"
+fi
 
 # --- fetch helper: curl first, wget fallback ----------------------------------
 fetch_to() { # $1 url, $2 dest
@@ -117,7 +215,22 @@ esac
 banner
 printf '  installed: %s/chug\n' "$install_dir"
 printf '  repo:      https://github.com/%s\n' "$REPO"
-printf '\n'
+if [ -n "$profile_name" ]; then
+  printf '  profile:   %s -> %s (profile %s)\n' "$profile_file" "$HOME/.chug/profile.env" "$profile_name"
+  case "$p_key" in
+    ''|'$'*|'<'*|'('*) ;; # no literal key, or a fetch/indirection value
+    *) printf '  note:      the profile carries a literal CHUG_LLM_API_KEY — prefer CHUG_LLM_API_KEY_CMD (a vault fetch) so the key never rests in a file\n' ;;
+  esac
+  printf '\n'
+  printf '  launch the loop with:\n'
+  printf '    ./loopd.sh                 # sources %s (profile %s)\n' "$HOME/.chug/profile.env" "$profile_name"
+  printf '\n'
+else
+  printf '\n'
+  printf '  next: point the loop at a model provider —\n'
+  printf '    install.sh --profile <name>   # the LLM profile contract; docs/install-profiles.md\n'
+  printf '\n'
+fi
 printf '  quickstart:\n'
 printf '    chug run --spec SPEC.md --goal "Build X and make the check pass" \\\n'
 printf '      --model <model> --max-iters 40 --max-minutes 120\n'
