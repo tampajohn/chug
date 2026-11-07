@@ -87,7 +87,7 @@ fn captured_string(cap: &std::sync::Arc<std::sync::Mutex<Vec<u8>>>) -> String {
 
 /// A healthy local mock daemon socket: 200 `{"status":"ok"}` to every GET
 /// /healthz (the model loads before the socket binds — healthz never lies).
-fn serve_healthz(sock: &Path) {
+pub(crate) fn serve_healthz(sock: &Path) {
     let _ = std::fs::remove_file(sock);
     let listener = UnixListener::bind(sock).expect("bind mock daemon");
     std::thread::spawn(move || {

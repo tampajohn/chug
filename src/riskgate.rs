@@ -722,6 +722,41 @@ mod tests {
             );
         }
 
+        // The auto matrix's WARM-socket arm at the judge level (the mutant
+        // the T332 validator's mutation round left alive): auto + a HEALTHY
+        // daemon socket + the proxy configured -> the daemon client wins —
+        // the socket beats the proxy, so the error flavor is the daemon's
+        // spawn flavor (a proxy or flipped probe order says "decision proxy
+        // request failed" here and fails the leg).
+        let warm = tempfile::tempdir().expect("tempdir");
+        let warm_sock = warm.path().join("warm.sock");
+        crate::decision::tests::serve_healthz(&warm_sock);
+        set_env(JUDGE_ENV, None);
+        set_env(crate::decision::PROVIDER_ENV, Some("auto".as_ref()));
+        set_env(crate::decision::PROXY_URL_ENV, Some("http://127.0.0.1:1".as_ref()));
+        set_env(crate::daemon::BINARY_ENV, Some("/bin/false".as_ref()));
+        set_env(crate::daemon::HOME_ENV, Some(warm.path().as_os_str()));
+        set_env(crate::daemon::SOCK_ENV, Some(warm_sock.as_os_str()));
+        let mut judge = judge_from_env().expect("warm auto constructs");
+        let err = match judge.judge("rm -rf /") {
+            Ok(_) => panic!("a daemon that cannot come up must not judge"),
+            Err(e) => e,
+        };
+        // The warm socket beat the proxy at the probe, so the daemon client
+        // consulted the mock — whose canned healthz body is not a verdict,
+        // and the DAEMON parse flavor is exactly that refusal. A proxy pick
+        // would say "decision proxy request failed" against the dead
+        // endpoint and fail this assert (the surviving mutant's flip).
+        assert!(
+            err.contains("missing answers.risk.choice"),
+            "warm auto leg: {err}"
+        );
+        set_env(crate::decision::PROVIDER_ENV, None);
+        set_env(crate::decision::PROXY_URL_ENV, None);
+        set_env(crate::daemon::BINARY_ENV, None);
+        set_env(crate::daemon::HOME_ENV, None);
+        set_env(crate::daemon::SOCK_ENV, None);
+
         // The consult's garbage mode refuses the run (never a silent pick).
         set_env(JUDGE_ENV, None);
         set_env(crate::decision::PROVIDER_ENV, Some("garbage".as_ref()));

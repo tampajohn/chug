@@ -103,9 +103,11 @@ pub trait DecisionProvider: Send {
 /// endpoint set, auto collapses to the local daemon without probing
 /// (today's behavior, byte for byte — the provider change must be
 /// invisible in every fixture that does not configure a proxy).
-// T332 mid-slice: the production consumers (the risk-gate consult + the
-// shell call sites' mirror) land in the arc's next commit; the auto matrix
-// is table-tested here either way.
+// The production consult path is `judge_from_env` (riskgate), which
+// carries this same table against the `Judge` trait; `provider_from_env`
+// is the pure table carrier for the pinned matrix test (and mirrors
+// `status_line`'s Auto branch). Dead in non-test builds by construction —
+// hence the allow.
 #[allow(dead_code)]
 pub fn provider_from_env() -> anyhow::Result<Option<Box<dyn DecisionProvider>>> {
     let raw = std::env::var(PROVIDER_ENV).ok();
@@ -233,4 +235,4 @@ fn short_id() -> String {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
