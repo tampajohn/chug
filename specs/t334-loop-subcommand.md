@@ -20,7 +20,7 @@ Two adoption-blocking flaws in the T329 quickstart:
 
 1. **`chug loop init`** (new subcommand, run in the target repo):
    - Scaffolds: `LOOP-SPEC.md` (a GENERIC minimal template — the queue
-     rules, the check:-line contract, the gate expectations; NOT chug's
+     rules, the gate-contract line convention, the gate expectations; NOT chug's
      self-referential doctrine/pins, which are chug-repo-specific),
      `TODO.md` (header + empty queue + the `## Proposed` lane header from
      T326), `.chug/` runtime dir, and appends `.chug/` to `.gitignore` if
@@ -50,7 +50,7 @@ Two adoption-blocking flaws in the T329 quickstart:
   reports `kept` for all; `--force` writes backups.
 - Scaffold validity: the generated TODO.md parses under the
   todo_consistency rules; the generated LOOP-SPEC.md contains the
-  check:-contract sentence.
+  gate-contract sentence.
 - run fixture: missing scaffold exits 2 with the init hint; with
   scaffold, the supervisor is invoked with cwd = the temp repo (assert
   via a stubbed exec).
