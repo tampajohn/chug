@@ -381,14 +381,10 @@ fn todo_table(rows: &[(&str, &str)]) -> String {
 /// fixtures. Returns the TempDir guard (RAII cleanup); use `.path()`.
 fn fixture_dir(todo: Option<String>) -> tempfile::TempDir {
     let tmp = tempfile::tempdir().expect("tempdir");
-    std::fs::write(
-        tmp.path().join("loopd.sh"),
-        std::fs::read_to_string(repo_root().join("loopd.sh")).expect("loopd.sh readable"),
-    )
-    .expect("copy loopd.sh into fixture dir");
     // T213/T330: the DERIVED fragment copy (common::copy_loopd_fixture) —
-    // loopd.sh sources scripts/*.sh relative to its own path, and a new
-    // fragment used to break this fixture silently (five opaque exit-1s).
+    // loopd.sh plus every scripts/*.sh fragment it sources, so a new
+    // fragment never breaks this fixture silently (five opaque exit-1s
+    // was the T330 bite).
     common::copy_loopd_fixture(tmp.path());
 
     if let Some(todo) = todo {
