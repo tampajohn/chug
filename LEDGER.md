@@ -1,15 +1,12 @@
 # Ledger
 
 ## Done
-- Cycle-3075 Phase-1 disposition: routine glm skip per freshness rule — routing record d1794035652-1 (predicate HOLDS: 3 open rows + EVALUATION.md 739th eb2dd5c same UTC day; loopd routed glm at 07:12:52Z). Flagged for the next eval: loopd's eval-delta read `FULL-READ REQUIRED: splice-violated (nothing carried verbatim from the previous ring)` at 07:12:25Z — the state ring may need a heal write at the wrap.
-- T332 discovery DONE (orchestrator probe, live): the proxy /v1/systemone is a DROP-IN for the daemon /judge — same {state,questions} body, same {answers} envelope, choice/noul/score all verified, usage.cost present, model field REQUIRED, Bearer or x-api-key auth. Committed as docs/decision-providers.md on the arc branch (b0ed89b).
-- T332 impl arc: 4 glm segments (seg1 80/80 iters → T63 resume seg2 77/80 minutes → fix-up seg3 80/80 → slice-4 seg4 60/60) + slice-4 ORCHESTRATOR-FINISH (T55/T150 precedent): 5 commits on loop-t332 (b0ed89b, 92c1989, b3252c7, bc05a59, e7aff68) — src/decision/ abstraction (LocalDaemon + ProxySystemOne, CHUG_DECISION_PROVIDER=auto|local|proxy), riskgate CHUG_JUDGE=proxy mode + decision-layer consult, the T330 profile contract (install.sh + both loaders + profiles/decision-proxy.env), the loopd.sh laya_triage rewire (fail-open preserved, provider-tagged note) + ideate.py noul leg (fail-closed preserved), batteries 30+17+8. My review fixes: 3 quiet-probe note asserts re-pinned at source level (loopd_fn_src); env_loader explicit-env leg count assert corrected. 11 delegate/mcp spawn reds adjudicated pre-existing (fail identically on main under load).
-- T332 kimi validation REQUIRED (d1794044736-4): validator pid 29377 FLYING (validate-a slot).
+- Cycle-3078 worked delta landed: T331 arc CLOSED (worktree loop-t331 + warm build impl-a → glm impl pid 8479 80/80 post-commit → T63/T150 orchestrator-finish 2f28167 → kimi FULL routing d1794066929-5 → VERDICT PASS d1794067778-6, 5/5 mutants + ~40 claims verified, 3 nits non-blocking → merge a50c4a3 --no-ff → flip be1bdfe → post-merge gates GREEN clippy ZERO + nextest 1942/1942 bg pid 58193) + README risk-gate pointer 95d853d (floor guards green). Harvest 4 files in .chug/ (events-t331-impl-20261107-155536 + events-t331-validate + verdict + LEDGER-t331-validate).
+- Release v0.19.0 prep: Cargo.toml/lock bumped (9f26184), check-tag-version ok, notes generated (scripts/release-notes.sh HEAD v0.18.0), ANCESTOR-OK; 5 distinct flip-ids since v0.18.0 (T330/331/332/334/335) ≥ 3 → minor (T332/T334 features). T333 flip-deviation noted (no todo: subject in range; row carries its ref — zero-casualty, named in Outcomes).
+- Outcomes: cycle-3078 entry written, cycle-3070 one-lined (kept-full-6: 3078/3075/3074/3073/3072/3071).
 
-## Next
-- T332: collect verdict → PASS → merge/flip/push → harvest worktree → post-merge gates.
-- T331 (pri 3, docs-only risk-gate story page) if budget permits.
-- Phase-3 wrap: eval-state heal (the splice-violated flag), gates, release check, token-free notes + T257 color, probe, fill, push, goal_complete.
+## Next (the wrap tail, in order)
+- T261 batch + decisions-audit → eval-state rewrite → wrap prep commit (eval:) → final gates at 9f26184 check (bg pid 54158) → tag v0.19.0 → token-free wrap notes + probe → fill + assertions (T309/T310/T311/T312) → push (notes+fill+tag) → flips → goal_complete.
 
 ## Blockers
-- none (T328 stays BLOCKED on the chug-watch tree, fleet-side)
+- none (T328 stays BLOCKED fleet-side; P001-P004 stay parked operator lane)
