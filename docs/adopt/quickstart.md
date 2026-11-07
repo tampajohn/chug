@@ -74,6 +74,8 @@ nohup ./loopd.sh > /dev/null 2>&1 &   # start (detached)
 - `goal_complete` appears only after the spec's `check:` re-runs and
   exits 0; a rejected claim keeps the loop in charge
 - `chug ledger` prints LEDGER.md — the run's external memory
+- the first eval lands as a fresh `EVALUATION.md` body — the loop
+  examining its own recent cycles, dated same-UTC-day at the top
 - under loopd: `.chug/loopd/loopd.log` gains one `cycle OK` line per
   completed cycle (plus a `cheap-exit disposition` line on empty days —
   a $0 cycle), `.chug/loopd/cycle-*.log` holds each cycle's stream, and
