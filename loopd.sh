@@ -445,8 +445,22 @@ laya_triage() { # the System One triage call: the state pack -> ONE
   body=$(triage_request_body "$@") || { laya_failopen "state pack build failed (jq?)"; return 0; }
   provider=$(decision_provider) || { laya_failopen "unknown CHUG_DECISION_PROVIDER (expected auto|local|proxy) — no provider consulted"; return 0; }
   if [ "$provider" = proxy ]; then
+    # NOT command substitution: DECISION_POST_ERR is set inside
+    # decision_proxy_post, and a $(...) subshell would swallow it — the
+    # fail-open note would read an EMPTY reason (the T332 validator's F1).
+    # stdout goes to a tempfile, the rc + the global var reach the caller.
     DECISION_POST_ERR=""
-    resp=$(decision_proxy_post "$body") || { laya_failopen "$DECISION_POST_ERR"; return 0; }
+    local proxy_out
+    proxy_out=$(mktemp "${TMPDIR:-/tmp}/decision-post.XXXXXX") || { laya_failopen "decision proxy tempfile failed"; return 0; }
+    # the if-guard keeps set -e from aborting the run on a dead proxy — the
+    # fail-open must REACH laya_failopen, never die before it.
+    if decision_proxy_post "$body" > "$proxy_out"; then
+      resp=$(cat "$proxy_out")
+    else
+      laya_failopen "${DECISION_POST_ERR:-decision proxy failed (no reason recorded)}"
+      rm -f "$proxy_out"; return 0
+    fi
+    rm -f "$proxy_out"
   else
     resp=$(curl --unix-socket "$sock" --max-time 2 -s -w '\n%{http_code}' \
       -X POST -H 'Content-Type: application/json' -d "$body" \
