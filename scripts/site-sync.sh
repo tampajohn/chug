@@ -1311,6 +1311,13 @@ STYLE
     printf '  <div class="nav-links">\n'
     printf '    <a href="#quickstart">quickstart</a>\n'
     printf '    <a href="%s">runbooks/</a>\n' "$DOCS_GH_TREE"
+    if [ "$ADOPT_STATE" = ok ] || [ "$ADOPT_LIVE" = 1 ]; then
+      # the link follows the PAGE's existence on the site — rendered this
+      # sync, or riding stale from an earlier one. It is never the reverse:
+      # a blocked render (dangling anchor, hygiene hit) must not flap the
+      # docs page — stale beats blank covers the link to the page too.
+      printf '    <a href="https://chug.sh/adopt.html">adopt</a>\n'
+    fi
     printf '  </div>\n'
     printf '  <a class="gh" href="%s">home</a>\n' "$DOCS_HOME"
     printf '</div></nav>\n'
@@ -1416,6 +1423,345 @@ ensure_docs_nav() {
     echo "site-sync: bootstrapped docs nav link + get-started pointer ($(git -C "$SITE" rev-parse --short HEAD 2>/dev/null))"
   else
     warn "docs nav bootstrap commit failed (git identity?) — edits written but uncommitted"
+  fi
+  return 0
+}
+
+# --- T329: adopt.html — the adopt page, machine-rendered from docs/adopt/ -----
+# Training content was the adoption bottleneck (operator Q4: expand chug to
+# the company), so the site gains a THIRD page — the front door that takes a
+# curious engineer from "what is this" to "my first loop is running". The
+# doctrine is T241's verbatim, with the adopt corpus's own shape:
+#
+# Content source of truth: the four curated markdown fragments under
+# docs/adopt/ in the chug repo (quickstart, mental-model, first-feature, faq
+# — the page's fixed section order), rendered by the docs_md renderer. The
+# corpus's own README.md is the index and never renders; any OTHER unknown
+# fragment is warned and skipped — the page renders exactly the four curated
+# sections, never whatever lands in the directory (fail-closed by design: a
+# stray note cannot leak onto the public site).
+#
+# Fail-closed per T217: a missing fragment renders an explicit placeholder
+# region in its slot (honest absence, never fabricated content) and the sync
+# continues; NO canonical fragments at all -> adopt.html is NOT written and
+# the nav bootstrap is skipped (never a link to a page that was not
+# rendered — the T241 leg). Deterministic and byte-stable (req 3): no clock,
+# byte-identical inputs render byte-identical output, an unchanged page never
+# commits. adopt.html is ADD/OVERWRITE (T241 req 3) written in the SAME
+# commit as index.html/docs.html when either changed (req 5).
+#
+# Two publish gates run over the composed page before it may land, both
+# fail-closed with the previously published page riding (stale beats blank —
+# the T327 doctrine):
+#   link check — every in-page anchor (href="#x") must resolve to an id="x"
+#     on the page; the render emits no heading ids, so fragment links target
+#     the four section anchors or nothing. A dangling anchor is broken
+#     training content: not written this sync.
+#   hygiene — the T249 internal-info redaction patterns, scanned line by
+#     line over the render. The repo's own lint covers the tracked fragments;
+#     this scan covers the rendered page in the SITE repo, which no chug-repo
+#     lint reaches. A hit is reported as line:pattern (never the content).
+ADOPT_DIR="$CHUG/docs/adopt"
+ADOPT_STATE="skip"; ADOPT_CHANGED=0; ADOPT_NOTE="skipped"; ADOPT_N=0
+ADOPT_LINK='href="https://chug.sh/adopt.html">adopt</a>'
+
+# t249_scan FILE — the T249 redaction pattern classes over each line; prints
+# "<line>:<pattern>" per hit, never the line content. Mirrors
+# tests/internal_info_lint.rs exactly: word-bounded needles (BOTH ends
+# non-word — ASCII alnum + underscore), the per-class case flags, and the
+# class-8 host shape `[a-z0-9][a-z0-9.-]*\.internal\.com` (a [a-z0-9]
+# somewhere in the consumed left run, non-word char after the TLD).
+t249_scan() { # file
+  awk '
+    function isw(c) { return c ~ /[A-Za-z0-9_]/ }
+    function wb(s, needle, ci,   hay, from, pos, start, before, after, n) {
+      hay = ci ? tolower(s) : s
+      if (ci) needle = tolower(needle)
+      n = length(needle); from = 1
+      while (from <= length(hay)) {
+        pos = index(substr(hay, from), needle)
+        if (pos == 0) return 0
+        start = from + pos - 1
+        before = start > 1 ? substr(hay, start - 1, 1) : ""
+        after = start + n <= length(hay) ? substr(hay, start + n, 1) : ""
+        if (!isw(before) && !isw(after)) return 1
+        from = start + 1
+      }
+      return 0
+    }
+    function hostpat(s,   from, pos, dot, end, after, left, c, haslead) {
+      from = 1
+      while (from <= length(s)) {
+        pos = index(substr(s, from), ".internal.com")
+        if (pos == 0) return 0
+        dot = from + pos - 1
+        end = dot + 13
+        after = end <= length(s) ? substr(s, end, 1) : ""
+        left = dot; haslead = 0
+        while (left > 1) {
+          c = substr(s, left - 1, 1)
+          if (c ~ /[a-z0-9.-]/) { if (c ~ /[a-z0-9]/) haslead = 1; left-- }
+          else break
+        }
+        if ((after == "" || !isw(after)) && haslead) return 1
+        from = dot + 1
+      }
+      return 0
+    }
+    {
+      # the needles are composed from pieces at runtime — this script is a
+      # tracked file and tests/internal_info_lint.rs scans every tracked
+      # line, so no source line here may carry a whole redaction literal
+      if (wb($0, "video" "amp", 1)) print NR ":org-name"
+      if (wb($0, "V" "A", 0)) print NR ":fleet-abbrev"
+      if (wb($0, "vamp" "flake", 1)) print NR ":monorepo-codename"
+      if (wb($0, "cen" "tral", 1)) print NR ":monorepo-intermediate"
+      if (wb($0, "internal-" "llm" "-proxy", 1)) print NR ":proxy-hostname"
+      if (wb($0, "INTERNAL-" "MONO" "REPO", 0)) print NR ":monorepo-repo-caps"
+      if (hostpat($0)) print NR ":internal-host"
+    }
+  ' "$1"
+}
+
+# adopt_placeholder OUTFILE SLUG NUM TITLE — the explicit missing-fragment
+# region: the section slot exists, the anchor resolves, and the page says
+# exactly what is absent and where to put it. Honest absence, never filler.
+# APPENDS (the sections buffer is shared with the rendered sections).
+adopt_placeholder() { # outfile slug num title
+  {
+    printf '<section id="%s"><div class="wrap">\n' "$2"
+    printf '  <p class="kicker"><span class="hash">##</span> %s · %s</p>\n' "$3" "$2"
+    printf '  <h2>%s</h2>\n' "$4"
+    printf '  <div class="doctext">\n'
+    printf '    <p class="lede">No content yet — this section'"'"'s fragment (docs/adopt/%s.md) is missing from the repo, so nothing is rendered here. Add the fragment and the next sync fills this slot.</p>\n' "$2"
+    printf '  </div>\n</div></section>\n'
+  } >> "$1"
+}
+
+# adopt_section STEM NUM TITLE — render one canonical section into the page
+# buffers: a readable fragment renders through docs_md (its H1 is the
+# section h2, its relative links rewrite onto the GitHub blob base), a
+# missing one renders the placeholder. Both shapes carry the section id, so
+# the on-this-page index is stable and every anchor resolves.
+adopt_section() { # stem num title
+  local stem="$1" num="$2" title="$3" f="$ADOPT_DIR/$1.md" label
+  if [ -r "$f" ]; then
+    label=$(docs_md "$f" title 1 "")
+    [ -n "$label" ] || label="$title"
+    printf '      <li><a href="#%s">%s</a></li>\n' "$stem" "$label" >> "$TMPD/adopt-index-li"
+    {
+      printf '<section id="%s"><div class="wrap">\n' "$stem"
+      printf '  <p class="kicker"><span class="hash">##</span> %s · %s</p>\n' "$num" "$stem"
+      printf '  <div class="doctext">\n'
+      docs_md "$f" body 1 "docs/adopt/"
+      printf '  </div>\n</div></section>\n'
+    } >> "$TMPD/adopt-sections"
+    ADOPT_N=$((ADOPT_N + 1)); ADOPT_HAVE=$((ADOPT_HAVE + 1))
+  else
+    printf '%s\n' "$stem" >> "$TMPD/adopt-missing"
+    adopt_placeholder "$TMPD/adopt-sections" "$stem" "$num" "$title"
+    printf '      <li><a href="#%s">%s</a></li>\n' "$stem" "$title" >> "$TMPD/adopt-index-li"
+  fi
+}
+
+# adopt_generate — compose adopt.html into $TMPD/adopt-out. Sets ADOPT_STATE
+# (ok|skip), ADOPT_CHANGED (vs the site's existing page), ADOPT_NOTE (the
+# sync commit body + stdout) and ADOPT_LIVE (the page exists on the site —
+# rendered this sync, or riding stale). Rendered FIRST in the sync flow, so
+# the docs page can link it only when it actually rendered.
+adopt_generate() {
+  ADOPT_LIVE=0
+  adopt_generate_core
+  if [ "$ADOPT_STATE" = ok ]; then
+    ADOPT_LIVE=1
+  elif grep -qF '<link rel="canonical" href="https://chug.sh/adopt.html">' "$SITE/adopt.html" 2>/dev/null; then
+    # a previously published page riding stale — the generator's own
+    # canonical meta is the fingerprint; a stray operator-written file
+    # without it is NOT a rendered page and earns no links anywhere
+    ADOPT_LIVE=1
+  fi
+  return 0
+}
+
+adopt_generate_core() {
+  ADOPT_STATE="skip"; ADOPT_CHANGED=0; ADOPT_NOTE="skipped"; ADOPT_N=0
+  if [ ! -d "$ADOPT_DIR" ]; then
+    warn "no docs/adopt/ dir in the chug repo — adopt.html not written, sync continues (fail-closed: the adopt corpus is missing)"
+    ADOPT_NOTE="skipped (no docs/adopt/)"
+    return 0
+  fi
+  awk '/<style>/{s=1} s{print} /<\/style>/{exit}' "$INDEX" > "$TMPD/adopt-style" 2>/dev/null
+  if [ ! -s "$TMPD/adopt-style" ]; then
+    warn "no <style> block in index.html — no shared style base, adopt.html not written, sync continues"
+    ADOPT_NOTE="skipped (no style base)"
+    return 0
+  fi
+  # the corpus walk: warn-and-skip anything that is not a canonical section
+  # (the corpus's own README.md is the index and rides silently — it exists
+  # for the repo, not the page)
+  for f in $(find "$ADOPT_DIR" -maxdepth 1 -type f -name '*.md' 2>/dev/null | sort); do
+    b=$(basename "$f" .md)
+    [ "$b" = "README" ] && continue
+    case " quickstart mental-model first-feature faq " in
+      *" $b "*) ;;
+      *) warn "unknown adopt fragment docs/adopt/$b.md — the page renders the four canonical sections only; skipped" ;;
+    esac
+  done
+  : > "$TMPD/adopt-index-li"; : > "$TMPD/adopt-sections"; : > "$TMPD/adopt-missing"
+  ADOPT_HAVE=0
+  adopt_section quickstart 01 "Quickstart"
+  adopt_section mental-model 02 "Mental model"
+  adopt_section first-feature 03 "Your first feature"
+  adopt_section faq 04 "FAQ"
+  if [ "$ADOPT_HAVE" -eq 0 ]; then
+    warn "no adopt fragments in docs/adopt/ (expected quickstart.md, mental-model.md, first-feature.md, faq.md) — adopt.html not written, sync continues (fail-closed: the adopt corpus is empty)"
+    ADOPT_NOTE="skipped (no fragments)"
+    return 0
+  fi
+  {
+    printf '<!doctype html>\n<html lang="en">\n<head>\n'
+    printf '<meta charset="utf-8">\n'
+    printf '<meta name="viewport" content="width=device-width, initial-scale=1">\n'
+    printf '<title>chug — adopt</title>\n'
+    printf '<meta name="description" content="Adopt chug: install it, understand the loop, file your first feature, get answers — machine-rendered from the repo docs/adopt/ fragments at every sync.">\n'
+    printf '<link rel="canonical" href="https://chug.sh/adopt.html">\n'
+    printf '<meta name="theme-color" content="#0d1117">\n'
+    printf '<link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">\n'
+    printf '<link rel="apple-touch-icon" href="/assets/apple-touch-icon.png">\n'
+    cat "$TMPD/adopt-style"
+    cat <<'STYLE'
+<style>
+/* adopt.html additions (T329) — the block above is index.html's own <style>,
+   verbatim, and is never modified here; these few rules cover only the shapes
+   the adopt corpus renders that the base does not style (prose
+   sub-headings, list bodies, tables + strong/em, the on-this-page index). */
+.doctext h3,.doctext h4{font-family:var(--mono);color:var(--text);line-height:1.4}
+.doctext h3{font-size:15px;margin:26px 0 8px}
+.doctext h4{font-size:13px;margin:20px 0 6px;color:var(--muted)}
+.doctext ul,.doctext ol{color:var(--muted);max-width:var(--measure);margin:0 0 14px;padding-left:22px}
+.doctext li{line-height:1.7;margin:0 0 6px}
+.doctext li b,.doctext li strong{color:var(--text)}
+.doctext p code,.doctext li code,.doctext td code{font-size:.88em;color:var(--text);background:var(--bg2);border:1px solid var(--border);border-radius:4px;padding:0 4px}
+.doctext pre.code{margin:0 0 14px;max-width:var(--content)}
+.doctext table{border-collapse:collapse;margin:0 0 14px;max-width:var(--measure);font-size:13.5px;line-height:1.6}
+.doctext th,.doctext td{border:1px solid var(--border);padding:5px 9px;text-align:left;vertical-align:top}
+.doctext th{color:var(--text);font-family:var(--mono);font-size:12px}
+.docs-index{margin:26px 0 0;max-width:var(--content)}
+.docs-index p{font-family:var(--mono);font-size:12px;letter-spacing:.16em;text-transform:uppercase;color:var(--accent);margin:0 0 10px}
+.docs-index ul{list-style:none;margin:0;padding:0;max-width:none}
+.docs-index li{margin:0 0 8px;line-height:1.6}
+.docs-index a{font-family:var(--mono);font-size:13.5px}
+</style>
+STYLE
+    printf '</head>\n<body>\n'
+    printf '<nav class="nav"><div class="wrap nav-in">\n'
+    printf '  <a class="brand" href="%s">chug<b>_</b></a>\n' "$DOCS_HOME"
+    printf '  <div class="nav-links">\n'
+    printf '    <a href="#quickstart">quickstart</a>\n'
+    printf '    <a href="#mental-model">mental model</a>\n'
+    printf '    <a href="#first-feature">first feature</a>\n'
+    printf '    <a href="#faq">faq</a>\n'
+    printf '  </div>\n'
+    printf '  <a class="gh" href="%s">home</a>\n' "$DOCS_HOME"
+    printf '</div></nav>\n'
+    printf '<header class="hero" id="adopt"><div class="wrap">\n'
+    printf '  <p class="kicker"><span class="hash">##</span> adopt · machine-rendered from the repo docs/adopt/ at every sync</p>\n'
+    printf '  <h1>adopt chug</h1>\n'
+    printf '  <p class="promise">From zero to your first loop — install it, understand it, hand it one small feature, get answers. The training page is never stale: rendered from docs/adopt/ by scripts/site-sync.sh at every wrap.</p>\n'
+    printf '  <div class="docs-index">\n'
+    printf '    <p>on this page</p>\n'
+    printf '    <ul>\n'
+    cat "$TMPD/adopt-index-li"
+    printf '    </ul>\n  </div>\n</div></header>\n'
+    cat "$TMPD/adopt-sections"
+    printf '<footer><div class="wrap">\n'
+    printf '  chug adopt — regenerated from the repo docs/adopt/ fragments at every sync; never hand-edited.<br>\n'
+    printf '  <a href="%s">home</a> · <a href="https://github.com/tampajohn/chug">source</a> · <a href="%s">README</a> · <a href="%s">edit this page (docs/adopt/)</a>\n' "$DOCS_HOME" "${DOCS_GH_BLOB}README.md" "${DOCS_GH_TREE%runbooks}docs/adopt"
+    printf '</div>\n</footer>\n'
+    printf '</body>\n</html>\n'
+  } > "$TMPD/adopt-out" || { warn "adopt.html compose failed — skipping"; return 0; }
+  # publish gate 1 — the link check: every in-page anchor must resolve; a
+  # dangling #href is broken training content, so the page does not land and
+  # the previously published one rides (stale beats blank)
+  dangling=$(awk '
+    { s = $0
+      while (match(s, /href="#[^"]+"/)) {
+        hrefs[substr(s, RSTART + 7, RLENGTH - 8)] = 1
+        s = substr(s, RSTART + RLENGTH)
+      }
+      s = $0
+      while (match(s, /id="[^"]+"/)) {
+        ids[substr(s, RSTART + 4, RLENGTH - 5)] = 1
+        s = substr(s, RSTART + RLENGTH)
+      }
+    }
+    END { for (h in hrefs) if (!(h in ids)) print h }
+  ' "$TMPD/adopt-out" | sort)
+  if [ -n "$dangling" ]; then
+    warn "adopt.html would carry dangling in-page anchor(s): $(printf '%s' "$dangling" | tr '\n' ' ')— not written this sync (fail-closed); point fragment links at the section anchors"
+    ADOPT_NOTE="skipped (dangling anchor)"
+    return 0
+  fi
+  # publish gate 2 — the T249 hygiene scan over the composed page
+  hits=$(t249_scan "$TMPD/adopt-out")
+  if [ -n "$hits" ]; then
+    warn "adopt.html would carry internal-info pattern hit(s) (the T249 redaction classes) — adopt.html not written this sync (fail-closed); the previously published page rides:"
+    printf '%s\n' "$hits" | while IFS= read -r h; do
+      warn "  adopt.html line ${h%%:*}: pattern ${h#*:} (line content not printed)"
+    done
+    ADOPT_NOTE="skipped (hygiene)"
+    return 0
+  fi
+  ADOPT_STATE="ok"
+  if [ ! -f "$SITE/adopt.html" ] || ! cmp -s "$TMPD/adopt-out" "$SITE/adopt.html"; then ADOPT_CHANGED=1; fi
+  if [ -s "$TMPD/adopt-missing" ]; then
+    ADOPT_NOTE="rendered $ADOPT_N sections ($(tr '\n' ' ' < "$TMPD/adopt-missing" | sed 's/ $//') missing)"
+  else
+    ADOPT_NOTE="rendered $ADOPT_N sections"
+  fi
+  return 0
+}
+
+# ensure_adopt_nav — T329: index.html gains the adopt.html link, directly
+# BEFORE the docs link when that exists (adopt is the front door, docs the
+# reference shelf), else as the last nav item (the T241 mechanics). Idempotent
+# by its own needle; one bootstrap commit; only called after adopt_generate
+# rendered a page — never a link to a page that is not rendered.
+ensure_adopt_nav() {
+  local navhave navopen navclose indent docsline do_nav
+  navhave=$(grep -cF "$ADOPT_LINK" "$INDEX" 2>/dev/null) || navhave=0
+  navopen=$(grep -nF '<div class="nav-links">' "$INDEX" 2>/dev/null | head -1 | cut -d: -f1)
+  navclose=""; docsline=""
+  if [ -n "$navopen" ]; then
+    navclose=$(tail -n +"$((navopen + 1))" "$INDEX" 2>/dev/null \
+      | grep -nE '^[[:space:]]*</div>[[:space:]]*$' | head -1 | cut -d: -f1)
+    if [ -n "$navclose" ]; then
+      navclose=$((navopen + navclose))
+      docsline=$(sed -n "${navopen},${navclose}p" "$INDEX" 2>/dev/null \
+        | grep -nF 'href="https://chug.sh/docs.html">docs</a>' | head -1 | cut -d: -f1)
+      [ -n "$docsline" ] && docsline=$((navopen + docsline - 1))
+    fi
+    indent=$(sed -n "$((navopen + 1))s/[^ ].*//p" "$INDEX" 2>/dev/null)
+  fi
+  do_nav=0
+  if [ "${navhave:-0}" -eq 0 ] && [ -n "$navclose" ]; then do_nav=1; fi
+  if [ "$do_nav" -eq 0 ]; then return 0; fi
+  awk -v at="${docsline:-$navclose}" -v indent="${indent:-    }" -v link="$ADOPT_LINK" '
+    NR == at { print indent "<a " link }
+    { print }' "$INDEX" > "$TMPD/adopt-nav" \
+    || { warn "adopt nav bootstrap splice failed — skipping"; return 1; }
+  cat "$TMPD/adopt-nav" > "$INDEX" \
+    || { warn "adopt nav bootstrap page write failed — index.html may be truncated, NOT committing"; return 1; }
+  if ! git -C "$SITE" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    warn "$SITE is not a git work tree — adopt nav edits written but not committed"
+    return 0
+  fi
+  git -C "$SITE" add index.html
+  if git -C "$SITE" commit -q -m "site: adopt page nav bootstrap (T329)" \
+    -m "scripts/site-sync.sh (T329): index.html gains the adopt.html link, directly before the docs link (adopt is the front door, docs the reference shelf). adopt.html itself is machine-rendered from the repo docs/adopt/ fragments by this same sync; adopt.html is never hand-edited."; then
+    echo "site-sync: bootstrapped adopt nav link ($(git -C "$SITE" rev-parse --short HEAD 2>/dev/null))"
+  else
+    warn "adopt nav bootstrap commit failed (git identity?) — edits written but uncommitted"
   fi
   return 0
 }
@@ -1853,12 +2199,18 @@ YJ="$(awk -v d="$SYNC_DATE" 'BEGIN {
     + int(yy / 4) - int(yy / 100) + int(yy / 400) - 32045 - 1
 }')"
 
+# --- T329: adopt.html — the adopt page -----------------------------------------
+# Rendered FIRST: the docs page's nav links it only when it actually rendered
+# (never a link to a page that is not rendered — the fail-closed leg), and its
+# own nav bootstrap runs with the docs one below.
+adopt_generate
 # --- T241: docs.html — the second page ----------------------------------------
 # The page is rendered FIRST; only a rendered page earns its nav link + the
 # get-started pointer (never a link to a page that is not rendered — the
 # fail-closed missing-runbooks leg, req 5).
 docs_generate
 if [ "$DOCS_STATE" = ok ]; then ensure_docs_nav || true; fi
+if [ "$ADOPT_STATE" = ok ] || [ "$ADOPT_LIVE" = 1 ]; then ensure_adopt_nav || true; fi
 
 # --- T99: regenerate the TIMELINE and FEATURES regions ------------------------
 TL_STATE=skip; FT_STATE=skip
@@ -1941,7 +2293,7 @@ else
   cp "$TMP_NEW4" "$TMP_NEW5"
 fi
 
-if cmp -s "$TMP_NEW5" "$INDEX" && [ "$DOCS_CHANGED" != 1 ]; then
+if cmp -s "$TMP_NEW5" "$INDEX" && [ "$DOCS_CHANGED" != 1 ] && [ "$ADOPT_CHANGED" != 1 ]; then
   echo "site-sync: page unchanged — no commit"
   exit 0
 fi
@@ -1959,20 +2311,31 @@ if [ "$DOCS_CHANGED" = 1 ]; then
     DOCS_CHANGED=0
   fi
 fi
+# T329: adopt.html is ADD/OVERWRITE the same way — same commit when changed;
+# a failed write never commits a partial render
+if [ "$ADOPT_CHANGED" = 1 ]; then
+  if cat "$TMPD/adopt-out" > "$SITE/adopt.html"; then
+    echo "site-sync: wrote $SITE/adopt.html ($ADOPT_NOTE)"
+  else
+    warn "adopt.html write failed — not committing a stale render"
+    ADOPT_CHANGED=0
+  fi
+fi
 
 # --- commit + push (req 2): best-effort, never force, rejection warns + exit 0
 if ! git -C "$SITE" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   warn "$SITE is not a git work tree — pages updated but not committed"
   exit 0
 fi
-if [ -z "$(git -C "$SITE" status --porcelain -- index.html docs.html 2>/dev/null)" ]; then
+if [ -z "$(git -C "$SITE" status --porcelain -- index.html docs.html adopt.html 2>/dev/null)" ]; then
   echo "site-sync: page change not visible to git — nothing to commit"
   exit 0
 fi
 git -C "$SITE" add index.html
 if [ "$DOCS_CHANGED" = 1 ]; then git -C "$SITE" add docs.html; fi  # T241 finding 1: stage docs.html only when THIS sync rendered it — a fail-closed leg never sweeps a stray file, a failed write never commits a partial
+if [ "$ADOPT_CHANGED" = 1 ]; then git -C "$SITE" add adopt.html; fi  # T329, same rule: stage adopt.html only when THIS sync rendered it
 if ! git -C "$SITE" commit -q -m "site: stats sync $SYNC_DATE" \
-  -m "scripts/site-sync.sh (T98+T99), deterministic — items $DONE/$TOTAL (TODO.md), tests $TEST_N ($TEST_SRC${TEST_REF:+, $TEST_REF}), cycles $CYC_N ($CYC_SRC), last eval $EVAL_D; last-5 landed: $LANDED_REFS; timeline: $TL_STATE (cap $TL_CAP), features: $FT_STATE; release: ${RELEASE_TAG:-none}; cost: $COST_STATE; docs: $DOCS_NOTE"; then
+  -m "scripts/site-sync.sh (T98+T99), deterministic — items $DONE/$TOTAL (TODO.md), tests $TEST_N ($TEST_SRC${TEST_REF:+, $TEST_REF}), cycles $CYC_N ($CYC_SRC), last eval $EVAL_D; last-5 landed: $LANDED_REFS; timeline: $TL_STATE (cap $TL_CAP), features: $FT_STATE; release: ${RELEASE_TAG:-none}; cost: $COST_STATE; docs: $DOCS_NOTE; adopt: $ADOPT_NOTE"; then
   warn "commit failed (git identity?) — page updated but uncommitted"
   exit 0
 fi

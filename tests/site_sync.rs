@@ -2844,3 +2844,319 @@ fn t327_docs_table_caps_at_14_days() {
         "yesterday and the 7-day average over the complete-day window:\n{cost}"
     );
 }
+
+// --- T329 — adopt.html: the adopt page, rendered from docs/adopt/ ------------
+//
+// scripts/site-sync.sh renders a THIRD site page — the training page that
+// takes an engineer from "what is this" to "my first loop is running". The
+// doctrine is T241's (fully machine-rendered, same style base, byte-stable,
+// add/overwrite in the same commit as index.html) over a NEW corpus: the four
+// curated fragments under docs/adopt/ (quickstart, mental-model,
+// first-feature, faq — the page's fixed section order; the corpus's own
+// README.md is the index and never renders; unknown fragments are warned and
+// skipped). Fail-closed per T217: a missing fragment renders an explicit
+// placeholder region and the sync continues; no canonical fragments at all ->
+// adopt.html not written and the nav links not bootstrapped. Two publish
+// gates over the composed page, both stale-beats-blank: every in-page anchor
+// must resolve, and the T249 internal-info redaction patterns must not hit
+// (the repo's lint covers the tracked fragments; this scan covers the page in
+// the SITE repo, which no chug-repo lint reaches).
+
+/// The adopt corpus half: the four canonical fragments (the corpus's own
+/// README.md index rides along — never a section). first-feature carries an
+/// in-page anchor to #faq (the only legal in-page link shape: a section id);
+/// faq carries the cross-page docs#cost link that the link check must leave
+/// alone.
+fn chug_fixture_t329_adopt(dir: &Path) {
+    let ad = dir.join("docs/adopt");
+    std::fs::create_dir_all(&ad).unwrap();
+    std::fs::write(
+        ad.join("quickstart.md"),
+        concat!(
+            "# Quickstart\n\nOne command:\n\n```bash\n",
+            "curl -fsSL https://chug.sh/install.sh | sh\n```\n\n",
+            "Point `--model` at any provider that speaks the wire protocol.\n"
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        ad.join("mental-model.md"),
+        concat!(
+            "# Mental model\n\n**The loop is code.**\n\n",
+            "```\n[ model turn ] -> [ check: re-runs ] -> keep chugging\n```\n"
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        ad.join("first-feature.md"),
+        concat!(
+            "# Your first feature\n\n1. write a spec with a check line\n",
+            "2. file the TODO row\n\nSee the [FAQ](#faq) for cost.\n"
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        ad.join("faq.md"),
+        concat!(
+            "# FAQ\n\n**Cost?**\n\nThe per-day table lives on the ",
+            "[docs page](https://chug.sh/docs.html#cost).\n"
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        ad.join("README.md"),
+        "# adopt corpus\n\nThe corpus's own index — never a section.\n",
+    )
+    .unwrap();
+    commit(dir, "docs: adopt corpus", None, "2026-09-23", false);
+}
+
+fn fixture_t329() -> Fixture {
+    let f = fixture_t241();
+    chug_fixture_t329_adopt(&f.chug);
+    f
+}
+
+fn adopt(f: &Fixture) -> String {
+    std::fs::read_to_string(f.site.join("adopt.html")).expect("read adopt.html")
+}
+
+#[test]
+fn t329_adopt_page_renders_four_sections_and_links_both_navs() {
+    let f = fixture_t329();
+    let out = run_sync(&f, true);
+    assert!(out.status.success(), "sync failed: {:?}", out.status.code());
+    let a = adopt(&f);
+    // the four sections render in the page's fixed narrative order
+    let s1 = a.find("<section id=\"quickstart\"").expect("quickstart section");
+    let s2 = a.find("<section id=\"mental-model\"").expect("mental-model section");
+    let s3 = a.find("<section id=\"first-feature\"").expect("first-feature section");
+    let s4 = a.find("<section id=\"faq\"").expect("faq section");
+    assert!(s1 < s2 && s2 < s3 && s3 < s4, "fixed section order:\n{a}");
+    // fragment markdown renders through the docs renderer: fences escaped,
+    // bold -> strong, the on-this-page index at the top
+    assert!(a.contains("curl -fsSL https://chug.sh/install.sh | sh"), "fence verbatim");
+    assert!(a.contains("<strong>The loop is code.</strong>"), "bold per the T99 text rules");
+    assert!(!a.contains("<b>The loop is"), "never the old <b> shape");
+    let idx = a.find("on this page").expect("page index");
+    assert!(idx < s1, "the index sits at the top of the page");
+    for h in ["#quickstart", "#mental-model", "#first-feature", "#faq"] {
+        assert!(a.contains(&format!("href=\"{h}\"")), "index entry {h}");
+    }
+    // the corpus README is the index, never a section; its words never render
+    assert!(!a.contains("corpus's own index"), "README.md must not render");
+    // an in-fragment section anchor resolves (the link check passed); a
+    // cross-page https anchor rides untouched
+    assert!(a.contains("href=\"#faq\">FAQ</a>"), "in-page anchor rendered");
+    assert!(
+        a.contains("href=\"https://chug.sh/docs.html#cost\""),
+        "cross-page anchor untouched"
+    );
+    // index.html: the adopt nav link, directly BEFORE the docs link (the
+    // front door precedes the reference shelf)
+    let html = page(&f);
+    let na = html.find("href=\"https://chug.sh/adopt.html\">adopt</a>").expect("index nav adopt link");
+    let nd = html.find("href=\"https://chug.sh/docs.html\">docs</a>").expect("index nav docs link");
+    assert!(na < nd, "adopt precedes docs in the index nav:\n{html}");
+    // docs.html (the T241 fixture ships runbooks): its nav links adopt only
+    // because adopt actually rendered
+    let d = docs(&f);
+    assert!(d.contains("<a href=\"https://chug.sh/adopt.html\">adopt</a>"), "docs nav adopt link:\n{d}");
+    // the sync commits all three pages in ONE sync commit; tree clean
+    assert_eq!(sync_commits(&f), 1);
+    let nameonly = git(&f.site, &["show", "--name-only", "--format="], None);
+    let files = String::from_utf8_lossy(&nameonly.stdout);
+    for p in ["index.html", "docs.html", "adopt.html"] {
+        assert!(files.lines().any(|l| l.trim() == p), "{p} in the sync commit: {files}");
+    }
+    let st = git(&f.site, &["status", "--porcelain"], None);
+    assert!(String::from_utf8_lossy(&st.stdout).trim().is_empty(), "clean tree");
+    let subjects = all_commit_subjects(&f);
+    assert!(
+        subjects.iter().any(|s| s.contains("site: adopt page nav bootstrap (T329)")),
+        "adopt nav bootstrap commit: {subjects:?}"
+    );
+    // idempotence: byte-identical re-render, no second commit, no dup links
+    let before = (a.clone(), docs(&f), html.clone());
+    let n = all_commit_subjects(&f).len();
+    let out2 = run_sync(&f, true);
+    assert!(out2.status.success());
+    assert!(String::from_utf8_lossy(&out2.stdout).contains("unchanged"), "no-op run says so");
+    assert_eq!(adopt(&f), before.0, "adopt.html byte-identical");
+    assert_eq!(docs(&f), before.1, "docs.html byte-identical");
+    assert_eq!(page(&f), before.2, "index.html byte-identical");
+    assert_eq!(all_commit_subjects(&f).len(), n, "no commit when unchanged");
+    assert_eq!(count(&page(&f), "chug.sh/adopt.html"), 1, "nav link exactly once");
+}
+
+/// The placeholder leg: a missing fragment renders an explicit placeholder
+/// region in its slot — honest absence, never fabricated content — the sync
+/// still succeeds, the nav still lands, and the commit records the note.
+#[test]
+fn t329_missing_fragments_render_placeholders_and_sync_succeeds() {
+    let f = fixture_t329();
+    std::fs::remove_file(f.chug.join("docs/adopt/mental-model.md")).unwrap();
+    std::fs::remove_file(f.chug.join("docs/adopt/faq.md")).unwrap();
+    let out = run_sync(&f, true);
+    assert!(out.status.success(), "a missing fragment must not fail the sync");
+    let a = adopt(&f);
+    assert!(a.contains("<section id=\"quickstart\""), "the present fragment renders");
+    assert_eq!(count(&a, "No content yet"), 2, "one placeholder per missing fragment:\n{a}");
+    assert!(a.contains("docs/adopt/mental-model.md"), "the placeholder names the missing file");
+    assert!(a.contains("<section id=\"faq\""), "the placeholder keeps the section anchor");
+    let log = git(&f.site, &["log", "-1", "--format=%B"], None);
+    let body = String::from_utf8_lossy(&log.stdout);
+    assert!(body.contains("adopt: rendered 2 sections (mental-model faq missing)"), "the note records the placeholders:\n{body}");
+    assert!(page(&f).contains("chug.sh/adopt.html"), "the nav still lands");
+}
+
+/// The empty-corpus leg (the T241 fail-closed shape): no canonical fragments
+/// -> adopt.html not written, the nav link not bootstrapped, the sync
+/// continues — and a stray adopt.html on the site is never swept into the
+/// commit (staging is guarded by ADOPT_CHANGED, not the file's existence).
+#[test]
+fn t329_no_canonical_fragments_leaves_adopt_unwritten() {
+    // leg 1: no docs/adopt/ dir at all
+    let f = fixture_t241();
+    let out = run_sync(&f, true);
+    assert!(out.status.success(), "the sync continues: {:?}", out.status.code());
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("docs/adopt/"), "warn names the missing corpus: {err}");
+    assert!(!f.site.join("adopt.html").exists(), "no page from a missing corpus");
+    assert!(!page(&f).contains("chug.sh/adopt.html"), "never a link to a page that is not rendered");
+    // leg 2: the dir exists but only the corpus's own README.md
+    std::fs::create_dir_all(f.chug.join("docs/adopt")).unwrap();
+    std::fs::write(f.chug.join("docs/adopt/README.md"), "# adopt corpus\n\nindex only.\n").unwrap();
+    commit(&f.chug, "docs: adopt index only", None, "2026-09-23", true);
+    std::fs::write(f.site.join("adopt.html"), "<html>sentinel-adopt</html>\n").unwrap();
+    let before = std::fs::read(f.site.join("adopt.html")).unwrap();
+    let n = all_commit_subjects(&f).len();
+    // make the stats region move so THIS sync has a real commit to inspect —
+    // the sweep guard (no adopt.html staging without ADOPT_CHANGED) then has
+    // teeth: index.html moves while the stray sentinel must ride untouched
+    let mut log = std::fs::read_to_string(f.chug.join(".chug/loopd/loopd.log")).unwrap();
+    log.push_str("2026-09-27T10:00:00Z cycle OK: third\n");
+    std::fs::write(f.chug.join(".chug/loopd/loopd.log"), log).unwrap();
+    commit(&f.chug, "chore: one more cycle", None, "2026-09-27", true);
+    let out2 = run_sync(&f, true);
+    assert!(out2.status.success());
+    let err2 = String::from_utf8_lossy(&out2.stderr);
+    assert!(err2.contains("no adopt fragments"), "warn names the empty corpus: {err2}");
+    assert_eq!(
+        std::fs::read(f.site.join("adopt.html")).unwrap(),
+        before,
+        "adopt.html untouched (fail-closed)"
+    );
+    assert!(!page(&f).contains("chug.sh/adopt.html"), "no nav link either");
+    let nameonly = git(&f.site, &["show", "--name-only", "--format="], None);
+    let files = String::from_utf8_lossy(&nameonly.stdout);
+    assert!(files.lines().any(|l| l.trim() == "index.html"), "the sync commit landed: {files}");
+    assert!(
+        !files.lines().any(|l| l.trim() == "adopt.html"),
+        "the stray adopt.html is NOT swept into the fail-closed sync commit: {files}"
+    );
+    assert_eq!(all_commit_subjects(&f).len(), n + 1, "the stats sync still lands once");
+}
+
+/// The link-check gate: a dangling in-page anchor is broken training content —
+/// the page does not land and the previously published one rides byte-identical
+/// (stale beats blank); the sync never fails.
+#[test]
+fn t329_dangling_anchor_keeps_published_page_and_sync_succeeds() {
+    let f = fixture_t329();
+    assert!(run_sync(&f, true).status.success());
+    let before = adopt(&f);
+    let n = all_commit_subjects(&f).len();
+    std::fs::write(
+        f.chug.join("docs/adopt/faq.md"),
+        "# FAQ\n\nSee also [nothing](#nope).\n",
+    )
+    .unwrap();
+    let out = run_sync(&f, true);
+    assert!(out.status.success(), "a dangling anchor must not fail the sync");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("dangling in-page anchor"), "the warn names the gate: {err}");
+    assert!(err.contains("nope"), "the warn names the anchor: {err}");
+    assert_eq!(adopt(&f), before, "stale beats blank: the published page rides");
+    assert_eq!(all_commit_subjects(&f).len(), n, "no commit for a blocked render");
+    // the fix-forward: repair the link and the next sync publishes again
+    std::fs::write(
+        f.chug.join("docs/adopt/faq.md"),
+        "# FAQ\n\nSee also [the top](#quickstart).\n",
+    )
+    .unwrap();
+    let out2 = run_sync(&f, true);
+    assert!(out2.status.success());
+    let a2 = adopt(&f);
+    assert!(a2.contains("href=\"#quickstart\""), "the repaired link renders:\n{a2}");
+    assert_eq!(all_commit_subjects(&f).len(), n + 1, "the recovery sync lands");
+}
+
+/// The hygiene gate: a T249 redaction-pattern hit in a fragment blocks the
+/// publish — the composed page is scanned before it may land, the published
+/// page rides byte-identical, and the warn names the pattern class (never the
+/// line content). The literal itself is composed from pieces at runtime: this
+/// file is tracked and tests/internal_info_lint.rs scans every tracked line,
+/// so no source line here may carry a whole redaction literal.
+#[test]
+fn t329_hygiene_hit_blocks_publish_and_keeps_published_page() {
+    let f = fixture_t329();
+    assert!(run_sync(&f, true).status.success());
+    let before = adopt(&f);
+    let n = all_commit_subjects(&f).len();
+    let needle = format!("cen{}l", "tra"); // the T249 class-4 literal, composed
+    std::fs::write(
+        f.chug.join("docs/adopt/mental-model.md"),
+        format!("# Mental model\n\nThe {needle} routing hub owns this.\n"),
+    )
+    .unwrap();
+    commit(&f.chug, "docs: poisoned fragment", None, "2026-09-24", false);
+    let out = run_sync(&f, true);
+    assert!(out.status.success(), "a hygiene hit must not fail the sync");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("internal-info pattern hit"), "the warn names the gate: {err}");
+    assert!(err.contains("monorepo-intermediate"), "the warn names the pattern class: {err}");
+    assert!(!err.contains(&needle), "the line content is never printed: {err}");
+    assert_eq!(adopt(&f), before, "stale beats blank: the published page rides");
+    assert_eq!(all_commit_subjects(&f).len(), n, "no commit for a blocked render");
+    // the clean corpus publishes (the gate is not a false-positive machine):
+    // the un-poisoned re-run lands again — byte-for-byte the original good
+    // render, since the corpus is restored exactly
+    chug_fixture_t329_adopt(&f.chug);
+    let out2 = run_sync(&f, true);
+    assert!(out2.status.success());
+    assert_eq!(adopt(&f), before, "the restored corpus re-renders the original page byte-for-byte");
+    assert_eq!(
+        all_commit_subjects(&f).len(),
+        n,
+        "the restored render is byte-identical to the riding page — nothing to commit"
+    );
+}
+
+/// The corpus walk: an unknown fragment is warned and skipped — the page
+/// renders exactly the four curated sections, never whatever lands in the
+/// directory (a stray note cannot leak onto the public site).
+#[test]
+fn t329_unknown_fragment_is_warned_and_skipped() {
+    let f = fixture_t329();
+    std::fs::write(
+        f.chug.join("docs/adopt/stray-notes.md"),
+        "# stray\n\nnote to self: nothing here is for the public site\n",
+    )
+    .unwrap();
+    commit(&f.chug, "docs: stray note", None, "2026-09-24", true);
+    let out = run_sync(&f, true);
+    assert!(out.status.success());
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("unknown adopt fragment docs/adopt/stray-notes.md"), "warn names the file: {err}");
+    assert!(err.contains("skipped"), "the warn says what happened: {err}");
+    let a = adopt(&f);
+    assert!(!a.contains("note to self"), "the stray note never renders:\n{a}");
+    assert_eq!(count(&a, "<section id="), 4, "exactly the four canonical sections:\n{a}");
+    let log = git(&f.site, &["log", "-1", "--format=%B"], None);
+    assert!(
+        String::from_utf8_lossy(&log.stdout).contains("adopt: rendered 4 sections"),
+        "the note is unchanged by the stray file:\n{}",
+        String::from_utf8_lossy(&log.stdout)
+    );
+}
