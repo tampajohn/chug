@@ -3,7 +3,8 @@
 //! scripts/loopd_env_loader.sh as `loopd_load_env_file` (the sourceable
 //! seam), and these tests drive the REAL fragment via `bash -c` with
 //! fixture env files in tempdirs — no supervisor spawn. Legs: the
-//! allowlist (the three judge keys, nothing else), explicit-env-wins, the
+//! allowlist (the three judge keys, then the T332 decision-provider
+//! pass-throughs, nothing else), explicit-env-wins, the
 //! tolerance shapes (quotes / `export ` prefix / CR / blank / `#`
 //! comment), malformed lines counted, and the hygiene rule — the file's
 //! CONTENTS never reach the log, only the path and a skipped-line COUNT;
@@ -46,15 +47,22 @@ const FX_FROMFILE: &str = "fromfile";
 const FX_DQ_CHECKPOINT: &str = "org/model@quoted";
 const FX_SQ_TOKEN: &str = "hf_SINGLE_QUOTED_42";
 const FX_CR_ENDPOINT: &str = "https://cr.example.com";
+// T332 — the decision-provider pass-throughs (all fake values).
+const FX_DECISION_PROVIDER: &str = "proxy";
+const FX_DECISION_URL: &str = "http://127.0.0.1:8443";
+const FX_DECISION_TOKEN: &str = "decision-FIXTURE-TOKEN-42";
 
 /// The probed keys, printed as `PROBE <key>=<value>` after the load. Each
 /// is `env_remove`d from the child unless the leg presets it, so no host
 /// environment can leak into a leg's expectation.
-const PROBE_KEYS: [&str; 4] = [
+const PROBE_KEYS: [&str; 7] = [
     "CHUG_LAYA_CHECKPOINT",
     "HF_TOKEN",
     "CHUG_HF_ENDPOINT",
     "AWS_SECRET",
+    "CHUG_DECISION_PROVIDER",
+    "CHUG_DECISION_PROXY_URL",
+    "CHUG_DECISION_PROXY_TOKEN",
 ];
 
 /// Run the REAL fragment under the supervisor's shell regime: source it,
@@ -195,6 +203,67 @@ fn all_three_allowlisted_fourth_key_skipped_with_count_only_logging() {
             "fixture value leaked to the log: {value}"
         );
     }
+}
+
+/// T332 — the decision-provider keys pass through the loopd.env allowlist
+/// unchanged (they are native env names): applied from the file, explicit
+/// env winning, and a non-allowlisted line beside them still counted.
+#[test]
+fn decision_provider_keys_pass_through_the_env_file() {
+    let tmp = tempfile::tempdir().unwrap();
+    let fixture = tmp.path().join("env-file");
+    std::fs::write(
+        &fixture,
+        format!(
+            "export CHUG_DECISION_PROVIDER={FX_DECISION_PROVIDER}\n\
+             CHUG_DECISION_PROXY_URL=\"{FX_DECISION_URL}\"\n\
+             CHUG_DECISION_PROXY_TOKEN='{FX_DECISION_TOKEN}'\n\
+             {FX_FOREIGN_KEY}={FX_FOREIGN_VALUE}\n"
+        ),
+    )
+    .unwrap();
+    let log = tmp.path().join("loopd.log");
+    let out = run_loader(&fixture, &[], &log);
+    assert_ok(&out, "decision pass-through leg");
+    let ps = probes(&out);
+    assert_eq!(probe_value(&ps, "CHUG_DECISION_PROVIDER"), FX_DECISION_PROVIDER);
+    assert_eq!(probe_value(&ps, "CHUG_DECISION_PROXY_URL"), FX_DECISION_URL);
+    assert_eq!(probe_value(&ps, "CHUG_DECISION_PROXY_TOKEN"), FX_DECISION_TOKEN);
+    assert_eq!(
+        probe_value(&ps, FX_FOREIGN_KEY),
+        "",
+        "a non-allowlisted key is still NOT applied"
+    );
+    // exactly one skipped line (the foreign key), zero value bytes in the log
+    let text = log_text(&log).expect("the skipped line is logged");
+    assert_count_line(&text, &fixture, 1);
+    for value in [FX_DECISION_PROVIDER, FX_DECISION_URL, FX_DECISION_TOKEN, FX_FOREIGN_VALUE] {
+        assert!(
+            !text.contains(value),
+            "fixture value leaked to the log: {value}"
+        );
+    }
+
+    // explicit env wins over the file, per key
+    let log2 = tmp.path().join("loopd2.log");
+    let out2 = run_loader(
+        &fixture,
+        &[("CHUG_DECISION_PROVIDER", FX_FROMENV)],
+        &log2,
+    );
+    assert_ok(&out2, "explicit-env leg");
+    let ps2 = probes(&out2);
+    assert_eq!(probe_value(&ps2, "CHUG_DECISION_PROVIDER"), FX_FROMENV);
+    assert_eq!(probe_value(&ps2, "CHUG_DECISION_PROXY_URL"), FX_DECISION_URL);
+    // the foreign (non-allowlisted) fixture line is still skipped exactly
+    // once and logged value-free — the explicit-env leg does not change the
+    // allowlist's counting behavior
+    let text2 = log_text(&log2).expect("the foreign line is still logged");
+    assert_count_line(&text2, &fixture, 1);
+    assert!(
+        !text2.contains(FX_FOREIGN_VALUE),
+        "fixture value leaked to the log: {FX_FOREIGN_VALUE}"
+    );
 }
 
 #[test]

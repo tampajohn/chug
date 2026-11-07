@@ -662,6 +662,11 @@ fn cleanup_socket(sock: &Path) -> bool {
 
 /// `chug daemon --status`: running (exit 0) / starting or absent (exit 1).
 pub fn status() -> anyhow::Result<i32> {
+    // T332: name the decision-model provider the selection table resolves
+    // to right now — best-effort, on every status leg (the selection is
+    // independent of this daemon's liveness; a proxy-selected box shows it
+    // even when no local daemon runs).
+    println!("decision provider: {}", crate::decision::status_line());
     let sock = sock_path()?;
     let pid = lock_holder_pid(&lock_path()?);
     let alive = pid.filter(|p| crate::driver_lock::pid_alive(*p));

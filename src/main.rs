@@ -14,6 +14,7 @@ mod complete;
 /// half (`DaemonJudge`, `CHUG_JUDGE=daemon`) compiles in EVERY build so the
 /// default (feature-off) binary still fails open with a clear message.
 mod daemon;
+mod decision;
 mod delegate;
 mod decisions;
 mod driver;

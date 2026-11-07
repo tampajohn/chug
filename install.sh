@@ -127,6 +127,9 @@ if [ -n "$profile_name" ]; then
           CHUG_LLM_API_KEY_CMD) p_cmd=$p_v ;;
           CHUG_MODEL_REASONING) p_reason=$p_v ;;
           CHUG_MODEL_CODING)    p_coding=$p_v ;;
+          # T332 — the optional decision-provider pass-throughs (the values
+          # are the native env names; the loopd loaders export them verbatim).
+          CHUG_DECISION_PROVIDER|CHUG_DECISION_PROXY_URL|CHUG_DECISION_PROXY_TOKEN) ;;
           CHUG_LANGFUSE_*)      ;; # the optional observability class
           *) p_unknown="$p_unknown $p_k" ;;
         esac
@@ -148,7 +151,7 @@ if [ -n "$profile_name" ]; then
   if [ -n "$p_key" ] && [ -n "$p_cmd" ]; then
     fail "profile '$profile_name' sets BOTH CHUG_LLM_API_KEY and CHUG_LLM_API_KEY_CMD — the contract takes exactly one; comment the other out and retry (docs/install-profiles.md)"
   fi
-  [ -z "$p_unknown" ] || fail "profile '$profile_name' sets non-profile-owned key(s):$p_unknown — a profile owns exactly CHUG_LLM_BASE_URL, CHUG_LLM_API_KEY (or CHUG_LLM_API_KEY_CMD), CHUG_MODEL_REASONING, CHUG_MODEL_CODING, CHUG_LANGFUSE_*; nothing installed (docs/install-profiles.md)"
+  [ -z "$p_unknown" ] || fail "profile '$profile_name' sets non-profile-owned key(s):$p_unknown — a profile owns exactly CHUG_LLM_BASE_URL, CHUG_LLM_API_KEY (or CHUG_LLM_API_KEY_CMD), CHUG_MODEL_REASONING, CHUG_MODEL_CODING, CHUG_LANGFUSE_*, CHUG_DECISION_PROVIDER, CHUG_DECISION_PROXY_URL, CHUG_DECISION_PROXY_TOKEN; nothing installed (docs/install-profiles.md)"
 
   mkdir -p "$HOME/.chug" || fail "cannot create $HOME/.chug — check \$HOME permissions (this script never elevates)"
   cp "$profile_file" "$HOME/.chug/profile.env" || fail "cannot write $HOME/.chug/profile.env — check write permission (this script never elevates)"

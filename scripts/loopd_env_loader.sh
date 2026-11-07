@@ -17,6 +17,13 @@
 #   ts()             the RFC3339 timestamp helper
 # Written for loopd.sh's `set -euo pipefail` regime; defines no other state
 # and executes nothing at source time (a pure function definition).
+#
+# T332 — the decision-provider keys joined the allowlist as identity
+# pass-throughs (CHUG_DECISION_PROVIDER / CHUG_DECISION_PROXY_URL /
+# CHUG_DECISION_PROXY_TOKEN — the T330 profile contract, docs/
+# decision-providers.md): a loopd.env may carry the proxy wiring the same
+# way it carries the judge keys. The alternative order keeps the original
+# three-key pattern byte-identical (the T213 verbatim-move pin).
 loopd_load_env_file() {
 if [ -f "$LOOPD_ENV_FILE" ]; then
   _loopd_env_skipped=0
@@ -25,7 +32,7 @@ if [ -f "$LOOPD_ENV_FILE" ]; then
     case "$_line" in ''|\#*) continue ;; esac
     _line="${_line#export }"
     case "$_line" in
-      CHUG_LAYA_CHECKPOINT=*|HF_TOKEN=*|CHUG_HF_ENDPOINT=*)
+      CHUG_DECISION_PROVIDER=*|CHUG_DECISION_PROXY_URL=*|CHUG_DECISION_PROXY_TOKEN=*|CHUG_LAYA_CHECKPOINT=*|HF_TOKEN=*|CHUG_HF_ENDPOINT=*)
         _key="${_line%%=*}"
         _val="${_line#*=}"
         case "$_val" in

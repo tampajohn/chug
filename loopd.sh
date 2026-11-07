@@ -49,8 +49,9 @@ LOOPD_STARTED="$(ts)"
 # edit + restart), and the orchestrator + delegate children + the spawned
 # judge daemon all inherit the exports. Format: KEY=VALUE lines, `#`
 # comments, optional `export ` prefix and one pair of surrounding quotes.
-# ONLY the allowlisted judge keys are applied (a secret file must not
-# inject arbitrary env into every cycle), and only when the operator has
+# ONLY the allowlisted keys are applied (the T205 judge keys, then the T332
+# decision-provider pass-throughs — a secret file must not inject arbitrary
+# env into every cycle), and only when the operator has
 # not already set them in the environment (explicit env wins). The file's
 # CONTENTS are never echoed or logged (the T205 hygiene gate — tokens were
 # once spilled by an env dump); only the path and a skipped-line COUNT may
@@ -354,6 +355,70 @@ laya_gate_field() { # the value of one "<key>=" field in a gate line (empty
   }' <<<"$2"
 }
 
+# T332 — the decision-provider selection (src/decision's table, shell
+# mirror; scripts/ideate.py's noul_provider is the third copy of the same
+# contract). The triage consults exactly ONE provider per cycle; the choice
+# must never be silent — an unknown mode is refused into the fail-open, not
+# mapped to whatever the operator did not ask for.
+decision_provider() { # prints `local` | `proxy` — the ONE transport this
+  # triage consults — or fails (rc 1, nothing printed) on an unknown
+  # CHUG_DECISION_PROVIDER mode (the caller fail-opens). Unset/blank is
+  # auto. auto collapses to the local daemon when no proxy is configured —
+  # today's default shape byte for byte, no health probe, so the provider
+  # change is invisible in every fixture that does not configure a proxy —
+  # and lets the socket's /healthz decide when a proxy IS configured:
+  # warm daemon wins, else the proxy.
+  local mode="${CHUG_DECISION_PROVIDER:-}"
+  mode=$(printf '%s' "$mode" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')
+  case "$mode" in
+    ''|auto)
+      if [ -n "${CHUG_DECISION_PROXY_URL:-}" ]; then
+        if decision_healthz_ok; then echo local; else echo proxy; fi
+      else
+        echo local
+      fi ;;
+    local) echo local ;;
+    proxy) echo proxy ;;
+    *) return 1 ;;
+  esac
+}
+
+decision_healthz_ok() { # the auto matrix's warm-daemon probe: GET /healthz
+  # over the daemon socket (the T204 resolution order), short bound —
+  # src/decision LocalDaemon::healthz_ok's shell twin. 200 means warm (the
+  # model loads BEFORE the socket binds, so healthz never lies).
+  local sock="${CHUG_DAEMON_SOCK:-${CHUG_HOME:-$HOME/.chug}/daemon.sock}"
+  local status
+  status=$(curl --unix-socket "$sock" --max-time 1 -s -o /dev/null \
+    -w '%{http_code}' http://localhost/healthz 2>/dev/null) || return 1
+  [ "$status" = "200" ]
+}
+
+decision_proxy_post() { # the T332 proxy leg: POST $1 to the configured
+  # <base>/v1/systemone — the model field added (the proxy contract
+  # REQUIRES it; the daemon never sees this field), `Authorization: Bearer`
+  # when a token is configured (a tokenless call is legal at the wire level
+  # and reads its 401 as the error), 2s bound (the triage's own fail-open
+  # bound, not the provider's 10s). Echoes the response in the daemon leg's
+  # exact parse shape — body + '\n' + status — or sets DECISION_POST_ERR and
+  # returns 1 on ANY failure: the caller fail-opens, same as a dead daemon.
+  DECISION_POST_ERR=""
+  local base="${CHUG_DECISION_PROXY_URL:-}"
+  [ -n "$base" ] || { DECISION_POST_ERR="decision proxy not configured (set CHUG_DECISION_PROXY_URL)"; return 1; }
+  local wire
+  wire=$(printf '%s' "$1" | jq -c '. + {model: "jev"}' 2>/dev/null) || { DECISION_POST_ERR="proxy request body build failed (jq?)"; return 1; }
+  local cmd
+  cmd=(curl --max-time 2 -s -w '\n%{http_code}' -X POST -H 'Content-Type: application/json')
+  if [ -n "${CHUG_DECISION_PROXY_TOKEN:-}" ]; then
+    cmd+=(-H "Authorization: Bearer ${CHUG_DECISION_PROXY_TOKEN}")
+  fi
+  local resp status
+  resp=$("${cmd[@]}" -d "$wire" "${base%/}/v1/systemone" 2>/dev/null) || { DECISION_POST_ERR="decision proxy unreachable at ${base%/}"; return 1; }
+  status=${resp##*$'\n'}
+  [ "$status" = "200" ] || { DECISION_POST_ERR="decision proxy HTTP $status"; return 1; }
+  printf '%s\n' "$resp"
+}
+
 laya_failopen() { # req 3: one note per cycle, never a storm — T258
   # behavior stands. The predicate probe sets LAYA_TRIAGE_QUIET (it writes
   # nothing); run mode notes once per cycle, which is once per triage.
@@ -364,19 +429,43 @@ laya_failopen() { # req 3: one note per cycle, never a storm — T258
 }
 
 laya_triage() { # the System One triage call: the state pack -> ONE
-  # needs-eval answer + confidence over the existing daemon socket (the
-  # T204 resolution: $CHUG_DAEMON_SOCK, then $CHUG_HOME, then ~/.chug).
-  # Sets LAYA_VERDICT/LAYA_CONF/LAYA_ROUTE — an empty route means
-  # FAIL-OPEN and the caller keeps the T258 arm verbatim. Bounded at 2s
-  # (req 3); the answer's confidence is normalized to a number (an
-  # unreadable one IS zero confidence, and zero routes kimi).
+  # needs-eval answer + confidence over the T332-selected provider:
+  # CHUG_DECISION_PROVIDER=auto|local|proxy (auto default) — local is the
+  # existing daemon socket (the T204 resolution: $CHUG_DAEMON_SOCK, then
+  # $CHUG_HOME, then ~/.chug) UNCHANGED, proxy is decision_proxy_post (the
+  # /v1/systemone contract, docs/decision-providers.md), auto prefers a
+  # warm socket and falls back to a configured proxy. Sets
+  # LAYA_VERDICT/LAYA_CONF/LAYA_ROUTE — an empty route means FAIL-OPEN and
+  # the caller keeps the T258 arm verbatim, whatever the transport.
+  # Bounded at 2s per leg (req 3); the answer's confidence is normalized to
+  # a number (an unreadable one IS zero confidence, and zero routes kimi).
   LAYA_VERDICT=""; LAYA_CONF=""; LAYA_ROUTE=""
   local sock="${CHUG_DAEMON_SOCK:-${CHUG_HOME:-$HOME/.chug}/daemon.sock}"
-  local body resp status answer choice conf
+  local body resp status answer choice conf provider
   body=$(triage_request_body "$@") || { laya_failopen "state pack build failed (jq?)"; return 0; }
-  resp=$(curl --unix-socket "$sock" --max-time 2 -s -w '\n%{http_code}' \
-    -X POST -H 'Content-Type: application/json' -d "$body" \
-    http://localhost/judge 2>/dev/null) || { laya_failopen "daemon unreachable at $sock"; return 0; }
+  provider=$(decision_provider) || { laya_failopen "unknown CHUG_DECISION_PROVIDER (expected auto|local|proxy) — no provider consulted"; return 0; }
+  if [ "$provider" = proxy ]; then
+    # NOT command substitution: DECISION_POST_ERR is set inside
+    # decision_proxy_post, and a $(...) subshell would swallow it — the
+    # fail-open note would read an EMPTY reason (the T332 validator's F1).
+    # stdout goes to a tempfile, the rc + the global var reach the caller.
+    DECISION_POST_ERR=""
+    local proxy_out
+    proxy_out=$(mktemp "${TMPDIR:-/tmp}/decision-post.XXXXXX") || { laya_failopen "decision proxy tempfile failed"; return 0; }
+    # the if-guard keeps set -e from aborting the run on a dead proxy — the
+    # fail-open must REACH laya_failopen, never die before it.
+    if decision_proxy_post "$body" > "$proxy_out"; then
+      resp=$(cat "$proxy_out")
+    else
+      laya_failopen "${DECISION_POST_ERR:-decision proxy failed (no reason recorded)}"
+      rm -f "$proxy_out"; return 0
+    fi
+    rm -f "$proxy_out"
+  else
+    resp=$(curl --unix-socket "$sock" --max-time 2 -s -w '\n%{http_code}' \
+      -X POST -H 'Content-Type: application/json' -d "$body" \
+      http://localhost/judge 2>/dev/null) || { laya_failopen "daemon unreachable at $sock"; return 0; }
+  fi
   status=${resp##*$'\n'}
   resp=${resp%$'\n'*}
   [ "$status" = "200" ] || { laya_failopen "daemon HTTP $status"; return 0; }
@@ -394,7 +483,12 @@ laya_triage() { # the System One triage call: the state pack -> ONE
   LAYA_CONF=$conf
   LAYA_ROUTE=$(triage_route "$choice" "$conf")
   if [ -z "${LAYA_TRIAGE_QUIET:-}" ]; then
-    echo "$(ts) laya triage (T259): needs_eval=$LAYA_VERDICT conf=$LAYA_CONF (HIGH=$TRIAGE_HIGH) -> route=$LAYA_ROUTE" >> "$LOG"
+    if [ "$provider" = proxy ]; then
+      # the hosted leg names itself — proxy spend is never invisible spend
+      echo "$(ts) laya triage (T259): needs_eval=$LAYA_VERDICT conf=$LAYA_CONF (HIGH=$TRIAGE_HIGH) -> route=$LAYA_ROUTE (provider=proxy jev)" >> "$LOG"
+    else
+      echo "$(ts) laya triage (T259): needs_eval=$LAYA_VERDICT conf=$LAYA_CONF (HIGH=$TRIAGE_HIGH) -> route=$LAYA_ROUTE" >> "$LOG"
+    fi
   fi
 }
 

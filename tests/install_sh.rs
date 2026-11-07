@@ -818,6 +818,37 @@ fn the_committed_example_profile_installs() {
     );
 }
 
+/// T332 — the decision-provider example IS installable too: the decision
+/// keys ride the T330 contract as optional pass-throughs, so a profile
+/// carrying them (plus the required LLM keys) installs unchanged and lands
+/// verbatim in ~/.chug/profile.env for the loopd loaders.
+#[test]
+fn the_decision_provider_example_profile_installs() {
+    let r = Run::new("prof-decision");
+    r.make_release("macos-arm64", "chug-fake");
+    let out = r.run_args("macos-arm64", &["--profile", "decision-proxy"], None);
+    assert_eq!(out.status.code(), Some(0), "{}", out_text(&out));
+    let installed = std::fs::read_to_string(r.installed_profile()).unwrap();
+    for needle in [
+        "CHUG_DECISION_PROVIDER=",
+        "CHUG_DECISION_PROXY_URL=",
+        "CHUG_DECISION_PROXY_TOKEN=",
+        "CHUG_LLM_BASE_URL=",
+        "CHUG_MODEL_REASONING=",
+        "CHUG_MODEL_CODING=",
+    ] {
+        assert!(
+            installed.contains(needle),
+            "the decision example carries {needle}: {installed:?}"
+        );
+    }
+    // placeholder values only — the real endpoint/token never land in the repo
+    assert!(
+        installed.contains("REPLACE-ME"),
+        "the example's values are placeholders: {installed:?}"
+    );
+}
+
 /// Static pins: install.sh enforces exactly the documented key set, and the
 /// no-profile invocation keeps today's footer (plus the discovery hint).
 #[test]
@@ -831,6 +862,9 @@ fn profile_static_pins_and_the_no_profile_footer() {
         "CHUG_MODEL_REASONING",
         "CHUG_MODEL_CODING",
         "CHUG_LANGFUSE_",
+        "CHUG_DECISION_PROVIDER",
+        "CHUG_DECISION_PROXY_URL",
+        "CHUG_DECISION_PROXY_TOKEN",
         "chmod 600",
         "docs/install-profiles.md",
     ] {

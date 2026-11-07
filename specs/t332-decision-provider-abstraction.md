@@ -16,6 +16,16 @@ zero-install — and gives non-company users the same shape through any
 compatible endpoint. Local Laya stays the free/offline provider; this item
 adds the second provider and the routing, it does NOT retire the daemon.
 
+## Discovery (DONE 2026-11-07 — orchestrator probe, verified live)
+
+`docs/decision-providers.md` in this worktree carries the verified
+contract — the proxy's `/v1/systemone` is a drop-in for the daemon's
+`/judge` (same `{state, questions}` body, same `{answers:{...}}` envelope,
+choice/noul/score all verified, `usage.cost` per call). Implement against
+THAT record, not a guess. Config keys: `CHUG_DECISION_PROVIDER=auto|local|proxy`
+plus `CHUG_DECISION_PROXY_URL` / `CHUG_DECISION_PROXY_TOKEN` (T330 profile
+keys). The discovery doc rides the arc commit.
+
 ## What
 
 1. **Discovery first** (do this before any rewiring, commit the findings
