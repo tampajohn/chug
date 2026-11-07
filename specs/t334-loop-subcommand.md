@@ -1,4 +1,4 @@
-# T333 — `chug loop` subcommand: init + run the loop in ANY repo, no clone
+# T334 — `chug loop` subcommand: init + run the loop in ANY repo, no clone
 
 estimate: ~200 changed lines (src/cli loop subcommand + embedded scaffold templates + loopd exec wiring + docs/adopt quickstart rewrite + fixtures)
 
@@ -57,9 +57,17 @@ Two adoption-blocking flaws in the T329 quickstart:
 - Guard test: running `chug loop run` inside the chug repo itself still
   uses chug's own files (no behavior change for the existing setup).
 
+The tests land under `tests/loop_subcommand.rs` — that filename is the
+gate contract (the filing-time check line names it, the c06a555 lesson:
+the gate chain is unpiped).
+
 ## Out of scope
 
 - Porting loopd.sh to Rust (the subcommand may exec the script; a Rust
   rewrite is a separate item if ever wanted).
 - Multi-repo/fleet operation of one loop (single-repo per run, as today).
 - The imem pilot kit text update (operator-side, follows the release).
+
+## check:
+
+check: cd /Users/jadams/workspace/chug && cargo test --release --test loop_subcommand
