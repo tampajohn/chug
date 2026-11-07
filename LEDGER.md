@@ -1,12 +1,14 @@
 # Ledger
 
 ## Done
-- Cycle 3082 CLOSED: routine glm freshness-skip (routing d1794075608-1) → T328 re-verified BLOCKED → quiet no-work wrap (prep b147304 + notes 31516e1 + fill e24e876 pushed; main == origin/main)
-- Fill asserts all GREEN first compose (T309 datum 91/1103.526s + T310 ok:false 8==8 + T317/T321 trim 0 streak 9 + T311 on-disk keyed b147304 + T323 untracked); probe post-notes 60 0 machine==TRUE 0
-- LIVE_CTX remedy landed: 415KB dead-prefix deletion (112,302 → 6,145 tokens), zero dangles / zero orphan-uses verified; fill asserts had 2 designed pre-write fires recomposed 0-REAL
+- (cycle start 2026-11-07T18:49:36Z, glm routine cycle, head a11e5e9)
 
 ## Next
-- Next cycle reads the wrap (e24e876): routine chain stands TRUE 0, one open row T328 (BLOCKED fleet-side — no chug-watch tree on host), re-arm 640th DUE at next real eval
+- Phase 1: SKIPPED per routing (todo_rows=1 eval_fresh=yes -> routine glm; predicate holds, delta STATE-HIT bookkeeping-only) — record eval-routing
+- Phase 2: P002 dispatch (the ONLY loop-workable row) — spec filed (specs/proposed/f16-unpark-decision.md ## Dispatch): docs/f16-unpark-memo.md, XS docs-only. Worktree /tmp/chug-loop-p002 -> warm build -> glm impl child -> review/T80 floor -> merge -> P-row note (operator pick pending)
+- T328 re-verified BLOCKED (2026-11-07T18:50Z): /Users/jadams/workspace/chug-watch does NOT exist on host; blocker text still true
+- P001/P003/P004 NOT dispatchable: operator-presence work (P001 3 operator steps on K7; P003 spark GPU headroom; P004 operator decision + chug-watch tree absent)
+- Phase 3: wrap — T207 note, T80 docs-only floor if P002 is the only diff, T261 batch, release recount (TRUE count since v0.19.0), token-free notes + T257 color, probe, fill, push, goal_complete
 
 ## Blockers
-- T328 BLOCKED fleet-side (no chug-watch tree on host — ~/workspace holds chug/chug-dashboard/chug-site only)
+- none (T328 external: chug-watch tree not on host, redispatch when reachable)
