@@ -316,6 +316,9 @@ fn tracked_files_carry_zero_org_details() {
         "specs/t249-internal-info-lint.md",
         "specs/t205-hf-org-laya-hosting.md",
         "runbooks/laya-hf-hosting.md",
+        // T330: the committed example profile — the class must not regrow
+        // through a "harmless placeholder" profile file either
+        "profiles/local-openai-compat.env",
     ] {
         assert!(
             names.iter().any(|n| n == must_scan),
@@ -473,8 +476,7 @@ fn word_boundary_pins() {
 }
 
 #[test]
-fn internal_host_trailing_boundary_pin() {
-    // a host-shaped string under the internal TLD fails …
+fn internal_host_trailing_boundary_pin() {    // a host-shaped string under the internal TLD fails …
     assert_eq!(
         scan_line("on the production endpoint (`tools-proxy.internal.com`), streamed"),
         vec!["internal-host"]
@@ -528,4 +530,19 @@ fn the_derivation_before_shapes_all_fail() {
         scan_line("-VA-org migration is the operator's IP call, flagged), and F13"),
         vec!["fleet-abbrev"]
     );
+}
+
+/// T330 — the profile contract's files are prose files like any other: a
+/// company endpoint pasted into a profile (the exact accident the contract
+/// exists to prevent — operator profiles belong in ~/.chug/profiles/, never
+/// the repo) must fail the same pattern classes. Synthetic line only — the
+/// committed example carries localhost placeholders and stays clean.
+#[test]
+fn a_profile_line_carrying_internal_info_is_caught() {
+    assert_eq!(
+        scan_line(r#"export CHUG_LLM_BASE_URL="https://tools-proxy.internal.com""#),
+        vec!["internal-host"]
+    );
+    // the committed example's own shape must stay legal
+    assert!(scan_line(r#"export CHUG_LLM_BASE_URL="http://127.0.0.1:8080""#).is_empty());
 }

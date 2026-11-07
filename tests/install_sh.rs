@@ -523,3 +523,343 @@ fn real_uname_path_drives_the_mapping() {
     let out = r.run_uname_shimmed(&r.uname_shim(), "Linux", "aarch64");
     assert_installs_exact_asset(&r, &out, "linux-aarch64");
 }
+
+// --- T330 profile legs ----------------------------------------------------------
+//
+// `--profile <name>` is the one-command bridge from "binary installed" to
+// "the loop talks to a model provider" (docs/install-profiles.md). The legs
+// below mirror the T100 doctrine: every failure names its fix, validation
+// happens BEFORE anything is written (never a half-written profile), and the
+// committed example profile is executable documentation the battery itself
+// executes. All fixtures are offline: the profile legs resolve/validate from
+// the fixture HOME/cwd and only the success legs need the fake release.
+
+impl Run {
+    /// Write `~/.chug/profiles/<name>.env` in the fixture HOME — the private
+    /// profile directory the resolution order prefers.
+    fn write_profile(&self, name: &str, body: &str) -> PathBuf {
+        let dir = self.home.join(".chug").join("profiles");
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join(format!("{name}.env"));
+        std::fs::write(&p, body).unwrap();
+        p
+    }
+
+    /// Run with extra argv (the `--profile` legs).
+    fn run_args(&self, platform: &str, args: &[&str], path_extra: Option<&Path>) -> Output {
+        self.base_cmd(path_extra)
+            .env("CHUG_INSTALL_PLATFORM", platform)
+            .args(args)
+            .output()
+            .expect("spawning sh install.sh --profile …")
+    }
+
+    fn installed_profile(&self) -> PathBuf {
+        self.home.join(".chug").join("profile.env")
+    }
+}
+
+/// A contract-valid profile in the CMD form (no literal key rests in the
+/// file) — the shape docs/install-profiles.md recommends.
+fn good_profile_body() -> String {
+    "export CHUG_LLM_BASE_URL=\"http://127.0.0.1:8080\"\n\
+     CHUG_LLM_API_KEY_CMD=\"printf %s fixture-token\"\n\
+     CHUG_MODEL_REASONING=anthropic/reasoner-full-id\n\
+     CHUG_MODEL_CODING=anthropic/coder-full-id\n"
+        .to_string()
+}
+
+/// The full success path: a valid profile resolves from ~/.chug/profiles/,
+/// installs to ~/.chug/profile.env (mode 600 — it may carry a literal key),
+/// and the footer prints the loopd launch line with the profile sourced.
+/// The CMD form must NOT print the literal-key note.
+#[test]
+fn profile_good_installs_and_prints_the_launch_line() {
+    let r = Run::new("prof-good");
+    r.make_release("macos-arm64", "chug-fake");
+    r.write_profile("good", &good_profile_body());
+    let out = r.run_args("macos-arm64", &["--profile", "good"], None);
+    assert_eq!(out.status.code(), Some(0), "{}", out_text(&out));
+    assert!(r.installed().is_file(), "binary installs: {}", out_text(&out));
+    let installed = r.installed_profile();
+    assert!(installed.is_file(), "the profile is copied: {}", out_text(&out));
+    assert_eq!(
+        std::fs::read_to_string(&installed).unwrap(),
+        good_profile_body(),
+        "the copy is verbatim (comments and shapes survive for the loopd loader)"
+    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&installed).unwrap().permissions().mode();
+        assert_eq!(
+            mode & 0o777,
+            0o600,
+            "the installed profile is mode 600 — it may carry a literal key"
+        );
+    }
+    let text = out_text(&out);
+    assert!(text.contains("loopd.sh"), "the launch line is printed: {text}");
+    assert!(text.contains("profile good"), "the profile is named: {text}");
+    assert!(
+        !text.contains("literal CHUG_LLM_API_KEY"),
+        "the CMD form prints no literal-key note: {text}"
+    );
+}
+
+/// Resolution order: ~/.chug/profiles/<name>.env (private values) wins over
+/// a repo checkout's ./profiles/<name>.env — the file a company operator
+/// drops on the box beats anything in the checkout cwd.
+#[test]
+fn profile_resolution_prefers_the_private_home_dir() {
+    let r = Run::new("prof-order");
+    r.make_release("macos-arm64", "chug-fake");
+    r.write_profile(
+        "both",
+        "CHUG_LLM_BASE_URL=u\nCHUG_LLM_API_KEY=k\nCHUG_MODEL_REASONING=r\n\
+         CHUG_MODEL_CODING=c\n# marker: from the private home dir\n",
+    );
+    let checkout = r.home.parent().unwrap().join("checkout");
+    let repo_profiles = checkout.join("profiles");
+    std::fs::create_dir_all(&repo_profiles).unwrap();
+    std::fs::write(
+        repo_profiles.join("both.env"),
+        "CHUG_LLM_BASE_URL=u\nCHUG_LLM_API_KEY=k\nCHUG_MODEL_REASONING=r\n\
+         CHUG_MODEL_CODING=c\n# marker: from the repo checkout\n",
+    )
+    .unwrap();
+    let mut cmd = r.base_cmd(None);
+    cmd.current_dir(&checkout)
+        .env("CHUG_INSTALL_PLATFORM", "macos-arm64")
+        .args(["--profile", "both"]);
+    let out = cmd.output().expect("spawning sh install.sh");
+    assert_eq!(out.status.code(), Some(0), "{}", out_text(&out));
+    let installed = std::fs::read_to_string(r.installed_profile()).unwrap();
+    assert!(
+        installed.contains("marker: from the private home dir"),
+        "the HOME copy wins: {installed:?}"
+    );
+    // and with NO private file, the checkout's ./profiles/ resolves
+    std::fs::remove_dir_all(r.home.join(".chug/profiles")).unwrap();
+    std::fs::write(
+        repo_profiles.join("only-repo.env"),
+        "CHUG_LLM_BASE_URL=u\nCHUG_LLM_API_KEY=k\nCHUG_MODEL_REASONING=r\n\
+         CHUG_MODEL_CODING=c\n# marker: repo-only profile\n",
+    )
+    .unwrap();
+    let mut cmd = r.base_cmd(None);
+    cmd.current_dir(&checkout)
+        .env("CHUG_INSTALL_PLATFORM", "macos-arm64")
+        .args(["--profile", "only-repo"]);
+    let out = cmd.output().expect("spawning sh install.sh");
+    assert_eq!(out.status.code(), Some(0), "{}", out_text(&out));
+    let reinstalled = std::fs::read_to_string(r.installed_profile()).unwrap();
+    assert!(
+        reinstalled.contains("marker: repo-only profile"),
+        "the checkout copy resolves when no private file exists: {reinstalled:?}"
+    );
+}
+
+/// A missing required key fails with EVERY absent key NAMED, before any
+/// download and before anything is written — never a half-written profile,
+/// never a half-installed box. (The release dir is left empty on purpose: a
+/// mutant that downloads before validating dies on the file:// 404.)
+#[test]
+fn profile_missing_keys_fail_named_before_anything_is_written() {
+    let r = Run::new("prof-missing");
+    r.write_profile("thin", "CHUG_LLM_BASE_URL=u\n");
+    let err_text = {
+        let out = r.run_args("macos-arm64", &["--profile", "thin"], None);
+        assert_ne!(out.status.code(), Some(0), "{}", out_text(&out));
+        String::from_utf8_lossy(&out.stderr).to_string()
+    };
+    assert!(
+        err_text.contains("missing required key"),
+        "the failure names the rule: {err_text}"
+    );
+    for key in [
+        "CHUG_MODEL_REASONING",
+        "CHUG_MODEL_CODING",
+        "CHUG_LLM_API_KEY (or CHUG_LLM_API_KEY_CMD)",
+    ] {
+        assert!(err_text.contains(key), "the failure names {key}: {err_text}");
+    }
+    assert!(
+        !r.installed_profile().exists(),
+        "NEVER a half-written profile"
+    );
+    assert!(!r.installed().exists(), "nothing installs on a bad profile");
+}
+
+/// `--profile` with no matching file fails closed, naming every place
+/// searched; `--profile` with no name names the usage.
+#[test]
+fn profile_without_a_file_fails_closed() {
+    let r = Run::new("prof-nofile");
+    let out = r.run_args("macos-arm64", &["--profile", "nosuch"], None);
+    assert_ne!(out.status.code(), Some(0), "{}", out_text(&out));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("profile 'nosuch' not found"),
+        "the failure names the profile: {err}"
+    );
+    assert!(
+        err.contains(".chug/profiles/nosuch.env") && err.contains("./profiles/nosuch.env"),
+        "the failure lists both searched places: {err}"
+    );
+    assert!(!r.installed().exists(), "nothing installs");
+
+    let out = r.run_args("macos-arm64", &["--profile"], None);
+    assert_ne!(out.status.code(), Some(0), "{}", out_text(&out));
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("--profile needs a profile name"),
+        "the no-name form names the usage: {}",
+        out_text(&out)
+    );
+}
+
+/// The contract takes exactly one credential form: both present is a named
+/// failure (which one would the loader fetch?), as is any non-profile-owned
+/// key (the loopd loader would silently skip it — install refuses so the
+/// typo surfaces here) and any non-KEY=VALUE line.
+#[test]
+fn profile_contract_violations_fail_named() {
+    // both credential forms
+    let r = Run::new("prof-both");
+    let body = "CHUG_LLM_BASE_URL=http://x\nCHUG_LLM_API_KEY=one\nCHUG_LLM_API_KEY_CMD=two\n\
+         CHUG_MODEL_REASONING=r\nCHUG_MODEL_CODING=c\n";
+    r.write_profile("both", body);
+    let out = r.run_args("macos-arm64", &["--profile", "both"], None);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert_ne!(out.status.code(), Some(0), "{}", out_text(&out));
+    assert!(
+        err.contains("BOTH CHUG_LLM_API_KEY and CHUG_LLM_API_KEY_CMD"),
+        "the conflict is named: {err}"
+    );
+    assert!(!r.installed_profile().exists());
+
+    // a non-profile-owned key
+    let r = Run::new("prof-unknown");
+    r.write_profile(
+        "unk",
+        "CHUG_LLM_BASE_URL=u\nCHUG_LLM_API_KEY=k\nCHUG_MODEL_REASONING=r\n\
+         CHUG_MODEL_CODING=c\nFOO=bar\n",
+    );
+    let out = r.run_args("macos-arm64", &["--profile", "unk"], None);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert_ne!(out.status.code(), Some(0), "{}", out_text(&out));
+    assert!(
+        err.contains("non-profile-owned") && err.contains("FOO"),
+        "the stray key is named: {err}"
+    );
+
+    // a line that is not KEY=VALUE
+    let r = Run::new("prof-malformed");
+    r.write_profile(
+        "mal",
+        "CHUG_LLM_BASE_URL=u\nCHUG_LLM_API_KEY=k\nCHUG_MODEL_REASONING=r\n\
+         CHUG_MODEL_CODING=c\njust some prose\n",
+    );
+    let out = r.run_args("macos-arm64", &["--profile", "mal"], None);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert_ne!(out.status.code(), Some(0), "{}", out_text(&out));
+    assert!(
+        err.contains("must be KEY=VALUE"),
+        "the malformed line is named: {err}"
+    );
+}
+
+/// A literal CHUG_LLM_API_KEY in the profile is legal but gets the note
+/// steering operators at the CMD form (the key never rests in a file).
+#[test]
+fn profile_literal_key_installs_with_the_cmd_form_note() {
+    let r = Run::new("prof-literal");
+    r.make_release("macos-arm64", "chug-fake");
+    r.write_profile(
+        "lit",
+        "CHUG_LLM_BASE_URL=u\nCHUG_LLM_API_KEY=fixture-placeholder\n\
+         CHUG_MODEL_REASONING=r\nCHUG_MODEL_CODING=c\n",
+    );
+    let out = r.run_args("macos-arm64", &["--profile", "lit"], None);
+    assert_eq!(out.status.code(), Some(0), "{}", out_text(&out));
+    assert!(
+        out_text(&out).contains("literal CHUG_LLM_API_KEY"),
+        "the note prints: {}",
+        out_text(&out)
+    );
+}
+
+/// The committed example IS the contract's executable documentation: the
+/// battery installs it from the repo checkout itself (./profiles/ relative
+/// to the test's cwd = the package root).
+#[test]
+fn the_committed_example_profile_installs() {
+    let r = Run::new("prof-example");
+    r.make_release("macos-arm64", "chug-fake");
+    let out = r.run_args(
+        "macos-arm64",
+        &["--profile", "local-openai-compat"],
+        None,
+    );
+    assert_eq!(out.status.code(), Some(0), "{}", out_text(&out));
+    let installed = std::fs::read_to_string(r.installed_profile()).unwrap();
+    assert!(
+        installed.contains("CHUG_LLM_BASE_URL=")
+            && installed.contains("CHUG_LLM_API_KEY_CMD=")
+            && installed.contains("CHUG_MODEL_REASONING=")
+            && installed.contains("CHUG_MODEL_CODING="),
+        "the example carries the owned keys: {installed:?}"
+    );
+    assert!(
+        !installed
+            .lines()
+            .any(|l| !l.trim_start().starts_with('#') && l.contains("CHUG_LLM_API_KEY=")),
+        "the example's literal-KEY form stays commented (the CMD form is active)"
+    );
+}
+
+/// Static pins: install.sh enforces exactly the documented key set, and the
+/// no-profile invocation keeps today's footer (plus the discovery hint).
+#[test]
+fn profile_static_pins_and_the_no_profile_footer() {
+    let text = std::fs::read_to_string(install_sh()).unwrap();
+    for needle in [
+        "--profile",
+        "CHUG_LLM_BASE_URL",
+        "CHUG_LLM_API_KEY",
+        "CHUG_LLM_API_KEY_CMD",
+        "CHUG_MODEL_REASONING",
+        "CHUG_MODEL_CODING",
+        "CHUG_LANGFUSE_",
+        "chmod 600",
+        "docs/install-profiles.md",
+    ] {
+        assert!(text.contains(needle), "install.sh must pin {needle}");
+    }
+    let example = std::fs::read_to_string(
+        std::env::current_dir()
+            .unwrap()
+            .join("profiles/local-openai-compat.env"),
+    )
+    .expect("the committed example profile exists");
+    assert!(
+        example.contains("docs/install-profiles.md"),
+        "the example links the contract doc"
+    );
+
+    // no-arg invocation: classic footer + the one-line profile hint
+    let r = Run::new("prof-classic");
+    r.make_release("macos-arm64", "chug-fake");
+    let out = r.run("macos-arm64", None);
+    assert_eq!(out.status.code(), Some(0), "{}", out_text(&out));
+    let text = out_text(&out);
+    assert!(text.contains("quickstart"), "the classic footer rides: {text}");
+    assert!(
+        text.contains("install.sh --profile <name>"),
+        "the discovery hint prints when no profile was requested: {text}"
+    );
+    assert!(
+        !text.contains("  profile:"),
+        "no profile block without --profile: {text}"
+    );
+}

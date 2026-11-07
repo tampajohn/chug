@@ -15,8 +15,15 @@
 
 use std::path::{Path, PathBuf};
 
-/// The needle the whole pin hangs on: the env var's NAME.
-const NEEDLE: &str = "HF_TOKEN";
+/// The needles the whole pin hangs on: env var NAMES whose VALUES must
+/// never be committed. `HF_TOKEN` is the original (T205); T330 adds
+/// `CHUG_LLM_API_KEY` — the profile contract's literal-credential key —
+/// with the same rule (the var NAME may appear; a committed VALUE fails).
+/// The bool is dash-tolerance: HF tokens are `hf_` + `[A-Za-z0-9]`, while
+/// `sk-ant-…` proxy keys carry dashes INSIDE the value, so the value run
+/// for CHUG_LLM_API_KEY must consume `-` too (placeholders like
+/// `sk-REPLACE-ME` stay under the length bar and still pass).
+const NEEDLES: &[(&str, bool)] = &[("HF_TOKEN", false), ("CHUG_LLM_API_KEY", true)];
 
 /// Skip the machinery: VCS internals, build outputs, runtime state, and
 /// this test itself (its matching logic necessarily contains assignment
@@ -61,20 +68,28 @@ fn collect(root: &Path, out: &mut Vec<PathBuf>, depth: u8) {
     }
 }
 
-/// The line's HF_TOKEN mention is a VALUE ASSIGNMENT if it reads
-/// `HF_TOKEN` (or `"HF_TOKEN"` / `'HF_TOKEN'`) followed by `=` or `:`,
+/// The line's needle mention is a VALUE ASSIGNMENT if it reads
+/// `<NEEDLE>` (or `"NEEDLE"` / `'NEEDLE'`) followed by `=` or `:`,
 /// then an optional quote, then a literal token-shaped value: at least 12
-/// chars of `[A-Za-z0-9_+]` starting with `hf_` OR a bare run of 24+ such
-/// chars. Placeholder/documentational starts — `$` (vault one-liners),
-/// `<` (templates), `(` — pass, as does anything that is not an
-/// assignment at all (prose, the var name in a flag list, the events
-/// note's boolean `token_set` key, which does not contain this needle).
+/// chars of `[A-Za-z0-9_+]` (plus `-` for the dash-tolerant needles)
+/// starting with `hf_` OR a bare run of 24+ such chars. Placeholder/
+/// documentational starts — `$` (vault one-liners), `<` (templates), `(` —
+/// pass, as does anything that is not an assignment at all (prose, the var
+/// name in a flag list, the events note's boolean `token_set` key, which
+/// does not contain this needle). The `*_CMD` companion form never matches:
+/// after the needle comes `_CMD=…`, and `_` is not a `=`/`:` separator.
 fn is_token_value_assignment(line: &str) -> bool {
-    let needle_pos = match line.find(NEEDLE) {
+    NEEDLES
+        .iter()
+        .any(|(needle, dashes)| is_secret_value_assignment(line, needle, *dashes))
+}
+
+fn is_secret_value_assignment(line: &str, needle: &str, dashes: bool) -> bool {
+    let needle_pos = match line.find(needle) {
         Some(p) => p,
         None => return false,
     };
-    let after_name = &line[needle_pos + NEEDLE.len()..];
+    let after_name = &line[needle_pos + needle.len()..];
     let quoted = after_name.starts_with('"') || after_name.starts_with('\'');
     let after_name = if quoted { &after_name[1..] } else { after_name };
     let after_sep = after_name.trim_start().strip_prefix(['=', ':']);
@@ -88,7 +103,9 @@ fn is_token_value_assignment(line: &str) -> bool {
         .unwrap_or(after_sep);
     let value: String = after_sep
         .chars()
-        .take_while(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '+')
+        .take_while(|c| {
+            c.is_ascii_alphanumeric() || *c == '_' || *c == '+' || (dashes && *c == '-')
+        })
         .collect();
     if value.len() < 12 {
         return false; // empty / placeholder words / short prose
@@ -117,7 +134,9 @@ fn repo_never_contains_an_hf_token_value() {
     for file in &files {
         let text = std::fs::read_to_string(file).unwrap_or_default();
         for (i, line) in text.lines().enumerate() {
-            if line.contains(NEEDLE) && is_token_value_assignment(line) {
+            if NEEDLES.iter().any(|(n, _)| line.contains(n))
+                && is_token_value_assignment(line)
+            {
                 // report the location, NEVER the matching line content
                 spills.push(format!(
                     "{}:{}",
@@ -153,4 +172,42 @@ fn the_matcher_itself_is_pinned() {
     assert!(!is_token_value_assignment("\"token_set\": false"));
     // the needle's absence is trivially safe
     assert!(!is_token_value_assignment("CHUG_LAYA_CHECKPOINT=org/model@rev"));
+}
+
+// --- T330 — the profile contract's key rides the same pin ---------------------
+
+/// The T330 profile contract (docs/install-profiles.md): the repo never
+/// carries endpoints or keys in `profiles/`. The walk covers the directory
+/// by construction (it scans every readable file), and THIS test makes the
+/// scope load-bearing: the committed example profile must be among the
+/// walked files, and a CHUG_LLM_API_KEY value — the contract's literal
+/// credential — must fail the matcher exactly like an HF_TOKEN value would.
+#[test]
+fn profile_files_are_walked_and_the_llm_key_value_is_caught() {
+    let root = std::env::current_dir().expect("cargo sets the test cwd to the package root");
+    let mut files = Vec::new();
+    collect(&root, &mut files, 0);
+    assert!(
+        files
+            .iter()
+            .any(|p| p.ends_with("profiles/local-openai-compat.env")),
+        "the committed example profile must be in the walk's scope — profiles/ \
+         is where a spilled company key would land"
+    );
+    // spilled shapes MUST fail (literal CHUG_LLM_API_KEY, quoted, and the
+    // dash-carrying sk-ant-… shape the HF matcher alone would miss)
+    assert!(is_token_value_assignment(
+        r#"CHUG_LLM_API_KEY="sk-ant-api03-ABCDEFGHIJKLMNOPQRSTUVWXYZ123456""#
+    ));
+    assert!(is_token_value_assignment("CHUG_LLM_API_KEY=0123456789abcdef0123456789abcdef"));
+    // documented / safe shapes MUST pass: the CMD escape hatch (the needle
+    // is a PREFIX of CHUG_LLM_API_KEY_CMD — the separator check must not
+    // fire on `_CMD=`), the short placeholder, and the commented form in the
+    // committed example
+    assert!(!is_token_value_assignment(
+        "CHUG_LLM_API_KEY_CMD=$(vault kv get -field=token secret/chug/llm)"
+    ));
+    assert!(!is_token_value_assignment("export CHUG_LLM_API_KEY_CMD='op read token'"));
+    assert!(!is_token_value_assignment(r#"CHUG_LLM_API_KEY="sk-REPLACE-ME""#));
+    assert!(!is_token_value_assignment("# export CHUG_LLM_API_KEY=\"sk-REPLACE-ME\""));
 }
