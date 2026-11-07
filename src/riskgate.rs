@@ -6,6 +6,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use anyhow::Context;
 use serde_json::{Value, json};
 
+use crate::decision::DecisionProvider;
 use crate::events::{Event, EventSink};
 
 pub const DEFAULT_LAYA_URL: &str = "http://127.0.0.1:8420";
@@ -80,10 +81,13 @@ impl Judge for LayaJudge {
 }
 
 /// `CHUG_JUDGE` — the judge client selection (T204 spec req 5):
-/// `daemon` | `http` | `off`. Unset (or empty) defaults to `daemon` — the
-/// baked-in judge daemon over its 0600 unix socket (auto-spawned on the
-/// first judge call); `http` is the external layad at `LAYA_URL`
-/// byte-for-byte today's path (the escape hatch); `off` disables the judge.
+/// `daemon` | `http` | `off` | `proxy` (T332). Unset (or empty) defaults to
+/// the T332 decision-layer consult — see [`judge_from_env`]; with nothing
+/// configured there that consult collapses to `daemon` — the baked-in judge
+/// daemon over its 0600 unix socket (auto-spawned on the first judge call);
+/// `http` is the external layad at `LAYA_URL` byte-for-byte today's path
+/// (the escape hatch); `off` disables the judge; `proxy` forces the hosted
+/// System One proxy (T332) regardless of the decision-layer selection.
 pub const JUDGE_ENV: &str = "CHUG_JUDGE";
 
 /// Select the judge client per `CHUG_JUDGE` (see [`JUDGE_ENV`]). The risk
@@ -94,9 +98,42 @@ pub fn judge_from_env() -> anyhow::Result<Box<dyn Judge>> {
     // pure [`judge_mode`] (the mcp_serve.rs env rule), pinned branch-by-
     // branch by table tests below.
     let raw = std::env::var(JUDGE_ENV).ok();
+    // T332: an explicitly set CHUG_JUDGE always wins the risk gate's own
+    // table. Unset or BLANK (not an operator choice — the table reads blank
+    // as default) falls through to the decision-layer selection
+    // (CHUG_DECISION_PROVIDER), whose auto matrix collapses to the daemon
+    // default when no proxy is configured — byte-identical to today's
+    // behavior for every run that does not configure a proxy.
+    if raw.as_deref().map(str::trim).filter(|s| !s.is_empty()).is_none() {
+        let decision_raw = std::env::var(crate::decision::PROVIDER_ENV).ok();
+        match crate::decision::decision_mode(decision_raw.as_deref())
+            .map_err(|e| anyhow::anyhow!(e))?
+        {
+            crate::decision::DecisionMode::Proxy => {
+                return Ok(Box::new(ProxyJudge::from_env()));
+            }
+            crate::decision::DecisionMode::Local => {
+                return Ok(Box::new(crate::daemon::DaemonJudge::from_env()?));
+            }
+            crate::decision::DecisionMode::Auto => {
+                if crate::decision::ProxySystemOne::configured() {
+                    // Auto: the local daemon socket when it answers
+                    // /healthz, else the configured proxy — the recorded
+                    // matrix. Without a configured proxy this arm is never
+                    // reached and today's default stands (no probe at all).
+                    let local = crate::decision::LocalDaemon::from_env()?;
+                    if local.healthz_ok().is_ok() {
+                        return Ok(Box::new(crate::daemon::DaemonJudge::from_env()?));
+                    }
+                    return Ok(Box::new(ProxyJudge::from_env()));
+                }
+            }
+        }
+    }
     match judge_mode(raw.as_deref()).map_err(|e| anyhow::anyhow!(e))? {
         JudgeMode::Daemon => Ok(Box::new(crate::daemon::DaemonJudge::from_env()?)),
         JudgeMode::Http => Ok(Box::new(LayaJudge::from_env()?)),
+        JudgeMode::Proxy => Ok(Box::new(ProxyJudge::from_env())),
         JudgeMode::Off => Ok(Box::new(OffJudge)),
     }
 }
@@ -108,6 +145,9 @@ pub(crate) enum JudgeMode {
     Daemon,
     /// The external layad at `LAYA_URL` — today's reqwest TCP path.
     Http,
+    /// The hosted System One proxy (T332) — the decision-model provider
+    /// abstraction's second transport, forced at the risk gate.
+    Proxy,
     /// The judge is disabled — every classification fails open, logged.
     Off,
 }
@@ -129,9 +169,10 @@ pub(crate) fn judge_mode(raw: Option<&str>) -> Result<JudgeMode, String> {
     match normalized.as_deref() {
         None | Some("daemon") => Ok(JudgeMode::Daemon),
         Some("http") => Ok(JudgeMode::Http),
+        Some("proxy") => Ok(JudgeMode::Proxy),
         Some("off") => Ok(JudgeMode::Off),
         Some(other) => Err(format!(
-            "unknown {JUDGE_ENV} mode {other:?} (expected daemon|http|off)"
+            "unknown {JUDGE_ENV} mode {other:?} (expected daemon|http|off|proxy)"
         )),
     }
 }
@@ -145,6 +186,31 @@ struct OffJudge;
 impl Judge for OffJudge {
     fn judge(&mut self, _command: &str) -> Result<Verdict, String> {
         Err("judge disabled (CHUG_JUDGE=off)".into())
+    }
+}
+
+/// T332 — the hosted-proxy judge client: the SAME fixed risk-gate body as
+/// every other client ([`judge_request_body`]), posted through the decision
+/// provider abstraction's [`ProxySystemOne`] (the recorded
+/// `/v1/systemone` contract: model field + Bearer + the 10s bound), and
+/// parsed by the SAME [`parse_verdict`] — one gate, one verdict shape.
+struct ProxyJudge {
+    provider: crate::decision::ProxySystemOne,
+}
+
+impl ProxyJudge {
+    fn from_env() -> Self {
+        Self {
+            provider: crate::decision::ProxySystemOne::from_env(),
+        }
+    }
+}
+
+impl Judge for ProxyJudge {
+    fn judge(&mut self, command: &str) -> Result<Verdict, String> {
+        let body = judge_request_body(command);
+        let envelope = self.provider.judge_envelope(&body)?;
+        parse_verdict(&envelope)
     }
 }
 
@@ -490,6 +556,10 @@ mod tests {
         for raw in [Some("http"), Some("HTTP"), Some(" http ")] {
             assert_eq!(judge_mode(raw), Ok(JudgeMode::Http), "raw {raw:?}");
         }
+        // The hosted System One proxy (T332).
+        for raw in [Some("proxy"), Some("PROXY"), Some(" Proxy ")] {
+            assert_eq!(judge_mode(raw), Ok(JudgeMode::Proxy), "raw {raw:?}");
+        }
         // The disabled judge.
         for raw in [Some("off"), Some("OFF"), Some("Off ")] {
             assert_eq!(judge_mode(raw), Ok(JudgeMode::Off), "raw {raw:?}");
@@ -501,7 +571,10 @@ mod tests {
         for garbage in ["garbage", "daemons", "0", "daemon,http", "GARBAGE"] {
             let err = judge_mode(Some(garbage)).expect_err(garbage);
             assert!(err.contains("unknown CHUG_JUDGE mode"), "{garbage}: {err}");
-            assert!(err.contains("expected daemon|http|off"), "{garbage}: {err}");
+            assert!(
+                err.contains("expected daemon|http|off|proxy"),
+                "{garbage}: {err}"
+            );
         }
         // The error names the offending (trimmed, lowercased) value.
         let err = judge_mode(Some("  Bogus  ")).expect_err("bogus");
@@ -557,6 +630,18 @@ mod tests {
             ),
             ("LAYA_URL", std::env::var_os("LAYA_URL")),
             (
+                crate::decision::PROVIDER_ENV,
+                std::env::var_os(crate::decision::PROVIDER_ENV),
+            ),
+            (
+                crate::decision::PROXY_URL_ENV,
+                std::env::var_os(crate::decision::PROXY_URL_ENV),
+            ),
+            (
+                crate::decision::PROXY_TOKEN_ENV,
+                std::env::var_os(crate::decision::PROXY_TOKEN_ENV),
+            ),
+            (
                 crate::daemon::BINARY_ENV,
                 std::env::var_os(crate::daemon::BINARY_ENV),
             ),
@@ -605,6 +690,54 @@ mod tests {
             Err(e) => e,
         };
         assert!(err.contains("layad request failed"), "{err}");
+
+        // T332 proxy legs. Explicit CHUG_JUDGE=proxy forces the hosted
+        // System One client; the decision-layer consult (CHUG_JUDGE unset)
+        // reaches the same client through CHUG_DECISION_PROVIDER=proxy and
+        // through the auto matrix (proxy configured + no healthy socket).
+        // Against a guaranteed-dead endpoint every leg's error flavor is
+        // the proxy's — never a spawn, never "layad request failed".
+        let tmp = tempfile::tempdir().expect("tempdir");
+        set_env("LAYA_URL", None);
+        set_env(crate::decision::PROXY_URL_ENV, Some("http://127.0.0.1:1".as_ref()));
+        for (label, judge_env, provider_env) in [
+            ("explicit proxy", Some("proxy".as_ref()), None),
+            ("consult proxy", None, Some("proxy".as_ref())),
+            ("auto -> dead socket -> proxy", None, Some("auto".as_ref())),
+        ] {
+            set_env(JUDGE_ENV, judge_env);
+            match provider_env {
+                Some(v) => set_env(crate::decision::PROVIDER_ENV, Some(v)),
+                None => set_env(crate::decision::PROVIDER_ENV, None),
+            }
+            set_env(crate::daemon::SOCK_ENV, Some(tmp.path().join("dead.sock").as_os_str()));
+            let mut judge = judge_from_env().expect("{label} constructs");
+            let err = match judge.judge("rm -rf /") {
+                Ok(_) => panic!("a dead proxy must not judge ({label})"),
+                Err(e) => e,
+            };
+            assert!(
+                err.contains("decision proxy request failed"),
+                "{label}: {err}"
+            );
+        }
+
+        // The consult's garbage mode refuses the run (never a silent pick).
+        set_env(JUDGE_ENV, None);
+        set_env(crate::decision::PROVIDER_ENV, Some("garbage".as_ref()));
+        let err = match judge_from_env() {
+            Ok(_) => panic!("a garbage decision mode refuses the run"),
+            Err(e) => e,
+        };
+        assert!(
+            err.to_string().contains("unknown CHUG_DECISION_PROVIDER mode"),
+            "{err}"
+        );
+        // ... and with the decision vars cleared again, the DEFAULT legs
+        // below prove the consult collapsed to the daemon (byte-identical
+        // to pre-T332 behavior for every unconfigured run).
+        set_env(crate::decision::PROVIDER_ENV, None);
+        set_env(crate::decision::PROXY_URL_ENV, None);
 
         // unset + empty: the DEFAULT is the daemon client (spec req 5). With
         // the delegate seam pointed at /bin/false the daemon client's ensure

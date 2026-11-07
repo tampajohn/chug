@@ -88,9 +88,6 @@ pub fn decision_mode(raw: Option<&str>) -> Result<DecisionMode, String> {
 /// failing — the CALL SITE owns the degrade (fail-open, fail-closed, or
 /// off, exactly as before this module existed).
 pub trait DecisionProvider: Send {
-    // T332 mid-slice: the envelope-level consumers ride the arc's next
-    // commit (the call-site rewires); the providers are tested through it.
-    #[allow(dead_code)]
     fn judge_envelope(&mut self, body: &Value) -> Result<Value, String>;
     /// A short human name for status lines and logs.
     fn describe(&self) -> String;
