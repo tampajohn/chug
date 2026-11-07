@@ -1,15 +1,16 @@
 # Ledger
 
 ## Done
-- Phase 1: routine freshness-skip (glm; loopd 21:37:46Z routing todo_rows=2 eval_fresh=yes; routing d1794090138-1) — predicate HOLDS, Phase 1 SKIPPED per the T81 routing switch
-- T336 RECOVERED (pri 1, the 3083 wrap recipe): fleet-state bisect + 0-mutation re-run — the env-bound spawn-child reds HEALED between 21:09-21:47Z; host I/O degradation diagnosed (macOS OS-update staging MSUPrepareUpdate + fseventsd state-U; 1KB write 209ms, deps readdir minutes) then dissolved; families GREEN (delegate 28/28 3.79s + spoof failure_stamp PASS 4.44s + dormant 17/17 6.18s + ideation 17/17 7.37s) + pins battery v2 213/213 20.5s UNWEDGED; NO code change, zero committed casualty; recovery-routing d1794090146-2; row FLIPPED done (todo_consistency 21/21 after)
-- T328 re-verified BLOCKED fleet-side (~/workspace holds only chug/, chug-dashboard/, chug-site/ — no chug-watch tree)
-- P004 adjudicated NOT dispatchable (first slice needs the chug-watch marketplace.json — the T328-blocked tree — plus an operator target pick)
-- Single-driver verified (pid 23610 only); worktree list clean (main only — nothing to harvest)
+- Cycle-3084 wrap CLOSED (the corridor complete): prep 4950ef1 (Outcomes 3084 full + the 3083 one-liner + 3075 one-lined + the T261 batch TWO d1794090427-1/-2 both landed-clean + LEDGER wrap-state) + fill d156a5c (all six fill legs GREEN first-at-final-compose: datum 101 iters/3,675.474s + T310 enumeration 10/10/10 after TWO designed pre-write fires 0-REAL + trim 0==0 streak 10 + T323 untracked + T311 on-disk GREEN) — pushed; main == origin/main
+- State write keyed to 4950ef1: validate_state + assert_state_on_disk GREEN (the nine fields, ring 12 = 5 batch + 7 carried outcomes, splice-consistent); probe post-notes read 60 0 machine==TRUE 0
+- T336 RECOVERED 0-mutation (the 3083 recipe): the fleet-state bisect found the macOS-update-staging I/O storm (MSUPrepareUpdate + fseventsd state-U); the env-bound reds healed host-side; families 3/3 GREEN + battery v2 213/213 + full gates 1,942/1,942 + clippy ZERO at d8f01b0; row flipped
+- LIVE_CTX remedy mid-wrap: 406,547 -> 11,091 bytes (140 blocks deleted in complete pairs, 0 dangles / 0 orphan-uses verified)
+- NO TAG rides the push (TRUE 1 distinct flip-id T336 since v0.19.0, under the 3-tag trigger, ANCESTOR-OK)
 
-## Next (the wrap tail)
-- EVALUATION.md edits DONE (the 3084 full + the 3083 one-liner + one-line 3075, the 19 needles zero-divergent, the T316 assert's DESIGNED fire named); the T261 batch TWO appended (d1794090427-1/-2, both landed-clean); the flip commit d8f01b0 landed (TRUE recount 1, describe v0.19.0-21)
-- Prep commit next (EVALUATION.md + LEDGER.md) -> eval-state rewrite keyed to the prep (validate_state + T311 + T323) -> notes commit (token-free) + probe -> fill (the T309/T310/T317/T319/T321/T323 legs) -> push -> goal_complete
+## Next (the next cycle's input)
+- Cold next cycle: read .chug/eval-state.md + .chug/eval-delta.md (the T260 pair, disk-only untracked); the queue holds T328 (BLOCKED — chug-watch tree absent fleet-side; redispatch when reachable), P001/P003 (operator/GPU-parked), P004 (needs the chug-watch tree + an operator target pick)
+- The chain stands at TRUE 0 (a real-work wrap; the next EMPTY-delta cycle authorizes the 1st disposition TRUE 0->1, 3 empties away)
+- The re-arm 640th check still DUE at the next real eval (reads the 3016 slot's final; (b) projected NEGATIVE, watch HOLDS 69)
 
 ## Blockers
 - T328 external: chug-watch tree not on host, redispatch when reachable
