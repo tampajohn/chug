@@ -624,6 +624,19 @@ logged). The inference stack (candle + hf-hub + tokenizers) lives behind the
 `daemon` cargo feature — off by default, so the hot `chug run` build never
 compiles it. See [DEPENDENCIES.md](DEPENDENCIES.md).
 
+T332 adds a second transport family behind a provider layer
+(`CHUG_DECISION_PROVIDER=auto|local|proxy`): `local` is the baked-in daemon
+above, unchanged; `proxy` sends the identical judge envelope to the hosted
+System One endpoint at `CHUG_DECISION_PROXY_URL` (Bearer
+`CHUG_DECISION_PROXY_TOKEN`, a 10s bound per call, fail-per-call — a dead
+proxy is a normal verdict failure, never a constructor panic), and `auto`
+(the default) picks the healthy daemon socket when `/healthz` answers and
+the configured proxy otherwise — with no proxy configured, `auto` IS the
+local daemon, byte-identical to pre-T332 behavior. `CHUG_JUDGE=proxy` forces
+the hosted endpoint at the risk gate explicitly; an unset `CHUG_JUDGE`
+consults this same provider layer. `chug daemon --status` names the
+resolved provider. See [docs/decision-providers.md](docs/decision-providers.md).
+
 The same socket also hosts the **session registry** (T219): every chug run
 registers a TTL heartbeat — `POST /sessions` upserts one entry
 (`{id, role, started, last_event_ts, status}`; roles `loopd-cycle`,
