@@ -28,8 +28,10 @@ curl -fsSL https://chug.sh/install.sh | sh
 **Wire up a model provider in the same command** — `--profile <name>` copies
 `~/.chug/profiles/<name>.env` (or `profiles/<name>.env` from the repo) to
 `~/.chug/profile.env`, validates it before writing anything (missing keys are
-named, never half-written), and prints the loopd launch line with the profile
-sourced. A profile exports the provider contract: `CHUG_LLM_BASE_URL`,
+named, never half-written), and prints the loop launch line (`chug loop
+init && chug loop run` — in a repo of yours, no clone needed) with the
+profile sourced. A profile exports the provider contract:
+`CHUG_LLM_BASE_URL`,
 `CHUG_LLM_API_KEY` (or `CHUG_LLM_API_KEY_CMD`, a fetch command for secret
 backends), `CHUG_MODEL_REASONING`, `CHUG_MODEL_CODING`, and optional
 `CHUG_LANGFUSE_*` — see `docs/install-profiles.md`; the committed
@@ -1010,6 +1012,18 @@ nohup ./loopd.sh > /dev/null 2>&1 &   # start (detached)
 ./loopd.sh stop                       # exits after the current cycle
 ```
 
+In any OTHER repo — a pilot's project, not this checkout — the same loop
+is a subcommand, and no clone of chug is ever required: the installed
+binary scaffolds the repo's own generic loop contract and works ITS queue
+(never chug's backlog), with an empty queue idling instead of inventing
+work:
+
+```bash
+cd <your-repo>
+chug loop init      # scaffold LOOP-SPEC.md + TODO.md + .chug/ (idempotent; --force backs up)
+chug loop run       # exec the loop supervisor against THIS repo
+```
+
 Before any launch the supervisor decides whether the cycle needs an
 orchestrator at all — the T258/T259 gate runs first, so an empty day
 costs $0. It computes the mechanical predicate from records it can read
@@ -1197,6 +1211,6 @@ cargo build && cargo clippy --all-targets -- -D warnings && cargo test
 All three must stay green. External dependencies — crates, runtime services,
 spawned processes, the env surface — are inventoried with their failure modes
 in [DEPENDENCIES.md](DEPENDENCIES.md); check it before adding one.
-Layout: `src/{api,autospec,archive,driver,driver_lock,eventlog,events,fork,fsatomic,hf_hosting,judge_model,judge_pack,kev_config,kev_model,live_ctx,testsupport,tools,todos,tgrep,tui,valroute,webfetch,websearch,chat,
+Layout: `src/{api,autospec,archive,driver,driver_lock,eventlog,events,fork,fsatomic,hf_hosting,judge_model,judge_pack,kev_config,kev_model,loop_cmd,live_ctx,testsupport,tools,todos,tgrep,tui,valroute,webfetch,websearch,chat,
 attach,complete,commands,decisions,delegate,notify,permissions,plan,riskgate,hooks,mcp,mcp_http,mcp_serve,sse,observ,auth,daemon,ledger,transcript,trim,build_info}.rs`
 (+ `main.rs`; `build.rs` only bakes the git commit into the startup banner).

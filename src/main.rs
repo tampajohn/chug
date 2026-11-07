@@ -24,6 +24,7 @@ mod events;
 mod fork;
 mod fsatomic;
 mod hooks;
+mod loop_cmd;
 mod riskgate;
 mod ledger;
 mod live_ctx;
@@ -300,6 +301,15 @@ enum CliCommand {
         #[arg(long)]
         cwd: Option<PathBuf>,
     },
+    /// T334: scaffold + run the continuous loop in ANY repo — no clone of
+    /// chug required. `init` scaffolds this repo's own loop contract
+    /// (LOOP-SPEC.md, TODO.md, .chug/, the .gitignore line; idempotent,
+    /// `--force` backs up); `run` execs the loop supervisor against THIS
+    /// repo — its own queue, its own worktrees, its own branches.
+    Loop {
+        #[command(subcommand)]
+        action: LoopAction,
+    },
     /// F10 phase 1 (T124): serve chug TO other agents as a stdio MCP server
     /// (read-only tools, `chug_status` + `chug_collect`) until stdin EOF,
     /// then exit 0. Stdout carries ONLY protocol messages — never run it
@@ -401,6 +411,32 @@ enum ForkAction {
     },
 }
 
+/// `chug loop` actions (T334). Each carries its own `--cwd` like `fork` —
+/// the repo the loop scaffolds/runs in (the pilot's repo, default `.`).
+#[derive(Subcommand)]
+enum LoopAction {
+    /// Scaffold this repo's loop files: LOOP-SPEC.md (the generic
+    /// contract), TODO.md (header + empty queue + the Proposed lane),
+    /// .chug/, and the .gitignore line. Idempotent — existing files are
+    /// reported `kept`, never clobbered.
+    Init {
+        /// Overwrite existing scaffolded files, backing each up as
+        /// `<file>.bak` beside it.
+        #[arg(long, default_value_t = false)]
+        force: bool,
+        /// Working directory (the repo to scaffold). Defaults to `.`.
+        #[arg(long)]
+        cwd: Option<PathBuf>,
+    },
+    /// Run the loop supervisor against this repo (scaffold required — a
+    /// missing one exits 2 with the init hint, never a half-start).
+    Run {
+        /// Working directory (the repo to run the loop in). Defaults to `.`.
+        #[arg(long)]
+        cwd: Option<PathBuf>,
+    },
+}
+
 fn main() -> ExitCode {
     let cli = Cli::parse();
     // SPEC-8: the observability sink must drain on EVERY exit path —
@@ -408,6 +444,11 @@ fn main() -> ExitCode {
     // the queued events still flush before the process exits.
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match cli.command {
         CliCommand::Ledger { cwd } => cmd_ledger(cwd),
+        // T334: the loop subcommand is a pure CLI op in the cmd_fork shape
+        // — no banner, no driver lock, no events write. `run` execs the
+        // supervisor (the process image is replaced), so there is no
+        // observability sink to drain on its success path.
+        CliCommand::Loop { action } => cmd_loop(action),
         // Stdout purity by construction (T124): the mcp-serve subcommand
         // dispatches STRAIGHT to the server loop — no banner, no ledger, no
         // driver lock, no events write on this path; stdout carries only
@@ -981,6 +1022,28 @@ fn cmd_daemon(stop: bool, status: bool, ensure: bool) -> anyhow::Result<i32> {
         return daemon::ensure_cmd();
     }
     daemon::serve()
+}
+
+/// `chug loop` (T334): scaffold (`init`) or run (`run`) the continuous
+/// loop against the CURRENT repo — the same pure-CLI-op shape as cmd_fork
+/// (no driver, no events, no banner). `init` prints one report line per
+/// scaffolded artifact; `run` execs the supervisor, so on unix it never
+/// returns — the exit-2 missing-scaffold leg and the non-unix fallback
+/// are the only `Ok(code)` paths.
+fn cmd_loop(action: LoopAction) -> anyhow::Result<i32> {
+    match action {
+        LoopAction::Init { force, cwd } => {
+            let cwd = resolve_cwd(cwd)?;
+            for line in loop_cmd::init(&cwd, force)? {
+                println!("{line}");
+            }
+            Ok(0)
+        }
+        LoopAction::Run { cwd } => {
+            let cwd = resolve_cwd(cwd)?;
+            loop_cmd::run(&cwd)
+        }
+    }
 }
 
 /// `chug fork` (T105): a pure CLI op over the two session files — no driver,

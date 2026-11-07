@@ -26,13 +26,14 @@ every knob.
 No. chug speaks the Anthropic Messages wire protocol; point
 `ANTHROPIC_BASE_URL` / `ANTHROPIC_AUTH_TOKEN` at any provider that speaks
 it. The repo's own loop runs kimi for judgment calls and glm for routine
-phases — per-phase routing is a mechanical rule in the supervisor
-(`./loopd.sh routing` prints what the next cycle would get), never a
-model's choice.
+phases — per-phase routing is a mechanical rule in the supervisor, never
+a model's choice; a profile installed with `install.sh --profile <name>`
+carries the same keys for your repo's loop.
 
 **How do I uninstall?**
 
-`./loopd.sh stop` (and remove the launchd plist, if you installed one),
+`.chug/loopd/loopd.sh stop` in each repo the loop runs in (and remove
+the launchd plist, if you installed one),
 delete the binary — `rm ~/.local/bin/chug`, or `cargo uninstall chug` if
 you installed from source — and delete any per-repo state you do not want
 (the `.chug/` directory inside each repo it ran in). Nothing else was

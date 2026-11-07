@@ -571,7 +571,8 @@ fn good_profile_body() -> String {
 
 /// The full success path: a valid profile resolves from ~/.chug/profiles/,
 /// installs to ~/.chug/profile.env (mode 600 — it may carry a literal key),
-/// and the footer prints the loopd launch line with the profile sourced.
+/// and the footer prints the loop launch line (the `chug loop` subcommand —
+/// no clone of chug needed) with the profile sourced.
 /// The CMD form must NOT print the literal-key note.
 #[test]
 fn profile_good_installs_and_prints_the_launch_line() {
@@ -599,7 +600,14 @@ fn profile_good_installs_and_prints_the_launch_line() {
         );
     }
     let text = out_text(&out);
-    assert!(text.contains("loopd.sh"), "the launch line is printed: {text}");
+    assert!(
+        text.contains("chug loop init && chug loop run"),
+        "the launch line is the loop subcommand (no clone needed): {text}"
+    );
+    assert!(
+        !text.contains("./loopd.sh"),
+        "the footer never tells the pilot to run a script only a clone has: {text}"
+    );
     assert!(text.contains("profile good"), "the profile is named: {text}");
     assert!(
         !text.contains("literal CHUG_LLM_API_KEY"),
