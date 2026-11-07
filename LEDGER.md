@@ -1,12 +1,12 @@
 # Ledger
 
 ## Done
-- Cycle 3072 (routine glm, routing d1793997856-1): ONE item landed — T326 ideation mode (merge ec19843 + flip c14a6d2 + README paragraph + TAG v0.18.0 pushed; main == origin/main at the notes commit).
-- T326 arc: impl glm round-1 80/80 → T63 resume d1794000704-2 (a1aeaf0); step-3 re-gate caught 2 REAL failures (T178 bash-cap ordering vs the ideation launch; T48 manifest-dir) → orchestrator-finish 71ac39c; kimi round-1 FAIL 8 findings (d1794004780-4; blocking F1 slug-dedupe vs hand-named P-row files) → fixup 80/80 → T63 resume d1794006768-5 (db654b2, 7/7 mutants killed) → kimi round-2 PASS (d1794008291-7, nextest 1877/1877).
-- Post-merge gates GREEN (1877/1877 + clippy zero, bg 3819); release v0.18.0 (5 flip-ids ≥ 3, feature → minor; check-tag ok; notes 125 lines; tag pushed); harvest 4 event segments + 2 LEDGERs; batch SEVEN (7 outcome backfills, census 62/91/83 HOLDS); 3054 one-lined (T316 assert GREEN); eval-state FULL recompose (validate_state GREEN); probe 60 0 (machine == TRUE 0).
+- Reconstructed: the dead cycle-3073 run died at budget-low MID-WRAP. Books found: eval e59f52b (the 739th, non-trip kimi) pushed; T329 arc CLOSED (merge 6e14a5b + flip/harvest 89b42bf + untrack 614f7a7, kimi PASS d1794022067-7); T330 arc OPEN (impl e599640 goal-accepted + review fix 1334efa on preserved worktree /tmp/chug-loop-t330, 4 nextest reds diagnosed, recovery recipe on the row); T328 assessed BLOCKED (chug-watch tree not on this host); T261 batch 8 backfills ALREADY APPENDED to decisions.jsonl (d1794028828-9..d1794028829-16); wrap-state note + TODO row updates written but UNCOMMITTED; no Outcomes entry, no state rewrite, no notes/probe/fill/push.
 
-## Next
-- Phase 2 next cycle: 5 open rows with ready specs — T328 (chug-watch daemon provider), T329 (adopt page), T330 (install profiles), T331 (risk-gate story), T332 (decision provider abstraction); P002 memo rides. Predicate: 6 todo rows → routine skip if eval fresh.
+## Next (wrap-state note, T207 — cycle-3073 zombie repair)
+- Merged-but-unflipped rows: NONE (T329 flipped 89b42bf). Unharvested worktrees: /tmp/chug-loop-t330 (PRESERVED BY DESIGN — recovery recipe on the row; impl stream 2 segments ride its .chug/events.jsonl). Unpushed commits: 0 at baseline (main == origin/main at 614f7a7); the wrap bookkeeping lands and pushes next. Missing decision records: NONE (the T261 batch landed — 8/8 backfills present).
+- Wrap sequence: commit inherited TODO/LEDGER bookkeeping → Outcomes cycle-3073 entry + one-line 3058 (kept-full 6 = 3073/3072/3071/3070/3066/3062) → prep commit (eval: prefix) → T242 bg full gates at HEAD (T329 touched site-sync.sh + site_sync.rs — NOT docs-only) → eval-state rewrite (marker = prep commit; T309/T311 asserts) → token-free wrap-notes + T257 color + post-notes probe → fill (T309/T310/T311 asserts &&-chained pre-commit) → push.
+- Then Phase 1 (routine glm skip — 4 open rows T328-T332, eval fresh, predicate HOLDS) → Phase 2 T330 recovery recipe → Phase 3 cycle-3074 wrap.
 
 ## Blockers
 - none
