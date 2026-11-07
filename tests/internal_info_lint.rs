@@ -476,7 +476,8 @@ fn word_boundary_pins() {
 }
 
 #[test]
-fn internal_host_trailing_boundary_pin() {    // a host-shaped string under the internal TLD fails …
+fn internal_host_trailing_boundary_pin() {
+    // a host-shaped string under the internal TLD fails …
     assert_eq!(
         scan_line("on the production endpoint (`tools-proxy.internal.com`), streamed"),
         vec!["internal-host"]
