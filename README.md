@@ -105,6 +105,13 @@ an external-repo feasibility eval, loopd operations, adversarial review —
 each with copy-pasteable commands and a wall-clock arc. Start at
 [runbooks/README.md](runbooks/README.md).
 
+New to chug end-to-end? The public site's adopt page (quickstart, mental
+model, your first feature, FAQ) is machine-rendered from `docs/adopt/` by
+`scripts/site-sync.sh` at every sync — four curated fragments, missing
+ones render explicit placeholders, and the sync's publish gates (in-page
+link check plus the internal-info hygiene scan) keep a bad render off the
+site. Edit the markdown fragments; the site follows.
+
 ## Interactive mode (`chug chat`)
 
 A conversational session in the TUI: type a request, chug works it with tools,
