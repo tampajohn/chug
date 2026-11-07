@@ -10,7 +10,9 @@ boundary: this script builds a deterministic ideas packet (FEATURES.md parked
 items, deferred/blocked threads in LEDGER + docs, the eval-triage class
 census from .chug/decisions.jsonl, site/mod staleness facts), turns it into
 at most 3 outward-facing proposal stubs, gates each through the Laya noul
-meta-class gate (daemon, fail CLOSED), files the survivors into
+meta-class gate (the T332-selected decision provider — the local daemon
+socket, or the configured proxy; fail CLOSED either way), files the
+survivors into
 specs/proposed/ + `## Proposed` rows with status `proposed`, and — per the
 2026-11-06 operator blanket delegation (the amendment) — auto-ratifies
 eligible `proposed` rows older than 7 days by flipping them to `open`.
@@ -21,11 +23,15 @@ Invariants this script exists to hold:
     auto-flips an internal-artifact row: rows carrying the never-dispatch
     note (`do not dispatch` / `operator-owned`, the P005-P007 marker) are
     skipped by the ratification sweep, whatever their age.
-  - The noul gate runs BEFORE filing, always. Daemon unavailable, timeout,
-    unparsable answer -> FAIL CLOSED to rejection (better silent than meta).
-  - Deterministic, no network: the only I/O beyond the repo is the LOCAL
-    daemon socket (the T204 judge transport), and the packet is derived
-    from repo files alone.
+  - The noul gate runs BEFORE filing, always. Provider refused, daemon
+    unavailable, timeout, proxy error, unparsable answer -> FAIL CLOSED to
+    rejection (better silent than meta).
+  - Deterministic: the packet is derived from repo files alone. The only
+    I/O beyond the repo is the decision transport — the LOCAL daemon
+    socket (the T204 judge transport) today, plus the configured proxy
+    endpoint ONLY when CHUG_DECISION_PROXY_URL is set (the T332 provider;
+    unset leaves the shape byte-for-byte today's, a local-socket-only
+    gate).
   - Idempotent by slug: a re-run over unchanged inputs (the same week) files
     nothing — the dedupe key is the slug, checked against both the filed
     spec files and the TODO.md P-rows.
@@ -43,6 +49,10 @@ Env seams (tests + operator overrides):
     CHUG_NOUL_SOCK      the daemon socket (default: $CHUG_DAEMON_SOCK, then
                         $CHUG_HOME/daemon.sock, then ~/.chug/daemon.sock)
     CHUG_NOUL_TIMEOUT   the gate's socket timeout in seconds (default 2)
+    CHUG_DECISION_PROVIDER  the T332 selection: auto|local|proxy (auto
+                        default — warm socket, else a configured proxy)
+    CHUG_DECISION_PROXY_URL / CHUG_DECISION_PROXY_TOKEN  the T332 proxy
+                        endpoint + Bearer credential (docs/decision-providers.md)
 """
 
 import argparse
@@ -52,6 +62,7 @@ import os
 import re
 import subprocess
 import sys
+import urllib.request
 from http.client import HTTPConnection
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -337,53 +348,150 @@ def noul_socket():
     )
 
 
+# --- the T332 decision-provider selection (src/decision's table +
+# loopd.sh decision_provider's shell twin — one contract, three transports) ----
+
+def _decision_mode():
+    """The CHUG_DECISION_PROVIDER selection key, trimmed exactly like the
+    shell twin (`tr -d '[:space:]'` + lowercase). Returns 'auto'|'local'|
+    'proxy' — unset/blank is 'auto' — or None on any OTHER value: an
+    unknown mode must refuse rather than silently pick a provider the
+    operator did not ask for (the caller fails closed)."""
+    mode = "".join((os.environ.get("CHUG_DECISION_PROVIDER") or "").split()).lower()
+    if mode in ("", "auto", "local", "proxy"):
+        return mode or "auto"
+    return None
+
+
+def daemon_healthz_ok(sock_path, timeout):
+    """The auto matrix's warm-daemon probe: GET /healthz over the daemon
+    socket, short bound (loopd.sh decision_healthz_ok's twin). 200 means
+    warm — the model loads BEFORE the socket binds, so healthz never lies
+    about readiness."""
+    try:
+        conn = _UnixHTTPConnection(sock_path, timeout)
+        try:
+            conn.request("GET", "/healthz")
+            resp = conn.getresponse()
+            resp.read()
+            return resp.status == 200
+        finally:
+            conn.close()
+    except Exception:
+        return False
+
+
+def noul_provider():
+    """`local` | `proxy` — the ONE transport this gate consults — or None
+    on an unknown CHUG_DECISION_PROVIDER mode (the caller fails closed).
+    auto collapses to the local daemon when no proxy is configured (today's
+    shape, byte for byte, no probe); with a proxy configured the socket's
+    /healthz decides: warm daemon wins, else the proxy."""
+    mode = _decision_mode()
+    if mode == "proxy":
+        return "proxy"
+    if mode == "local":
+        return "local"
+    if mode is None:
+        return None
+    # auto
+    if os.environ.get("CHUG_DECISION_PROXY_URL") or "":
+        return "local" if daemon_healthz_ok(noul_socket(), 1.0) else "proxy"
+    return "local"
+
+
+def noul_daemon_answer(payload, timeout):
+    """The LOCAL provider's leg (the T204 transport, unchanged): POST the
+    /judge body over the daemon socket, return the parsed meta_class
+    answer. ANY failure raises — noul_gate's except fails closed."""
+    conn = _UnixHTTPConnection(noul_socket(), timeout)
+    try:
+        conn.request(
+            "POST",
+            "/judge",
+            body=json.dumps(payload),
+            headers={"Content-Type": "application/json"},
+        )
+        resp = conn.getresponse()
+        raw = resp.read()
+        if resp.status != 200:
+            raise RuntimeError(f"noul daemon HTTP {resp.status}")
+    finally:
+        conn.close()
+    return json.loads(raw.decode("utf-8"))["answers"]["meta_class"]
+
+
+def noul_proxy_answer(payload, timeout):
+    """The PROXY provider's leg (the /v1/systemone contract,
+    docs/decision-providers.md): the SAME body plus the contract's REQUIRED
+    `model` field (the daemon never sees it), `Authorization: Bearer` when
+    a token is configured, the gate's own bound (the call site's fail-closed
+    timing, not the provider's 10s). Returns the parsed meta_class answer
+    from the IDENTICAL answers envelope; ANY failure — unconfigured
+    endpoint, transport error, non-200, unparsable body — raises, so a
+    proxy-down reads exactly like a daemon-down: the same fail CLOSED."""
+    base = os.environ.get("CHUG_DECISION_PROXY_URL") or ""
+    if not base:
+        raise RuntimeError(
+            "decision proxy not configured (set CHUG_DECISION_PROXY_URL)"
+        )
+    if base.endswith("/"):
+        base = base[:-1]
+    wire = dict(payload)
+    wire["model"] = "jev"
+    headers = {"Content-Type": "application/json"}
+    token = os.environ.get("CHUG_DECISION_PROXY_TOKEN") or ""
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    req = urllib.request.Request(
+        base + "/v1/systemone",
+        data=json.dumps(wire).encode("utf-8"),
+        headers=headers,
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        raw = resp.read()
+    return json.loads(raw.decode("utf-8"))["answers"]["meta_class"]
+
+
 def noul_gate(title, stub_text):
     """True = outward-facing (file it); False = reject.
 
-    FAILS CLOSED (the spec's rule — better silent than meta): daemon
-    unavailable, connect/read timeout, non-200, unparsable body, or an
-    answer whose choice is anything but the outward 'no' — all reject. Only
-    an explicit confident 'no' (not-meta) passes.
+    FAILS CLOSED (the spec's rule — better silent than meta): an unknown
+    provider mode, daemon unavailable, connect/read timeout, proxy error,
+    non-200, unparsable body, or an answer whose choice is anything but the
+    outward 'no' — all reject, whichever transport answered. Only an
+    explicit confident 'no' (not-meta) passes.
     """
     try:
         timeout = float(os.environ.get("CHUG_NOUL_TIMEOUT") or 2)
     except ValueError:
         timeout = 2.0
     try:
-        body = json.dumps(
-            {
-                "state": {
-                    "context": NOUL_CONTEXT,
-                    "proposal_title": title,
-                    "proposal_stub": stub_text,
-                },
-                "questions": {
-                    "meta_class": {
-                        "type": "choice",
-                        "instructions": NOUL_INSTRUCTIONS,
-                        "criteria": {
-                            "no": "outward-facing - a real capability for chug's users, site, or ecosystem; file it",
-                            "yes": "meta-class - primarily the loop's own tooling/assertions/bookkeeping; reject it",
-                        },
-                    }
-                },
-            }
-        )
-        conn = _UnixHTTPConnection(noul_socket(), timeout)
-        try:
-            conn.request(
-                "POST",
-                "/judge",
-                body=body,
-                headers={"Content-Type": "application/json"},
-            )
-            resp = conn.getresponse()
-            raw = resp.read()
-            if resp.status != 200:
-                return False
-        finally:
-            conn.close()
-        answer = json.loads(raw.decode("utf-8"))["answers"]["meta_class"]
+        payload = {
+            "state": {
+                "context": NOUL_CONTEXT,
+                "proposal_title": title,
+                "proposal_stub": stub_text,
+            },
+            "questions": {
+                "meta_class": {
+                    "type": "choice",
+                    "instructions": NOUL_INSTRUCTIONS,
+                    "criteria": {
+                        "no": "outward-facing - a real capability for chug's users, site, or ecosystem; file it",
+                        "yes": "meta-class - primarily the loop's own tooling/assertions/bookkeeping; reject it",
+                    },
+                }
+            },
+        }
+        provider = noul_provider()
+        if provider is None:
+            return False
+        if provider == "proxy":
+            answer = noul_proxy_answer(payload, timeout)
+        else:
+            answer = noul_daemon_answer(payload, timeout)
         return answer.get("choice") == "no"
     except Exception:
         return False

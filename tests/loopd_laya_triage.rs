@@ -297,7 +297,13 @@ fn run_predicate(root: &Path, envs: &[(&str, &str)]) -> String {
         .env_remove("LOOP_ROUTINE_MODEL")
         .env_remove("GIT_DIR")
         .env_remove("GIT_WORK_TREE")
-        .env_remove("GIT_INDEX_FILE");
+        .env_remove("GIT_INDEX_FILE")
+        // T332: the decision-provider selection is per-leg explicit — no
+        // host environment may flip a daemon-path fixture onto the proxy
+        // (auto with no configured proxy is today's shape byte for byte).
+        .env_remove("CHUG_DECISION_PROVIDER")
+        .env_remove("CHUG_DECISION_PROXY_URL")
+        .env_remove("CHUG_DECISION_PROXY_TOKEN");
     for (k, v) in envs {
         cmd.env(k, v);
     }
@@ -1675,4 +1681,302 @@ fn an_out_of_band_outcome_consumes_the_park_silently_without_a_second_backfill()
         "the designed backfill never ran for X: {log}"
     );
     assert_ids_unique(&decisions);
+}
+
+// --- T332 — the proxy decision provider (the /v1/systemone contract) ---------
+
+use std::net::TcpListener;
+use std::sync::Arc;
+
+/// The canned /v1/systemone envelope (the recorded contract's answer shape:
+/// answers.<qid> exactly like the daemon's; usage.cost rides for the
+/// legibility pin). Fixture values only — the real endpoint and any real
+/// token NEVER appear in a tracked file.
+fn systemone_answer(choice: &str, conf: f64) -> String {
+    let no = 1.0 - conf;
+    "{\"model\":\"typesafe/jev-fixture\",\"answers\":{\"needs_eval\":{\"type\":\"choice\",\"choice\":\"".to_string()
+        + choice
+        + "\",\"probabilities\":{\"no\":"
+        + &no.to_string()
+        + ",\"yes\":"
+        + &conf.to_string()
+        + "},\"confidence\":"
+        + &conf.to_string()
+        + "}},\"usage\":{\"input_tokens\":11,\"output_tokens\":3,\"cost\":0.0002},\"id\":\"gen-dec-fixture\",\"provider\":\"TypeSafe\"}"
+}
+
+/// A LOCAL mock of the proxy's /v1/systemone surface: a TCP server on an
+/// ephemeral 127.0.0.1 port serving the canned answer to every POST, and
+/// capturing every raw request (head + body) so the pins can assert the
+/// path, the Authorization header, and the model field. NEVER a live
+/// network call — the listener is loopback-only and dies with the test.
+struct MockProxy {
+    port: u16,
+    captured: Arc<Mutex<Vec<String>>>,
+}
+
+impl MockProxy {
+    fn serve(answer: String) -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind the mock proxy");
+        let port = listener.local_addr().expect("local addr").port();
+        let captured = Arc::new(Mutex::new(Vec::new()));
+        let capt = captured.clone();
+        std::thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                let mut stream = stream;
+                let mut buf = Vec::new();
+                let mut chunk = [0u8; 16384];
+                // Read to the end of the head AND the declared body — a
+                // single read may split the stream (the serve_judge shape).
+                loop {
+                    match stream.read(&mut chunk) {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => buf.extend_from_slice(&chunk[..n]),
+                    }
+                    let text = String::from_utf8_lossy(&buf).to_string();
+                    let Some(head_end) = text.find("\r\n\r\n") else {
+                        continue;
+                    };
+                    let want = text
+                        .lines()
+                        .find_map(|l| {
+                            l.to_ascii_lowercase()
+                                .strip_prefix("content-length:")
+                                .map(|v| v.trim().parse::<usize>().ok())
+                        })
+                        .flatten()
+                        .unwrap_or(0);
+                    if buf.len() >= head_end + 4 + want {
+                        break;
+                    }
+                }
+                capt.lock().expect("captured requests").push(
+                    String::from_utf8_lossy(&buf).to_string(),
+                );
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    answer.len(),
+                    answer
+                );
+                let _ = stream.write_all(resp.as_bytes());
+                let _ = stream.flush();
+            }
+        });
+        Self { port, captured }
+    }
+
+    fn url(&self) -> String {
+        format!("http://127.0.0.1:{}", self.port)
+    }
+
+    fn requests(&self) -> Vec<String> {
+        self.captured.lock().expect("captured requests").clone()
+    }
+}
+
+const FIXTURE_PROXY_TOKEN: &str = "decision-FIXTURE-TOKEN-42";
+
+/// The captured proxy request, parsed loose: (path line, has bearer, body).
+fn proxy_wire(req: &str) -> (String, bool, String) {
+    let mut lines = req.split("\r\n");
+    let path = lines.next().unwrap_or_default().to_string();
+    let bearer = req.contains("Authorization: Bearer ");
+    let body = req.split("\r\n\r\n").nth(1).unwrap_or("").to_string();
+    (path, bearer, body)
+}
+
+/// T332 leg 1 — a proxy verdict is parsed and routed exactly like a daemon
+/// verdict: the confident-empty answer skips the borderline eval at $0, the
+/// wire carried the model field + Bearer token, and the note names the
+/// provider (proxy spend is never invisible).
+#[test]
+fn the_proxy_verdict_is_parsed_and_routed_like_a_daemon_verdict() {
+    let f = borderline_fixture();
+    let proxy = MockProxy::serve(systemone_answer("no", 0.93));
+    let gate = run_predicate(
+        f.path(),
+        &[
+            ("CHUG_ROUTINE_TODAY", FRESH_DAY),
+            ("CHUG_DECISION_PROVIDER", "proxy"),
+            ("CHUG_DECISION_PROXY_URL", &proxy.url()),
+            ("CHUG_DECISION_PROXY_TOKEN", FIXTURE_PROXY_TOKEN),
+        ],
+    );
+    assert_eq!(
+        field_of(&gate, "laya="),
+        "no",
+        "the proxy verdict lands in the gate line: {gate}"
+    );
+    assert_eq!(field_of(&gate, "conf="), "0.93", "{gate}");
+    assert_eq!(field_of(&gate, "route="), "skip", "{gate}");
+    assert_eq!(verb_of(&gate), "skip", "the confident-empty proxy verdict skips: {gate}");
+
+    // the wire: POST /v1/systemone, Bearer token, the triage state pack PLUS
+    // the required model field
+    let reqs = proxy.requests();
+    assert_eq!(reqs.len(), 1, "exactly one proxy call: {:?}", reqs.len());
+    let (path, bearer, body) = proxy_wire(&reqs[0]);
+    assert!(path.starts_with("POST /v1/systemone"), "the recorded path: {path}");
+    assert!(bearer, "the token rides as Authorization: Bearer");
+    assert!(
+        body.contains("\"model\":\"jev\""),
+        "the proxy contract's required model field is present: {body}"
+    );
+    assert!(
+        body.contains("\"needs_eval\"") && body.contains("\"rows_added\""),
+        "the same triage state pack rides: {body}"
+    );
+
+    // the predicate probe is QUIET (LAYA_TRIAGE_QUIET=1, pinned at exactly
+    // one site) — no triage note is written in probe mode, so the provider
+    // tag is pinned at the SOURCE level instead: laya_triage's proxy branch
+    // tags the note exactly once, the daemon branch never does.
+    let triage = loopd_fn_src("laya_triage");
+    assert_eq!(
+        triage.matches("(provider=proxy jev)").count(),
+        1,
+        "the proxy branch tags its note exactly once (proxy spend is never          invisible spend)"
+    );
+    assert_eq!(
+        triage.matches("route=$LAYA_ROUTE\" >> \"$LOG\"").count(),
+        1,
+        "exactly one UNTAGGED echo (the daemon branch) — the local note stays \
+         byte-identical to the pre-T332 shape"
+    );
+}
+
+/// T332 leg 2 — any proxy error fail-opens to EXACTLY the T258 routing, one
+/// note: a dead endpoint reads laya=down and the borderline eval launches on
+/// glm, never a partial parse of nothing.
+#[test]
+fn a_dead_proxy_fails_open_to_the_t258_borderline_routing() {
+    let f = borderline_fixture();
+    // an unroutable loopback port: bind one, then close it — nothing listens
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind the dead port");
+    let dead_port = listener.local_addr().expect("local addr").port();
+    drop(listener);
+    let gate = run_predicate(
+        f.path(),
+        &[
+            ("CHUG_ROUTINE_TODAY", FRESH_DAY),
+            ("CHUG_DECISION_PROVIDER", "proxy"),
+            ("CHUG_DECISION_PROXY_URL", &format!("http://127.0.0.1:{dead_port}")),
+            ("CHUG_DECISION_PROXY_TOKEN", FIXTURE_PROXY_TOKEN),
+        ],
+    );
+    assert_eq!(
+        field_of(&gate, "laya="),
+        "down",
+        "the dead proxy fail-opens: {gate}"
+    );
+    assert_eq!(
+        model_of(&gate),
+        GLM_ID,
+        "the fail-open keeps the T258 glm routing: {gate}"
+    );
+    // quiet probe: no note is written at runtime — the one-note-per-cycle
+    // guarantee and the proxy-named reason are pinned at the SOURCE level:
+    // laya_failopen emits once (guarded by the quiet flag), and the proxy
+    // leg's error names the unreachable endpoint.
+    let loopd = std::fs::read_to_string(repo_root().join("loopd.sh"))
+        .expect("loopd.sh");
+    assert_eq!(
+        loopd.matches("laya triage (T259): FAIL-OPEN").count(),
+        1,
+        "one fail-open emit site — never a storm (structural)"
+    );
+    let post = loopd_fn_src("decision_proxy_post");
+    assert!(
+        post.contains("decision proxy unreachable at"),
+        "the proxy leg's failure reason names the unreachable endpoint"
+    );
+}
+
+/// T332 leg 3 — auto with a dead socket and a configured proxy consults the
+/// proxy: the healthz probe cannot reach the socket, so the fallback fires
+/// and the proxy's verdict routes the eval.
+#[test]
+fn auto_with_a_dead_socket_and_a_configured_proxy_uses_the_proxy() {
+    let f = borderline_fixture();
+    let proxy = MockProxy::serve(systemone_answer("yes", 0.9));
+    let dead_sock = f.path().join(".chug/no-such-daemon.sock");
+    let gate = run_predicate(
+        f.path(),
+        &[
+            ("CHUG_ROUTINE_TODAY", FRESH_DAY),
+            ("CHUG_DAEMON_SOCK", dead_sock.to_string_lossy().as_ref()),
+            ("CHUG_DECISION_PROVIDER", "auto"),
+            ("CHUG_DECISION_PROXY_URL", &proxy.url()),
+            ("CHUG_DECISION_PROXY_TOKEN", FIXTURE_PROXY_TOKEN),
+        ],
+    );
+    assert_eq!(
+        field_of(&gate, "laya="),
+        "yes",
+        "the proxy fallback answered: {gate}"
+    );
+    assert_eq!(field_of(&gate, "route="), "glm", "a confident-work verdict routes glm: {gate}");
+    assert_eq!(
+        proxy.requests().len(),
+        1,
+        "the proxy was consulted exactly once"
+    );
+}
+
+/// T332 leg 4 — auto with a HEALTHY socket stays on the daemon: the proxy is
+/// configured but never called (the warm local daemon wins, $0 stays $0).
+#[test]
+fn auto_with_a_healthy_socket_stays_on_the_daemon() {
+    let f = borderline_fixture();
+    let sock = f.path().join(".chug/daemon.sock");
+    serve_judge(&sock, judge_answer("no", 0.93));
+    let proxy = MockProxy::serve(systemone_answer("yes", 0.9));
+    let gate = run_predicate(
+        f.path(),
+        &[
+            ("CHUG_ROUTINE_TODAY", FRESH_DAY),
+            ("CHUG_DAEMON_SOCK", sock.to_string_lossy().as_ref()),
+            ("CHUG_DECISION_PROVIDER", "auto"),
+            ("CHUG_DECISION_PROXY_URL", &proxy.url()),
+            ("CHUG_DECISION_PROXY_TOKEN", FIXTURE_PROXY_TOKEN),
+        ],
+    );
+    assert_eq!(
+        field_of(&gate, "laya="),
+        "no",
+        "the daemon answered through auto: {gate}"
+    );
+    assert_eq!(field_of(&gate, "route="), "skip", "{gate}");
+    assert!(
+        captured(&sock).contains("\"needs_eval\""),
+        "the daemon received the judge call: {:?}",
+        captured(&sock)
+    );
+    assert!(
+        proxy.requests().is_empty(),
+        "the configured proxy was NEVER called when the socket is warm"
+    );
+    // quiet probe: no note is written at runtime — the byte-identical
+    // daemon shape is pinned at the SOURCE level: the provider tag lives on
+    // the proxy branch only (one needle in laya_triage), so the local path's
+    // note stays byte-identical to the pre-T332 shape.
+    let triage = loopd_fn_src("laya_triage");
+    assert_eq!(
+        triage.matches("(provider=proxy").count(),
+        1,
+        "the provider tag exists on the proxy branch only"
+    );
+}
+
+/// T332 — the proxy leg carries its own 2s fail-open bound (the textual
+/// sibling of the daemon bound's pin: one bound per transport, both exact).
+#[test]
+fn the_proxy_leg_curl_is_bounded_at_two_seconds() {
+    let body = loopd_fn_src("decision_proxy_post");
+    count_eq(&body, "--max-time 2", 1, "the proxy leg's fail-open bound");
+    let healthz = loopd_fn_src("decision_healthz_ok");
+    count_eq(&healthz, "--max-time 1", 1, "the auto health probe's short bound");
+    // the daemon bound's original pin still holds at exactly one site
+    let triage = loopd_fn_src("laya_triage");
+    count_eq(&triage, "--max-time 2", 1, "the daemon leg's fail-open bound");
 }

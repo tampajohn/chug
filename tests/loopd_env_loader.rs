@@ -255,7 +255,15 @@ fn decision_provider_keys_pass_through_the_env_file() {
     let ps2 = probes(&out2);
     assert_eq!(probe_value(&ps2, "CHUG_DECISION_PROVIDER"), FX_FROMENV);
     assert_eq!(probe_value(&ps2, "CHUG_DECISION_PROXY_URL"), FX_DECISION_URL);
-    assert!(log_text(&log2).is_none(), "nothing skipped -> nothing logged");
+    // the foreign (non-allowlisted) fixture line is still skipped exactly
+    // once and logged value-free — the explicit-env leg does not change the
+    // allowlist's counting behavior
+    let text2 = log_text(&log2).expect("the foreign line is still logged");
+    assert_count_line(&text2, &fixture, 1);
+    assert!(
+        !text2.contains(FX_FOREIGN_VALUE),
+        "fixture value leaked to the log: {FX_FOREIGN_VALUE}"
+    );
 }
 
 #[test]

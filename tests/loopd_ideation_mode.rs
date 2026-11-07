@@ -235,6 +235,12 @@ fn run_ideate(root: &Path, args: &[&str], sock: Option<&Path>) -> (String, i32) 
     } else {
         cmd.env_remove("CHUG_NOUL_SOCK").env_remove("CHUG_DAEMON_SOCK");
     }
+    // T332: the decision-provider selection is per-leg explicit — no host
+    // environment may flip a daemon-path fixture onto the proxy (auto with
+    // no configured proxy is today's shape byte for byte).
+    cmd.env_remove("CHUG_DECISION_PROVIDER")
+        .env_remove("CHUG_DECISION_PROXY_URL")
+        .env_remove("CHUG_DECISION_PROXY_TOKEN");
     let out = cmd.output().expect("spawn ideate.py");
     (
         String::from_utf8_lossy(&out.stdout).trim().to_string(),
@@ -938,20 +944,374 @@ fn the_noul_gate_fails_closed_on_bad_daemon_answers() {
 
 /// `--gate-only` takes the stub file as its OWN argument (not the root).
 fn run_ideate_gate(root: &Path, stub: &Path, sock: &Path) -> (String, i32) {
-    let out = Command::new("python3")
-        .arg(repo_root().join("scripts/ideate.py"))
+    run_ideate_gate_env(root, stub, sock, &[])
+}
+
+/// The gate runner with explicit extra env (the T332 provider legs set the
+/// selection keys; every UNLISTED decision var is stripped, so a leg tests
+/// exactly the env it names).
+fn run_ideate_gate_env(
+    root: &Path,
+    stub: &Path,
+    sock: &Path,
+    envs: &[(&str, &str)],
+) -> (String, i32) {
+    let mut cmd = Command::new("python3");
+    cmd.arg(repo_root().join("scripts/ideate.py"))
         .arg("--gate-only")
         .arg(stub)
         .current_dir(root)
         .env("HOME", root)
         .env("LC_ALL", "C")
         .env("CHUG_NOUL_SOCK", sock)
-        .output()
-        .expect("spawn ideate.py --gate-only");
+        .env_remove("CHUG_DECISION_PROVIDER")
+        .env_remove("CHUG_DECISION_PROXY_URL")
+        .env_remove("CHUG_DECISION_PROXY_TOKEN");
+    for (k, v) in envs {
+        cmd.env(k, v);
+    }
+    let out = cmd.output().expect("spawn ideate.py --gate-only");
     (
         String::from_utf8_lossy(&out.stdout).trim().to_string(),
         out.status.code().unwrap_or(-1),
     )
+}
+
+// --- T332: the noul gate's PROXY provider (the /v1/systemone contract) --------
+
+use std::net::TcpListener;
+use std::sync::Arc;
+
+/// A LOCAL mock of the proxy's /v1/systemone surface: a TCP server on an
+/// ephemeral 127.0.0.1 port serving ONE canned response to every POST and
+/// capturing every raw request so the pins can assert the path, the
+/// Authorization header, and the model field. NEVER a live network call —
+/// the listener is loopback-only and dies with the test (the
+/// loopd_laya_triage MockProxy shape, sized for this battery).
+struct GateProxyMock {
+    port: u16,
+    captured: Arc<Mutex<Vec<String>>>,
+}
+
+impl GateProxyMock {
+    fn serve(status: u16, body: &str) -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind the mock gate proxy");
+        let port = listener.local_addr().expect("local addr").port();
+        let captured = Arc::new(Mutex::new(Vec::new()));
+        let capt = captured.clone();
+        let body = body.to_string();
+        std::thread::spawn(move || {
+            use std::io::{Read, Write};
+            for stream in listener.incoming().flatten() {
+                let mut stream = stream;
+                let mut buf = Vec::new();
+                let mut chunk = [0u8; 16384];
+                // Read to the end of the head AND the declared body (the
+                // serve_noul shape — a single read may split the stream).
+                loop {
+                    match stream.read(&mut chunk) {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => buf.extend_from_slice(&chunk[..n]),
+                    }
+                    let text = String::from_utf8_lossy(&buf).to_string();
+                    let Some(head_end) = text.find("\r\n\r\n") else {
+                        continue;
+                    };
+                    let want = text
+                        .lines()
+                        .find_map(|l| {
+                            l.to_ascii_lowercase()
+                                .strip_prefix("content-length:")
+                                .map(|v| v.trim().parse::<usize>().ok())
+                        })
+                        .flatten()
+                        .unwrap_or(0);
+                    if buf.len() >= head_end + 4 + want {
+                        break;
+                    }
+                }
+                capt.lock().expect("captured requests").push(
+                    String::from_utf8_lossy(&buf).to_string(),
+                );
+                let reason = if status == 200 { "OK" } else { "Service Unavailable" };
+                let resp = format!(
+                    "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                let _ = stream.write_all(resp.as_bytes());
+                let _ = stream.flush();
+            }
+        });
+        Self { port, captured }
+    }
+
+    fn url(&self) -> String {
+        format!("http://127.0.0.1:{}", self.port)
+    }
+
+    fn requests(&self) -> Vec<String> {
+        self.captured.lock().expect("captured requests").clone()
+    }
+}
+
+/// The canned /v1/systemone envelope (the recorded contract's answers
+/// shape — identical to the daemon's). Fixture values only: the real
+/// endpoint and any real token NEVER appear in a tracked file.
+fn systemone_answer(choice: &str) -> String {
+    format!(
+        "{{\"model\":\"typesafe/jev-fixture\",\"answers\":{{\"meta_class\":{{\"type\":\"choice\",\"choice\":\"{choice}\",\"confidence\":0.93}}}},\"usage\":{{\"input_tokens\":11,\"output_tokens\":3,\"cost\":0.0002}},\"id\":\"gen-dec-fixture\",\"provider\":\"TypeSafe\"}}"
+    )
+}
+
+const GATE_FIXTURE_TOKEN: &str = "decision-GATE-FIXTURE-TOKEN-42";
+
+/// An outward-facing gate stub (the T326 stub shape, three cells + source).
+fn gate_stub(f: &Path, name: &str, title: &str) -> PathBuf {
+    let path = f.join(name);
+    std::fs::write(
+        &path,
+        format!(
+            "# P902 — {title}\n\n\
+             - **User-visible value**: v\n\
+             - **First slice**: s\n\
+             - **Estimate class**: S.\n\
+             - **Source fact**: f\n"
+        ),
+    )
+    .expect("write gate stub");
+    path
+}
+
+/// T332 leg 1 — the proxy provider's verdicts parse exactly like the
+/// daemon's: an OUTWARD classification passes (exit 0), a META
+/// classification rejects (exit 2), and the wire carried the contract's
+/// required shape (POST /v1/systemone, Bearer token, the model field, the
+/// same meta_class question + proposal state).
+#[test]
+fn the_noul_gate_consults_the_proxy_with_the_daemons_verdict_semantics() {
+    let f = ideate_fixture();
+    let outward = gate_stub(f.path(), "outward-stub.md", "chug.sh cost dashboard");
+    let meta = gate_stub(f.path(), "meta-stub.md", "add wrap_assert leg");
+
+    // OUTWARD through the proxy → PASS (exit 0), the daemon's exact pass line.
+    let proxy = GateProxyMock::serve(200, &systemone_answer("no"));
+    let (out, code) = run_ideate_gate_env(
+        f.path(),
+        &outward,
+        &f.join("no-such-daemon.sock"),
+        &[
+            ("CHUG_DECISION_PROVIDER", "proxy"),
+            ("CHUG_DECISION_PROXY_URL", &proxy.url()),
+            ("CHUG_DECISION_PROXY_TOKEN", GATE_FIXTURE_TOKEN),
+        ],
+    );
+    assert_eq!(code, 0, "an outward stub must PASS through the proxy: {out}");
+    assert!(
+        out.contains("ideation gate (T326): PASS chug.sh cost dashboard"),
+        "the pass line is provider-blind: {out}"
+    );
+
+    // META through the proxy → REJECT (exit 2), the daemon's exact reject line.
+    let proxy_meta = GateProxyMock::serve(200, &systemone_answer("yes"));
+    let (out, code) = run_ideate_gate_env(
+        f.path(),
+        &meta,
+        &f.join("no-such-daemon.sock"),
+        &[
+            ("CHUG_DECISION_PROVIDER", "proxy"),
+            ("CHUG_DECISION_PROXY_URL", &proxy_meta.url()),
+            ("CHUG_DECISION_PROXY_TOKEN", GATE_FIXTURE_TOKEN),
+        ],
+    );
+    assert_eq!(code, 2, "a meta stub must REJECT through the proxy: {out}");
+    assert!(
+        out.contains("ideation reject (T326): meta-class add wrap_assert leg"),
+        "the reject line is provider-blind: {out}"
+    );
+    assert_eq!(proxy_meta.requests().len(), 1, "one proxy call for the meta leg");
+
+    // the wire: POST /v1/systemone, Bearer token, the model field, and the
+    // SAME question/state body the daemon leg builds
+    let reqs = proxy.requests();
+    assert_eq!(reqs.len(), 1, "exactly one proxy call per gate: {reqs:?}");
+    let req = &reqs[0];
+    assert!(
+        req.starts_with("POST /v1/systemone"),
+        "the recorded path: {}",
+        req.lines().next().unwrap_or_default()
+    );
+    assert!(req.contains("Authorization: Bearer "), "the token rides as Bearer: {req}");
+    assert!(req.contains("\"model\": \"jev\""), "the contract's required model field: {req}");
+    assert!(
+        req.contains("\"meta_class\"") && req.contains("proposal_stub"),
+        "the same gate body rides (question + state): {req}"
+    );
+}
+
+/// The provider=proxy env triple (one URL argument — a free fn so the
+/// elided lifetimes unify across the static and dynamic members).
+fn proxy_env(url: &str) -> [(&str, &str); 3] {
+    [
+        ("CHUG_DECISION_PROVIDER", "proxy"),
+        ("CHUG_DECISION_PROXY_URL", url),
+        ("CHUG_DECISION_PROXY_TOKEN", GATE_FIXTURE_TOKEN),
+    ]
+}
+
+/// T332 leg 2 — the fail-CLOSED degrade is transport-blind: a proxy that is
+/// DOWN, a non-200, an UNPARSABLE body, and a proxy configured but with NO
+/// endpoint URL all reject the outward stub (exit 2), byte-for-byte the
+/// daemon-down arms. A hedge choice through the proxy rejects too — only an
+/// explicit confident 'no' passes, whichever transport answered.
+#[test]
+fn the_noul_gate_fails_closed_when_the_proxy_degrades() {
+    let f = ideate_fixture();
+    let outward = gate_stub(f.path(), "outward-stub.md", "chug.sh cost dashboard");
+
+    // Leg 1 (the dead endpoint): an unroutable loopback port — nothing listens.
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind the dead port");
+    let dead_port = listener.local_addr().expect("local addr").port();
+    drop(listener);
+    let (out, code) = run_ideate_gate_env(
+        f.path(),
+        &outward,
+        &f.join("no-such-daemon.sock"),
+        &proxy_env(&format!("http://127.0.0.1:{dead_port}")),
+    );
+    assert_eq!(code, 2, "a dead proxy must fail CLOSED: {out}");
+    assert!(
+        out.contains("ideation reject (T326): meta-class chug.sh cost dashboard"),
+        "the fail-closed reject line is transport-blind: {out}"
+    );
+
+    // Leg 2 (the non-200): a 503 carrying a VALID outward body still rejects.
+    let s503 = GateProxyMock::serve(503, &systemone_answer("no"));
+    let (out, code) = run_ideate_gate_env(
+        f.path(),
+        &outward,
+        &f.join("no-such-daemon.sock"),
+        &proxy_env(&s503.url()),
+    );
+    assert_eq!(code, 2, "a non-200 proxy answer must fail CLOSED: {out}");
+
+    // Leg 3 (the unparsable body): a 200 with garbage rejects.
+    let garbage = GateProxyMock::serve(200, "not-json-at-all");
+    let (out, code) = run_ideate_gate_env(
+        f.path(),
+        &outward,
+        &f.join("no-such-daemon.sock"),
+        &proxy_env(&garbage.url()),
+    );
+    assert_eq!(code, 2, "an unparsable proxy body must fail CLOSED: {out}");
+
+    // Leg 4 (the hedge): a 200 with a 'maybe' choice rejects — the
+    // daemon's only-explicit-no rule, unchanged by the transport.
+    let hedge = GateProxyMock::serve(200, &systemone_answer("maybe"));
+    let (out, code) = run_ideate_gate_env(
+        f.path(),
+        &outward,
+        &f.join("no-such-daemon.sock"),
+        &proxy_env(&hedge.url()),
+    );
+    assert_eq!(code, 2, "a hedged choice must fail CLOSED: {out}");
+
+    // Leg 5 (the unconfigured endpoint): provider=proxy with NO URL — the
+    // named fix, then the same reject.
+    let (out, code) = run_ideate_gate_env(
+        f.path(),
+        &outward,
+        &f.join("no-such-daemon.sock"),
+        &[
+            ("CHUG_DECISION_PROVIDER", "proxy"),
+            ("CHUG_DECISION_PROXY_TOKEN", GATE_FIXTURE_TOKEN),
+        ],
+    );
+    assert_eq!(code, 2, "an unconfigured proxy must fail CLOSED: {out}");
+}
+
+/// T332 leg 3 — the auto matrix, ideate edition: with a proxy configured,
+/// a WARM daemon socket wins (the proxy is configured but never called —
+/// $0 stays $0), and a DEAD socket falls through to the proxy.
+#[test]
+fn the_auto_matrix_prefers_a_warm_socket_and_falls_through_to_the_proxy() {
+    let f = ideate_fixture();
+    let outward = gate_stub(f.path(), "outward-stub.md", "chug.sh cost dashboard");
+
+    // Warm socket: the mocked daemon answers the gate → PASS with the proxy
+    // NEVER consulted (the proxy's mock serves a 'yes' that would reject —
+    // a pass here proves the DAEMON answered).
+    let sock = f.join("noul.sock");
+    serve_noul(&sock, &noul_answer("no"));
+    let proxy = GateProxyMock::serve(200, &systemone_answer("yes"));
+    let (out, code) = run_ideate_gate_env(
+        f.path(),
+        &outward,
+        &sock,
+        &[
+            ("CHUG_DECISION_PROVIDER", "auto"),
+            ("CHUG_DECISION_PROXY_URL", &proxy.url()),
+            ("CHUG_DECISION_PROXY_TOKEN", GATE_FIXTURE_TOKEN),
+        ],
+    );
+    assert_eq!(code, 0, "the warm daemon answers through auto: {out}");
+    assert!(
+        out.contains("ideation gate (T326): PASS chug.sh cost dashboard"),
+        "the pass line: {out}"
+    );
+    assert!(
+        proxy.requests().is_empty(),
+        "the configured proxy was NEVER called when the socket is warm: {:?}",
+        proxy.requests()
+    );
+
+    // Dead socket: the same auto config falls through to the proxy — the
+    // mock's 'no' passes, proving the proxy answered (a dead daemon cannot).
+    let proxy = GateProxyMock::serve(200, &systemone_answer("no"));
+    let (out, code) = run_ideate_gate_env(
+        f.path(),
+        &outward,
+        &f.join("no-such-daemon.sock"),
+        &[
+            ("CHUG_DECISION_PROVIDER", "auto"),
+            ("CHUG_DECISION_PROXY_URL", &proxy.url()),
+            ("CHUG_DECISION_PROXY_TOKEN", GATE_FIXTURE_TOKEN),
+        ],
+    );
+    assert_eq!(code, 0, "the proxy fallback answers through auto: {out}");
+    assert_eq!(proxy.requests().len(), 1, "the proxy was consulted exactly once");
+}
+
+/// T332 leg 4 — an unknown CHUG_DECISION_PROVIDER mode refuses into the
+/// fail-CLOSED even with a HEALTHY daemon: the choice must never be silent,
+/// and it must never map to a provider the operator did not ask for.
+#[test]
+fn an_unknown_provider_mode_fails_closed_without_consulting_anything() {
+    let f = ideate_fixture();
+    let outward = gate_stub(f.path(), "outward-stub.md", "chug.sh cost dashboard");
+    let sock = f.join("noul.sock");
+    serve_noul(&sock, &noul_answer("no"));
+    let proxy = GateProxyMock::serve(200, &systemone_answer("no"));
+    let (out, code) = run_ideate_gate_env(
+        f.path(),
+        &outward,
+        &sock,
+        &[
+            ("CHUG_DECISION_PROVIDER", "bogus"),
+            ("CHUG_DECISION_PROXY_URL", &proxy.url()),
+            ("CHUG_DECISION_PROXY_TOKEN", GATE_FIXTURE_TOKEN),
+        ],
+    );
+    assert_eq!(code, 2, "an unknown mode must fail CLOSED: {out}");
+    assert!(
+        out.contains("ideation reject (T326): meta-class chug.sh cost dashboard"),
+        "the refuse arm reads as any other reject: {out}"
+    );
+    assert!(
+        proxy.requests().is_empty(),
+        "no provider was consulted on a refused mode: {:?}",
+        proxy.requests()
+    );
 }
 
 // --- the amendment: auto-ratification flips only eligible rows ------------------
@@ -1442,7 +1802,25 @@ fn the_ideation_wiring_is_pinned_in_loopd_sh() {
 
     // ideate.py: the gate fails CLOSED, the never-flip markers, the ≤3 cap.
     let ideate = read("scripts/ideate.py");
-    count_eq(&ideate, "except Exception:\n        return False", 1, "the fail-closed gate");
+    // The fail-closed gate: the noul_gate body's OWN except arm, sliced —
+    // the T332 healthz probe shares the file (its warm-miss arm reads the
+    // same), and this pin is about THE GATE.
+    let gate = ideate
+        .split("def noul_gate(")
+        .nth(1)
+        .and_then(|s| s.split("\ndef ").next())
+        .unwrap_or("");
+    count_eq(gate, "except Exception:\n        return False", 1, "the fail-closed gate");
+    // T332: the provider consult is wired — the third copy of the one
+    // selection table, the contract's model field, the refusal arm.
+    count_eq(&ideate, "def noul_provider(", 1, "the T332 provider selection, defined once");
+    count_eq(&ideate, "wire[\"model\"] = \"jev\"", 1, "the proxy contract's required model field");
+    count_eq(
+        gate,
+        "provider = noul_provider()",
+        1,
+        "the gate consults the selection before any transport",
+    );
     count_eq(&ideate, "MAX_PROPOSALS = 3", 1, "the filing cap");
     count_eq(&ideate, "NEVER_FLIP_MARKERS = (\"do not dispatch\", \"operator-owned\")", 1, "the never-flip markers");
     count_eq(&ideate, "ideation reject (T326): meta-class", 2, "the reject log line (both the filing path and --gate-only)");
