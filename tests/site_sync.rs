@@ -3160,3 +3160,215 @@ fn t329_unknown_fragment_is_warned_and_skipped() {
         String::from_utf8_lossy(&log.stdout)
     );
 }
+
+// --- T331 — the risk-gate story section on docs.html -------------------------
+//
+// docs/risk-gate.md — the leadership-review answer to "what stops it from
+// doing something bad?" — renders through the SAME docs-page pipeline
+// (docs_md) as one section on docs.html, after the runbooks and before the
+// cost table. The adopt page's safety FAQ entry (docs/adopt/faq.md) links
+// the section at https://chug.sh/docs.html#risk-gate — a cross-page anchor
+// that must resolve on every render, which is why the section id exists in
+// BOTH shapes: fail-closed per the T217 letter, a missing or unreadable
+// source renders the explicit placeholder region in its slot (honest
+// absence, never fabricated content, never filler) and the sync continues.
+
+/// The risk-gate story source for the fixture's docs/risk-gate.md: an H1
+/// (the section h2 + index label), a gates table, the escaped pipe the T216
+/// rule requires inside a table cell, and a fence.
+fn write_riskgate_md(dir: &Path) {
+    let docs_dir = dir.join("docs");
+    std::fs::create_dir_all(&docs_dir).unwrap();
+    std::fs::write(
+        docs_dir.join("risk-gate.md"),
+        concat!(
+            "# Why it's safe to let the loop write code\n\n",
+            "The question this page answers: **what stops it from doing something bad?**\n\n",
+            "## The gates\n\n",
+            "| Gate | Command |\n",
+            "|---|---|\n",
+            "| Full suite | `cargo nextest run --release` |\n",
+            "| Docs-only classifier | `git diff --name-only main...<branch> \\| grep -qvE '\\.md$'` |\n\n",
+            "```bash\n",
+            "chug run --spec SPEC.md --goal \"Build X\"\n",
+            "```\n"
+        ),
+    )
+    .unwrap();
+}
+
+/// The adopt FAQ fragment with the safety entry's cross-page link to the
+/// rendered risk-gate section (the T329 FAQ corpus, plus the T331 link).
+fn write_adopt_faq_with_riskgate_link(dir: &Path) {
+    std::fs::write(
+        dir.join("docs/adopt/faq.md"),
+        concat!(
+            "# FAQ\n\n**Cost?**\n\nThe per-day table lives on the ",
+            "[docs page](https://chug.sh/docs.html#cost).\n\n",
+            "**Is it safe to point at my repo?**\n\nThe trust boundary is ",
+            "mechanical. The full story is on the [risk-gate page]",
+            "(https://chug.sh/docs.html#risk-gate).\n"
+        ),
+    )
+    .unwrap();
+}
+
+/// The T331 fixture: the T241 docs corpus + the T329 adopt corpus, then
+/// docs/risk-gate.md and the adopt FAQ cross-link, committed.
+fn fixture_t331() -> Fixture {
+    let f = fixture_t329();
+    write_riskgate_md(&f.chug);
+    write_adopt_faq_with_riskgate_link(&f.chug);
+    commit(
+        &f.chug,
+        "docs: t331 risk-gate story + adopt FAQ cross-link",
+        None,
+        "2026-09-24",
+        false,
+    );
+    f
+}
+
+/// The T331 runner with the T327 canned collector (for the cost-ordering
+/// pin) — CHUG_SYNC_NOW 2026-11-20, the T327_TSV window.
+fn run_sync_t331_with_cost(f: &Fixture, tsv: &Path) -> Output {
+    let mut c = Command::new("bash");
+    c.arg(script_path()).arg(&f.site).arg(&f.chug);
+    c.env("CHUG_SYNC_NOW", "2026-11-20");
+    c.env("CHUG_SITE_SYNC_NO_PUSH", "1");
+    c.env("CHUG_COST_CH_CMD", format!("cat {}", tsv.display()));
+    c.output().expect("spawn scripts/site-sync.sh")
+}
+
+#[test]
+fn t331_risk_gate_md_renders_as_a_docs_section_after_the_runbooks() {
+    let f = fixture_t331();
+    let out = run_sync(&f, true);
+    assert!(out.status.success(), "sync failed: {:?}", out.status.code());
+    let d = docs(&f);
+    // the section exists and orders after the runbook sections (the cost
+    // ordering is pinned separately, with collector data)
+    let qs = d.find("<section id=\"quickstart\"").expect("quickstart section");
+    let rb = d.find("<section id=\"runbook-alpha\"").expect("runbook section");
+    let rg = d
+        .find("<section id=\"risk-gate\"")
+        .expect("risk-gate section rendered");
+    assert!(qs < rb && rb < rg, "quickstart leads, runbooks precede the risk-gate section");
+    // rendered through the SAME docs_md pipeline: H1 -> section h2, the
+    // gates table as <table>, the escaped pipe as one cell's literal
+    // content (T216), the fence verbatim
+    let sec = docs_section(&d, "risk-gate");
+    assert!(
+        sec.contains("<h2>Why it's safe to let the loop write code</h2>"),
+        "H1 -> section h2:\n{sec}"
+    );
+    assert!(sec.contains("<table>"), "the gates table renders as a table:\n{sec}");
+    assert!(
+        sec.contains("<code>git diff --name-only main...&lt;branch&gt; | grep -qvE '\\.md$'</code>"),
+        "the escaped pipe stays one cell's literal content (T216):\n{sec}"
+    );
+    assert!(sec.contains("chug run --spec SPEC.md"), "fence content renders:\n{sec}");
+    // the on-this-page index carries the section at the top, labeled by the
+    // source H1
+    let idx = d.find("href=\"#risk-gate\"").expect("index entry");
+    assert!(idx < qs, "the index entry sits at the top of the page");
+    assert!(
+        d.contains("<li><a href=\"#risk-gate\">Why it's safe to let the loop write code</a></li>"),
+        "index label is the source H1:\n{d}"
+    );
+    // the adopt page's safety FAQ cross-link is an https href — rides the
+    // render untouched (the T329 cross-page rule)
+    let a = adopt(&f);
+    assert!(
+        a.contains("href=\"https://chug.sh/docs.html#risk-gate\""),
+        "the adopt FAQ links the rendered section:\n{a}"
+    );
+    // idempotence: unchanged inputs, byte-identical page, no second commit
+    let before = d;
+    let n = all_commit_subjects(&f).len();
+    let out2 = run_sync(&f, true);
+    assert!(out2.status.success());
+    assert_eq!(docs(&f), before, "unchanged corpus renders byte-identical docs.html");
+    assert_eq!(all_commit_subjects(&f).len(), n, "no second commit");
+}
+
+#[test]
+fn t331_risk_gate_section_precedes_the_cost_table() {
+    let f = fixture_t331();
+    let tsv = f._keep.path().join("t331.tsv");
+    std::fs::write(&tsv, T327_TSV).unwrap();
+    let out = run_sync_t331_with_cost(&f, &tsv);
+    assert!(out.status.success(), "sync failed: {:?}", out.status.code());
+    let d = docs(&f);
+    let rg = d.find("<section id=\"risk-gate\"").expect("risk-gate section rendered");
+    let cost = d.find("<section id=\"cost\">").expect("cost table rendered");
+    assert!(rg < cost, "the cost table still rides at the page's end (T327)");
+    let idx = d.find("href=\"#risk-gate\"").expect("risk-gate index entry");
+    let cost_idx = d.find("href=\"#cost\"").expect("cost index entry");
+    assert!(idx < cost_idx, "the index keeps the same order: runbooks, risk gate, cost");
+}
+
+#[test]
+fn t331_missing_risk_gate_source_renders_placeholder_and_sync_succeeds() {
+    let f = fixture_t331();
+    std::fs::remove_file(f.chug.join("docs/risk-gate.md")).unwrap();
+    commit(
+        &f.chug,
+        "docs: remove the risk-gate source",
+        None,
+        "2026-09-25",
+        true,
+    );
+    let out = run_sync(&f, true);
+    assert!(out.status.success(), "the sync continues: {:?}", out.status.code());
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("docs/risk-gate.md"),
+        "the warn names the missing source: {err}"
+    );
+    let d = docs(&f);
+    let sec = docs_section(&d, "risk-gate");
+    assert!(sec.contains("No content yet"), "the placeholder says what is absent:\n{sec}");
+    assert!(
+        sec.contains("docs/risk-gate.md"),
+        "the placeholder names the source file:\n{sec}"
+    );
+    assert!(
+        !sec.contains("what stops it from doing something bad"),
+        "no fabricated content in the placeholder:\n{sec}"
+    );
+    // the id + index entry still exist in the placeholder shape, so the
+    // adopt page's cross-page link resolves on every render
+    assert!(
+        d.contains("<li><a href=\"#risk-gate\">Risk gate</a></li>"),
+        "the index entry rides the placeholder:\n{d}"
+    );
+    let a = adopt(&f);
+    assert!(
+        a.contains("href=\"https://chug.sh/docs.html#risk-gate\""),
+        "the adopt cross-link still rides:\n{a}"
+    );
+    // the sync still lands once (the placeholder changed docs.html)
+    assert_eq!(sync_commits(&f), 1, "the placeholder render still commits");
+    // recovery: restore the source -> the next sync renders the body into
+    // the same slot
+    write_riskgate_md(&f.chug);
+    commit(
+        &f.chug,
+        "docs: restore the risk-gate source",
+        None,
+        "2026-09-26",
+        false,
+    );
+    let out2 = run_sync(&f, true);
+    assert!(out2.status.success());
+    let d2 = docs(&f);
+    assert!(
+        docs_section(&d2, "risk-gate").contains("what stops it from doing something bad"),
+        "the restored source renders into the same slot"
+    );
+    assert!(
+        d2.contains("<li><a href=\"#risk-gate\">Why it's safe to let the loop write code</a></li>"),
+        "the index label follows the restored source"
+    );
+}

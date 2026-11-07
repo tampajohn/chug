@@ -19,7 +19,10 @@ route around — and `.chug/hooks.json` can veto any tool call, while
 the run cwd, and the goal gate is the spec's `check:` re-running, never a
 model's claim. The README's [risk gate, hooks, and permissions
 sections](https://github.com/tampajohn/chug/blob/main/README.md) name
-every knob.
+every knob. The full story — the gates, the validators, the decision
+gate, the cost guardrails, and the repo's own redaction history — is on
+the [risk-gate page](https://chug.sh/docs.html#risk-gate), rendered from
+the repo's `docs/risk-gate.md` at every sync.
 
 **Do I need an Anthropic account?**
 

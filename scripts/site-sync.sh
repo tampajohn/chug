@@ -1209,7 +1209,10 @@ docs_md() { # file mode hoff relbase
 # sync commit body + stdout). Fail-closed (T217 req 3 applied to the docs
 # corpus): no runbooks/ dir, no .md files in it, or no <style> block in
 # index.html -> nothing is written, the sync continues (req 5's
-# missing-runbooks leg).
+# missing-runbooks leg). T331: the page also renders docs/risk-gate.md as
+# one section between the runbooks and the cost table — missing source
+# renders the explicit placeholder in the slot (the T217 letter, the
+# adopt_placeholder shape) and the sync continues.
 docs_generate() {
   DOCS_STATE="skip"; DOCS_CHANGED=0; DOCS_NOTE="skipped"; DOCS_N=0; DOCS_QS=0
   if [ ! -d "$CHUG/runbooks" ]; then
@@ -1269,6 +1272,43 @@ docs_generate() {
     DOCS_NOTE="skipped (no runbooks)"
     return 0
   fi
+  # T331: the risk-gate story section — docs/risk-gate.md rendered by the
+  # SAME pipeline as the runbooks (docs_md: H1 -> section h2, relative links
+  # rewritten onto the GitHub blob base under docs/). Fail-closed per the
+  # T217 letter, in the adopt_placeholder shape: a missing or unreadable
+  # source renders the explicit placeholder region in its slot — honest
+  # absence, never fabricated content, never filler — and the sync
+  # continues. BOTH shapes carry the section id, so the on-this-page index
+  # is stable and the adopt page's safety-FAQ cross-link
+  # (docs/adopt/faq.md -> https://chug.sh/docs.html#risk-gate) resolves on
+  # every render.
+  : > "$TMPD/docs-riskgate"
+  RG_SRC="$CHUG/docs/risk-gate.md"
+  RG_NOTE="risk-gate section rendered"
+  if [ -r "$RG_SRC" ]; then
+    RG_TITLE=$(docs_md "$RG_SRC" title 1 "")
+    [ -n "$RG_TITLE" ] || RG_TITLE="Risk gate"
+    {
+      printf '<section id="risk-gate"><div class="wrap">\n'
+      printf '  <p class="kicker"><span class="hash">##</span> risk gate · docs/risk-gate.md</p>\n'
+      printf '  <div class="doctext">\n'
+      docs_md "$RG_SRC" body 1 "docs/"
+      printf '  </div>\n</div></section>\n'
+    } >> "$TMPD/docs-riskgate"
+  else
+    warn "docs/risk-gate.md missing or unreadable — the risk-gate section renders its placeholder (the slot and anchor exist either way)"
+    RG_TITLE="Risk gate"
+    RG_NOTE="risk-gate placeholder (source missing)"
+    {
+      printf '<section id="risk-gate"><div class="wrap">\n'
+      printf '  <p class="kicker"><span class="hash">##</span> risk gate · docs/risk-gate.md</p>\n'
+      printf '  <h2>%s</h2>\n' "$RG_TITLE"
+      printf '  <div class="doctext">\n'
+      printf '    <p class="lede">No content yet — this section'"'"'s source (docs/risk-gate.md) is missing or unreadable in the repo, so nothing is rendered here. Add the file and the next sync fills this slot.</p>\n'
+      printf '  </div>\n</div></section>\n'
+    } >> "$TMPD/docs-riskgate"
+  fi
+  printf '      <li><a href="#risk-gate">%s</a></li>\n' "$RG_TITLE" >> "$TMPD/docs-index-li"
   {
     printf '<!doctype html>\n<html lang="en">\n<head>\n'
     printf '<meta charset="utf-8">\n'
@@ -1346,6 +1386,10 @@ STYLE
       printf '  </div>\n</div></section>\n'
     fi
     cat "$TMPD/docs-sections"
+    # T331: the risk-gate story — always a section (rendered body or the
+    # explicit placeholder), after the runbooks and before the cost table
+    # (T327 keeps the cost table at the page's end).
+    cat "$TMPD/docs-riskgate"
     # T327: the per-day cost table rides at the page's end — the quickstart
     # still LEADS (the T241 doctrine) and the runbooks stay in corpus order.
     # Rendered from usable collector data, or kept from the published page
@@ -1366,6 +1410,7 @@ STYLE
   else
     DOCS_NOTE="rendered $DOCS_N runbooks (no README quickstart)"
   fi
+  DOCS_NOTE="$DOCS_NOTE; $RG_NOTE"
   return 0
 }
 
