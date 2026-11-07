@@ -607,6 +607,10 @@ cwd` refused; `bash` is the cross-tree escape).
 
 ## Risk gate (`--risk-gate`)
 
+The full safety story — gates, validators, the decision gate, cost
+guardrails, written for a skeptical staff engineer — lives in
+[docs/risk-gate.md](docs/risk-gate.md).
+
 Every `bash` command is classified by a [Laya](https://github.com/convaiinnovations/laya)
 judge server (`LAYA_URL`, default `http://127.0.0.1:8420`) as
 destructive/risky/safe before executing. `destructive` p≥0.5 is blocked with
