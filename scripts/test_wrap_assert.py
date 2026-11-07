@@ -5073,6 +5073,27 @@ def _t324_discharged_ordinal(text):
     return int(text[m:k])
 
 
+def _t324_first_probed_rearm(text):
+    """The first `re-arm` occurrence the PRE-CHANGE (all-T324-skips-
+    disabled) scan probes — the boundary refusal (an alnum/hyphen join)
+    is pre-T324 (the mutant keeps it), so the walk mirrors it exactly;
+    -1 when no occurrence survives. The T324 skip classes (the
+    `re-arm(ed)? at the` clause-mentions and the backtick-quoted term
+    mentions) are deliberately NOT refused here: the pre-change scan
+    probes them, and a prior!=shipped delta riding such an occurrence is
+    the skips' DESIGNED extra-probe recovery, not a behavior change (the
+    T333 live-corpus-drift carve-out in the no-behavior-change pin)."""
+    start = 0
+    while True:
+        idx = text.find("re-arm", start)
+        if idx < 0:
+            return -1
+        if idx > 0 and (text[idx - 1].isalnum() or text[idx - 1] == "-"):
+            start = idx + len("re-arm")
+            continue
+        return idx
+
+
 # The composed full-entry shapes (legs a/b/c) — minimal, mirroring the
 # committed renderings, each carrying exactly one non-anchor occurrence
 # where the shape demands it.
@@ -5261,11 +5282,16 @@ class AssertOutcomesOneLinerAnchorSkipRuleTest(unittest.TestCase):
         # `first-re-arm` TRIAGE prose): with the quoted-mention skip
         # disabled, the own-discharge cross-check diverges (the quoted
         # mention latches the record id's digits); the shipped module
-        # probes the own discharge 625.
+        # probes the own discharge 625. The full entry reads from the
+        # COMMITTED corpus at the T324-era ref — the `_t324_git_eval_text`
+        # shape the 3008 fixture legs already use, corpus-position-
+        # independent: the live kept-full window has rotated past 3025
+        # (T333 — only the LIVE window lost the entry, the committed
+        # text is immutable).
         with open(wrap_assert.__file__, "r", encoding="utf-8") as f:
             pristine = f.read()
         full_3025 = next(
-            l for l in _t324_current_full_set(_t324_entry_lines(_t324_live_eval_text()))
+            l for l in _t324_entry_lines(_t324_git_eval_text("9ae8c1a"))
             if l.startswith("### Cycle 3025 ")
         )
         value, detail = wrap_assert._ol_rearm_figure(full_3025)
@@ -5283,31 +5309,48 @@ class AssertOutcomesOneLinerAnchorSkipRuleTest(unittest.TestCase):
     def test_live_corpus_smoke_six_full_set_extracts_and_cross_checks(self):
         # Leg (d) — the live-corpus smoke: the CURRENT kept-full set's
         # committed entries (the six newest full entries, re-derived from
-        # the live tree at test time). For each: the establishment group
-        # extracts and the re-arm group extracts EQUAL to the
-        # independently DISCHARGED-derived own-discharge ordinal (the
-        # wrong-latch class fires here, not at a future prep).
-        # RED-proven via the two skip-disabled mutants above: with the
-        # establishment skip disabled the 3029/3025 entries' extraction
-        # fails; with the clause/quoted skips disabled the 3029/3025/
-        # 3016/3012 entries' cross-checks diverge.
+        # the live tree at test time). The window ADVANCES and is
+        # routine-skip-dominated (T333): an entry carrying no
+        # own-establishment anchor (the extractor's DESIGNED no-anchor
+        # fail-closed), no own re-arm discharge anchor, or no `DISCHARGED`
+        # keyword is a SKIP-LEGITIMATE shape, not a failure — the smoke
+        # probes only the entries carrying BOTH own anchors plus the
+        # keyword through the FULL path: the establishment group extracts
+        # and the re-arm group extracts EQUAL to the independently
+        # DISCHARGED-derived own-discharge ordinal (the wrong-latch class
+        # fires here, not at a future prep). The probed >= 1 floor keeps
+        # the smoke from going vacuous when the window is all-skips.
+        # RED-proven via the two skip-disabled mutants above: the mention
+        # classes they un-skip are exactly the non-anchor shapes this
+        # smoke must not read as failures.
         fulls = _t324_current_full_set(_t324_entry_lines(_t324_live_eval_text()))
         probed = 0
+        skipped = 0
         for full in fulls:
             cycle = full[len("### Cycle "):].split(" ")[0]
             value, detail = wrap_assert._ol_establishment_figures(full)
-            if detail is not None:
+            if (
+                detail is not None
+                and "no own-establishment anchor probed" not in detail
+            ):
                 raise AssertionError(
                     f"the T324 live-corpus smoke: cycle {cycle}'s "
                     f"establishment group failed to extract ({detail})"
                 )
-            self.assertIsInstance(value, tuple)
             rearm, rearm_detail = wrap_assert._ol_rearm_figure(full)
-            if rearm_detail is not None:
+            rearm_skip = "no own-`re-arm` discharge anchor probed"
+            if rearm_detail is not None and rearm_skip not in rearm_detail:
                 raise AssertionError(
                     f"the T324 live-corpus smoke: cycle {cycle}'s re-arm "
                     f"group failed to extract ({rearm_detail})"
                 )
+            if value is None or rearm is None or "DISCHARGED" not in full:
+                # the no-anchor/no-discharged skip shape (the extractor's
+                # designed semantics — T333): not a failure, not probed.
+                skipped += 1
+                continue
+            self.assertIsInstance(value, tuple)
+            self.assertIsInstance(rearm, tuple)
             expected = _t324_discharged_ordinal(full)
             self.assertEqual(
                 rearm, (expected,),
@@ -5316,7 +5359,13 @@ class AssertOutcomesOneLinerAnchorSkipRuleTest(unittest.TestCase):
                 f"({expected},)",
             )
             probed += 1
-        self.assertEqual(probed, 6)
+        self.assertGreaterEqual(
+            probed, 1,
+            f"the T324 live-corpus smoke: zero of the {len(fulls)} "
+            f"kept-full entries probed the full path ({skipped} "
+            f"skip-legitimate no-anchor/no-discharged shapes) — the "
+            f"smoke must not go vacuous (T333)",
+        )
 
     def test_live_corpus_smoke_exercised_one_liners_still_extract(self):
         # Leg (d), the one-liner side: every one-liner the guard is
@@ -5344,7 +5393,12 @@ class AssertOutcomesOneLinerAnchorSkipRuleTest(unittest.TestCase):
         # the SAME values as the shipped module — wherever the pre-change
         # scan succeeded, the shipped scan succeeds with the identical
         # figure (fail-detail rewordings and designed extra-probe
-        # recoveries are the only permitted deltas).
+        # recoveries are the only permitted deltas). T333: the designed
+        # extra-probe recoveries are ADJUDICATED at test time — a
+        # prior!=shipped delta on the re-arm group whose first probed
+        # occurrence is a T324 non-anchor mention (the clause/quoted
+        # classes the skips were landed for) is the skips' designed
+        # recovery, carved out; the anchor-first surface stays pinned.
         with open(wrap_assert.__file__, "r", encoding="utf-8") as f:
             pristine = f.read()
         skip_line = "        if _ol_ordinal_before(text, idx) is None:"
@@ -5366,6 +5420,7 @@ class AssertOutcomesOneLinerAnchorSkipRuleTest(unittest.TestCase):
         ]
         self.assertGreaterEqual(len(one_liners), 200)
         checked = 0
+        adjudicated = 0
         for one_liner in one_liners:
             for idx, (group, extract) in enumerate(
                 wrap_assert._ONE_LINER_GROUPS
@@ -5374,6 +5429,24 @@ class AssertOutcomesOneLinerAnchorSkipRuleTest(unittest.TestCase):
                 prior_value, _ = mutant["_ONE_LINER_GROUPS"][idx][1](one_liner)
                 if prior_value is None:
                     continue
+                if prior_value != shipped_value and group == "re-arm ordinal":
+                    # The T333 live-corpus-drift carve-out: the mutant
+                    # probes exactly what the shipped module skips, so a
+                    # prior!=shipped delta is the DESIGNED extra-probe
+                    # recovery exactly when the pre-change scan's first
+                    # probed occurrence is a T324 non-anchor mention;
+                    # when it IS the own anchor the scans read the same
+                    # occurrence and any delta is a real behavior change
+                    # (this assert fires). The committed 3029/3025/3024/
+                    # 3020/3016/3012 one-liners ride the clause-mention
+                    # shape today.
+                    first = _t324_first_probed_rearm(one_liner)
+                    if first >= 0 and (
+                        wrap_assert._ol_rearm_clause_at(one_liner, first)
+                        or wrap_assert._ol_rearm_quoted_at(one_liner, first)
+                    ):
+                        adjudicated += 1
+                        continue
                 self.assertEqual(
                     shipped_value, prior_value,
                     f"the T324 no-behavior-change pin: a one-liner's "
@@ -5382,6 +5455,12 @@ class AssertOutcomesOneLinerAnchorSkipRuleTest(unittest.TestCase):
                 )
                 checked += 1
         self.assertGreater(checked, 500)
+        self.assertGreaterEqual(
+            adjudicated, 1,
+            "the T324 no-behavior-change pin: the T333 drift carve-out "
+            "absorbed zero prior!=shipped deltas — the committed "
+            "clause-mention one-liners must keep exercising it",
+        )
 
 
 if __name__ == "__main__":
