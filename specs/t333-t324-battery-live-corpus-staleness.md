@@ -48,4 +48,4 @@ shape the advancing Outcomes window no longer has:
 
 ## check:
 
-check: cd /Users/jadams/workspace/chug && python3 scripts/test_wrap_assert.py
+check: python3 scripts/test_wrap_assert.py
