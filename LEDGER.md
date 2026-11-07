@@ -1,16 +1,16 @@
 # Ledger
 
 ## Done
-- (cycle start 2026-11-07T18:49:36Z, glm routine cycle, head a11e5e9)
-- Phase 1: SKIPPED per routing (d1794077604-1: todo_rows=1 P002 eval_fresh=yes delta STATE-HIT) + P002 dispatch plan (d1794077614-2) — eval corridor c4a5643
-- P002 arc: worktree /tmp/chug-loop-p002 -> glm impl 37/80 goal-accepted -> T80 docs-only floor + gates-only lane call (d1794080868-3) -> merge 248aca4 --no-ff -> flip 4bf4353 (docs/f16-unpark-memo.md; operator pick pending) — T261 batch 3/3 landed-clean (d1794081956-1..3)
-- WRAP RED-BOUND: the full suite at HEAD = RED in the spawn-child families (delegate stub 9+2 reds under both runners red-alone clean-env; spoof_guard failure_stamp 3x red-alone T158 exhausted; dormant+ideation fixture spawns WEDGED >180s) on src byte-identical to the 18:19-green a11e5e9 — the T82 runner-inverse, the orphan read, the daemon liveness (pid 1991 alive), the fleet history grep (zero recorded reds), the env-key grep (clean), and the dev-binary REBUILD (1m36s post-T332 linked 15:43) ALL verified immune 0-mutation — the delta UNRESOLVED in ~35 legs; the wedged pins battery killed (T178 bound); zero committed casualty
-- T336 recipe filed (T28 class): specs/t336-spawn-child-recovery.md (estimate ~250; the fleet-state bisect first) + the byte-carry filing (the 2-occurrence spec-cell swap corrected; todo_consistency 21/21 after)
-- Gates state: NO TAG (the release trigger: the T-count since v0.19.0 = the T-rows only — zero T-flips this cycle; the spawn-child red families block any green-gate claim per the T336 standing note)
+- Phase 1: routine freshness-skip (glm; loopd 21:37:46Z routing todo_rows=2 eval_fresh=yes; routing d1794090138-1) — predicate HOLDS, Phase 1 SKIPPED per the T81 routing switch
+- T336 RECOVERED (pri 1, the 3083 wrap recipe): fleet-state bisect + 0-mutation re-run — the env-bound spawn-child reds HEALED between 21:09-21:47Z; host I/O degradation diagnosed (macOS OS-update staging MSUPrepareUpdate + fseventsd state-U; 1KB write 209ms, deps readdir minutes) then dissolved; families GREEN (delegate 28/28 3.79s + spoof failure_stamp PASS 4.44s + dormant 17/17 6.18s + ideation 17/17 7.37s) + pins battery v2 213/213 20.5s UNWEDGED; NO code change, zero committed casualty; recovery-routing d1794090146-2; row FLIPPED done (todo_consistency 21/21 after)
+- T328 re-verified BLOCKED fleet-side (~/workspace holds only chug/, chug-dashboard/, chug-site/ — no chug-watch tree)
+- P004 adjudicated NOT dispatchable (first slice needs the chug-watch marketplace.json — the T328-blocked tree — plus an operator target pick)
+- Single-driver verified (pid 23610 only); worktree list clean (main only — nothing to harvest)
 
-## Next
-- (cleared — the 3083 run complete; the wrap corridor: the ledger + the recipe + the corridor commits carry the red-bound state; NO fill composed — the fill battery gate = the pins battery v2 UNWEDGED, red-bound this wrap)
+## Next (the wrap tail)
+- EVALUATION.md edits DONE (the 3084 full + the 3083 one-liner + one-line 3075, the 19 needles zero-divergent, the T316 assert's DESIGNED fire named); the T261 batch TWO appended (d1794090427-1/-2, both landed-clean); the flip commit d8f01b0 landed (TRUE recount 1, describe v0.19.0-21)
+- Prep commit next (EVALUATION.md + LEDGER.md) -> eval-state rewrite keyed to the prep (validate_state + T311 + T323) -> notes commit (token-free) + probe -> fill (the T309/T310/T317/T319/T321/T323 legs) -> push -> goal_complete
 
 ## Blockers
-- T336 (the spawn-child env-bound red — the next cycle's recovery recipe, standing)
 - T328 external: chug-watch tree not on host, redispatch when reachable
+- P001/P003 operator/GPU-parked; P004 blocked on the same chug-watch tree + an operator target pick
