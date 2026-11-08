@@ -1,11 +1,16 @@
 # Ledger
 
 ## Done
-- Cycle-3132 books CLOSED: routing d1794161087-1 (routine-skip-glm) → queue disposition (T328 BLOCKED re-verified, zero dispatchable) → wrap corridor closed (prep 46d16167 + notes 6d7ac28a + fill 99bde461 pushed, main == origin/main)
-- The wrap: battery 213/213 15.575s (canonical 12-target binary() filter recovered verbatim off the transcript's recorded command — the carried battery-filter composition lesson DISCHARGED, written down in the Outcomes 3132 entry; census 213 EXACT, bg pid 66555, HEAD 06fe0a8f); Outcomes 3132 full + 3126 one-lined (8 value-pairs verified count>=1 pre-write; bracket balance verified on both entries); T261 batch d1794161650-1 (6738/2704/naming 1); audit zero-growth (63/92/83, malformed 3, dups 2); release recount NO TAG (TRUE 2 = T336+T337 < 3, ANCESTOR-OK, describe v0.19.0-205-g06fe0a8f); T311 state write keyed to 46d16167 (validate_state FULL + on-disk facade GREEN first attempt, prepend-2/carry-10/rotate-2); token-free notes 6d7ac28a (probe 60 0 machine==TRUE 0); fill 99bde461 (T309/T310/T317/T321/T323/T311 asserts ALL GREEN same-leg first attempt, datum 46 iters/~368.084s); 4 designed 0-REAL probe refusals enumerated (the arity slip, the text-as-path, the bare-prefix extractor, the carry-list mismatch — all recomposed GREEN same-cycle)
+- Phase 1 disposition: routing d1794162023-1 (routine-skip-glm; todo_rows=1 T328 open + eval fresh same-UTC-day 46d16167 + delta bookkeeping-only) — Phase 1 SKIPPED, glm never evaluates
+- Phase 2: queue disposition — T328 re-verified BLOCKED external (~/workspace/chug-watch absent on host 18:19Z + ssh chug-watch connect-timeout); P001/P003/P004 parked-operator lanes untouched; ZERO dispatchable, nothing launched
 
-## Next
-- Next cycle (3133): loopd re-routes from the freshness rule — T328 stays blocked external (redispatch when ~/workspace/chug-watch is reachable); the re-arm 640th check still DUE at the next real eval; the LIVE_CTX block-race lesson rides open-threads until written down
+## Next (the cycle-3133 wrap, T207 wrap-state note)
+- Every merged-but-unflipped row: NONE (zero items landed this cycle)
+- Every unharvested worktree: NONE (git worktree list clean, main only — harvest NO-OP)
+- Unpushed commit count at wrap start: 0 (1ea51442 == origin/main)
+- Missing decision records: the routing d1794162023-1 awaits its T261 outcome backfill at the batch (ONE record, appended at the wrap per the T261 wrap-boundary trigger)
+- Wrap duties: pins battery (bg, T242) -> Outcomes 3133 + one-line 3127 -> T261 batch ONE -> prep commit -> token-free notes (NOT a disposition — the T237 token must NOT appear) + probe -> eval-state splice rewrite (T311/T312) -> fill (T309/T310/T317/T321/T323/T311 asserts) -> push -> flips -> goal_complete
+- Release recount pre-computed: NO TAG expected (TRUE 2 = T336+T337 carried since v0.19.0, zero flips this cycle, 2 < 3; ANCESTOR-OK v0.19.0; describe v0.19.0-209-g1ea51442; FEATURES.md 0 unchecked)
 
 ## Blockers
 - none (T328 blocked external — not this cycle's blocker)
