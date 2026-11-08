@@ -1,13 +1,15 @@
 # Ledger
 
 ## Done
-- Cycle-3099 CLOSED: the quiet no-work routine-skip wrap. Phase 1 skipped per the freshness predicate (todo_rows=4 open, eval fresh same-UTC-day 37f1d27, delta bookkeeping-only); routing d1794120648-1; single-driver verified (pid 49051 only); T328 re-verified BLOCKED live (~/workspace/chug-watch/hooks absent)
-- Phase 2: ZERO items (T328 BLOCKED external, P001/P003/P004 operator-parked); T81 anti-sprint-burn → wrap
-- Wrap: battery 213/213 GREEN ×3 (v1 15.495s at 19ccd95 + v2 14.674s at prep 489dabb + v3 14.689s at notes ba70dbe, census 213 EXACT, no wedge); batch ONE d1794120702-2 <- d1794120648-1 landed-clean (malformed trio HOLDS 3, dup 2); release recount TRUE 2 = T336+T337 (2 < 3, ANCESTOR-OK, describe v0.19.0-76-g19ccd95, FEATURES.md 0 unchecked) → NO TAG; Outcomes 3099 full + 3093 one-lined (T316 DESIGNED guard-fire 5 figure groups per the T324 skip-rule, needles 8/8); eval-state FULL recompose keyed to the prep 489dabb (validate_state GREEN 3rd attempt — 2 pre-write refusals recorded in the ring-compose-basis bullet; T311 on-disk GREEN); token-free notes ba70dbe (probe post-commit 60 0 machine==TRUE 0); fill 1b85dbf (all six legs GREEN) + correction 51ed0cd (the T310/T319 recompose-after-guard-fire class corrected forward per T70 — the count figure 5 TRUE while the prose named FOUR legs; the fifth leg the compose's own KeyError rc-1, designed 0-REAL; T319 leg run at the correction); corridor pushed 19ccd95..51ed0cd, main == origin/main
+- Cycle-3100 Phase-1 disposition: routine freshness-skip (routing d1794121650-1) — predicate HOLDS on the todo-rows half (T328 open-blocked, the ONLY open row) + eval fresh same-UTC-day (marker 489dabb, 2026-11-08T06:55Z) + delta STATE-HIT bookkeeping-only (4 eval: commits since marker, LEDGER.md-only); loopd 07:06:31Z routing line confirms routine glm
+- Phase 2: ZERO items dispatchable — T328 re-verified BLOCKED live THIS cycle (~/workspace/chug-watch absent: ls No such file or directory; chug/, chug-dashboard/, chug-site/ + unrelated trees only); P001/P003/P004 operator-parked; P006/P007 internal-not-loop-work; T81 anti-sprint-burn → wrap; single-driver verified (pid 21143 only, this run, glm-5-3-flash, max-iters 200); git worktree list clean (main only — harvest NO-OP)
 
-## Next
-- Cycle-3100 cold-start dispositions: re-verify T328 (redispatch only when the chug-watch tree is reachable); P001/P003/P004 stay operator-parked; the eval-freshness window re-reads at boot
-- The T319 count-word fire rides the falsification-watch for the next eval's triage (the 1b85dbf compose skipped the T319 leg — the miss that let FOUR ride)
+## Next (the T207 wrap-state, written BEFORE the wrap duties)
+- Merged-but-unflipped rows: NONE (zero items this cycle; T328 stays open-blocked external)
+- Unharvested worktrees: NONE (worktree list clean)
+- Unpushed commits: 0 at wrap start (8a82544 == origin/main); the wrap corridor will add prep/notes/fill then push once at the end
+- Missing decision records: NONE known — routing d1794121650-1 filed; the T261 batch ONE (outcome <- routing) appends at the wrap
+- Wrap plan: pins battery (T242 bg pid 21650, census 213 EXACT pre-verified) → Outcomes 3100 full + 3094 one-lined (the 6-full set sheds the OLDEST full entry) → decisions-audit + T261 batch → release recount (TRUE 2 carried, NO TAG expected) → eval-state rewrite keyed to the new prep commit → token-free notes (routine-skip wrap, NOT a disposition — the chain rule does not bind) → probe → fill (T309/T310/T311/T319/T321/T323 legs) → push → flips → goal_complete
 
 ## Blockers
 - T328 BLOCKED external (chug-watch tree absent fleet-side — redispatch when reachable)
