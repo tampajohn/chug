@@ -1,15 +1,10 @@
 # Ledger
 
 ## Done
-- Cycle 3142 boot: routine-skip-glm routing d1794172015-1 recorded (loopd 21:06:13Z routed todo_rows=1 eval_fresh=yes); T328 re-verified BLOCKED external LIVE (chug-watch absent host-side, ssh connect-timeout fleet-side); Phase 2 zero dispatchable (P001/P003/P004 parked-operator, P002 delivered pending pick, P006/P007 internal-not-loop-work); battery 213/213 GREEN (Summary 16.951s, pid 86674, census EXACT, composition UNCHANGED); T261 batch d1794172127-2 <- d1794172015-1 (post-append 6,762/2,714/naming-1); audit zero-growth; NO TAG TRUE 2 (T336+T337, ANCESTOR-OK, describe v0.19.0-245-g1e251dd2); Outcomes 3142 full + 3136 one-lined (12 needles both-texts count>=1); docs-only corridor LEDGER.md-only since 500c2db9.
+- Cycle 3142 COMPLETE: routine-skip-glm routing d1794172015-1 (loopd 21:06:13Z, todo_rows=1 eval_fresh=yes); T328 re-verified BLOCKED external LIVE; Phase 2 zero dispatchable (P001/P003/P004 parked-operator, P002 delivered pending pick, P006/P007 internal-not-loop-work); battery 213/213 GREEN (Summary 16.951s pid 86674, census EXACT, composition UNCHANGED 33+30+28+27+21+17+17+12+10+9+8+1 = 213); T261 batch d1794172127-2 <- d1794172015-1 (post-append 6,762/2,714/naming-1); audit zero-growth (malformed 3 / dups 2 / unlabeled 63-92-83); NO TAG TRUE 2 (T336+T337, ANCESTOR-OK, describe v0.19.0-245-g1e251dd2); Outcomes 3142 full + 3136 one-lined (12 needles both-texts count>=1); prep e852fc95 + state write keyed to it (validate_state FULL + on-disk facade GREEN first attempt, ring prepend-2/carry-10/rotate-2, corpus-tail identity CLEAN) + notes 448a0788 (token-free, T257 color 35 iters/301.044s, ok:false 3==3, probe 60 0 machine==TRUE 0) + fill def70cff (ALL 7 assert legs GREEN — T309 datum FINAL 48 iters/420.019s @ 21:13:23Z / T310 enumeration 5==5 / T319 count-word FIVE / T317 trim 0==0 / T321-INERT claim-free / T323 count-0 / T311; the fill recomposed once in-leg — the first compose's payload prose said THREE against the fresh-stamp count 5, self-caught pre-commit, recomposed consistent, zero committed-casualty); pushed (1e251dd2..def70cff), main == origin/main; 5 designed self-caught refusals enumerated (boot grep, FEATURES grep, state-compose KeyError, notes-commit no-stage, fill-compose KeyError) — all 0-REAL; harvest NO-OP; NO TAG.
 
-## Next (the wrap tail — this cycle's remaining steps, in order)
-1. Prep commit (eval: cycle-3142 wrap prep — EVALUATION.md + LEDGER.md).
-2. State rewrite keyed to the prep commit (splice prepend-2/carry-10/rotate-2: + d1794172127-2 outcome, + d1794172015-2 routing; rotate off d1794166596-1 + d1794165656-2); validate_state FULL + on-disk facade via scripts/wrap_assert.py.
-3. Wrap-notes commit (token-free — NOT a disposition, the predicate holds on the todo-rows half; T257 color re-derived at the notes stamp; ok:false enumeration re-run at the stamp).
-4. Post-notes probe ./loopd.sh sleep-ok.
-5. Fill commit via the 7 assert legs (T309 datum FINAL re-derived at the fill stamp / T310 enumeration / T319 count-word / T317 trim / T321 streak / T323 untracked / T311 state-on-disk); fill subject eval:-first via git commit -F (the T302 lesson).
-6. Push + flips + goal_complete.
+## Next (NONE for this cycle — the books are closed)
+- main == origin/main after the fill push; the corridor CLEAN (both notes and fill subjects eval:-prefixed, no marker leak, no T70 correction to carry); T328 stays open-blocked (redispatch when the chug-watch tree is reachable); the re-arm 640th check rides DUE at the next real eval.
 
 ## Blockers
 - T328 blocked external (chug-watch tree not on host; fleet-side ssh unreachable) — unchanged; redispatch when the tree is reachable.
