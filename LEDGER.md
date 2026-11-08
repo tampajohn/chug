@@ -1,12 +1,14 @@
 # Ledger
 
 ## Done
-- Cycle-3136 books CLOSED: routing d1794165513-1 (routine-skip-glm — todo_rows=1 T328 open BLOCKED external re-verified live: ~/workspace/chug-watch ABSENT + ssh connect-timeout; eval fresh 23a39b58 2026-11-08T19:08:43Z same UTC day; delta bookkeeping-only; HEAD 1c15fe14 == origin/main at boot; single-driver ps census 1; worktree list clean; reseed LEDGER-20261108-191725.md read-first T251) → queue disposition (T328 BLOCKED, P00x parked — zero dispatchable) → wrap corridor closed (prep 854fd06d + notes 0c3b1e5b + fill f817b60f pushed, main == origin/main)
-- The wrap: battery 213/213 15.921s (bg pid 63553, canonical 12-target binary() battery composed off the Outcomes 3132 written-down filter form + the 3135 run-log names — census EXACT, composition UNCHANGED 33+30+28+27+21+17+17+12+10+9+8+1); post-edit pinned-carrier re-run 92/92 8.621s (the six EVALUATION.md-reading targets); Outcomes 3136 full + 3130 one-lined (10 value-pairs verified pre-write; T316 designed fire 5-groups-unextractable adjudicated 0-REAL per T324; 7 carried needles count=1); T261 batch d1794165656-2 (class-bearing 6746/outcomes 2708/naming 1); audit zero-growth (63/92/83, malformed 3, dups 2); release recount NO TAG (TRUE 2 = T336+T337 < 3, ANCESTOR-OK, describe v0.19.0-224-gf817b60f at the fill recount); T311 state write keyed to 854fd06d (prepend-2/carry-10/rotate-2, validate_state FULL + on-disk facade GREEN first attempt); token-free notes 0c3b1e5b (probe 60 0 machine==TRUE 0); fill f817b60f (7 assert legs ALL GREEN same-leg first attempt: T309 datum 50 iters/~491.450s + T310/T319 enumeration THREE==THREE + T317/T321 claim-free INERT + T323 count-0 + T311 facade); the THREE designed 0-REAL refusals enumerated (the 19:19:43 sed GNU-range-form compose slip probe, the 19:23:00 pinned-carrier trailing grep-exit-1 no-FAIL reading, the 19:25:13 pre---allow-empty commit attempt); harvest NO-OP (zero children)
-- Next-cycle handoff: loopd re-routes from the freshness rule — EVALUATION.md fresh (854fd06d, 2026-11-08); a routine glm cycle while the predicate holds (T328 open); glm never evaluates; T328 stays BLOCKED external (~/workspace/chug-watch absent on host; ssh chug-watch connect-timeout) — redispatch when the tree is reachable; the re-arm 640th check still DUE at the next real eval
+- Cycle 3137 boot: predicate HOLDS (todo_rows=1 T328 BLOCKED external; eval fresh 854fd06d same UTC day; delta bookkeeping-only 3 eval: commits LEDGER-only; child deaths 0) → routine-skip-glm routing d1794166596-1 recorded; Phase 2: zero dispatchable (T328 stays open-blocked, P001/P003/P004 parked, P002 delivered pending operator pick, P006/P007 internal-not-loop-work)
 
-## Next
-- goal_complete (cycle-3136 wrap landed; probe 60 0 machine==TRUE 0; NO TAG)
+## Next (cycle-3137 wrap duties, T207 wrap-state)
+- Merged-but-unflipped rows: NONE (zero items this cycle)
+- Unharvested worktrees: NONE (git worktree list = main only)
+- Unpushed commits: 0 at boot (b4ce7375 == origin/main); cycle corridor commits push at the fill
+- Missing decision records: NONE outstanding (routing d1794166596-1 recorded; its T261 outcome backfills at the wrap batch per T261)
+- Wrap: pins battery (T242 bg) → Outcomes 3137 full + 3131 one-lined → T261 batch → prep commit → eval-state rewrite (T311 keyed to prep) → token-free notes + T257 color → probe → fill → push → release recount (NO TAG expected, TRUE 2 < 3) → flips → goal_complete
 
 ## Blockers
-- none (T328 blocked external — not this cycle's blocker)
+- T328 BLOCKED external (chug-watch tree absent on host, ssh unreachable — redispatch when reachable)
