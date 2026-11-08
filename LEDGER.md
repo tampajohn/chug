@@ -1,11 +1,11 @@
 # Ledger
 
 ## Done
-- Cycle 3144 COMPLETE: routine-skip-glm routing d1794173876-1 (loopd 21:37:01Z, todo_rows=1 eval_fresh=yes); T328 re-verified BLOCKED external LIVE (ls rc=1 + bounded ssh probe silent); Phase 2 zero dispatchable (P001/P003/P004 parked-operator, P002 delivered pending pick, P006/P007 internal-not-loop-work); battery 213/213 GREEN first pass (Summary 15.896s pid 83518, census EXACT, composition UNCHANGED 33+30+28+27+21+17+17+12+10+9+8+1 = 213); T261 batch d1794173876-2 <- d1794173876-1 (post-append 6,766/2,716/naming-1); audit zero-growth (malformed 3 / dups 2 / unlabeled 63-92-83); NO TAG TRUE 2 (T336+T337, ANCESTOR-OK, describe v0.19.0-253-g3ce21de9); Outcomes 3144 full + 3138 one-lined (13 needles both-texts count>=1); prep a69b79bd + state write keyed to it (validate_state FULL + facade GREEN — fields + drift-first-token + T306 probed eval-commit + ring count/unique + splice prepend-2/carry-10/rotate-bottom-2 + corpus-tail identity; TWO designed self-caught compose refusals en route, both 0-REAL: the id-less-record KeyError + the tail-orientation mismatch assert) + notes af4eeffb (token-free, T257 color 54 iters/458.151s, ok:false 2==2, probe 60 0 machine==TRUE 0) + fill ff835be6 (ALL 7 assert legs GREEN FIRST COMPOSE — datum FINAL 63 iters/517.980s @ 21:45:50Z, enumeration 2==2, count-word TWO, trim 0==0, T321-INERT claim-free, T323 count-0, T311); pushed, main == origin/main; 2 designed refusals enumerated (both 0-REAL); harvest NO-OP; NO TAG.
+- Phase 1 disposition: routine-skip routing recorded `d1794174968-1` (predicate HOLDS on the todo-rows half — T328 open, eval fresh a69b79bd same UTC day; glm routine model per loopd T81; delta bookkeeping-only, 0 child deaths, chain TRUE 0)
+- Phase 2: T328 re-verified BLOCKED external (~/workspace/chug-watch ABSENT, ssh fleet-half silent) — ZERO dispatchable; P001/P003/P004 parked-operator lanes untouched; P002 delivered (operator pick pending)
 
-## Next (NONE for this cycle — the books are closed)
-- Wrap-state (T207) at the boundary: merged-but-unflipped rows NONE; unharvested worktrees NONE (git worktree list = main only); unpushed commits 0 (close-out == origin/main); missing decision records NONE (the T261 batch landed disk-only pre-prep, d1794173876-2 <- d1794173876-1).
+## Next
+- Phase 3 wrap (cycle 3145): battery (T242 bg pid 33147) → Outcomes 3145 full + one-line 3139 → prep commit → T261 batch (d1794174968-2 <- d1794174968-1) → audit → release recount → state splice (T311/T312 keyed to prep) → notes + probe → fill + push → close-out → flips → goal_complete
 
 ## Blockers
-- T328 blocked external (chug-watch tree not on host; fleet-side ssh unreachable) — unchanged; redispatch when the tree is reachable.
-- None else. Books state at this note: 0 unpushed, worktrees clean (main only), harvest NO-OP (zero children), routing + outcome records landed disk-only.
+- none (T328 BLOCKED external — the standing designed blocker, redispatch when the chug-watch tree is reachable)
