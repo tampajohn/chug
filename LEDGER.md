@@ -1,21 +1,10 @@
 # Ledger
 
-## Wrap-state note (T207, written at the stop-dispatch boundary — cycle 3147)
-
-- **Merged-but-unflipped rows:** none (zero items this cycle — T328 re-verified BLOCKED external; nothing dispatched, nothing merged).
-- **Unharvested worktrees:** none (`git worktree list` = main only; harvest NO-OP).
-- **Unpushed commits:** 0 at boot (71e711e0 == origin/main); the corridor commits land and push this wrap.
-- **Missing decision records:** none outstanding — the routing d1794177197-1 is recorded; its T261 outcome backfill landed at the wrap batch (d1794177429-1, probed post-append 6,772/2,719/naming-1).
-- **Bg windows:** both landed GREEN — gates pid 29061 (clippy exit-0 37.19s + nextest 1942/1942 in 102.732s, /tmp/wrap-gates-3147.log) + pins battery pid 29080 (/tmp/eval-3147-pins.log BATTERY_EXIT=0, 213/213, census EXACT).
-- **State:** eval-state spliced (prepend-2/carry-10/rotate-2, corpus-tail identity CLEAN tail-reversed) + validate_state FULL GREEN + T323 untracked GREEN.
-
 ## Done
-- Phase-1 disposition: routine skip (routing d1794177197-1; todo_rows=1 T328 BLOCKED external re-verified; eval fresh 0e69dcfb same UTC day; delta bookkeeping-only; chain TRUE 0).
-- Phase-2 triage: zero items dispatchable (T328 blocked external; P001/P003/P004 parked; T81 honest act → wrap).
-- Wrap corridor: prep 0c5356ba + eval-state splice + notes 070d00c5 (probe 60 0) + fill b3671835 (ALL 7 assert legs GREEN FIRST COMPOSE) + this close-out — pushed, main == origin/main; books closed.
+- Boot: single-driver verified (ps census reads 1 = THIS run only, pid 59345, glm-5-3-flash, max-iters 200; no other chug run/chat); T328 re-verified BLOCKED external (~/workspace/chug-watch ABSENT, ls rc=1, the DESIGNED-BLOCKER-SIGNAL); 0 unpushed at boot (630680a == origin/main); delta bookkeeping-only (3 eval: commits since 0c5356ba — 070d00c5 notes + b3671835 fill + 630680a close-out); loopd routing 22:48:43Z todo_rows=1 eval_fresh=yes -> routine glm; routing d1794178207-1 recorded; T261 batch outcome d1794178222-1 appended DISK-ONLY (id carried at write time, allocator-derived).
 
 ## Next
-- (none — the cycle-3147 books are closed; the next cold cycle reads the wrap)
+- Wrap: gates (T242 bg windows: FULL clippy+nextest + 12-target pins battery) -> Outcomes 3148 full + 3142 one-lined -> prep commit -> state rewrite keyed to prep -> notes+probe -> fill+asserts+push -> close-out -> flips -> goal_complete.
 
 ## Blockers
-- none
+- T328 BLOCKED external (chug-watch tree not on this host) — nothing dispatchable; P001/P003/P004 parked-operator, P002 delivered (operator pick pending), P006/P007 internal-not-loop-work.
