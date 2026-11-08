@@ -1,17 +1,14 @@
-# Ledger — cycle-3119 (routine-skip; corridor CLOSED, books pushed)
+# Ledger — cycle-3120 (routine-skip in flight)
 
 ## Done
-- T251 read-first: cold-start dirty LEDGER.md = the loopd reseed template (disposable); the reseed archive .chug/LEDGER-20261108-135655.md holds the 3118 close-out — BYTE-EQUAL to the committed c3cdb9dc:LEDGER.md record (diff -q verified THIS cycle, nothing lost).
-- Boot housekeeping: single-driver verified (pid 52039 only — this run, glm-5-3-flash, max-iters 200, started 13:56:53Z); git worktree list clean (main only); 0 unpushed at boot (c3cdb9dc == origin/main).
-- Phase 1: routine-skip disposition (routing d1794146383-1; loopd 13:56:53Z todo_rows=1 eval_fresh=yes → routine glm; predicate HOLDS on the todo-rows half — T328 open; delta bookkeeping-only STATE-HIT evals-behind=0 since marker 1dd8d79d; T260 state+delta read-path exercised, no full corpus needed); T328 re-verified BLOCKED (~/workspace/chug-watch ENOENT at 13:57Z).
-- Phase 2: queue triage — T328 BLOCKED external, P001/P003/P004 parked-operator lanes untouched (the Proposed lane — the loop never self-flips), P002 delivered pending the operator pick, P006/P007 internal-not-loop-work → ZERO dispatchable, nothing launched (T81: wrap).
-- T261 batch ONE: outcome d1794146422-1 <- routing d1794146383-1 landed-clean (probed-TRUE unlabeled pre-append 0->1; DISK-ONLY per the 3078 correction; the id field carried at write time pre-emptively [the 3118 compose-slip lesson]; the batch verify leg's stale-constant assert adjudicated 0-REAL same-breath — TRUE corpus 6714->6715, named/dup/schema-less all GREEN, schema-less HOLDS 10 zero-growth; corpus 6715).
-- Wrap corridor: prep 01dbe470 (Outcomes 3119 full + 3113 one-lined, 8 needles + 12 value-pairs verified, T316 DESIGNED fire adjudicated 0-REAL) → state rewrite keyed to the prep at 14:05:45Z (validate_state ALL LEGS GREEN first attempt: fields + drift-first-token + eval-commit probed + ring 12/unique + splice prepend-2/carry-10/rotate-2 + corpus-tail identity 12/12; assert_state_on_disk self-probe GREEN; T323 untracked GREEN; T184 fresh 20,891,124 / cache-read 88,608,000 / out 511,761 across 29 usage-bearing events) → notes abe02f4a (token-free — NOT a disposition; SEVEN-leg enumeration after the T310 compose-time catch corrected the drafted THREE; probe post-notes read 60 0 machine==TRUE 0) → fill 6cd20eaa (datum FINAL 44 iters / ~783.703s at the fill stamp 14:16:00Z; ok:false 7 == 7 at the stamp + TWO unflushed-buffer compose-refusals disclosed per T70; assert battery T309/T310/T317/T321-inert/T311/T323 ALL GREEN in the fill leg) — batteries 213/213 twice (/tmp/eval-3119-pins.log 15.274s + -v2.log 15.824s, target-shared-main, the canonical TRUE 12-target battery, the census HOLDS 213).
-- Books: 0 unpushed post-amend (this commit rides the push), 0 unharvested worktrees (zero children), 0 missing decision records (routing d1794146383-1 + outcome d1794146422-1 both landed, batched at the wrap per T261).
+- T251 read-first: cold-start dirty LEDGER.md = the loopd reseed template (disposable); the reseed archive .chug/LEDGER-20261108-142006.md holds the 3119 close-out — BYTE-EQUAL to the committed 68391197:LEDGER.md record (diff -q verified THIS cycle, nothing lost).
+- Boot housekeeping: single-driver verified (pid 13727 only — this run, glm-5-3-flash, max-iters 200, started 14:20:04Z per loopd); git worktree list clean (main only); 0 unpushed at boot (68391197 == origin/main).
+
+## Wrap-state note (T207)
+- Zero children this cycle (nothing launched yet, nothing planned — T328 BLOCKED external); 0 unmerged-but-unflipped rows; 0 unharvested worktrees; 0 unpushed at boot. Mid-wrap death recoverable from this ledger + the git record alone.
 
 ## Next
-- Handoff for the cold next cycle: the queue is UNCHANGED — T328 open-BLOCKED external (chug-watch tree absent fleet-side; redispatch when reachable), P001/P003/P004 parked-operator lanes (the loop never self-flips the Proposed lane), P002 delivered pending the operator pick; EVALUATION.md fresh same-UTC-day → the freshness predicate holds on the todo-rows half → routine skip unless the delta goes non-bookkeeping or the operator picks up a Proposed row.
-- The two unflushed event-buffer compose-refusals (the fill legs' jq-missing-arg + stale-EIGHT catches) flush into this stream post-wrap with the disclosure riding the fill commit message — no further action.
+- Routing record → T328 re-verify → queue triage (expect ZERO dispatchable) → wrap corridor (battery → Outcomes 3120 + one-line 3114 → T261 batch → prep → state → notes → probe → fill → push → close-out).
 
 ## Blockers
-- none loop-side (T328 BLOCKED external — chug-watch tree absent fleet-side; operator pick pending on the Proposed lane).
+- none loop-side (T328 BLOCKED external — chug-watch tree absent fleet-side).
