@@ -12,10 +12,10 @@
 ## Done
 - Phase-1 disposition: routine skip (routing d1794177197-1; todo_rows=1 T328 BLOCKED external re-verified; eval fresh 0e69dcfb same UTC day; delta bookkeeping-only; chain TRUE 0).
 - Phase-2 triage: zero items dispatchable (T328 blocked external; P001/P003/P004 parked; T81 honest act → wrap).
-- Wrap corridor: prep 0c5356ba (Outcomes 3147 full + 3141 one-lined, 13 needles GREEN; T261 batch d1794177429-1; audit CLEAN; NO TAG TRUE 2) + eval-state splice (facade GREEN).
+- Wrap corridor: prep 0c5356ba (Outcomes 3147 full + 3141 one-lined, 13 needles GREEN; T261 batch d1794177429-1; audit CLEAN; NO TAG TRUE 2) + eval-state splice (facade GREEN) + notes 070d00c5 (probe 60 0 machine==TRUE 0) + fill (ALL 7 assert legs GREEN FIRST COMPOSE — datum FINAL 43 iters/511.760s @ 22:40:30Z, ok:false 2==2, count-word TWO, trim 0==0, T321 claim-free, T323 count-0, T311).
 
 ## Next
-- Token-free notes commit → probe → fill (7 assert legs) → push → goal gate.
+- Close-out commit → push → flips → goal gate.
 
 ## Blockers
 - none
