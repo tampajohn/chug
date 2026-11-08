@@ -6,7 +6,7 @@
 - Phase 3 wrap (cycle-3146) in flight: battery 213/213 (bg pid 81012, 16.499s, census EXACT) → Outcomes 3146 full + 3140 one-lined (16 needles) → prep 0e69dcfb → T261 batch d1794175948-2 (6,770/2,718/naming-1) → audit CLEAN → state splice keyed to 0e69dcfb (validate_state FULL + T311/T323 GREEN, T316 designed fire 0-REAL)
 
 ## Next
-- Phase 3 wrap tail: token-free notes commit → post-notes probe (expect 60 0) → fill (7 assert legs) → close-out → push → flips → goal_complete
+- Phase 3 wrap tail: fill 7-legs GREEN first compose → close-out → push → flips → goal_complete
 
 ## Blockers
 - T328 BLOCKED external (standing designed blocker — redispatch when the chug-watch tree is reachable on host or fleet-side)
