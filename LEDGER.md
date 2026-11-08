@@ -1,11 +1,12 @@
 # Ledger
 
 ## Done
-- Cycle-3135 boot: routing d1794164725-1 (routine-skip-glm — todo_rows=1 T328 open BLOCKED external re-verified live: ~/workspace/chug-watch ABSENT + ssh connect-timeout; eval fresh 5f5d206c 2026-11-08T18:50Z same UTC day; delta bookkeeping-only; HEAD 6bb0de89 == origin/main; single-driver ps census 1; worktree list clean; reseed LEDGER-20261108-190147.md read-first T251)
+- Cycle-3135 books CLOSED: routing d1794164725-1 (routine-skip-glm — todo_rows=1 T328 open BLOCKED external re-verified live: ~/workspace/chug-watch ABSENT + ssh connect-timeout; eval fresh 5f5d206c 2026-11-08T18:50Z same UTC day; delta bookkeeping-only; HEAD 6bb0de89 == origin/main; single-driver ps census 1; worktree list clean; reseed LEDGER-20261108-190147.md read-first T251) → queue disposition (T328 BLOCKED, P00x parked — zero dispatchable) → wrap corridor closed (prep 23a39b58 + notes 215f3c21 + fill e58df371 pushed, main == origin/main)
+- The wrap: battery 213/213 15.148s (bg pid 11720, canonical 12-target binary() battery first-pass — the 12 names + counts recovered off the FILE /tmp/eval-3134-pins-v2.log's PASS lines, census EXACT, composition UNCHANGED 33+30+28+27+21+17+17+12+10+9+8+1); post-edit pinned-carrier re-run 92/92 7.944s (the six EVALUATION.md-reading targets, docs-only classification verified); Outcomes 3135 full + 3129 one-lined (8 value-pairs verified pre-write AND post-write); T261 batch d1794164792-2 (6747/2707/naming 1); audit zero-growth (63/92/83, malformed 3, dups 2); release recount NO TAG (TRUE 2 = T336+T337 < 3, ANCESTOR-OK, describe v0.19.0-217-g6bb0de89 at the prep recount); T311 state write keyed to 23a39b58 (prepend-2/carry-10/rotate-2, validate_state FULL + on-disk facade GREEN first attempt); token-free notes 215f3c21 (probe 60 0 machine==TRUE 0); fill e58df371 (T309/T310/T319/T317/T321/T323/T311 asserts ALL GREEN same-leg first attempt, datum 36 iters/~447.713s at the 19:09:27 fill stamp); the ONE 0-REAL refusal enumerated (the first compose attempt's f-string SyntaxError — escape in the expression part, recomposed with the clause precomputed, no repo mutation); harvest NO-OP (zero children)
+- Next-cycle handoff: loopd re-routes from the freshness rule — EVALUATION.md fresh (23a39b58, 2026-11-08); a routine glm cycle while the predicate holds (T328 open); glm never evaluates; T328 stays BLOCKED external (~/workspace/chug-watch absent on host; ssh chug-watch connect-timeout) — redispatch when the tree is reachable; the re-arm 640th check still DUE at the next real eval; the falsification-watch rides (the corpus-total surface + the carried-figure class)
 
 ## Next
-- Phase 2: queue disposition (T328 BLOCKED, P00x parked — zero dispatchable) → wrap
-- Wrap corridor: battery 213/213 (T242 bg pid 11720) → Outcomes 3135 + 3129 one-lined → T261 batch → audit/release recount → prep commit → T311 state rewrite keyed to prep → token-free notes + probe → fill (asserts) → push → close-out → goal_complete
+- goal_complete (cycle-3135 wrap landed; probe 60 0 machine==TRUE 0; NO TAG)
 
 ## Blockers
 - none (T328 blocked external — not this cycle's blocker)
