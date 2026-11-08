@@ -1,13 +1,15 @@
 # Ledger
 
 ## Done
-- Cycle 3087 CLOSED (the WORKED cycle: merge f9d8945 + flip 12d6ec0, pushed — main == origin/main): routine freshness-skip (routing d1794095048-1; todo_rows=1 todo-status T337 + T328 open-blocked + eval fresh same-UTC-day af01f32); ONE item landed — T337 the wrap_assert T324 smoke own-anchor probe narrowing (glm impl 102085d 61/80 goal-accepted; kimi FULL validation routing d1794098358-2 -> VERDICT PASS d1794099148-3, 4/4 mutants killed, corpus RED reproduced, smoke-floor fallback exercised-not-dead); suite 198/198; gates GREEN post-merge (T242 bg pid 16349: BUILD_RC=0 + CLIPPY_RC=0 + nextest 1942/1942) + final gates at HEAD 12d6ec0 (bg pid 289, 1942/1942); harvest 4 files DISK-ONLY (post-3078 design); worktree removed post-liveness (both pids DEAD exact); T261 batch THREE (d1794095048-1/d1794098358-2/d1794099148-3 landed-clean); NO TAG (TRUE 2 = T336+T337 < 3, ANCESTOR-OK, describe v0.19.0-34-g12d6ec0); T316-leg: 3080 one-lined, 12 needles count>=1 both texts, suite GREEN over the edited corpus
+- Cycle 3088 Phase-1 disposition: routine freshness-skip (routing d1794100699-1; todo_rows=1 T328 open-blocked + eval fresh same-UTC-day 8180997 [eval-at 2026-11-08T01:05Z] + delta STATE-HIT bookkeeping-only, 0 child deaths, 0 goal rejects); single-driver verified (pid 19714 only); T328 re-verified BLOCKED fleet-side (~/workspace holds only chug/, chug-dashboard/, chug-site/ — no chug-watch tree); queue empty of dispatchable rows → ZERO items, nothing to launch (T81: nothing mergeable, nothing launchable → wrap)
+- T261 batch ONE: outcome d1794100813-2 <- routing d1794100699-1 landed-clean (probed-TRUE unlabeled pre-append)
+- Pins battery 213/213 GREEN (bg pid 21367, /tmp/eval-3088-pins.log 17.599s, target-shared-main, HEAD c31d5c3 — the canonical TRUE 12-target battery, census HOLDS 213, composition unchanged); docs-only corridor since gate base 12d6ec0 (EVALUATION.md + LEDGER.md only) → the docs-only floor stands, todo_consistency in the battery
+- Release recount: NO TAG (TRUE 2 distinct flip-ids since v0.19.0 — T336+T337, 2 < 3, ANCESTOR-OK, describe v0.19.0-37-gc31d5c3, FEATURES.md 0 unchecked)
 
-## Next (the next cycle's input)
-- Cold next cycle: read .chug/eval-state.md + .chug/eval-delta.md (the T260 pair, disk-only untracked); the queue is EMPTY of dispatchable rows — T328 BLOCKED (the chug-watch tree absent fleet-side; redispatch when reachable), P001/P003 operator/GPU-parked, P004 needs the chug-watch tree + an operator target pick, P002 delivered (the operator pick on the F16 memo pending)
-- The chain stands TRUE 0 (a worked cycle, NOT a disposition — the T237 token does not appear by design); the next EMPTY-delta cycle [queue drained] authorizes the 1st disposition TRUE 0->1, 3 empties away
-- The re-arm 640th check still DUE at the next real eval (no eval ran this cycle; the figure carries)
+## Next (the wrap tail — this cycle's remaining duties)
+- Wrap prep commit (Outcomes 3088 full + 3081 one-lined per the T316-leg) → wrap_assert suite over the edited corpus → state write keyed to the prep marker (T311/T312) → token-free notes + post-commit probe (expect 60 0) → fill (T309/T310/T321/T323/T311 legs) → push → flips → goal_complete
+- Handoff for the cold next cycle: TRUE 2 carried (T336+T337, no flips this cycle — 1 short of the tag trigger); T328 STAYS open-blocked external (redispatch when the chug-watch tree is reachable); P001/P003 operator/GPU-parked, P004 blocked on the chug-watch tree + an operator pick, P002 delivered (the operator pick pending); the re-arm 640th check still DUE at the next real eval (carries forward); the queue's only loop row blocked → the next cycle re-routes routine glm on the same predicate unless the tree lands
 
 ## Blockers
-- T328 external: the chug-watch tree not on host, redispatch when reachable
+- T328 external: the chug-watch tree not on host (verified THIS cycle), redispatch when reachable
 - P001/P003 operator/GPU-parked; P004 blocked on the same chug-watch tree + an operator target pick
