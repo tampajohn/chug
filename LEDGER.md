@@ -1,17 +1,20 @@
-# Ledger — cycle-3125 CLOSED (routine-skip, zero-item wrap)
+# Ledger
 
 ## Done
-- Phase 1: routine-skip disposition (eval-routing d1794153958-1, todo_rows=1 T328 open-blocked + eval fresh same-UTC-day 991dc32d + delta bookkeeping-only since marker), Phase 1 skipped per the freshness predicate — glm never evaluates. Boot housekeeping: single-driver verified (pid 45957 only), worktree list clean (main only), 0 unpushed at boot (91638d02 == origin/main); the reseed archive .chug/LEDGER-20261108-160433.md verified byte-equal to the committed 91638d02:LEDGER.md record (T251 read-first, ARCHIVE-BYTE-EQUAL).
-- Phase 2: T328 re-verified BLOCKED fleet-side (~/workspace/chug-watch absent — the DESIGNED blocker signal, 16:05Z); P001/P003/P004 parked-operator, P002 delivered pending operator pick → ZERO items dispatchable → wrap per the T81 anti-sprint-burn.
-- Phase 3: the corridor closed — prep 6d378041 (Outcomes 3125 full + 3119 one-lined, the 8 carried needles ALL GREEN; AMENDED PRE-PUSH — the prep entry's ok:false leg-1 label first wrote the FEATURES-grep class for the 16:05:41.061Z leg while the TRUE leg is the archive leg's sh process-substitution refusal; the label healed and the sha re-keyed before any dependent commit, the 2299/3054 pre-push-amendment precedent, the T272 census moves 84→85 for the mis-name class) + notes 4c8dcd9a (T257 color 56/414.959 at the 16:12Z stamp; ok:false 4==4; T321 INERT + T323 + T311 GREEN) + fill 7ba5e80a (datum FINAL 62/513.4 at the 16:14Z stamp; enumeration 4==4; T309/T310/T317/T321/T323/T311 all GREEN in the compose leg; battery v2 213/213 14.872s at the notes HEAD) — ALL PUSHED, main == origin/main.
-- The state rewrite keyed to the amended prep 6d378041: validate_state ALL LEGS GREEN first attempt (fields 9/9, drift none first-token, ring 12 prepend-2/carry-10/rotate-2 [the 3119 pair d1794146422-1 + d1794146383-1 rotated off byte-identical carry 10], T311 on-disk read-back GREEN over the re-keyed bytes).
-- The T261 batch ONE: outcome d1794154070-1 <- routing d1794153958-1 landed-clean (DISK-ONLY per the 3078 correction; the id carried at write time pre-emptively per the 3118 lesson; the append's first-attempt KeyError 'id' — the grandfathered schema-less trio — recomposed with .get()); post-append verify GREEN 6727 total / 2697 outcomes, exactly one outcome naming the routing id.
-- The pins battery: #1 213/213 GREEN (/tmp/eval-3125-pins.log Summary 16.419s, HEAD 91638d02, bg pid 46710) + the fill battery v2 213/213 GREEN (/tmp/eval-3125-pins-v2.log Summary 14.872s, notes HEAD 4c8dcd9a, bg pid 60392) — the canonical TRUE 12-target battery, the 12-target composition UNCHANGED 33+30+28+27+21+17+17+12+10+9+8+1 = 213, per-target counts re-derived off the full logs; the census line "Starting 213 tests across 12 binaries" EXACT both runs; no tail-pipe truncation this cycle (the 3124 lesson applied — logs captured full).
-- Release: NO TAG (TRUE 2 = T336 + T337 < 3, ANCESTOR-OK per T245, describe v0.19.0-177-g91638d02 at the prep recount, FEATURES.md 0 unchecked).
-- The probe post-notes read 60 0 machine==TRUE 0 (the backoff at floor; the chain stands TRUE 0 — a token-free routine wrap, NOT a disposition).
+- (nothing yet)
 
 ## Next
-- Next cycle: the routine disposition (the predicate re-checked at boot: todo rows + eval freshness + delta); T328 stays BLOCKED external until the chug-watch tree is reachable; the re-arm 640th check still DUE at the next real eval.
+- Read the spec
 
 ## Blockers
-- none (T328 blocked external — redispatch when the tree is reachable)
+- none
+
+<!-- T207 wrap-state note (cycle 3126, written at the stop-dispatch boundary) -->
+## Wrap-state note (cycle 3126 — T207)
+
+- Merged-but-unflipped rows: NONE (zero items landed this cycle — T328 re-verified BLOCKED fleet-side, the chug-watch tree absent on host; the row stays open-blocked by its own recipe).
+- Unharvested worktrees: NONE (`git worktree list` clean at main only; zero children this cycle — harvest NO-OP).
+- Unpushed commits: 0 at boot (b906cec4 == origin/main); the corridor commits land and push at the wrap.
+- Missing decision records: NONE at this write — the routing d1794155052-1 recorded; its T261 outcome backfill batches at THIS wrap (one append, DISK-ONLY per the 3078 correction).
+- Gates: the pins battery launched in a T242 bg window (pid 6436, /tmp/eval-3126-pins.log, target-shared-main, canonical 12-target battery, census expected 213); result verified before the notes commit.
+- Dirty-state note (T251): the boot-time dirty LEDGER.md was the fresh-run reseed template, ARCHIVE-BYTE-EQUAL to the committed b906cec4:LEDGER.md record (verified this cycle) — disposable, now overwritten by THIS wrap-state note.
