@@ -1,16 +1,14 @@
-# Ledger — cycle-3124 CLOSED (routine-skip, zero-item wrap)
+# Ledger — cycle-3125 corridor (routine-skip, zero-item wrap; prep phase)
 
 ## Done
-- Phase 1: routine-skip disposition (eval-routing d1794152918-1, todo_rows=1 T328 open-blocked + eval fresh same-UTC-day 464981a6 + delta bookkeeping-only since marker), Phase 1 skipped per the freshness predicate — glm never evaluates. Boot housekeeping: single-driver verified (pid 62175 only), worktree list clean (main only), 0 unpushed at boot (1fd37f8e == origin/main); the reseed archive .chug/LEDGER-20261108-154717.md verified byte-equal to the committed 1fd37f8e:LEDGER.md record (T251 read-first, ARCHIVE-BYTE-EQUAL).
-- Phase 2: T328 re-verified BLOCKED fleet-side (~/workspace/chug-watch absent — the DESIGNED blocker signal, 15:48Z); P001/P003/P004 parked-operator, P002 delivered pending operator pick → ZERO items dispatchable → wrap per the T81 anti-sprint-burn.
-- Phase 3: the corridor closed — prep 991dc32d (Outcomes 3124 full + 3118 one-lined, 8 carried needles ALL GREEN) + notes fc9de6dc (T257 color 45/441.186 at the 15:58Z stamp; ok:false 1==1; T321 INERT + T323 + T311 GREEN in-leg) + fill b07f9d29 (datum FINAL 49/518.170 at the 16:01Z stamp; enumeration 1==1; battery v2 213/213 16.878s at the notes HEAD; all asserts GREEN; probe post-notes 60 0 machine==TRUE 0) — ALL PUSHED, main == origin/main.
-- The state rewrite keyed to the prep 991dc32d: validate_state ALL LEGS GREEN first attempt (fields 9/9, drift none first-token, eval-commit probed-equal, ring 12 prepend-2/carry-10/rotate-2, corpus-tail identity 12/12 in-order, T311 on-disk read-back GREEN).
-- The T261 batch ONE: outcome d1794152985-2 <- routing d1794152918-1 landed-clean (DISK-ONLY append per the 3078 correction); post-append verify TRUE 6725/2696, malformed trio HOLDS 3, dup-ids HOLDS 2.
-- Release: NO TAG (TRUE 2 = T336 + T337 < 3, ANCESTOR-OK per T245, describe v0.19.0-173-g1fd37f8e at the recount, FEATURES.md 0 unchecked).
-- Battery lesson recorded: the first bg launch piped through tail -30 truncating its own log (per-target counts unextractable) — superseded by the full-log re-run rc=0 at the same HEAD, 0-REAL.
+- Phase 1: routine-skip disposition (eval-routing d1794153958-1, todo_rows=1 T328 open-blocked + eval fresh same-UTC-day 991dc32d + delta bookkeeping-only since marker), Phase 1 skipped per the freshness predicate — glm never evaluates. Boot housekeeping: single-driver verified (pid 45957 only), worktree list clean (main only), 0 unpushed at boot (91638d02 == origin/main); the reseed archive .chug/LEDGER-20261108-160433.md verified byte-equal to the committed 91638d02:LEDGER.md record (T251 read-first, ARCHIVE-BYTE-EQUAL).
+- Phase 2: T328 re-verified BLOCKED fleet-side (~/workspace/chug-watch absent — the DESIGNED blocker signal, 16:05Z); P001/P003/P004 parked-operator, P002 delivered pending operator pick → ZERO items dispatchable → wrap per the T81 anti-sprint-burn.
+- The pins battery 213/213 GREEN (/tmp/eval-3125-pins.log Summary 16.419s, target-shared-main, HEAD 91638d02 — the canonical TRUE 12-target battery, the 12-target composition UNCHANGED 33+30+28+27+21+17+17+12+10+9+8+1 = 213, per-target counts re-derived off the full log; no tail-pipe truncation this cycle).
+- The T261 batch ONE: outcome d1794154070-1 <- routing d1794153958-1 landed-clean (DISK-ONLY per the 3078 correction; the id carried at write time pre-emptively per the 3118 lesson); post-append verify GREEN 6727 total / 2697 outcomes, exactly one outcome naming the routing id.
+- The Outcomes edit: cycle-3125 full entry inserted + cycle 3119 one-lined (3125/3124/3123/3122/3121/3120 the 6-full set — the kept-full 6 sheds the OLDEST full entry); the 8 carried needles count>=1 pre-write ALL GREEN; the 3119 one-liner's 8 value-pairs present-and-consistent vs the FULL entry pre-write.
 
 ## Next
-- Next cycle: the routine disposition (the predicate re-checked at boot: todo rows + eval freshness + delta); T328 stays BLOCKED external until the chug-watch tree is reachable; the re-arm 640th check still DUE at the next real eval.
+- The notes commit (token-free — the predicate holds on the todo-rows half, the T237 token does not appear) → post-notes probe (expect 60 0) → the fill commit (datum FINAL re-derived at the fill stamp + enumeration + wrap_assert legs) → push → close-out.
 
 ## Blockers
 - none (T328 blocked external — redispatch when the tree is reachable)
