@@ -1,11 +1,12 @@
 # Ledger
 
 ## Done
-- Cycle-3130 books CLOSED: routing d1794158887-1 (routine-skip-glm) → queue disposition (T328 BLOCKED re-verified, zero dispatchable) → wrap corridor closed (prep f8adf2b8 + notes c0cad08f + fill 8c78a6d7 pushed, main == origin/main)
-- The wrap: battery 213/213 14.933s (binary() first-pass, census 213 EXACT, HEAD 7506d389); Outcomes 3130 full + 3124 one-lined (T316 DESIGNED guard-fire adjudicated 0-REAL, 8 needles present-and-consistent); T261 batch d1794159030-1 (6737/2702/naming 1); audit zero-growth (63/92/83, malformed 3, dups 2); release recount NO TAG (TRUE 2 = T336+T337 < 3, ANCESTOR-OK, describe v0.19.0-196-g7506d389); T311 state write keyed to f8adf2b8 (validate_state FULL splice-checked + on-disk facade GREEN first attempt, prepend-2/carry-10/rotate-2); token-free notes c0cad08f (probe 60 0 machine==TRUE 0); fill 8c78a6d7 (T309/T310/T311/T323 asserts ALL GREEN same-leg first attempt)
+- Cycle-3131 Phase-1 disposition: routine freshness-skip recorded (eval-routing d1794160183-1 — todo_rows=1 T328 open-blocked + eval fresh 83366f97 same UTC day + delta bookkeeping-only LEDGER.md-only; read-path STATE-HIT)
+- Cycle-3131 Phase-2 disposition: T328 re-verified BLOCKED external (chug-watch absent at the 17:42Z boot probe); P001/P003/P004 parked — zero dispatchable
+- Cycle-3131 wrap in progress: battery 213/213 GREEN (15.091s, census 213 EXACT, HEAD 83366f97, pid 36784); Outcomes 3131 full + 3125 one-lined (T316 DESIGNED fire adjudicated 0-REAL, 8 needles present); T261 batch d1794160249-1 (6739/2703/naming 1); audit zero-growth (63/92/83, malformed 3, dups 2); release recount NO TAG (TRUE 2, ANCESTOR-OK, describe v0.19.0-200-g83366f97)
 
 ## Next
-- Next cycle (3131): loopd re-routes from the freshness rule — T328 stays blocked external (redispatch when ~/workspace/chug-watch is reachable); the re-arm 640th check still DUE at the next real eval; the LIVE_CTX block-race + battery-filter composition lessons ride open-threads until written down
+- Finish the corridor: prep commit → eval-state rewrite (T311) → token-free notes + probe → fill + push → LEDGER close-out + flips + goal_complete
 
 ## Blockers
-- none (T328 blocked external only — needs the chug-watch tree on-host or a fleet-side executor)
+- none
