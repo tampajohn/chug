@@ -1,10 +1,16 @@
 # Ledger
 
 ## Done
-- Cycle 3141 COMPLETE: boot predicate HOLDS (todo_rows=1 T328 BLOCKED external re-verified LIVE; eval fresh 0ab5966f same UTC day; delta bookkeeping-only; child deaths 0; chain TRUE 0; loopd 20:46:03Z -> routine glm) → routine-skip-glm routing d1794171023-1; Phase 2: zero dispatchable (T328 open-blocked re-verified: chug-watch ABSENT host-side + ssh connect-timeout fleet-side; P001/P003/P004 parked; P002 delivered pending operator pick; P006/P007 internal-not-loop-work). Wrap: prep 500c2db9 (Outcomes 3141 full + 3135 one-lined, 12 carried needles verified pre-write; battery 213/213 17.962s pid 37946 census EXACT composition UNCHANGED; T261 batch d1794171196-2 <- d1794171023-1, probed 6,760/2,713/naming 1; NO TAG TRUE 2 describe v0.19.0-241) + state write validate_state FULL + on-disk facade GREEN first attempt (ring prepend-3/carry-9/rotate-3 keyed to 500c2db9 — the 3140 close-out's triage d1794170250-3 riding into the ring at this splice, corpus-tail identity CLEAN) + notes 63ffe687 (token-free, T257 color 33 iters/639.329s, ok:false 0==0, probe 60 0 machine==TRUE 0) + fill b982be21 (ALL 7 assert legs GREEN same-leg first attempt — T309/T310/T319/T317/T321-INERT/T323/T311, datum FINAL 37 iters/676.223s, ok:false 0==0; the fill subject written eval:-first via -F, no marker extraction — the T302 lesson honored) pushed.
+- Cycle 3142 boot: routine-skip-glm routing d1794172015-1 recorded (loopd 21:06:13Z routed todo_rows=1 eval_fresh=yes); T328 re-verified BLOCKED external LIVE (chug-watch absent host-side, ssh connect-timeout fleet-side); Phase 2 zero dispatchable (P001/P003/P004 parked-operator, P002 delivered pending pick, P006/P007 internal-not-loop-work); battery 213/213 GREEN (Summary 16.951s, pid 86674, census EXACT, composition UNCHANGED); T261 batch d1794172127-2 <- d1794172015-1 (post-append 6,762/2,714/naming-1); audit zero-growth; NO TAG TRUE 2 (T336+T337, ANCESTOR-OK, describe v0.19.0-245-g1e251dd2); Outcomes 3142 full + 3136 one-lined (12 needles both-texts count>=1); docs-only corridor LEDGER.md-only since 500c2db9.
 
-## Next
-- NONE for this cycle — the books are closed (main == origin/main after the close-out push); the corridor is CLEAN (both notes and fill subjects eval:-prefixed, no marker leak, no T70 correction to carry); T328 stays open-blocked (redispatch when the chug-watch tree is reachable); the re-arm 640th check rides DUE at the next real eval.
+## Next (the wrap tail — this cycle's remaining steps, in order)
+1. Prep commit (eval: cycle-3142 wrap prep — EVALUATION.md + LEDGER.md).
+2. State rewrite keyed to the prep commit (splice prepend-2/carry-10/rotate-2: + d1794172127-2 outcome, + d1794172015-2 routing; rotate off d1794166596-1 + d1794165656-2); validate_state FULL + on-disk facade via scripts/wrap_assert.py.
+3. Wrap-notes commit (token-free — NOT a disposition, the predicate holds on the todo-rows half; T257 color re-derived at the notes stamp; ok:false enumeration re-run at the stamp).
+4. Post-notes probe ./loopd.sh sleep-ok.
+5. Fill commit via the 7 assert legs (T309 datum FINAL re-derived at the fill stamp / T310 enumeration / T319 count-word / T317 trim / T321 streak / T323 untracked / T311 state-on-disk); fill subject eval:-first via git commit -F (the T302 lesson).
+6. Push + flips + goal_complete.
 
 ## Blockers
-- T328 blocked (chug-watch tree not on host — fleet-side; P001/P003/P004 operator-parked)
+- T328 blocked external (chug-watch tree not on host; fleet-side ssh unreachable) — unchanged; redispatch when the tree is reachable.
+- None else. Books state at this note: 0 unpushed, worktrees clean (main only), harvest NO-OP (zero children), no missing decision records (the batch landed disk-only pre-prep).
