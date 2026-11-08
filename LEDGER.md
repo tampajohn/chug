@@ -1,9 +1,11 @@
 # Ledger
 
 ## Done
-- Cycle-3134 books CLOSED: routing d1794163478-1 (routine-skip-glm) → queue disposition (T328 BLOCKED re-verified external, zero dispatchable) → wrap corridor closed (prep 5f5d206c + notes dc3f093e + fill 667863a9 pushed, main == origin/main)
-- The wrap: battery 213/213 15.726s (v2 pid 63308, canonical 12-target binary() battery — the 12 names + counts recovered off the FILE /tmp/eval-3133-pins.log's PASS lines, census EXACT, composition UNCHANGED; the v1 pid 62989 inner-alternation filteret mis-filter self-caught 0-REAL and superseded — nextest's | is a TOP-LEVEL alternation, the 3127 v1/v2 precedent); Outcomes 3134 full + 3128 one-lined (8 value-pairs verified pre-write); T261 batch d1794163704-2 (6745/2706/naming 1); audit zero-growth (63/92/83, malformed 3, dups 2); release recount NO TAG (TRUE 2 = T336+T337 < 3, ANCESTOR-OK, describe v0.19.0-213-ga05987a3 at the prep recount); T311 state write keyed to 5f5d206c (prepend-2/carry-10/rotate-2, validate_state FULL + on-disk facade GREEN first attempt after the one AssertionError recompose — the corpus-tail order); token-free notes dc3f093e (probe 60 0 machine==TRUE 0); fill 667863a9 (T309/T310/T319/T317/T321/T323/T311 asserts ALL GREEN same-leg first attempt, datum ~906.353s wall at the 18:52:19 notes stamp / FINAL re-derived at the 18:53:28 fill stamp); 3 designed 0-REAL refusals enumerated (the batch-call options schema refusal; the 3133-entry insert-bug detection probe — the insert branch REPLACED the 3133 line, restored verbatim from git HEAD, diff verified 3+/1-; the splice corpus-tail order AssertionError); harvest NO-OP (zero children)
-- Next-cycle handoff: loopd re-routes from the freshness rule — EVALUATION.md fresh (5f5d206c, 2026-11-08); a routine glm cycle while the predicate holds (T328 open); glm never evaluates; T328 stays BLOCKED external (~/workspace/chug-watch absent on host; ssh chug-watch connect-timeout) — redispatch when the tree is reachable; the re-arm 640th check still DUE at the next real eval; the falsification-watch rides (the corpus-total surface + the carried-figure class)
+- Cycle-3135 boot: routing d1794164725-1 (routine-skip-glm — todo_rows=1 T328 open BLOCKED external re-verified live: ~/workspace/chug-watch ABSENT + ssh connect-timeout; eval fresh 5f5d206c 2026-11-08T18:50Z same UTC day; delta bookkeeping-only; HEAD 6bb0de89 == origin/main; single-driver ps census 1; worktree list clean; reseed LEDGER-20261108-190147.md read-first T251)
+
+## Next
+- Phase 2: queue disposition (T328 BLOCKED, P00x parked — zero dispatchable) → wrap
+- Wrap corridor: battery 213/213 (T242 bg pid 11720) → Outcomes 3135 + 3129 one-lined → T261 batch → audit/release recount → prep commit → T311 state rewrite keyed to prep → token-free notes + probe → fill (asserts) → push → close-out → goal_complete
 
 ## Blockers
 - none (T328 blocked external — not this cycle's blocker)
