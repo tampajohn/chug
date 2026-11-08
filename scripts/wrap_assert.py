@@ -2759,7 +2759,14 @@ def _ol_establishment_anchor(text):
     125/3,411 unaffected and TRUE` — the cycle-3008 full entry's
     carried-figure triage prose, no ordinal adjacent) or a hyphenated
     compound (`the 695th-establishment anchor-label slip` — the hyphen
-    breaks the adjacency) is NOT the group anchor. The scan tries
+    breaks the adjacency) is NOT the group anchor. T337 narrows the probe
+    further: a T316-leg QUOTE/bracket clause mention (`the
+    710th/711th/712th establishments bracket` — the committed 3081 full
+    entry's quote of the one-lined 3073 compaction's group-clause NAMES,
+    the adjacent slash-list ordinal riding — or any establishment word
+    inside a clause-size parenthetical that also names the one-lining) is
+    a MENTION, not an own-anchor (_ol_establishment_bracket_mention_at).
+    The scan tries
     subsequent occurrences until a real anchor is found; none → (-1, None)
     — the fail-closed detail. The own shapes all pass: `The 668th
     establishment — reading` full, `the 669th establishment [` / `the 640th
@@ -2777,10 +2784,104 @@ def _ol_establishment_anchor(text):
         if text.startswith("'s", p) or text.startswith("hands", p):
             start = idx + len("establishment")
             continue
+        if _ol_establishment_bracket_mention_at(text, idx):
+            start = idx + len("establishment")
+            continue
         if _ol_ordinal_before(text, idx) is None:
             start = idx + len("establishment")
             continue
         return (idx, "establishment")
+
+
+# _ONE_LINING_NEEDLES / _ONE_LINING_PAREN_MAX — the T337 parenthetical
+# prong's shape table: what "names the one-lining" reads as (the hyphenated
+# family `one-lined` / `one-liner` / `one-lining`, and the spaced compaction
+# marker `one line per the last-6 compaction`), and how large an enclosing
+# parenthetical may be and still count as one (a CLAUSE-size paren — the
+# corpus's prose-paren spans run median ~38 / p99 ~250 chars, the committed
+# 3000/3004-era fulls' entry-wrap parens run into the thousands; past 400
+# the span is an entry-wrap, not a parenthetical, and the own anchor inside
+# it stays the own anchor — the 6,9xxths establishment clause of those fulls
+# must keep extracting).
+_ONE_LINING_NEEDLES = ("one-lin", "one line")
+_ONE_LINING_PAREN_MAX = 400
+
+
+# _ol_establishment_bracket_mention_at(text, idx) — INTERNAL; e.g. _ol_establishment_bracket_mention_at(full_entry_text, 2844)
+def _ol_establishment_bracket_mention_at(text, idx):
+    """Is the `establishment` occurrence at *idx* a T316-leg QUOTE/bracket
+    clause mention?
+
+    T337 (the live-corpus smoke's next-instance shape — the committed 3081
+    full entry): the entry's T316-leg prose QUOTES the one-lined
+    compaction's group clauses — `the worked full's group clauses carried
+    near-verbatim (the 3058-precedent shape: ..., the 710th/711th/712th
+    establishments bracket, the 637th re-arm)` — and the quoted
+    group-clause NAME reads exactly like an own anchor (an adjacent
+    `<N>th` ordinal rides the slash-list), then no `<id> stream` X/Y group
+    follows it and the smoke raises. Two mention shapes are refused:
+      - the group-clause-name QUOTE: the plural `establishments` whose
+        next token is the literal `bracket` (the `the <ord>…establishments
+        bracket` shape — the own group clause is never followed by that
+        word: it is followed by the ` [<id> stream X/Y ...]` payload
+        bracket, the em-dash prose, or the paren-led figures);
+      - an establishment word inside a CLAUSE-size parenthetical
+        (<= _ONE_LINING_PAREN_MAX chars) that also names the one-lining
+        (_ONE_LINING_NEEDLES): a QUOTE inside one-lining prose is the
+        compacted cycle's group, never this entry's own. Walked outward
+        through EVERY enclosing paren span (nested parens included); a
+        span past the clause bound is an entry-wrap, not a parenthetical,
+        and is never checked (the committed 3000/3004-era fulls' own
+        anchors sit inside multi-thousand-char wrap parens and must keep
+        extracting).
+    The own shapes all pass: `The 668th establishment — reading` full,
+    `the 710th/711th/712th establishments [3070 stream 134/3,592 ...]`
+    (the plural followed by the payload bracket, not the word), and the
+    paren-led figures `the 708th establishment (3062 stream 107/1,906
+    ...)` (the paren opens AFTER the anchor — the anchor word itself is
+    not inside it).
+    """
+    n = len(text)
+    p = idx + len("establishment")
+    # Prong 1 — the group-clause-name QUOTE (`...establishments bracket`).
+    if p < n and text[p] == "s":
+        q = p + 1
+        while q < n and text[q] in _ONE_LINER_WS:
+            q += 1
+        if text.startswith("bracket", q):
+            end = q + len("bracket")
+            if end >= n or not text[end].isalnum():
+                return True
+    # Prong 2 — an enclosing clause-size parenthetical that also names the
+    # one-lining. Walk left: a `)` opens depth, a `(` at depth 0 is an
+    # enclosing open paren, a `(` at depth > 0 closes a nested group.
+    depth = 0
+    o = idx - 1
+    while o >= 0:
+        ch = text[o]
+        if ch == ")":
+            depth += 1
+        elif ch == "(":
+            if depth == 0:
+                d = 0
+                c = o + 1
+                while c < n:
+                    if text[c] == "(":
+                        d += 1
+                    elif text[c] == ")":
+                        if d == 0:
+                            break
+                        d -= 1
+                    c += 1
+                if c - o <= _ONE_LINING_PAREN_MAX:
+                    span = text[o + 1:c]
+                    for needle in _ONE_LINING_NEEDLES:
+                        if needle in span:
+                            return True
+            else:
+                depth -= 1
+        o -= 1
+    return False
 
 
 # _ol_establishment_figures(text) — INTERNAL; e.g. _ol_establishment_figures(full_entry_text)
@@ -2799,7 +2900,7 @@ def _ol_establishment_figures(text):
     """
     idx, _ = _ol_establishment_anchor(text)
     if idx < 0:
-        return (None, "no own-establishment anchor probed (the `establishment` occurrence is a `'s` back-reference, a `hands off` handoff, or a bare non-anchor mention with no adjacent `<N>th` ordinal; T324)")
+        return (None, "no own-establishment anchor probed (the `establishment` occurrence is a `'s` back-reference, a `hands off` handoff, a T316-leg QUOTE/bracket clause mention (`the <ord>…establishments bracket` group-clause quote, or an establishment word inside a clause-size parenthetical that also names the one-lining; T337), or a bare non-anchor mention with no adjacent `<N>th` ordinal; T324)")
     ordinal = _ol_ordinal_before(text, idx)
     if ordinal is None:
         return (None, "no `<N>th` ordinal adjacent before the establishment anchor")

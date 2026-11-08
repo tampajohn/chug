@@ -5040,6 +5040,47 @@ def _t324_current_full_set(entries, count=6):
     return fulls[:count]
 
 
+def _t324_smoke_full_path(full, cycle):
+    """The smoke's per-entry FULL path: the entry's establishment and
+    re-arm groups extract (any extraction failure — a detail that is NOT
+    the extractor's DESIGNED no-anchor skip — raises with the named
+    detail), and a both-own-anchors-plus-`DISCHARGED`-keyword entry
+    crosses its re-arm figure against the independently
+    DISCHARGED-derived own-discharge ordinal (the wrong-latch class
+    fires HERE, not at a future prep). Returns True when the entry
+    probed the full path, False for the designed
+    no-anchor/no-discharged skip shape (T333)."""
+    value, detail = wrap_assert._ol_establishment_figures(full)
+    if detail is not None and "no own-establishment anchor probed" not in detail:
+        raise AssertionError(
+            f"the T324 live-corpus smoke: cycle {cycle}'s "
+            f"establishment group failed to extract ({detail})"
+        )
+    rearm, rearm_detail = wrap_assert._ol_rearm_figure(full)
+    rearm_skip = "no own-`re-arm` discharge anchor probed"
+    if rearm_detail is not None and rearm_skip not in rearm_detail:
+        raise AssertionError(
+            f"the T324 live-corpus smoke: cycle {cycle}'s re-arm "
+            f"group failed to extract ({rearm_detail})"
+        )
+    if value is None or rearm is None or "DISCHARGED" not in full:
+        return False
+    if not isinstance(value, tuple) or not isinstance(rearm, tuple):
+        raise AssertionError(
+            f"the T324 live-corpus smoke: cycle {cycle}'s full path "
+            f"extracted non-tuple shapes (establishment {value!r}, "
+            f"re-arm {rearm!r})"
+        )
+    expected = _t324_discharged_ordinal(full)
+    if rearm != (expected,):
+        raise AssertionError(
+            f"the T324 live-corpus smoke: cycle {cycle}'s re-arm "
+            f"figure {rearm} != the DISCHARGED-derived own discharge "
+            f"({expected},)"
+        )
+    return True
+
+
 def _t324_discharged_ordinal(text):
     """The own discharge's ordinal derived INDEPENDENTLY of the extractor:
     the first uppercase `DISCHARGED` keyword (the corpus's own-discharge
@@ -5138,6 +5179,29 @@ _T324_ONLY_ESTABLISHMENT_COMPOUND = (
     "### Cycle 3996 (2099-01-01) — the compound-only replay: the cycle "
     "carried the 695th-establishment anchor-label slip observation."
 )
+# (c-T337) the T316-leg QUOTE/bracket clause mentions — the next
+# non-anchor-only shapes (the committed 3081 full entry's quote of the
+# one-lined 3073 compaction's group-clause NAMES, and the sibling
+# one-lining-naming parenthetical): each entry's ONLY establishment
+# occurrence is the quote, so the extractor must fail closed with the
+# designed no-anchor skip, never take the quoted group-clause NAME as the
+# own anchor (the adjacent slash-list ordinal rides it).
+_T324_ONLY_ESTABLISHMENT_BRACKET_QUOTE = (
+    "### Cycle 3993 (2099-01-01) — the routine no-work wrap replay (the "
+    "T337 shape, the committed 3081 entry): the T316-leg compacted cycle "
+    "3072 — assert_outcomes_one_liner GREEN first compose [the five "
+    "figure groups EQUAL mechanically — the worked full's group clauses "
+    "carried near-verbatim (the 3058-precedent shape: the zero-row/trip "
+    "holds-pair, the second net, the 705th close, the "
+    "710th/711th/712th establishments bracket, the 637th re-arm)]. "
+    "Verdict: routine skip + 0 rows, queue EMPTY."
+)
+_T324_ONLY_ESTABLISHMENT_ONE_LINING_PAREN = (
+    "### Cycle 3992 (2099-01-01) — the T316-leg replay: cycle 3072 "
+    "(one-lined 3072 compaction carried the 705th establishment figures "
+    "near-verbatim) — assert_outcomes_one_liner GREEN first compose. "
+    "Verdict: routine skip + 0 rows, queue EMPTY."
+)
 _T324_ONLY_REARM_CLAUSE = (
     "### Cycle 3995 (2099-01-01) — the clause-only replay: DECLINED, the "
     "class re-armed at the FIFTH."
@@ -5191,6 +5255,22 @@ class AssertOutcomesOneLinerAnchorSkipRuleTest(unittest.TestCase):
         self.assertIsNone(value)
         self.assertIn("no own-establishment anchor probed", detail)
         self.assertIn("T324", detail)
+        # Leg (c-T337): the T316-leg QUOTE/bracket clause mentions — the
+        # bracket-mention-only fixture (the committed 3081 shape) and the
+        # sibling one-lining-naming parenthetical both read as the
+        # DESIGNED no-anchor skip (value None, the T324-named detail that
+        # now also names the T337 class), never the stream-figure
+        # extraction failure a wrongly-taken quoted group-clause NAME
+        # would produce.
+        for only_text in (
+            _T324_ONLY_ESTABLISHMENT_BRACKET_QUOTE,
+            _T324_ONLY_ESTABLISHMENT_ONE_LINING_PAREN,
+        ):
+            value, detail = wrap_assert._ol_establishment_figures(only_text)
+            self.assertIsNone(value)
+            self.assertIn("no own-establishment anchor probed", detail)
+            self.assertIn("T337", detail)
+            self.assertIn("T324", detail)
         for only_text in (_T324_ONLY_REARM_CLAUSE, _T324_ONLY_REARM_QUOTED):
             value, detail = wrap_assert._ol_rearm_figure(only_text)
             self.assertIsNone(value)
@@ -5247,6 +5327,32 @@ class AssertOutcomesOneLinerAnchorSkipRuleTest(unittest.TestCase):
         message = str(caught.exception)
         self.assertIn("'establishment'", message)
         self.assertIn("no `<N>th` ordinal adjacent", message)
+        # The T337 RED proof: with the QUOTE/bracket-clause narrowing
+        # disabled, the bracket-mention-only fixture takes the quoted
+        # group-clause NAME as the own anchor (the adjacent slash-list
+        # ordinal rides it) and fails at the stream-figure extraction —
+        # exactly the committed 3081 smoke failure — while the shipped
+        # module reads the designed no-anchor skip; the sibling
+        # one-lining-naming parenthetical likewise. The module is
+        # byte-identical after (the mutation rides an in-memory exec).
+        bracket_line = (
+            "        if _ol_establishment_bracket_mention_at(text, idx):"
+        )
+        self.assertEqual(pristine.count(bracket_line), 1)
+        t337_mutant = _mutant_wrap_assert(
+            pristine, bracket_line, "        if False:"
+        )
+        for only_text in (
+            _T324_ONLY_ESTABLISHMENT_BRACKET_QUOTE,
+            _T324_ONLY_ESTABLISHMENT_ONE_LINING_PAREN,
+        ):
+            value, detail = wrap_assert._ol_establishment_figures(only_text)
+            self.assertIsNone(value)
+            self.assertIn("no own-establishment anchor probed", detail)
+            value, detail = t337_mutant["_ol_establishment_figures"](only_text)
+            self.assertIsNone(value)
+            self.assertNotIn("no own-establishment anchor probed", detail)
+            self.assertIn("no `<id> stream` reference", detail)
         with open(wrap_assert.__file__, "r", encoding="utf-8") as f:
             self.assertEqual(f.read(), pristine)
 
@@ -5319,46 +5425,47 @@ class AssertOutcomesOneLinerAnchorSkipRuleTest(unittest.TestCase):
         # and the re-arm group extracts EQUAL to the independently
         # DISCHARGED-derived own-discharge ordinal (the wrong-latch class
         # fires here, not at a future prep). The probed >= 1 floor keeps
-        # the smoke from going vacuous when the window is all-skips.
+        # the smoke from going vacuous when the window is all-skips —
+        # and when the window IS all-routine (T337: the kept-full 6 all
+        # routine no-work wraps) the floor rides the COMMITTED corpus's
+        # own full-path entry, the floor's intent intact.
         # RED-proven via the two skip-disabled mutants above: the mention
         # classes they un-skip are exactly the non-anchor shapes this
-        # smoke must not read as failures.
+        # smoke must not read as failures. T337: the 3081 shape — the
+        # entry's T316-leg prose QUOTES the one-lined compaction's
+        # group-clause NAMES (`the 710th/711th/712th establishments
+        # bracket`) — is likewise a designed no-anchor skip, not a
+        # failure.
         fulls = _t324_current_full_set(_t324_entry_lines(_t324_live_eval_text()))
         probed = 0
         skipped = 0
         for full in fulls:
             cycle = full[len("### Cycle "):].split(" ")[0]
-            value, detail = wrap_assert._ol_establishment_figures(full)
-            if (
-                detail is not None
-                and "no own-establishment anchor probed" not in detail
-            ):
-                raise AssertionError(
-                    f"the T324 live-corpus smoke: cycle {cycle}'s "
-                    f"establishment group failed to extract ({detail})"
-                )
-            rearm, rearm_detail = wrap_assert._ol_rearm_figure(full)
-            rearm_skip = "no own-`re-arm` discharge anchor probed"
-            if rearm_detail is not None and rearm_skip not in rearm_detail:
-                raise AssertionError(
-                    f"the T324 live-corpus smoke: cycle {cycle}'s re-arm "
-                    f"group failed to extract ({rearm_detail})"
-                )
-            if value is None or rearm is None or "DISCHARGED" not in full:
+            if _t324_smoke_full_path(full, cycle):
+                probed += 1
+            else:
                 # the no-anchor/no-discharged skip shape (the extractor's
                 # designed semantics — T333): not a failure, not probed.
                 skipped += 1
-                continue
-            self.assertIsInstance(value, tuple)
-            self.assertIsInstance(rearm, tuple)
-            expected = _t324_discharged_ordinal(full)
-            self.assertEqual(
-                rearm, (expected,),
-                f"the T324 live-corpus smoke: cycle {cycle}'s re-arm "
-                f"figure {rearm} != the DISCHARGED-derived own discharge "
-                f"({expected},)",
+        if probed < 1:
+            # The all-routine window (the T337-advanced corpus — the
+            # kept-full 6 are ALL routine no-work wraps, every one a
+            # designed skip shape): the floor's intent — the FULL path
+            # is exercised, never vacuous — rides the COMMITTED corpus's
+            # own full-path entry (the corpus-position-independent
+            # git-ref fixture shape the T333 fix landed; the 3008 full
+            # at 9ae8c1a carries both own anchors plus the keyword).
+            committed = next(
+                l for l in _t324_entry_lines(_t324_git_eval_text("9ae8c1a"))
+                if l.startswith("### Cycle 3008 ")
             )
-            probed += 1
+            if not _t324_smoke_full_path(committed, "3008 (committed, 9ae8c1a)"):
+                raise AssertionError(
+                    "the T324 live-corpus smoke: the committed 3008 full "
+                    "entry (the all-routine window's floor fallback) did "
+                    "not probe the full path"
+                )
+            probed = 1
         self.assertGreaterEqual(
             probed, 1,
             f"the T324 live-corpus smoke: zero of the {len(fulls)} "
