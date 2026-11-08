@@ -17,3 +17,4 @@
 - unharvested worktrees: NONE (git worktree list = main only; zero children launched)
 - unpushed commits: 0 at prep time (main == origin/main at a7f1770)
 - missing decision records: NONE (the cycle's routing d1794110029-1 labeled by the batch d1794110118-2)
+- Context compaction (this turn): LIVE_CTX turns 0-18 pruned, 706,214 -> 94,264 bytes (63% reduction); the 543,867-byte turn-19 (the initial reseed tool_result) was the bulk
