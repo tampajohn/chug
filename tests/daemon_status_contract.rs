@@ -94,6 +94,9 @@ impl Home {
     fn spawn(extra_env: &[(&str, &str)]) -> Home {
         let dir = tempfile::tempdir().expect("tempdir");
         let exe = env!("CARGO_BIN_EXE_chug");
+        // The warm-up exec is probe-inert (`--help` builds no capabilities
+        // document, so nothing reads the ambient claude dir); the daemon
+        // spawn below pins the seam anyway.
         let _ = Command::new(exe)
             .env_remove("CHUG_DAEMON_SOCK")
             .arg("--help")
@@ -102,6 +105,12 @@ impl Home {
             .status();
         let mut cmd = Command::new(exe);
         cmd.env("CHUG_HOME", dir.path())
+            // Ambient CLAUDE_CONFIG_DIR/HOME is safe on the DAEMON child
+            // (the T341 probe runs only inside the `capabilities` document
+            // builder, which the daemon never serves) — pinned to the
+            // scoped home anyway so the whole file is hermetic no matter
+            // what a future daemon surface reads.
+            .env("CLAUDE_CONFIG_DIR", dir.path().join("claude-scratch"))
             .env_remove("CHUG_DAEMON_SOCK")
             .stdout(Stdio::null())
             .stderr(Stdio::null());
@@ -169,10 +178,20 @@ fn get_json(home: &Home, path: &str) -> (u16, serde_json::Value) {
 }
 
 /// Run `chug <args>` with a scoped environment and return (exit, stdout).
+/// `CLAUDE_CONFIG_DIR` is SET to a scratch dir inside the scoped home:
+/// when `<args>` is `capabilities` the T341 probe reads that seam, and an
+/// UNSCOPED run falls back to `$HOME/.claude` — on a box with the
+/// meta-broker pack wired there, `permission_broker` flips true and the
+/// posture asserts below (e.g. line-of-fixture `permission_broker == false`)
+/// go RED. SET, never REMOVE — removing the var IS the fallback
+/// (the t341 validator's finding 2, the t339 finding-1 class). The var is
+/// read nowhere else in chug (only the capabilities probe), so every other
+/// subcommand here runs byte-identically with it set.
 fn run_chug(home_dir: &Path, extra_env: &[(&str, &str)], args: &[&str]) -> (i32, String) {
     let exe = env!("CARGO_BIN_EXE_chug");
     let mut cmd = Command::new(exe);
     cmd.env("CHUG_HOME", home_dir)
+        .env("CLAUDE_CONFIG_DIR", home_dir.join("claude-scratch"))
         .env_remove("CHUG_DAEMON_SOCK")
         .arg(args[0])
         .args(&args[1..])

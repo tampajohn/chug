@@ -157,20 +157,91 @@ absent or endpoints unreachable: `chug capabilities` reports
 
 ### T341 — permission broker (`permission_broker`)
 
-An opt-in PreToolUse hook pack. When `~/.claude/meta-broker.sock` exists
-and answers, the hook POSTs:
+An opt-in PreToolUse hook pack (`hooks/meta-broker/`, shipped in-repo and
+installed by `install.sh --with-meta-pack`). When
+`<claude-dir>/meta-broker.sock` exists and answers, the hook POSTs one HTTP
+request over that unix socket:
 
-```json
+```
+POST /permission HTTP/1.1
+Host: meta-broker
+Content-Type: application/json
+Content-Length: n
+Connection: close
+
 { "tool_name": "…", "input_summary": "…", "session_id": "…", "cwd": "…", "contract_version": "1" }
 ```
 
-and honors the reply `{ "decision": "allow|deny|ask", "reason": "…", "ttl": "…" }`
-— `ask` falls through to the stock prompt path unchanged. Fail-open by
-construction: socket absent, >800ms, or a malformed reply → the stock
-path with zero interference (a broker crash can never wedge a session).
-Every brokered decision appends one JSONL audit line (decision, reason,
-broker latency) to `~/.claude/meta-broker-audit.jsonl`; stock-path
-decisions append nothing.
+- `input_summary` — a bounded rendering of the tool input (compact JSON,
+  truncated hard at 2000 chars, `...` appended when truncated); the socket
+  payload stays small no matter how large the actual tool input is.
+- Absent values are omitted keys — never fabricated zeros, never empty
+  strings (the contract's event rule, applied to the request).
+- The whole interaction (connect through reply) gets **800ms** of wall
+  clock; anything slower is a fail-open.
+
+and honors the reply:
+
+```json
+{ "decision": "allow|deny|ask", "reason": "…", "ttl": "…" }
+```
+
+| decision | what the hook does | what Claude sees |
+| --- | --- | --- |
+| `allow` | prints the `permissionDecision: allow` document, exit 0 | the tool runs, no prompt |
+| `deny` | prints the `permissionDecision: deny` document, exit 0 | the tool is refused with the reason |
+| `ask` | prints nothing, exit 0 | the stock prompt path, unchanged |
+
+`ttl` is advisory for the v1 hook: it is recorded in the audit line and not
+acted on (a caching hook revision would honor it; the semantics stay the
+harness's). `reason` and `ttl` are optional; a non-string reads as absent.
+
+**Fail-open by construction** — every condition below lands on the same
+path: exit 0, no output, no audit line. Stock permission evaluation is
+byte-identical; a broker crash can never wedge a session.
+
+| condition | behavior |
+| --- | --- |
+| socket absent (`-S` fails) | stock path, <5ms added (shell builtins only, no fork) |
+| connect refused (a stale socket) | stock path |
+| >800ms (connect, send, or read) | stock path |
+| non-200 HTTP status | stock path |
+| malformed body / missing `decision` / unknown `decision` | stock path |
+| python3 missing (the handler's runtime) | stock path |
+| audit append fails | stock path (below) |
+| any other handler error | stock path |
+
+The audit leg is the contract's record: every **brokered** decision —
+`allow`, `deny`, and `ask` — appends exactly one JSONL line to
+`<claude-dir>/meta-broker-audit.jsonl`; stock-path outcomes append nothing
+(no noise). The decision only lands if its audit line is written — an
+unauditable decision is not a decision (fail-open, the gap is observable by
+the harness as a missing line). The line schema:
+
+```json
+{ "ts": "…", "tool_name": "…", "decision": "allow", "reason": "…", "ttl": "…",
+  "broker_latency_ms": 4, "input_summary": "…", "session_id": "…", "cwd": "…",
+  "contract_version": "1" }
+```
+
+`ts` is RFC3339 UTC with milliseconds; `broker_latency_ms` is the POST
+round trip (connect through reply); absent values are omitted keys.
+
+**Install / uninstall / detection.** `install.sh --with-meta-pack` installs
+the pack to `<claude-dir>/hooks/meta-broker/` and wires its PreToolUse hook
+into `<claude-dir>/settings.json` additively (existing hooks untouched,
+re-runs a no-op, the write atomic) — the pack comes from the SAME verified
+release tarball the binary comes from, or from the working tree when the
+script runs from a repo checkout that carries it.
+`install.sh --uninstall-meta-pack` is the exact reverse, offline: it
+removes exactly the pack's own block and the installed pack dir.
+`chug capabilities` reports `permission_broker: true` when the pack is
+**wired** — detected by the hook's presence in the user-level settings
+(the pack marker in a `hooks.PreToolUse` command), never by socket
+presence: a listening socket without the wired hook brokers nothing, and a
+wired hook with no socket is a <5ms no-op. `<claude-dir>` is
+`$CLAUDE_CONFIG_DIR` when set, else `~/.claude` — the same resolution the
+hook uses at run time.
 
 ### T342 — session status mod (`status_mod`)
 
@@ -236,3 +307,6 @@ Anthropic changes are tracked out-of-band, never here.
   `tests/fixtures/capabilities/contract-v1.json`.
 - The landing rows: T340 (daemon status + lifecycle events), T341
   (permission broker), T342 (session status mod), T343 (usage events).
+- T341's shipping leg: `hooks/meta-broker/` (the hook pack),
+  `install.sh --with-meta-pack` / `--uninstall-meta-pack` (the opt-in
+  wiring), `tests/meta_broker_hook.rs` (the hook + audit battery).

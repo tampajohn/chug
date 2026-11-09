@@ -1,7 +1,7 @@
 # T341 — permission-broker hook pack: meta-harness as approver-of-record (opt-in, fail-open)
 
 estimate: ~180 changed lines (hooks/meta-broker/ pack + install.sh --with-meta-pack leg + broker socket protocol doc + fixtures)
-check: set -o pipefail; CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared cargo test --release --test install_sh --test capabilities_contract
+check: set -o pipefail; CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-validate-a cargo test --release --test install_sh --test capabilities_contract
 
 ## Why
 
