@@ -922,18 +922,27 @@ impl Run {
             use std::os::unix::fs::PermissionsExt;
             std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
         }
-        let pack_src = install_sh().parent().unwrap().join("hooks/meta-broker");
         let staging_hooks = staging.join("hooks");
         std::fs::create_dir_all(&staging_hooks).unwrap();
+        // BOTH packs ride the tarball (the release workflow packages
+        // hooks/ whole): the T341 broker and the T342 status mod.
+        let broker_src = install_sh().parent().unwrap().join("hooks/meta-broker");
         let dst = staging_hooks.join("meta-broker");
         std::fs::create_dir_all(&dst).unwrap();
         for file in ["hook.sh", "hook.py", "wire.py", "README.md"] {
-            std::fs::copy(pack_src.join(file), dst.join(file)).unwrap();
+            std::fs::copy(broker_src.join(file), dst.join(file)).unwrap();
+        }
+        let status_src = install_sh().parent().unwrap().join("hooks/meta-status");
+        let status_dst = staging_hooks.join("meta-status");
+        std::fs::create_dir_all(&status_dst).unwrap();
+        for file in ["hook.sh", "wire.py", "README.md"] {
+            std::fs::copy(status_src.join(file), status_dst.join(file)).unwrap();
         }
         // The tarball-source marker: lets the fixtures PROVE which pack
         // source won (tarball vs repo checkout) instead of implying it —
         // the checkout-wins fixture below asserts this file did NOT land.
         std::fs::write(dst.join("tarball-pack-marker.txt"), "from-the-verified-tarball\n").unwrap();
+        std::fs::write(status_dst.join("tarball-pack-marker.txt"), "from-the-verified-tarball\n").unwrap();
         let tarball = self.release_dir.join(format!("chug-{platform}.tar.gz"));
         let ok = Command::new("tar")
             .args(["czf"])
@@ -1023,22 +1032,49 @@ fn with_meta_pack_installs_from_the_tarball_and_wires_additively() {
     let settings: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(claude.join("settings.json")).unwrap()).unwrap();
     let entries = settings["hooks"]["PreToolUse"].as_array().unwrap();
-    assert_eq!(entries.len(), 2, "the pack entry appended, nothing else moved");
+    assert_eq!(
+        entries.len(),
+        3,
+        "BOTH packs' entries appended, nothing else moved: {entries:?}"
+    );
     assert_eq!(entries[0]["hooks"][0]["command"], "echo keep-me", "existing hooks untouched");
     assert!(
         entries[1]["hooks"][0]["command"]
             .as_str()
             .unwrap()
             .ends_with("hooks/meta-broker/hook.sh"),
-        "the wired command points at the installed pack"
+        "the broker's wired command points at the installed pack"
     );
+    assert_eq!(
+        entries[2]["matcher"], "AskUserQuestion",
+        "the status mod's PreToolUse entry matches the question tool: {entries:?}"
+    );
+    // The status mod is wired on its six events (the non-tool events
+    // carry no matcher).
+    for event in ["PostToolUse", "UserPromptSubmit", "Notification", "Stop", "SessionEnd"] {
+        let entries = settings["hooks"][event].as_array().unwrap();
+        assert!(
+            entries
+                .iter()
+                .any(|e| e["hooks"][0]["command"].as_str().is_some_and(|c| c.contains("meta-status"))),
+            "{event} carries the status mod's wiring"
+        );
+    }
     assert_eq!(settings["model"], "opus", "unrelated keys untouched");
     // Idempotent re-run: still exit 0, still exactly one pack entry.
     let out = run.run_pack_leg("macos-arm64", &["--with-meta-pack"], &[("CHUG_INSTALL_PLATFORM", "macos-arm64")]);
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
     let settings: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(claude.join("settings.json")).unwrap()).unwrap();
-    assert_eq!(settings["hooks"]["PreToolUse"].as_array().unwrap().len(), 2, "no duplicate wiring");
+    assert_eq!(
+        settings["hooks"]["PreToolUse"].as_array().unwrap().len(),
+        3,
+        "no duplicate wiring (both packs idempotent)"
+    );
+    assert_eq!(settings["hooks"]["Stop"].as_array().unwrap().len(), 1, "no duplicate status wiring");
+    // The status dir exists from install (the hook never mkdirs on the
+    // hot path).
+    assert!(claude.join("meta-status").is_dir(), "the status dir is created at install");
 }
 
 /// --uninstall-meta-pack is the exact reverse: the pack's block removed
@@ -1068,9 +1104,17 @@ fn uninstall_meta_pack_removes_exactly_its_own_block_offline() {
     let settings: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(claude.join("settings.json")).unwrap()).unwrap();
     let entries = settings["hooks"]["PreToolUse"].as_array().unwrap();
-    assert_eq!(entries.len(), 1, "only the pack's block removed");
+    assert_eq!(entries.len(), 1, "only the packs' blocks removed");
     assert_eq!(entries[0]["hooks"][0]["command"], "echo keep-me", "the foreign hook survives");
-    assert!(!claude.join("hooks").join("meta-broker").exists(), "the pack dir is gone");
+    assert!(!claude.join("hooks").join("meta-broker").exists(), "the broker pack dir is gone");
+    assert!(!claude.join("hooks").join("meta-status").exists(), "the status pack dir is gone");
+    for event in ["PostToolUse", "UserPromptSubmit", "Notification", "Stop", "SessionEnd"] {
+        assert!(
+            settings["hooks"].get(event).is_none(),
+            "{event} was the status mod's event: unwired"
+        );
+    }
+    assert!(!claude.join("meta-status").exists(), "the status files went with the uninstall");
     // Idempotent: a second uninstall is a no-op exit 0.
     let out = run.run_pack_leg(
         "macos-arm64",
@@ -1126,13 +1170,20 @@ fn uninstall_meta_pack_refuses_profile_named_and_moves_nothing() {
         serde_json::from_str(&std::fs::read_to_string(claude.join("settings.json")).unwrap())
             .unwrap();
     let entries = settings["hooks"]["PreToolUse"].as_array().unwrap();
-    assert_eq!(entries.len(), 2, "the wiring is untouched");
+    assert_eq!(entries.len(), 3, "the wiring is untouched");
     assert!(
         entries[1]["hooks"][0]["command"]
             .as_str()
             .unwrap()
             .contains("meta-broker"),
-        "the pack entry survives the refused run"
+        "the broker entry survives the refused run"
+    );
+    assert!(
+        entries[2]["hooks"][0]["command"]
+            .as_str()
+            .unwrap()
+            .contains("meta-status"),
+        "the status mod entry survives the refused run"
     );
     // ...and the refused profile was never consumed.
     assert!(
@@ -1158,15 +1209,21 @@ fn a_checkout_carrying_the_pack_installs_from_the_working_tree() {
     // repo-checkout shape, not the release dir itself (which must stay a
     // non-checkout for the tarball fixtures).
     let checkout = run.release_dir.parent().unwrap().join("checkout");
-    let checkout_pack = checkout.join("hooks").join("meta-broker");
-    std::fs::create_dir_all(&checkout_pack).unwrap();
+    let checkout_hooks = checkout.join("hooks");
+    std::fs::create_dir_all(&checkout_hooks).unwrap();
     std::fs::copy(install_sh(), checkout.join("install.sh")).unwrap();
-    let repo_pack = install_sh().parent().unwrap().join("hooks/meta-broker");
-    for file in ["hook.sh", "hook.py", "wire.py", "README.md"] {
-        std::fs::copy(repo_pack.join(file), checkout_pack.join(file)).unwrap();
+    let repo_hooks = install_sh().parent().unwrap().join("hooks");
+    for (pack, files) in [
+        ("meta-broker", vec!["hook.sh", "hook.py", "wire.py", "README.md"]),
+        ("meta-status", vec!["hook.sh", "wire.py", "README.md"]),
+    ] {
+        let dst = checkout_hooks.join(pack);
+        std::fs::create_dir_all(&dst).unwrap();
+        for file in files {
+            std::fs::copy(repo_hooks.join(pack).join(file), dst.join(file)).unwrap();
+        }
+        std::fs::write(dst.join("checkout-pack-marker.txt"), "from-the-working-tree\n").unwrap();
     }
-    std::fs::write(checkout_pack.join("checkout-pack-marker.txt"), "from-the-working-tree\n")
-        .unwrap();
 
     // Install from the checkout. `sh <checkout>/install.sh` puts the
     // checkout's hooks/ sibling in play via the $0-relative gate.
@@ -1192,6 +1249,12 @@ fn a_checkout_carrying_the_pack_installs_from_the_working_tree() {
     for file in ["hook.sh", "hook.py", "wire.py"] {
         assert!(pack.join(file).is_file(), "{file} landed from the checkout");
     }
+    let status_pack = claude_dir(&run.home).join("hooks").join("meta-status");
+    assert!(
+        status_pack.join("checkout-pack-marker.txt").is_file()
+            && !status_pack.join("tarball-pack-marker.txt").is_file(),
+        "BOTH packs install from the working tree when the checkout carries them"
+    );
 
     // The wiring still happened, and points at the installed copy.
     let settings: serde_json::Value = serde_json::from_str(
@@ -1199,13 +1262,20 @@ fn a_checkout_carrying_the_pack_installs_from_the_working_tree() {
     )
     .unwrap();
     let entries = settings["hooks"]["PreToolUse"].as_array().unwrap();
-    assert_eq!(entries.len(), 1, "exactly the pack entry wired");
+    assert_eq!(entries.len(), 2, "exactly the two packs' entries wired");
     assert!(
         entries[0]["hooks"][0]["command"]
             .as_str()
             .unwrap()
             .ends_with("hooks/meta-broker/hook.sh"),
         "the wired command points at the installed pack"
+    );
+    assert!(
+        entries[1]["hooks"][0]["command"]
+            .as_str()
+            .unwrap()
+            .ends_with("hooks/meta-status/hook.sh"),
+        "the status mod's entry points at the installed pack"
     );
 }
 

@@ -10,14 +10,15 @@
 //!
 //! Cheap by construction: the document is built from constants and the
 //! package version — no file I/O, no env reads ([`document`] stays pure).
-//! The `chug capabilities` COMMAND adds exactly two bounded probes (T340 +
-//! T341): a missing, stale, or unreachable daemon reports
+//! The `chug capabilities` COMMAND adds exactly three bounded probes (T340,
+//! T341, T342): a missing, stale, or unreachable daemon reports
 //! `daemon_status: false` / `lifecycle_events: false` and `versions.daemon:
-//! null`, and an unwired (or unreadable) meta-broker hook reports
-//! `permission_broker: false` — never an error, never a hang (the daemon
-//! probe budget is the daemon client's own 2s socket bound, the spec's
-//! ">2s budget per probe"; the broker probe is one stat + one bounded read
-//! of Claude's settings.json).
+//! null`, an unwired (or unreadable) meta-broker hook reports
+//! `permission_broker: false`, and an unwired session-status pack reports
+//! `status_mod: false` — never an error, never a hang (the daemon probe
+//! budget is the daemon client's own 2s socket bound, the spec's ">2s
+//! budget per probe"; the hook-pack probes are one stat + one bounded read
+//! of Claude's settings.json each).
 //!
 //! The stability rule, stated in-band in every document (`compat`) and in
 //! the doc: consumers MUST treat unknown features as false and MUST ignore
@@ -31,8 +32,8 @@
 
 // The reader half (`FEATURE_KEYS`, `is_shipped`, `shipped`) has production
 // callers only in the contract tests today; the writer half's remaining
-// feature flips land with T342-T343. Same posture as attach.rs/observ.rs:
-// the API is the deliverable, the callers land with the rows that implement
+// feature flip lands with T343. Same posture as attach.rs/observ.rs: the
+// API is the deliverable, the callers land with the rows that implement
 // against it.
 #![allow(dead_code)]
 
@@ -190,12 +191,15 @@ pub fn render(doc: &Document) -> String {
 }
 
 /// The document this binary prints (producer path): the daemon probe (T340)
-/// merged first, then the broker probe (T341). Both flips are additive
-/// within contract v1.
+/// merged first, then the broker probe (T341) and the status-mod probe
+/// (T342). All flips are additive within contract v1.
 pub fn document_json() -> String {
     let mut doc = document_with_daemon(&probe_daemon_status());
     if probe_permission_broker() {
         doc.features.permission_broker = FeatureValue::Bool(true);
+    }
+    if probe_status_mod() {
+        doc.features.status_mod = FeatureValue::Bool(true);
     }
     render(&doc)
 }
@@ -273,8 +277,9 @@ pub const PERMISSION_BROKER_MARKER: &str = "meta-broker";
 
 /// The settings read cap: Claude's settings.json is a few KB; a file past
 /// this is not a settings file chug will walk (bounded probe — never a
-/// giant read on a wedged path).
-const BROKER_SETTINGS_MAX_BYTES: u64 = 4 * 1024 * 1024;
+/// giant read on a wedged path). Shared by the T341 broker probe and the
+/// T342 status-mod probe.
+const SETTINGS_MAX_BYTES: u64 = 4 * 1024 * 1024;
 
 /// The Claude config dir: `$CLAUDE_CONFIG_DIR` when set (Claude's own
 /// override, and the fixtures' seam), else `$HOME/.claude` (`USERPROFILE`
@@ -329,28 +334,77 @@ pub fn permission_broker_installed_from_str(settings_json: &str) -> bool {
     })
 }
 
-/// The probe behind `permission_broker`: one stat + one bounded read of the
-/// user settings (`<claude-dir>/settings.json`), then the pure walk above.
-/// Every failure mode — no home, no file, unreadable, unparseable,
-/// oversized — is `false`, never an error: the command stays cheap and
-/// total. The project-level settings are deliberately NOT probed — the pack
-/// installs at the user level and the capabilities document reports that
-/// install.
-pub fn probe_permission_broker() -> bool {
-    let Some(dir) = claude_dir() else {
-        return false;
-    };
-    let path = dir.join("settings.json");
-    let Ok(meta) = std::fs::metadata(&path) else {
-        return false;
-    };
-    if !meta.is_file() || meta.len() > BROKER_SETTINGS_MAX_BYTES {
-        return false;
+/// The bounded settings read behind both hook-pack probes: one stat + one
+/// read of the user settings (`<claude-dir>/settings.json`). Every failure
+/// mode — no home, no file, unreadable, oversized — is `None`, never an
+/// error: the probes stay cheap and total.
+fn read_settings_bounded() -> Option<String> {
+    let path = claude_dir()?.join("settings.json");
+    let meta = std::fs::metadata(&path).ok()?;
+    if !meta.is_file() || meta.len() > SETTINGS_MAX_BYTES {
+        return None;
     }
-    let Ok(text) = std::fs::read_to_string(&path) else {
+    std::fs::read_to_string(&path).ok()
+}
+
+/// The probe behind `permission_broker`: the bounded settings read, then
+/// the pure walk above. The project-level settings are deliberately NOT
+/// probed — the pack installs at the user level and the capabilities
+/// document reports that install.
+pub fn probe_permission_broker() -> bool {
+    permission_broker_installed_from_str(&read_settings_bounded().unwrap_or_default())
+}
+
+// T342 — the bounded session-status probe behind `status_mod`.
+// ---------------------------------------------------------------------------
+
+/// The hook-command marker the status-mod probe matches: the pack's
+/// directory name (`…/hooks/meta-status/hook.sh`) — the same string
+/// `install.sh --with-meta-pack` wires and `--uninstall-meta-pack`
+/// removes. Substring, not an exact-path match, so a compatible status
+/// hook a harness wires by hand still reads installed.
+pub const STATUS_MOD_MARKER: &str = "meta-status";
+
+/// The PURE half of the probe: does this settings document wire the
+/// session-status pack on ANY hook event? The pack is wired on six events
+/// (PreToolUse matched to AskUserQuestion, PostToolUse, UserPromptSubmit,
+/// Notification, Stop, SessionEnd), so — unlike the PreToolUse-only broker
+/// probe — the walk covers every event key, and an entry without a
+/// `matcher` (the non-tool-event shape `wire.py` writes) still counts.
+/// HOOK PRESENCE, never file presence — a status file a harness finds
+/// without the wired hook is a leftover, not an install. Fail-open by
+/// contract: anything unreadable, unparseable, or shaped otherwise than
+/// Claude's hooks schema is `false`.
+pub fn status_mod_installed_from_str(settings_json: &str) -> bool {
+    let Ok(parsed) = serde_json::from_str::<Value>(settings_json) else {
         return false;
     };
-    permission_broker_installed_from_str(&text)
+    let Some(hooks) = parsed.get("hooks").and_then(Value::as_object) else {
+        return false;
+    };
+    hooks.values().any(|entries| {
+        entries.as_array().is_some_and(|entries| {
+            entries.iter().any(|entry| {
+                entry
+                    .get("hooks")
+                    .and_then(Value::as_array)
+                    .is_some_and(|hooks| {
+                        hooks.iter().any(|hook| {
+                            hook.get("command")
+                                .and_then(Value::as_str)
+                                .is_some_and(|command| command.contains(STATUS_MOD_MARKER))
+                        })
+                    })
+            })
+        })
+    })
+}
+
+/// The probe behind `status_mod`: the bounded settings read, then the pure
+/// walk above. Same fail-open posture as the broker probe — every failure
+/// mode is `false`, never an error.
+pub fn probe_status_mod() -> bool {
+    status_mod_installed_from_str(&read_settings_bounded().unwrap_or_default())
 }
 
 /// The reference reader — the consumer rule, executable. Tolerant by
@@ -680,5 +734,91 @@ mod tests {
         assert!(!permission_broker_installed_from_str(
             r#"{"hooks":{"PreToolUse":[{"matcher":"*","command":"meta-broker-hook"}]}}"#
         ));
+    }
+
+    // ---------- the T342 probe + merge ----------
+
+    /// The exact shape install.sh wires (via wire.py) reads as installed:
+    /// the pack on all six events, including the matcher-less entries the
+    /// non-tool events carry.
+    #[test]
+    fn the_wired_status_pack_shape_reads_installed() {
+        let command = "/home/u/.claude/hooks/meta-status/hook.sh";
+        let wired = format!(
+            r#"{{
+                "hooks": {{
+                    "PreToolUse": [{{"matcher": "AskUserQuestion", "hooks": [{{"type": "command", "command": "{command}"}}]}}],
+                    "PostToolUse": [{{"matcher": "*", "hooks": [{{"type": "command", "command": "{command}"}}]}}],
+                    "UserPromptSubmit": [{{"hooks": [{{"type": "command", "command": "{command}"}}]}}],
+                    "Notification": [{{"hooks": [{{"type": "command", "command": "{command}"}}]}}],
+                    "Stop": [{{"hooks": [{{"type": "command", "command": "{command}"}}]}}],
+                    "SessionEnd": [{{"hooks": [{{"type": "command", "command": "{command}"}}]}}]
+                }}
+            }}"#
+        );
+        assert!(status_mod_installed_from_str(&wired));
+        // A PARTIAL wiring (one event, the pre-wire or hand-edited shape)
+        // still reads installed — presence, not completeness.
+        assert!(status_mod_installed_from_str(
+            r#"{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"/x/hooks/meta-status/hook.sh"}]}]}}"#
+        ));
+    }
+
+    /// Every non-wiring shape reads false: foreign hooks, the BROKER pack
+    /// (a different row — the markers differ), no hooks block, malformed
+    /// JSON, an empty document. And the status probe must not read the
+    /// broker's PreToolUse wiring as its own.
+    #[test]
+    fn every_non_status_mod_shape_reads_false() {
+        let other_hook = r#"{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"echo hi"}]}]}}"#;
+        assert!(
+            !status_mod_installed_from_str(other_hook),
+            "a foreign Stop hook is not the pack"
+        );
+        let broker_pack = r#"{"hooks":{"PreToolUse":[{"matcher":"*","hooks":[{"type":"command","command":"/x/hooks/meta-broker/hook.sh"}]}]}}"#;
+        assert!(
+            !status_mod_installed_from_str(broker_pack),
+            "the broker pack is permission_broker's row, not status_mod's"
+        );
+        assert!(!status_mod_installed_from_str("{}"));
+        assert!(!status_mod_installed_from_str(r#"{"hooks":{}}"#));
+        assert!(!status_mod_installed_from_str("{broken"));
+        assert!(!status_mod_installed_from_str(""));
+        assert!(!status_mod_installed_from_str("null"));
+        // A command sitting directly on the entry is not the wiring.
+        assert!(!status_mod_installed_from_str(
+            r#"{"hooks":{"Stop":[{"command":"meta-status-hook"}]}}"#
+        ));
+    }
+
+    /// The merge: an installed probe flips EXACTLY `status_mod`, the
+    /// T340-T341 rows stay off, and the flip survives the wire roundtrip.
+    #[test]
+    fn an_installed_probe_flips_exactly_status_mod() {
+        let mut doc = document_with_daemon(&DaemonProbe::absent());
+        doc.features.status_mod = FeatureValue::Bool(true);
+        assert!(doc.features.shipped("status_mod"));
+        assert!(!doc.features.shipped("daemon_status"));
+        assert!(!doc.features.shipped("lifecycle_events"));
+        assert!(!doc.features.shipped("permission_broker"));
+        assert!(!doc.features.shipped("usage_events"));
+        let rendered = serde_json::to_value(&doc).unwrap();
+        assert_eq!(rendered["features"]["status_mod"], serde_json::json!(true));
+        let parsed = parse(&render(&doc)).expect("the flipped document parses");
+        assert!(parsed.features.shipped("status_mod"));
+    }
+
+    /// Both hook-pack probes on one settings file (the state a real
+    /// --with-meta-pack box is in): each row flips from ITS marker only.
+    #[test]
+    fn both_pack_rows_flip_from_their_own_markers() {
+        let both = r#"{"hooks":{
+            "PreToolUse":[{"matcher":"*","hooks":[{"type":"command","command":"/x/hooks/meta-broker/hook.sh"}]}],
+            "Stop":[{"hooks":[{"type":"command","command":"/x/hooks/meta-status/hook.sh"}]}]}}"#;
+        assert!(permission_broker_installed_from_str(both));
+        assert!(status_mod_installed_from_str(both));
+        let only_broker = r#"{"hooks":{"PreToolUse":[{"matcher":"*","hooks":[{"type":"command","command":"/x/hooks/meta-broker/hook.sh"}]}]}}"#;
+        assert!(permission_broker_installed_from_str(only_broker));
+        assert!(!status_mod_installed_from_str(only_broker));
     }
 }
