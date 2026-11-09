@@ -534,8 +534,8 @@ impl Fixture {
 
     fn run_one_pass_with(&self, chug_exits: i32) {
         self.install_run_stubs(chug_exits);
-        let status = Command::new("bash")
-            .arg(self.path().join("loopd.sh"))
+        let mut cmd = Command::new("bash");
+        cmd.arg(self.path().join("loopd.sh"))
             .arg("run")
             .current_dir(self.path())
             .env(
@@ -560,7 +560,12 @@ impl Fixture {
             .env("GIT_COMMITTER_NAME", "t326-fixture")
             .env("GIT_COMMITTER_EMAIL", "t326@example.test")
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null");
+        // T346: pin the T213/T330 loader files to ABSENT fixture paths — an
+        // operator-staged ~/.chug/profile.env must never reach the stub
+        // cycle (the T332 hermeticity contract).
+        common::pin_loopd_env_files(&mut cmd, self.path());
+        let status = cmd
             .output()
             .expect("spawn loopd.sh run");
         assert!(

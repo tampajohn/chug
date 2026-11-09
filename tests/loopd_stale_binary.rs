@@ -28,6 +28,11 @@
 
 #![cfg(unix)]
 
+// T346: the loopd-spawning harnesses pin the T213/T330 env-file loaders to
+// ABSENT fixture paths — the shared helper lives here.
+#[path = "common/mod.rs"]
+mod common;
+
 use std::fs;
 use std::io::Read;
 use std::os::unix::fs::PermissionsExt;
@@ -205,6 +210,10 @@ impl Sandbox {
             cmd.env(k, v);
         }
         cmd.stdout(Stdio::null()).stderr(Stdio::null());
+        // T346: pin the T213/T330 loader files to ABSENT fixture paths — an
+        // operator-staged ~/.chug/profile.env must never re-export itself
+        // into the spawned supervisor (the T332 hermeticity contract).
+        common::pin_loopd_env_files(&mut cmd, &self.root);
         cmd.spawn().expect("spawn bash loopd.sh run")
     }
 
@@ -389,6 +398,10 @@ exit 0
         cmd.env("LOOPD_MAX_LOOPS", "50");
         cmd.env("CARGO_TARGET_DIR", &inherited);
         cmd.stdout(Stdio::null()).stderr(Stdio::null());
+        // T346: pin the T213/T330 loader files to ABSENT fixture paths —
+        // every `loopd.sh run` spawn site carries the bound (this test
+        // builds its own Command, so the pin rides here too).
+        common::pin_loopd_env_files(&mut cmd, &sandbox.root);
         cmd.spawn().expect("spawn bash loopd.sh run")
     };
     // Both scenarios end in a recorded cycle; what differs is WHO ran it.
