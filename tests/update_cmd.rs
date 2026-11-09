@@ -490,10 +490,8 @@ fn a_stale_release_takes_the_source_build_path() {
         fs::set_permissions(&built, fs::Permissions::from_mode(0o755)).expect("chmod built");
         fs::write(
             &cargo_stub,
-            format!(
-                "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$PWD/cargo-argv.log\"\n\
-                 printf 'cargo build --release would compile here\\n' >&2\nexit 0\n"
-            ),
+            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$PWD/cargo-argv.log\"\n\
+                 printf 'cargo build --release would compile here\\n' >&2\nexit 0\n",
         )
         .expect("write the cargo stub");
         fs::set_permissions(&cargo_stub, fs::Permissions::from_mode(0o755)).expect("chmod cargo");

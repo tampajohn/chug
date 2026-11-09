@@ -270,10 +270,8 @@ fn http_get(url: &str, total_timeout: Duration, max_bytes: u64) -> anyhow::Resul
     if !status.is_success() {
         bail!("HTTP {status}: non-2xx response from GET {url}");
     }
-    if let Some(len) = resp.content_length() {
-        if len > max_bytes {
-            bail!("GET {url} returned {len} bytes (cap {max_bytes}) — not a release artifact");
-        }
+    if let Some(len) = resp.content_length().filter(|&len| len > max_bytes) {
+        bail!("GET {url} returned {len} bytes (cap {max_bytes}) — not a release artifact");
     }
     let mut bytes = Vec::new();
     resp.take(max_bytes)
