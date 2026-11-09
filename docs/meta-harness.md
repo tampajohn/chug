@@ -354,6 +354,26 @@ On all three, a provider that reports none leaves the key out — the
 requested name is never copied into the served slot. Additive optional
 keys: existing consumers parse unchanged.
 
+## Spawning a loop: the goal rides `--goal`, not the prompt
+
+A harness that spawns a loop (`chug loop init && chug loop run` in a
+target repo) passes the spawn goal as a FLAG: `chug loop init --goal
+"<goal text>"` (or `--goal-file <path>` for a long goal), or `chug loop
+run --goal` when the target's queue is still empty (seed-then-run).
+`--goal` seeds the queue — TODO.md gains one row citing a generated spec
+under `specs/` that carries the goal verbatim and a `check:` line — so
+the loop works the goal instead of waking on an empty queue and going
+dormant (T355; the 2026-11-09 herdr report: "the queue stayed at 0 for
+the goal i spawned it with" — the goal had only ridden the spawn prompt).
+
+The session prompt is dead text to the loop: a cycle reads its queue
+(TODO.md), its contract (LOOP-SPEC.md), and nothing else. A goal that
+only rode the prompt never becomes work. Compat: bare `chug loop init`
+is unchanged (empty queue + Proposed lane) — only `--goal` seeds; and
+`chug loop run --goal` on a NON-empty queue refuses (exit 2) rather than
+silently append to a queue nobody read, so seeding a live queue is
+`chug loop init --goal`'s explicit, reported act.
+
 ## Versioning
 
 Within one `contract_version`, every change is **additive**:

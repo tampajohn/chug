@@ -447,6 +447,19 @@ enum LoopAction {
         /// `<file>.bak` beside it.
         #[arg(long, default_value_t = false)]
         force: bool,
+        /// T355: seed the queue from this goal after scaffolding — TODO.md
+        /// gains one row (title from the goal's first sentence) citing a
+        /// generated spec at specs/t<N>-<slug>.md that carries the goal
+        /// verbatim plus a `check:` line requiring an operator-visible
+        /// outcome artifact. Composes with an already-scaffolded repo: the
+        /// row is appended at the next id (the only mutation allowed on a
+        /// `kept` file); the same goal twice reports `kept`, one row.
+        #[arg(long)]
+        goal: Option<String>,
+        /// T355: read the --goal text from a file (long goals). One of
+        /// --goal / --goal-file, never both.
+        #[arg(long)]
+        goal_file: Option<PathBuf>,
         /// Working directory (the repo to scaffold). Defaults to `.`.
         #[arg(long)]
         cwd: Option<PathBuf>,
@@ -457,6 +470,13 @@ enum LoopAction {
         /// Working directory (the repo to run the loop in). Defaults to `.`.
         #[arg(long)]
         cwd: Option<PathBuf>,
+        /// T355: seed-then-run convenience — with an EMPTY queue (no open
+        /// rows), seed it from this goal (the same seeding `chug loop init
+        /// --goal` does) and start work. With a non-empty queue this is an
+        /// error (exit 2): never silently append to a queue you didn't
+        /// read — seed a live queue with `chug loop init --goal` instead.
+        #[arg(long)]
+        goal: Option<String>,
     },
 }
 
@@ -1081,18 +1101,45 @@ fn cmd_daemon(stop: bool, status: bool, ensure: bool) -> anyhow::Result<i32> {
 /// are the only `Ok(code)` paths.
 fn cmd_loop(action: LoopAction) -> anyhow::Result<i32> {
     match action {
-        LoopAction::Init { force, cwd } => {
+        LoopAction::Init {
+            force,
+            cwd,
+            goal,
+            goal_file,
+        } => {
             let cwd = resolve_cwd(cwd)?;
-            for line in loop_cmd::init(&cwd, force)? {
+            let goal = loop_goal_text(goal.as_deref(), goal_file.as_deref())?;
+            for line in loop_cmd::init(&cwd, force, goal.as_deref())? {
                 println!("{line}");
             }
             Ok(0)
         }
-        LoopAction::Run { cwd } => {
+        LoopAction::Run { cwd, goal } => {
             let cwd = resolve_cwd(cwd)?;
-            loop_cmd::run(&cwd)
+            let goal = loop_goal_text(goal.as_deref(), None)?;
+            loop_cmd::run(&cwd, goal.as_deref())
         }
     }
+}
+
+/// T355: the `--goal` / `--goal-file` resolution shared by `loop init` and
+/// `loop run` — exactly one source, trimmed, never empty.
+fn loop_goal_text(goal: Option<&str>, goal_file: Option<&Path>) -> anyhow::Result<Option<String>> {
+    let text = match (goal, goal_file) {
+        (Some(_), Some(_)) => {
+            bail!("loop: use one of --goal / --goal-file, not both");
+        }
+        (Some(goal), None) => goal.to_string(),
+        (None, Some(path)) => std::fs::read_to_string(path)
+            .with_context(|| format!("reading --goal-file {}", path.display()))?,
+        (None, None) => return Ok(None),
+    };
+    let trimmed = text.trim();
+    anyhow::ensure!(
+        !trimmed.is_empty(),
+        "loop: --goal is empty — nothing to seed the queue with"
+    );
+    Ok(Some(trimmed.to_string()))
 }
 
 /// `chug fork` (T105): a pure CLI op over the two session files — no driver,
