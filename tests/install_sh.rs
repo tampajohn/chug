@@ -242,6 +242,7 @@ fn posix_sh_parse_and_no_bashisms() {
         "CHUG_INSTALL_PLATFORM",
         "CHUG_INSTALL_DIR",
         "CHUG_RELEASE_URL_BASE",
+        "CHUG_RELEASE_API_BASE",
     ] {
         assert!(text.contains(needle), "install.sh must keep the {needle} override");
     }
@@ -1340,4 +1341,652 @@ fn a_pack_less_tarball_fails_named() {
         !claude_dir(&run.home).join("hooks").exists(),
         "nothing installed on the failed leg"
     );
+}
+
+// ---------- T348: the release-staleness gate + the service legs ----------//
+//
+// Two targeted gaps found during the K7 update (2026-11-09): install.sh
+// succeeded while installing a MONTH-OLD binary (releases/latest is a moving
+// pointer — the T347 outage made every pilot install a silent downgrade),
+// and the managed launchd jobs for chugd/loopd were tribal knowledge (the
+// scripts/ plists were hand-installed on K7). The battery covers: the
+// staleness gate (probe BEFORE download, --allow-stale as the non-
+// interactive escape hatch, the installed --version echo for logs), and the
+// --with-daemon/--with-loopd legs (idempotent bootstrap → kickstart-on-
+// rerun via a MOCK launchctl — no system job is ever consulted — the
+// macOS-only Linux TODO note, and the loop-scaffold gate).
+
+/// Howard Hinnant's civil_from_days: days since 1970-01-01 → (y, m, d).
+/// No external `date` call: BSD and GNU disagree on `-d`/`-v`, and the
+/// freshness fixtures must be pinned relative to the REAL clock.
+fn civil_from_days(z: i64) -> (i64, u32, u32) {
+    let z = z + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    ((if m <= 2 { y + 1 } else { y }), m as u32, d)
+}
+
+/// The UTC date `n` days before now, in the YYYY-MM-DD form the release
+/// metadata's published_at carries.
+fn days_ago_utc(n: i64) -> String {
+    let now_days = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("the clock is after 1970")
+        .as_secs() as i64
+        / 86_400;
+    let (y, m, d) = civil_from_days(now_days - n);
+    format!("{y:04}-{m:02}-{d:02}")
+}
+
+/// A fixed date far beyond the 7-day window, whatever day the suite runs.
+const STALE_PUBLISHED_AT: &str = "2026-01-01T12:00:00Z";
+
+impl Run {
+    /// The release-metadata fixture for the staleness probe: the JSON the
+    /// GitHub API returns for repos/<repo>/releases/latest, served from the
+    /// fixture's fake API base (CHUG_RELEASE_API_BASE=file://<release>/api).
+    /// Decoy fields ride it so the script's extraction must key on the FIELD
+    /// NAME (published_at), not on line position.
+    fn write_release_meta(&self, published_at: &str, tag: &str) -> PathBuf {
+        let api = self.release_dir.join("api/repos/tampajohn/chug/releases");
+        std::fs::create_dir_all(&api).unwrap();
+        let meta = api.join("latest");
+        std::fs::write(
+            &meta,
+            format!(
+                "{{\n  \"url\": \"https://api.github.com/repos/tampajohn/chug/releases/1\",\n  \
+                 \"tag_name\": \"{tag}\",\n  \"name\": \"{tag}\",\n  \
+                 \"published_at\": \"{published_at}\",\n  \"assets\": []\n}}\n"
+            ),
+        )
+        .unwrap();
+        meta
+    }
+
+    /// Run with the staleness probe pointed at the fixture's fake API base.
+    /// The probe runs ONLY when CHUG_RELEASE_API_BASE is set on top of the
+    /// base_cmd's CHUG_RELEASE_URL_BASE (the skip rule keeps every other
+    /// fixture — and every mirror run — offline).
+    fn run_with_api(&self, platform: &str, args: &[&str]) -> Output {
+        self.base_cmd(None)
+            .env("CHUG_INSTALL_PLATFORM", platform)
+            .env(
+                "CHUG_RELEASE_API_BASE",
+                format!("file://{}/api", self.release_dir.display()),
+            )
+            .args(args)
+            .output()
+            .expect("spawning sh install.sh")
+    }
+
+    /// A fake release whose tarball carries the service plists (`chug` +
+    /// `scripts/`) — the layout a release packages once the service legs
+    /// ship. The plist is the checked-in scripts/com.tampajohn.chugd.plist.
+    fn make_release_with_scripts(&self, platform: &str, stub_stdout: &str) -> PathBuf {
+        let staging = self.release_dir.join(format!("stage-scripts-{platform}"));
+        std::fs::create_dir_all(staging.join("scripts")).unwrap();
+        let stub = staging.join("chug");
+        std::fs::write(&stub, format!("#!/bin/sh\necho {stub_stdout}\n")).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let repo_scripts = install_sh().parent().unwrap().join("scripts");
+        std::fs::copy(
+            repo_scripts.join("com.tampajohn.chugd.plist"),
+            staging.join("scripts").join("com.tampajohn.chugd.plist"),
+        )
+        .expect("the committed chugd plist exists in scripts/");
+        let tarball = self.release_dir.join(format!("chug-{platform}.tar.gz"));
+        let ok = Command::new("tar")
+            .args(["czf"])
+            .arg(&tarball)
+            .args(["chug", "scripts"])
+            .current_dir(&staging)
+            .output()
+            .expect("tar czf");
+        assert!(
+            ok.status.success(),
+            "tar czf failed: {}",
+            String::from_utf8_lossy(&ok.stderr)
+        );
+        let hash = sha256(&tarball);
+        std::fs::write(
+            self.release_dir.join(format!("chug-{platform}.tar.gz.sha256")),
+            format!("{hash}  chug-{platform}.tar.gz\n"),
+        )
+        .unwrap();
+        tarball
+    }
+
+    /// The state dir the mock launchctl keeps its gui-domain registry in.
+    fn launchctl_state(&self) -> PathBuf {
+        self.home.join("launchctl-state")
+    }
+
+    /// A PATH-shim `launchctl`: models the gui-domain job registry as
+    /// marker files (loaded/<label>) and appends EVERY invocation to
+    /// calls.log. The fixture harness that makes the bootstrap/kickstart
+    /// legs deterministic without touching the real launchd — no system
+    /// job is ever consulted, exactly like the uname shim above.
+    fn launchctl_shim(&self) -> PathBuf {
+        let dir = self.home.join("launchctl-shim");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("launchctl"),
+            "#!/bin/sh\n\
+             state=$MOCK_LAUNCHCTL_STATE\n\
+             mkdir -p \"$state\"\n\
+             printf '%s\\n' \"$*\" >> \"$state/calls.log\"\n\
+             case \"$1\" in\n\
+               print)\n\
+                 label=${2##*/}\n\
+                 if [ -f \"$state/loaded/$label\" ]; then exit 0; fi\n\
+                 exit 1 ;;\n\
+               bootstrap)\n\
+                 mkdir -p \"$state/loaded\"\n\
+                 touch \"$state/loaded/$(basename \"$3\" .plist)\"\n\
+                 exit 0 ;;\n\
+               kickstart)\n\
+                 printf '%s\\n' \"$*\" >> \"$state/kickstarts.log\"\n\
+                 exit 0 ;;\n\
+             esac\n\
+             exit 0\n",
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(dir.join("launchctl"), std::fs::Permissions::from_mode(0o755))
+                .unwrap();
+        }
+        dir
+    }
+
+    /// Run a COPY of install.sh from a non-checkout dir (no scripts/ sibling:
+    /// the tarball leg runs) with the mock launchctl on PATH and the OS leg
+    /// forced (the plist fixtures must be host-independent). `cwd` relocates
+    /// the run — the --with-loopd scaffold gate reads the current directory.
+    fn run_service_leg(
+        &self,
+        platform: &str,
+        args: &[&str],
+        os: &str,
+        cwd: Option<&Path>,
+    ) -> Output {
+        let script_copy = self
+            .release_dir
+            .join(format!("install-service-{platform}.sh"));
+        std::fs::copy(install_sh(), &script_copy).unwrap();
+        self.run_service_leg_at(&script_copy, platform, args, os, cwd)
+    }
+
+    /// The same, but against an explicit script path (the checkout-wins
+    /// fixture runs the checkout's own install.sh).
+    fn run_service_leg_at(
+        &self,
+        script: &Path,
+        platform: &str,
+        args: &[&str],
+        os: &str,
+        cwd: Option<&Path>,
+    ) -> Output {
+        let shim = self.launchctl_shim();
+        let mut cmd = Command::new("sh");
+        cmd.arg(script)
+            .args(args)
+            .env(
+                "CHUG_RELEASE_URL_BASE",
+                format!("file://{}", self.release_dir.display()),
+            )
+            .env("CHUG_INSTALL_DIR", &self.install_dir)
+            .env("CHUG_INSTALL_PLATFORM", platform)
+            .env("CHUG_INSTALL_OS", os)
+            .env("HOME", &self.home)
+            .env(
+                "PATH",
+                format!("{}:/usr/bin:/bin:/usr/sbin:/sbin", shim.display()),
+            )
+            .env("MOCK_LAUNCHCTL_STATE", self.launchctl_state());
+        if let Some(dir) = cwd {
+            cmd.current_dir(dir);
+        }
+        cmd.output()
+            .expect("spawning sh install.sh --with-daemon/--with-loopd")
+    }
+
+    /// A loop-scaffolded repo (exactly the three artifacts `chug loop run`
+    /// verifies): the shape `chug loop init` leaves behind. Canonicalized:
+    /// the script's $PWD is the getcwd-resolved path (macOS /var →
+    /// /private/var), and the plist it writes carries THAT path.
+    fn initialized_loop_repo(&self) -> PathBuf {
+        let repo = self.home.join("pilot-repo");
+        std::fs::create_dir_all(repo.join(".chug")).unwrap();
+        std::fs::write(repo.join("LOOP-SPEC.md"), "spec\n").unwrap();
+        std::fs::write(repo.join("TODO.md"), "todo\n").unwrap();
+        repo.canonicalize().unwrap()
+    }
+}
+
+// --- the staleness gate ----------------------------------------------------------
+
+/// A stale release gates the install BEFORE any download: the loud warning
+/// names the date and the tag, suggests the build-from-source and mirror
+/// fixes, and refuses without --allow-stale. The fixture carries NO tarball:
+/// a mutant that downloads before gating dies on the file:// 404 with the
+/// download message — the gate's message is what must fire.
+#[test]
+fn stale_release_gates_the_install_before_any_download() {
+    let r = Run::new("t348-gate");
+    r.write_release_meta(STALE_PUBLISHED_AT, "v0.17.27");
+    let out = r.run_with_api("macos-arm64", &[]);
+    assert_ne!(out.status.code(), Some(0), "{}", out_text(&out));
+    let text = out_text(&out);
+    assert!(text.contains("STALE RELEASE"), "the loud warning prints: {text}");
+    assert!(text.contains("2026-01-01"), "the warning names the date: {text}");
+    assert!(text.contains("v0.17.27"), "the warning names the release tag: {text}");
+    assert!(
+        text.contains("--allow-stale"),
+        "the gate names the non-interactive escape hatch: {text}"
+    );
+    assert!(
+        text.contains("cargo install"),
+        "the warning suggests building from source: {text}"
+    );
+    assert!(
+        text.contains("CHUG_RELEASE_URL_BASE"),
+        "the warning names the mirror override: {text}"
+    );
+    assert!(
+        !text.contains("download failed"),
+        "the gate fires BEFORE the tarball download: {text}"
+    );
+    assert!(!r.installed().exists(), "a gated install writes nothing");
+}
+
+/// --allow-stale is the escape hatch: the warning still prints (loud, in the
+/// log), the install proceeds, and the installed `chug --version` is echoed
+/// so the staleness stays visible even past the gate.
+#[test]
+fn stale_release_with_allow_stale_installs_with_the_loud_warning() {
+    let r = Run::new("t348-allow");
+    r.make_release("macos-arm64", "chug-fake-0.17.27");
+    r.write_release_meta(STALE_PUBLISHED_AT, "v0.17.27");
+    let out = r.run_with_api("macos-arm64", &["--allow-stale"]);
+    assert_eq!(out.status.code(), Some(0), "{}", out_text(&out));
+    let text = out_text(&out);
+    assert!(text.contains("STALE RELEASE"), "the warning still prints: {text}");
+    assert!(text.contains("2026-01-01"), "…naming the date: {text}");
+    assert!(
+        text.contains("proceeding with the stale release"),
+        "…and logging the opt-in: {text}"
+    );
+    assert!(r.installed().is_file(), "the install proceeds: {text}");
+    assert!(
+        text.contains("installed version: chug-fake-0.17.27"),
+        "the installed chug --version is echoed for the log: {text}"
+    );
+}
+
+/// A fresh release passes silently (no staleness warning at all) and the
+/// --version echo still appears — it is on every install, not just the
+/// gated ones.
+#[test]
+fn fresh_release_passes_silently_and_still_echoes_the_version() {
+    let r = Run::new("t348-fresh");
+    r.make_release("macos-arm64", "chug-fake-0.17.27");
+    r.write_release_meta(&format!("{}T12:00:00Z", days_ago_utc(1)), "v0.18.0");
+    let out = r.run_with_api("macos-arm64", &[]);
+    assert_eq!(out.status.code(), Some(0), "{}", out_text(&out));
+    let text = out_text(&out);
+    assert!(
+        !text.contains("STALE"),
+        "a fresh release prints no staleness warning: {text}"
+    );
+    assert!(r.installed().is_file(), "{text}");
+    assert!(
+        text.contains("installed version: chug-fake-0.17.27"),
+        "the --version echo appears on every install: {text}"
+    );
+}
+
+/// The window comparison is `age > days` at the DAY boundary: exactly 7
+/// days old is inside the window (silent), 8 days is gated. CHUG_STALE_DAYS
+/// widens the window for pilots who deliberately run behind.
+#[test]
+fn staleness_window_boundary_seven_passes_eight_gates_and_the_env_widens_it() {
+    let r = Run::new("t348-edge7");
+    r.make_release("macos-arm64", "chug-fake");
+    r.write_release_meta(&format!("{}T00:00:00Z", days_ago_utc(7)), "v0.18.0");
+    let out = r.run_with_api("macos-arm64", &[]);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "7 days old is NOT older than the 7-day window: {}",
+        out_text(&out)
+    );
+    assert!(!out_text(&out).contains("STALE"), "{}", out_text(&out));
+
+    let r = Run::new("t348-edge8");
+    r.make_release("macos-arm64", "chug-fake");
+    r.write_release_meta(&format!("{}T00:00:00Z", days_ago_utc(8)), "v0.18.0");
+    let out = r.run_with_api("macos-arm64", &[]);
+    assert_ne!(
+        out.status.code(),
+        Some(0),
+        "8 days old IS older than the window: {}",
+        out_text(&out)
+    );
+    assert!(
+        out_text(&out).contains("--allow-stale"),
+        "{}",
+        out_text(&out)
+    );
+
+    let r = Run::new("t348-edge-widened");
+    r.make_release("macos-arm64", "chug-fake");
+    r.write_release_meta(STALE_PUBLISHED_AT, "v0.17.27");
+    let out = r
+        .base_cmd(None)
+        .env("CHUG_INSTALL_PLATFORM", "macos-arm64")
+        .env(
+            "CHUG_RELEASE_API_BASE",
+            format!("file://{}/api", r.release_dir.display()),
+        )
+        .env("CHUG_STALE_DAYS", "3650")
+        .output()
+        .expect("spawning sh install.sh");
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "CHUG_STALE_DAYS widens the window: {}",
+        out_text(&out)
+    );
+    assert!(!out_text(&out).contains("STALE"), "{}", out_text(&out));
+}
+
+/// An UNREACHABLE probe degrades to a note and the install continues:
+/// api.github.com rate limits are real, the checksum still guards
+/// integrity, and staleness blindness must not be traded for a new way to
+/// fail every install.
+#[test]
+fn unreachable_release_metadata_degrades_to_a_note() {
+    let r = Run::new("t348-nometa");
+    r.make_release("macos-arm64", "chug-fake");
+    // NO metadata fixture: the fake API base 404s.
+    let out = r.run_with_api("macos-arm64", &[]);
+    assert_eq!(out.status.code(), Some(0), "{}", out_text(&out));
+    let text = out_text(&out);
+    assert!(
+        text.contains("WITHOUT the staleness check"),
+        "the degrade names what did not happen: {text}"
+    );
+    assert!(r.installed().is_file(), "{text}");
+}
+
+// --- the service legs (--with-daemon / --with-loopd) ------------------------------
+
+/// --with-daemon installs the chugd plist into ~/Library/LaunchAgents,
+/// bootstraps it in the gui domain, prints the socket path + the fail-open
+/// note — and is IDEMPOTENT: the rerun detects the already-bootstrapped job
+/// and kickstarts it instead (never a second bootstrap).
+#[test]
+fn with_daemon_installs_bootstraps_and_kickstarts_on_rerun() {
+    let r = Run::new("t348-daemon");
+    r.make_release_with_scripts("macos-arm64", "chug-fake");
+    let out = r.run_service_leg("macos-arm64", &["--with-daemon"], "Darwin", None);
+    assert_eq!(out.status.code(), Some(0), "{}", out_text(&out));
+    let plist = r.home.join("Library/LaunchAgents/com.tampajohn.chugd.plist");
+    assert!(
+        plist.is_file(),
+        "the plist lands in ~/Library/LaunchAgents: {}",
+        out_text(&out)
+    );
+    let body = std::fs::read_to_string(&plist).unwrap();
+    assert!(
+        !body.contains("/Users/jadams"),
+        "the committed plist's authoring-box paths are rewritten to this box: {body}"
+    );
+    assert!(
+        body.contains(&format!("{}/chug", r.install_dir.display())),
+        "the plist runs the binary install.sh JUST installed: {body}"
+    );
+    let text = out_text(&out);
+    assert!(text.contains(".chug/daemon.sock"), "the socket path prints: {text}");
+    assert!(text.contains("fails OPEN"), "the fail-open note prints: {text}");
+    let calls = std::fs::read_to_string(r.launchctl_state().join("calls.log")).unwrap();
+    assert!(
+        calls
+            .lines()
+            .any(|l| l.starts_with("bootstrap gui/") && l.contains("/com.tampajohn.chugd.plist")),
+        "a fresh job is BOOTSTRAPPED in the gui domain: {calls}"
+    );
+    assert!(
+        !calls.contains("kickstart"),
+        "a fresh job is never kickstarted: {calls}"
+    );
+
+    // Rerun: idempotent — the loaded job is detected and KICKSTARTED.
+    let out = r.run_service_leg("macos-arm64", &["--with-daemon"], "Darwin", None);
+    assert_eq!(out.status.code(), Some(0), "{}", out_text(&out));
+    assert!(
+        out_text(&out).contains("already bootstrapped"),
+        "the rerun detects the loaded job: {}",
+        out_text(&out)
+    );
+    let calls = std::fs::read_to_string(r.launchctl_state().join("calls.log")).unwrap();
+    assert_eq!(
+        calls.matches("bootstrap gui/").count(),
+        1,
+        "no second bootstrap: {calls}"
+    );
+    let kicks = std::fs::read_to_string(r.launchctl_state().join("kickstarts.log")).unwrap();
+    assert!(
+        kicks
+            .lines()
+            .any(|l| l.starts_with("kickstart -k gui/") && l.ends_with("/com.tampajohn.chugd")),
+        "the rerun kickstarts the job: {kicks}"
+    );
+}
+
+/// The checkout's scripts/ plist wins over the tarball's — the same
+/// working-tree rule the meta packs follow (repo-checkout users install
+/// from the tree). Distinguishable copies: the checkout's carries a marker
+/// comment the tarball's does not.
+#[test]
+fn daemon_plist_checkout_wins_over_the_tarball() {
+    let r = Run::new("t348-daemon-checkout");
+    r.make_release_with_scripts("macos-arm64", "chug-fake"); // the tarball carries its own
+    let checkout = r.release_dir.parent().unwrap().join("checkout");
+    std::fs::create_dir_all(checkout.join("scripts")).unwrap();
+    std::fs::copy(install_sh(), checkout.join("install.sh")).unwrap();
+    let original = std::fs::read_to_string(
+        install_sh()
+            .parent()
+            .unwrap()
+            .join("scripts/com.tampajohn.chugd.plist"),
+    )
+    .unwrap();
+    std::fs::write(
+        checkout.join("scripts/com.tampajohn.chugd.plist"),
+        original.replacen(
+            "<plist version=\"1.0\">",
+            "<plist version=\"1.0\">\n<!-- checkout-plist-marker -->",
+            1,
+        ),
+    )
+    .unwrap();
+    let out = r.run_service_leg_at(
+        &checkout.join("install.sh"),
+        "macos-arm64",
+        &["--with-daemon"],
+        "Darwin",
+        Some(&checkout),
+    );
+    assert_eq!(out.status.code(), Some(0), "{}", out_text(&out));
+    let body =
+        std::fs::read_to_string(r.home.join("Library/LaunchAgents/com.tampajohn.chugd.plist"))
+            .unwrap();
+    assert!(
+        body.contains("checkout-plist-marker"),
+        "the WORKING TREE plist won over the tarball's: {body}"
+    );
+}
+
+/// The daemon leg with NO plist anywhere (plain tarball, script copy away
+/// from any checkout scripts/ sibling) fails NAMED with the hand-install
+/// fix, and installs nothing.
+#[test]
+fn daemon_leg_without_a_plist_anywhere_fails_named() {
+    let r = Run::new("t348-noplist");
+    r.make_release("macos-arm64", "chug-fake"); // chug only — no scripts/
+    let out = r.run_service_leg("macos-arm64", &["--with-daemon"], "Darwin", None);
+    assert_ne!(out.status.code(), Some(0), "{}", out_text(&out));
+    let text = out_text(&out);
+    assert!(
+        text.contains("plist is unavailable"),
+        "the failure names the missing plist: {text}"
+    );
+    assert!(
+        text.contains("launchctl bootstrap"),
+        "the failure names the hand-install fix: {text}"
+    );
+    assert!(
+        !r.home.join("Library/LaunchAgents").exists(),
+        "nothing installed on the failed leg"
+    );
+}
+
+/// Both legs are macOS-only: on Linux each prints the systemd TODO note and
+/// the install CONTINUES (exit 0), and nothing lands in ~/Library.
+#[test]
+fn service_legs_on_linux_print_the_systemd_todo_and_continue() {
+    let r = Run::new("t348-linux");
+    r.make_release_with_scripts("linux-x86_64", "chug-fake-linux");
+    let repo = r.initialized_loop_repo();
+    let out = r.run_service_leg(
+        "linux-x86_64",
+        &["--with-daemon", "--with-loopd"],
+        "Linux",
+        Some(&repo),
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "the legs continue on linux: {}",
+        out_text(&out)
+    );
+    let text = out_text(&out);
+    assert!(
+        text.contains("systemd unit is not packaged yet"),
+        "the TODO note prints: {text}"
+    );
+    assert!(
+        !r.home.join("Library").exists(),
+        "no LaunchAgents on linux: {text}"
+    );
+}
+
+/// --with-loopd OUTSIDE a loop-scaffolded repo SKIPS (exit 0) with the init
+/// hint, and installs no plist.
+#[test]
+fn with_loopd_outside_an_initialized_repo_skips_with_the_init_hint() {
+    let r = Run::new("t348-loopd-skip");
+    r.make_release_with_scripts("macos-arm64", "chug-fake");
+    let bare = r.home.join("bare-dir"); // no LOOP-SPEC.md / TODO.md / .chug/
+    std::fs::create_dir_all(&bare).unwrap();
+    let out = r.run_service_leg("macos-arm64", &["--with-loopd"], "Darwin", Some(&bare));
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "a skip is not a failure: {}",
+        out_text(&out)
+    );
+    let text = out_text(&out);
+    assert!(text.contains("--with-loopd skipped"), "{text}");
+    assert!(
+        text.contains("chug loop init"),
+        "the hint names the init command: {text}"
+    );
+    assert!(
+        !r.home
+            .join("Library/LaunchAgents/com.tampajohn.chug-loopd.plist")
+            .exists(),
+        "no plist installed outside an initialized repo"
+    );
+}
+
+/// --with-loopd inside an initialized repo installs the supervisor plist
+/// generated for THIS repo (WorkingDirectory = the repo, ProgramArguments =
+/// caffeinate -dims <installed chug> loop run, logs under the repo's
+/// .chug/loopd/) and bootstraps it — idempotently (kickstart on rerun).
+#[test]
+fn with_loopd_installs_the_supervisor_in_an_initialized_repo() {
+    let r = Run::new("t348-loopd");
+    r.make_release_with_scripts("macos-arm64", "chug-fake");
+    let repo = r.initialized_loop_repo();
+    let out = r.run_service_leg("macos-arm64", &["--with-loopd"], "Darwin", Some(&repo));
+    assert_eq!(out.status.code(), Some(0), "{}", out_text(&out));
+    let plist = r
+        .home
+        .join("Library/LaunchAgents/com.tampajohn.chug-loopd.plist");
+    assert!(
+        plist.is_file(),
+        "the supervisor plist installs: {}",
+        out_text(&out)
+    );
+    let body = std::fs::read_to_string(&plist).unwrap();
+    assert!(
+        body.contains(&format!(
+            "<key>WorkingDirectory</key><string>{}</string>",
+            repo.display()
+        )),
+        "the job runs against THIS repo: {body}"
+    );
+    assert!(
+        body.contains(&format!(
+            "<string>{}</string>",
+            repo.join(".chug/loopd/launchd.out.log").display()
+        )),
+        "the logs land in the repo's .chug/loopd/: {body}"
+    );
+    for arg in ["<string>loop</string>", "<string>run</string>"] {
+        assert!(
+            body.contains(arg),
+            "ProgramArguments rides `chug loop run` (the installed binary, no clone): {body}"
+        );
+    }
+    assert!(
+        body.contains(&format!("<string>{}/chug</string>", r.install_dir.display())),
+        "the supervisor is the INSTALLED binary: {body}"
+    );
+    assert!(
+        body.contains("<key>RunAtLoad</key><true/>"),
+        "launchd starts the loop at login: {body}"
+    );
+    let calls = std::fs::read_to_string(r.launchctl_state().join("calls.log")).unwrap();
+    assert!(
+        calls
+            .lines()
+            .any(|l| l.starts_with("bootstrap gui/") && l.contains("/com.tampajohn.chug-loopd")),
+        "a fresh job is bootstrapped: {calls}"
+    );
+
+    // Rerun: kickstart, never a second bootstrap.
+    let out = r.run_service_leg("macos-arm64", &["--with-loopd"], "Darwin", Some(&repo));
+    assert_eq!(out.status.code(), Some(0), "{}", out_text(&out));
+    let calls = std::fs::read_to_string(r.launchctl_state().join("calls.log")).unwrap();
+    assert_eq!(
+        calls.matches("bootstrap gui/").count(),
+        1,
+        "no duplicate bootstrap: {calls}"
+    );
+    assert!(calls.contains("kickstart"), "the rerun kickstarts: {calls}");
 }

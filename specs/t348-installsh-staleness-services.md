@@ -59,3 +59,7 @@ so this item is two targeted gaps, not a rewrite:
   script loud about it).
 - systemd units (print the TODO; a Linux leg is a follow-up if pilots
   appear there).
+
+## check
+
+check: CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-validate-b cargo test --release --test install_sh

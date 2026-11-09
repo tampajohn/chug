@@ -14,14 +14,39 @@
 #   CHUG_INSTALL_PLATFORM  force the platform token (skips the uname mapping)
 #   CHUG_INSTALL_DIR       install dir        (default $HOME/.local/bin)
 #   CHUG_RELEASE_URL_BASE  asset base URL     (default …/releases/latest/download)
+#   CHUG_RELEASE_API_BASE  release-metadata base (default https://api.github.com)
+#   CHUG_STALE_DAYS        staleness window   (default 7)
 #
-# Flag (T330 — the LLM profile contract, docs/install-profiles.md):
+# Staleness gate (T348): before downloading, the script probes the release
+# metadata (`<api-base>/repos/$REPO/releases/latest` -> published_at). A
+# release older than CHUG_STALE_DAYS days prints a loud warning naming the
+# date and refuses to proceed without --allow-stale — a stalled release
+# pipeline (T347) must never silently downgrade every pilot install. The
+# probe is skipped when CHUG_RELEASE_URL_BASE is set WITHOUT
+# CHUG_RELEASE_API_BASE (a mirror controls its own freshness). After the
+# install the installed `chug --version` is echoed, so staleness is visible
+# in logs even when the gate was bypassed.
+#
+# Flags (T330 — the LLM profile contract, docs/install-profiles.md):
 #   --profile <name>  resolve profiles/<name>.env (repo checkout) or
 #                     ~/.chug/profiles/<name>.env (private values, win),
 #                     validate it BEFORE anything is written (a bad profile
 #                     installs nothing and never writes ~/.chug/profile.env),
 #                     copy it there (mode 600) for the loop supervisor to
 #                     load at startup, and print the loop launch line.
+#
+# Flags (T348 — the macOS service legs, docs/install-profiles.md):
+#   --allow-stale      install a release older than the staleness window
+#                      anyway (the non-interactive escape hatch).
+#   --with-daemon      install the chugd launchd job (scripts/com.tampajohn.
+#                      chugd.plist -> ~/Library/LaunchAgents) and bootstrap
+#                      it in the gui domain. Idempotent: an already-
+#                      bootstrapped job is kickstarted instead.
+#   --with-loopd       same shape for the loop supervisor — but ONLY in a
+#                      repo that already has the loop scaffold (chug loop
+#                      init has run); elsewhere it prints the init hint and
+#                      skips. Both legs are macOS-only (launchd); on Linux
+#                      they print the systemd TODO note and continue.
 #
 # Flags (T341+T342 — the meta hook packs, docs/meta-harness.md):
 #   --with-meta-pack      install hooks/meta-broker/ and hooks/meta-status/
@@ -66,6 +91,9 @@ banner() {
 profile_name=
 with_meta_pack=0
 uninstall_meta_pack=0
+with_daemon=0
+with_loopd=0
+allow_stale=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --profile)
@@ -86,8 +114,20 @@ while [ $# -gt 0 ]; do
       uninstall_meta_pack=1
       shift
       ;;
+    --with-daemon)
+      with_daemon=1
+      shift
+      ;;
+    --with-loopd)
+      with_loopd=1
+      shift
+      ;;
+    --allow-stale)
+      allow_stale=1
+      shift
+      ;;
     *)
-      fail "unknown argument '$1' — the flags are --profile <name>, --with-meta-pack and --uninstall-meta-pack (docs/install-profiles.md, docs/meta-harness.md)"
+      fail "unknown argument '$1' — the flags are --profile <name>, --with-meta-pack, --uninstall-meta-pack, --with-daemon, --with-loopd and --allow-stale (docs/install-profiles.md, docs/meta-harness.md)"
       ;;
   esac
 done
@@ -120,6 +160,11 @@ if [ "$uninstall_meta_pack" = 1 ]; then
   # the flag on the floor).
   if [ -n "$profile_name" ]; then
     fail "--uninstall-meta-pack does not take --profile — the uninstall is offline and moves nothing but the packs; a profile belongs to an install: run 'install.sh --profile <name>' on its own (docs/install-profiles.md)"
+  fi
+  # Same shape for the service flags (the uninstall exits before the legs
+  # run — without the guard they would be silently dropped on the floor).
+  if [ "$with_daemon" = 1 ] || [ "$with_loopd" = 1 ]; then
+    fail "--uninstall-meta-pack does not take --with-daemon/--with-loopd — the uninstall is offline and moves nothing but the packs; run the service legs on their own: 'install.sh --with-daemon' (docs/install-profiles.md)"
   fi
   claude_dir=${CLAUDE_CONFIG_DIR:-$HOME/.claude}
   settings_file=$claude_dir/settings.json
@@ -282,6 +327,88 @@ tmp=$(mktemp -d "${TMPDIR:-/tmp}/chug-install.XXXXXX") || fail "mktemp failed �
 trap 'rm -rf "$tmp"' EXIT
 trap 'rm -rf "$tmp"; exit 1' INT TERM
 
+# --- T348: the release-staleness gate ------------------------------------------
+# releases/latest is a moving pointer: when the release pipeline stalls
+# (T347's exact failure) it keeps serving a months-old artifact and every
+# pilot install is silently a downgrade. Probe the release metadata BEFORE
+# downloading and refuse a stale release without --allow-stale. Pure-shell
+# day arithmetic (no GNU-vs-BSD `date -d/-v` split); the probe itself is
+# skipped when a mirror override names no API base (the mirror controls its
+# own freshness) and degrades to a note when the metadata is unreachable
+# (api.github.com rate limits exist; the checksum still protects integrity).
+
+# Days since 1970-01-01 for a civil date (Howard Hinnant's days_from_civil,
+# integer-only POSIX arithmetic — exact for every year >= 0).
+civil_to_days() { # $1 y, $2 m, $3 d
+  ctd_y=$1; ctd_m=$2; ctd_d=$3
+  # Strip ONE leading zero per field: $((…)) reads "09" as invalid octal.
+  ctd_y=${ctd_y#0}; ctd_m=${ctd_m#0}; ctd_d=${ctd_d#0}
+  if [ "$ctd_m" -le 2 ]; then
+    ctd_y=$((ctd_y - 1))
+    ctd_m=$((ctd_m + 12))
+  fi
+  ctd_era=$((ctd_y / 400))
+  ctd_yoe=$((ctd_y - ctd_era * 400))
+  ctd_doy=$(((153 * (ctd_m - 3) + 2) / 5 + ctd_d - 1))
+  ctd_doe=$((ctd_yoe * 365 + ctd_yoe / 4 - ctd_yoe / 100 + ctd_doy))
+  printf '%s\n' $((ctd_era * 146097 + ctd_doe - 719468))
+}
+
+# Age of a YYYY-MM-DD date vs today (UTC), in whole days.
+age_in_days() { # $1 = YYYY-MM-DD
+  age_d=${1%%-*}; age_rest=${1#*-}
+  age_m=${age_rest%%-*}; age_dy=${age_rest#*-}
+  case "$age_d$age_m$age_dy" in ''|*[!0-9]*) printf '%s\n' '?'; return ;; esac
+  today_utc=$(date -u +%Y-%m-%d)
+  today_y=${today_utc%%-*}; today_rest=${today_utc#*-}
+  today_m=${today_rest%%-*}; today_d=${today_rest#*-}
+  printf '%s\n' $(( $(civil_to_days "$today_y" "$today_m" "$today_d") - $(civil_to_days "$age_d" "$age_m" "$age_dy") ))
+}
+
+staleness_gate() {
+  # Mirrors/CI set CHUG_RELEASE_URL_BASE alone to pin the artifact; without
+  # an explicit API base the staleness question is theirs to answer, and the
+  # skip keeps every mirror run offline.
+  if [ -n "${CHUG_RELEASE_URL_BASE:-}" ] && [ -z "${CHUG_RELEASE_API_BASE:-}" ]; then
+    return 0
+  fi
+  api_base="${CHUG_RELEASE_API_BASE:-https://api.github.com}"
+  stale_days="${CHUG_STALE_DAYS:-7}"
+  case "$stale_days" in ''|*[!0-9]*) stale_days=7 ;; esac
+  meta_file=$tmp/release-meta.json
+  if ! fetch_to "$api_base/repos/$REPO/releases/latest" "$meta_file"; then
+    printf 'install.sh: note: release metadata unreachable (%s/repos/%s/releases/latest) — continuing WITHOUT the staleness check (the checksum still guards integrity)\n' "$api_base" "$REPO"
+    return 0
+  fi
+  published=$(sed -n 's/.*"published_at": *"\([0-9]\{4\}-[0-9]\{2\}-[0-9]\{2\}\).*/\1/p' "$meta_file" | head -n 1)
+  if [ -z "$published" ]; then
+    printf 'install.sh: note: release metadata carried no published_at — continuing WITHOUT the staleness check (the checksum still guards integrity)\n'
+    return 0
+  fi
+  age=$(age_in_days "$published")
+  [ "$age" != '?' ] || age=0
+  tag=$(sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' "$meta_file" | head -n 1)
+  [ -n "$tag" ] || tag="the latest release"
+  if [ "$age" -le "$stale_days" ]; then
+    return 0
+  fi
+  printf '\n'
+  printf 'install.sh: *** WARNING: STALE RELEASE ***\n'
+  printf 'install.sh: %s was published %s (%s days ago) — older than the %s-day staleness window.\n' "$tag" "$published" "$age" "$stale_days"
+  printf 'install.sh: A stalled release pipeline (like the T347 outage) makes every install of\n'
+  printf 'install.sh: releases/latest a silent downgrade to an old binary.\n'
+  printf 'install.sh:   fresher install: build from source: git clone "https://github.com/%s" && cd chug && cargo install --path .\n' "$REPO"
+  printf 'install.sh:   or pin a mirror you trust: CHUG_RELEASE_URL_BASE=<asset base> install.sh\n'
+  printf 'install.sh:   install this stale release anyway: re-run with --allow-stale\n'
+  printf '\n'
+  if [ "$allow_stale" = 1 ]; then
+    printf 'install.sh: proceeding with the stale release (--allow-stale given)\n'
+    return 0
+  fi
+  fail "release $tag ($published) is $age days old (window: $stale_days days) — refusing to install a possibly-months-old binary; re-run with --allow-stale to install it anyway; build from source: git clone \"https://github.com/$REPO\" && cd chug && cargo install --path .; or pin CHUG_RELEASE_URL_BASE"
+}
+staleness_gate
+
 printf 'install.sh: downloading %s\n' "$tarball_url"
 fetch_to "$tarball_url" "$tmp/chug.tar.gz" || fail "download failed: $tarball_url — if no release has been published yet, build from source: git clone \"https://github.com/$REPO\" && cd chug && cargo install --path . (releases appear as each vX.Y.Z tag lands)"
 fetch_to "$sha_url" "$tmp/chug.sha256" || fail "download failed: $sha_url — the release tarball exists but its .sha256 sidecar is missing; re-check the release assets (or install manually: curl -L \"$tarball_url\" | tar xz)"
@@ -307,6 +434,17 @@ tar -xzf "$tmp/chug.tar.gz" -C "$tmp" || fail "tar extraction failed for the dow
 mkdir -p "$install_dir" || fail "cannot create $install_dir — check \$HOME permissions (this script never elevates)"
 mv "$tmp/chug" "$install_dir/chug" || fail "cannot move the binary into $install_dir — check write permission (this script never elevates)"
 chmod +x "$install_dir/chug"
+
+# --- T348: the installed version, echoed for the log ---------------------------
+# The checksum already proved the bytes are the release's; this makes WHICH
+# release (and therefore staleness, even past --allow-stale) visible in
+# every install log. Best-effort: a --version failure never fails the
+# install itself.
+if installed_version=$("$install_dir/chug" --version 2>/dev/null); then
+  printf 'install.sh: installed version: %s\n' "$installed_version"
+else
+  printf 'install.sh: note: installed %s/chug but could not read its --version\n' "$install_dir"
+fi
 
 # --- T341/T342: the meta hook packs (--with-meta-pack) -------------------------
 # Both packs come from the SAME verified tarball the binary came from (or
@@ -346,6 +484,132 @@ if [ "$with_meta_pack" = 1 ]; then
   done
 fi
 
+# --- T348: the macOS service legs (--with-daemon / --with-loopd) ---------------
+# The managed launchd jobs for chugd and the loop supervisor exist (the
+# scripts/ plists, hand-installed on K7 2026-11-09) but were tribal
+# knowledge — a pilot's loop was one reboot away from down unless they knew
+# the plist dance. Both legs: install the plist into ~/Library/LaunchAgents,
+# bootstrap it in the gui domain, and stay IDEMPOTENT — an already-bootstrapped
+# job is kickstarted instead (a second bootstrap is an error; kickstart -k is
+# the refresh). Both are macOS-only: on Linux they print the systemd TODO
+# note and continue (a Linux leg is a follow-up when pilots appear there).
+
+launchagents_dir=$HOME/Library/LaunchAgents
+uid=$(id -u)
+
+bootstrap_service() { # $1 label, $2 plist path
+  if launchctl print "gui/$uid/$1" >/dev/null 2>&1; then
+    printf 'install.sh: %s is already bootstrapped — kickstarting it\n' "$1"
+    launchctl kickstart -k "gui/$uid/$1" || fail "launchctl kickstart failed for $1 — inspect the job: launchctl print gui/$uid/$1"
+  else
+    launchctl bootstrap "gui/$uid" "$2" || fail "launchctl bootstrap failed for $1 (plist: $2) — inspect it: launchctl print gui/$uid/$1"
+    printf 'install.sh: %s bootstrapped (gui/%s)\n' "$1" "$uid"
+  fi
+}
+
+# The checkout's scripts/ wins over the release tarball's (same rule as the
+# meta packs: repo-checkout users install from the working tree).
+plist_checkout_src() { # $1 = plist file name; prints the checkout path, or nothing
+  if [ -f "$pack_checkout_dir/scripts/$1" ]; then
+    printf '%s\n' "$pack_checkout_dir/scripts/$1"
+  fi
+}
+
+if [ "$with_daemon" = 1 ]; then
+  if [ "$osname" != macos ]; then
+    printf 'install.sh: --with-daemon is macOS-only (launchd) — on %s a systemd unit is not packaged yet (TODO); run "%s/chug daemon" under your service manager for now\n' "$osname" "$install_dir"
+  else
+    daemon_src=$(plist_checkout_src com.tampajohn.chugd.plist)
+    daemon_src_desc="the working tree ($daemon_src)"
+    if [ -z "$daemon_src" ]; then
+      daemon_src=$tmp/scripts/com.tampajohn.chugd.plist
+      daemon_src_desc="the verified release tarball"
+    fi
+    if [ ! -f "$daemon_src" ]; then
+      fail "the chugd plist is unavailable (no scripts/com.tampajohn.chugd.plist in this checkout or the release tarball) — install it by hand: cp scripts/com.tampajohn.chugd.plist \"$launchagents_dir/\" && launchctl bootstrap \"gui/\$(id -u)\" \"$launchagents_dir/com.tampajohn.chugd.plist\""
+    fi
+    mkdir -p "$launchagents_dir" || fail "cannot create $launchagents_dir — check \$HOME permissions (this script never elevates)"
+    daemon_plist=$launchagents_dir/com.tampajohn.chugd.plist
+    # The committed plist carries the authoring box's absolute paths
+    # (/Users/jadams/…): rewrite the binary to the one JUST installed and
+    # the rest to this box's $HOME.
+    sed -e "s|/Users/jadams/.local/bin/chug|$install_dir/chug|" \
+        -e "s|/Users/jadams/workspace/chug|$HOME|" \
+        -e "s|/Users/jadams|$HOME|g" \
+        "$daemon_src" > "$daemon_plist" || fail "cannot write $daemon_plist — check permissions (this script never elevates)"
+    printf 'install.sh: chugd plist installed from %s -> %s\n' "$daemon_src_desc" "$daemon_plist"
+    bootstrap_service com.tampajohn.chugd "$daemon_plist"
+    if [ -n "${CHUG_DAEMON_SOCK:-}" ]; then
+      daemon_sock=$CHUG_DAEMON_SOCK
+    elif [ -n "${CHUG_HOME:-}" ]; then
+      daemon_sock=$CHUG_HOME/daemon.sock
+    else
+      daemon_sock=$HOME/.chug/daemon.sock
+    fi
+    printf '\n'
+    printf '  chugd: the /judge inference server for the risk gate (host-scoped)\n'
+    printf '  daemon socket: %s   (override with CHUG_DAEMON_SOCK; logs: %s/daemon.launchd.{out,err}.log)\n' "$daemon_sock" "${CHUG_HOME:-$HOME/.chug}"
+    printf '  fail-open note: the risk gate fails OPEN — an unreachable daemon never blocks a run, it only costs the semantic judge layer\n'
+    printf '  uninstall: launchctl bootout gui/%s/com.tampajohn.chugd && rm %s\n' "$uid" "$daemon_plist"
+  fi
+fi
+
+if [ "$with_loopd" = 1 ]; then
+  if [ "$osname" != macos ]; then
+    printf 'install.sh: --with-loopd is macOS-only (launchd) — on %s a systemd unit is not packaged yet (TODO); run "chug loop run" under your service manager for now\n' "$osname"
+  else
+    # ONLY inside a repo whose loop scaffold exists — the same three
+    # artifacts `chug loop run` itself verifies (chug loop init has run).
+    loop_missing=
+    [ -f "./LOOP-SPEC.md" ] || loop_missing="$loop_missing LOOP-SPEC.md"
+    [ -f "./TODO.md" ]     || loop_missing="$loop_missing TODO.md"
+    [ -d "./.chug" ]       || loop_missing="$loop_missing .chug/"
+    if [ -n "$loop_missing" ]; then
+      printf 'install.sh: --with-loopd skipped — no loop scaffold (%s) in %s — run "chug loop init" first, then re-run with --with-loopd\n' "${loop_missing# }" "$PWD"
+    else
+      mkdir -p "$launchagents_dir" || fail "cannot create $launchagents_dir — check \$HOME permissions (this script never elevates)"
+      loopd_plist=$launchagents_dir/com.tampajohn.chug-loopd.plist
+      # Generated on the scripts/com.tampajohn.chug-loopd.plist shape (the
+      # chug-repo self-hosting variant runs loopd.sh out of the clone); the
+      # pilot shape post-T334 runs the INSTALLED binary against THIS repo,
+      # so no clone of chug is ever needed.
+      cat > "$loopd_plist" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.tampajohn.chug-loopd</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/caffeinate</string>
+    <string>-dims</string>
+    <string>$install_dir/chug</string>
+    <string>loop</string>
+    <string>run</string>
+  </array>
+  <key>WorkingDirectory</key><string>$PWD</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key><string>$HOME/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+  </dict>
+  <key>KeepAlive</key><false/>
+  <key>RunAtLoad</key><true/>
+  <key>StandardOutPath</key><string>$PWD/.chug/loopd/launchd.out.log</string>
+  <key>StandardErrorPath</key><string>$PWD/.chug/loopd/launchd.err.log</string>
+</dict>
+</plist>
+EOF
+      printf 'install.sh: loop supervisor plist installed -> %s (repo: %s)\n' "$loopd_plist" "$PWD"
+      bootstrap_service com.tampajohn.chug-loopd "$loopd_plist"
+      printf '\n'
+      printf '  loopd: launchd starts the loop at login (RunAtLoad) and caffeinate keeps the mac awake while it runs\n'
+      printf '  the supervisor sources %s (the profile contract — docs/install-profiles.md)\n' "$HOME/.chug/profile.env"
+      printf '  logs: %s/.chug/loopd/launchd.{out,err}.log\n' "$PWD"
+      printf '  uninstall: launchctl bootout gui/%s/com.tampajohn.chug-loopd && rm %s\n' "$uid" "$loopd_plist"
+    fi
+  fi
+fi
+
 # --- PATH hint + banner ----------------------------------------------------------
 case ":$PATH:" in
   *":$install_dir:"*) ;;
@@ -376,6 +640,9 @@ else
   printf '  next: point the loop at a model provider —\n'
   printf '    install.sh --profile <name>   # the LLM profile contract; docs/install-profiles.md\n'
   printf '    install.sh --with-meta-pack   # the meta hook packs (broker + status mod); docs/meta-harness.md\n'
+  printf '\n'
+  printf '  services (macOS, optional): install.sh --with-daemon   # the chugd launchd job\n'
+  printf '                             install.sh --with-loopd    # the loop supervisor launchd job (in a loop-initialized repo)\n'
   printf '\n'
 fi
 if [ "$with_meta_pack" = 1 ]; then
