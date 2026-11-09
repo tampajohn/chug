@@ -1,15 +1,13 @@
 # Ledger
 
 ## Done
-- Phase 1: routine-skip disposition (eval-routing d1794234087-1) — predicate HOLDS both halves (T328 open-BLOCKED + eval fresh 03922964 same-UTC-day 14:09:18Z); glm never evaluates
-- Phase 2: T328 re-verified BLOCKED same-root (work-routing d1794234091-2) — chug-watch clean at 13eca32 (T344 investigation commit), operator A/B/C menu unanswered; zero dispatchable; T81 anti-sprint-burn -> wrap
-- Wrap corridor CLOSED (cycle-3172): prep 2cafba8d + notes a2f5f43a (post-commit probe 60 0 machine==TRUE 0) + fill d1180c28 pushed; state write T311/T323/ring-splice facade-GREEN first attempt; fill legs T309/T310/T317/T311/T323 all GREEN first attempt; battery 225/225; guard floor 21/21; T261 batch TWO (d1794234215-3/-4); NO TAG (TRUE 0)
-- Post-wrap fix-up COMPLETE: the goal gate caught 2 red in loopd_laya_triage — the HOST-staged ~/.chug/profile.env (staged 2026-11-09, [1m]-decorated CHUG_MODEL_REASONING + proxy base URL) re-exported into every spawned loopd.sh fixture AFTER env_remove (loader runs in-script) -> gate-line model field `[1m]` + laya=down. Fixed 7a26c410: common::pin_loopd_env_files pins CHUG_LOOPD_ENV/CHUG_PROFILE_ENV to ABSENT fixture paths (silent no-op; created-empty would warn) at 11 sites / 7 harnesses; loopd_daemon_ensure gains mod common (+dead-code allow). Gates: 9 harnesses 163/163; FULL nextest 2046/2046 in 121.831s; clippy -D warnings clean; pushed
-- T346 filed (b65e4d5c): RED-proven guard row + spec (loader-pin scan) + lane record d1794235415-5 (gates-only, tests-only); todo_consistency 21/21; main == origin/main == b65e4d5c
-- LIVE_CTX compacted 409,809 -> 76,632 (one mid-fix reconstruction after a phantom-header split; 159 blocks 0..158 contiguous, all bodies valid JSON)
+- Phase 1: routine-skip disposition (eval-routing d1794235891-1) — predicate HOLDS (T346 todo + T328 open-BLOCKED; eval fresh STATE-HIT); glm never evaluates
+- T346 arc COMPLETE: impl 7f57f044 (50/80 goal-accepted) → review found 10 PRE-EXISTING main reds (7a26c410's pin missed the RIDING env: CHUG_DECISION_PROVIDER=proxy rides loopd→driver→cargo-test→fixtures) → orchestrator fix 38a3076b on-branch (run_one_pass T332 removes + matrix auto-leg provider removal; RED = the 10 reds themselves; worktree 2048/2048 + clippy zero) → kimi PASS d1794239243-3 (9 mutants 7 caught, m2/m7 minor escapes noted) → merge 97f4740d → flip (swept into operator commit 26f76828, verbatim) → harvest complete (events-t346-impl/validate-20261109-152914 + LEDGER + verdict) → ALL PUSHED by the operator (main == origin/main == 26f76828)
+- READ-FIRST reconstruction (T251): operator tampajohn committed 26f76828 at 10:58 from this shared checkout — swept my working-tree TODO flip + filed T347 (P1 release pipeline) + T348 (spec landed). No destructive ops; my flip preserved verbatim inside their commit
+- Wrap prep: worktree removed (pids verified GONE, harvest first) → T242 bg gates at 26f76828 (clippy ZERO 28.57s; nextest in flight) → battery 225/225 (14.091s) → Outcomes 3173 full + 3167 one-lined → T261 batch FOUR (d1794240118-4/-5/-6 + the stray d1794240139-7; tail healed 63/92/83) → audit REPORT-only (malformed HOLDS 3 / dups HOLDS 2) → release recount (mechanical ^todo: 1 == TRUE 1 = T346, NO TAG, ANCESTOR-OK, describe v0.21.0-58-g26f76828)
 
 ## Next
-- goal_complete (cycle-3172 summary, retaken post fix-up)
+- Wrap tail: nextest-green verify → prep commit → eval-state rewrite (T311) → token-free notes + T257 color → post-notes probe → fill (T309/T310/T311 asserts) → push → flips → goal_complete
 
 ## Blockers
-- T328 operator-decision-pending, parked; A/B/C menu at the T344 handoff d20261109060232-1
+- none
