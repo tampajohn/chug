@@ -458,57 +458,157 @@ fn check_exit_codes_are_the_machine_contract() {
     let _ = install;
 }
 
+// ---------- the source-build leg's fixture ----------
+
+/// The source-build leg's fixture: a fake checkout (a Cargo.toml at its
+/// root), a stub `cargo` on PATH that records its argv to
+/// `<checkout>/cargo-argv.log` and leaves a "built" stub chug at
+/// `<checkout>/target/release/chug` whose `--version` reports
+/// `built_version`, and the installed-binary seam at `<install>/chug` —
+/// the REAL test binary (the feature-lean default build,
+/// tests/daemon_feature_off.rs's doctrine) unless `installed` names a stub
+/// script to install instead.
+struct SourceLegFixture {
+    checkout: tempfile::TempDir,
+    bin: tempfile::TempDir,
+    /// Held, never read: the tempdir must outlive the run (the same hold
+    /// the `let _ = install;` tail gives the standalone fixtures).
+    _install: tempfile::TempDir,
+    target: PathBuf,
+}
+
+impl SourceLegFixture {
+    fn new(built_version: &str) -> Self {
+        Self::with_installed(None, built_version)
+    }
+
+    fn with_installed(installed: Option<&str>, built_version: &str) -> Self {
+        let checkout = tempfile::tempdir().expect("fake checkout");
+        fs::write(checkout.path().join("Cargo.toml"), "[package]\nname=\"x\"\n")
+            .expect("write the manifest");
+        let target_rel = checkout.path().join("target/release");
+        fs::create_dir_all(&target_rel).expect("target dir");
+        let built = target_rel.join("chug");
+        fs::write(&built, stub_chug_script(built_version, "1")).expect("write the built stub");
+        let bin = tempfile::tempdir().expect("bin dir");
+        let cargo_stub = bin.path().join("cargo");
+        // The stub logs only BUILD invocations: update.rs's
+        // cargo-availability probe (`cargo --version`) runs the same stub
+        // with the test process's cwd — logging there would litter the
+        // worktree root with a stray cargo-argv.log.
+        fs::write(
+            &cargo_stub,
+            "#!/bin/sh\n[ \"$1\" = build ] && printf '%s\\n' \"$*\" >> \"$PWD/cargo-argv.log\"\n\
+                 printf 'cargo build --release would compile here\\n' >&2\nexit 0\n",
+        )
+        .expect("write the cargo stub");
+        let (install, target) = match installed {
+            Some(script) => {
+                let install = tempfile::tempdir().expect("install dir");
+                let target = install.path().join("chug");
+                fs::write(&target, script).expect("write the installed stub");
+                (install, target)
+            }
+            None => install_fixture(),
+        };
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&built, fs::Permissions::from_mode(0o755)).expect("chmod built");
+            fs::set_permissions(&cargo_stub, fs::Permissions::from_mode(0o755))
+                .expect("chmod cargo");
+            if installed.is_some() {
+                fs::set_permissions(&target, fs::Permissions::from_mode(0o755))
+                    .expect("chmod the installed stub");
+            }
+        }
+        Self { checkout, bin, _install: install, target }
+    }
+
+    /// The cargo stub's argv capture (inside the checkout — the stub's
+    /// `$PWD` is where cargo runs it).
+    fn argv_log(&self) -> PathBuf {
+        self.checkout.path().join("cargo-argv.log")
+    }
+
+    /// The `chug update` command wired for this fixture: `flags` between
+    /// `update` and `--source`, CHUG_UPDATE_TARGET at the installed binary,
+    /// CARGO_TARGET_DIR pinned to the checkout's target (the harness itself
+    /// may carry a shared-cache one), the stub cargo leading PATH, and both
+    /// release URL bases at the fake server.
+    fn update_cmd(&self, flags: &[&str], url: &str) -> Command {
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_chug"));
+        cmd.arg("update");
+        for flag in flags {
+            cmd.arg(flag);
+        }
+        cmd.arg("--source").arg(self.checkout.path());
+        cmd.env("CHUG_UPDATE_TARGET", &self.target)
+            .env("CHUG_RELEASE_URL_BASE", url)
+            .env("CHUG_RELEASE_API_BASE", url)
+            .env("CHUG_INSTALL_PLATFORM", "linux-x86_64")
+            .env("CARGO_TARGET_DIR", self.checkout.path().join("target"))
+            .env(
+                "PATH",
+                format!(
+                    "{}:{}",
+                    self.bin.path().display(),
+                    std::env::var("PATH").unwrap_or_default()
+                ),
+            );
+        cmd
+    }
+}
+
 /// stale release (8+ days old, the T348 window) + `--source <checkout>` +
 /// a cargo on PATH → the SOURCE path is taken: `cargo build --release`
-/// runs (no `--features daemon`: the installed binary's daemon surface is
-/// probed, not assumed) and its result is swapped in.
+/// runs and its result is swapped in. THE PROBE FACET is finding 1's
+/// killing fixture: the installed binary is the REAL feature-off test
+/// build, so the probe must read it feature-OFF and the stub cargo must
+/// NOT be handed `--features daemon` (the heaviest build chug has — the
+/// vacuous probe, `daemon --help` exit 0, read this exact binary as
+/// daemon-live and silently flipped feature-off installs to daemon-on).
 #[test]
 fn a_stale_release_takes_the_source_build_path() {
     // The release is NEWER but stale — the source path wins (the T347
     // smell: the pipeline may be frozen; the checkout is the operator's
     // freshness source).
-    let (tarball, sidecar) = package_release(&stub_chug_script("9.9.9", "1"));
+    let (tarball, sidecar) = package_release(&stub_chug_script("8.8.8", "1"));
     let old = "2026-01-01T00:00:00Z";
-    let (url, stub) = newer_release_server("v9.9.9", old, tarball, &sidecar, None);
+    let (url, stub) = newer_release_server("v8.8.8", old, tarball, &sidecar, None);
+    let fix = SourceLegFixture::new("8.8.8");
 
-    let checkout = tempfile::tempdir().expect("fake checkout");
-    fs::write(checkout.path().join("Cargo.toml"), "[package]\nname=\"x\"\n").expect("manifest");
+    // Fixture validity, on the real bytes: the installed binary IS the
+    // feature-lean default build — its bytes carry the compiled-in
+    // feature-off refusal literal (the grep loopd's resolve_daemon_bin
+    // runs). If this fails the suite was built with --features daemon;
+    // the ground-truth assert below needs a real feature-off binary.
+    let validity = Command::new("grep")
+        .args(["-aq", "built without the judge daemon"])
+        .arg(&fix.target)
+        .output()
+        .expect("grep the fixture binary");
+    assert!(
+        validity.status.success(),
+        "the fixture binary must be the feature-off default build (its bytes carry the \
+         compiled-in refusal literal) — the suite must run with default features"
+    );
+    // The blindness anchor, on the same real bytes: `daemon --help` exits 0
+    // — the vacuous probe's sole signal — so this fixture's discrimination
+    // is real, not vacuously green (against the old mechanism the argv
+    // below carried the flag and the assert failed).
+    let help = Command::new(&fix.target)
+        .args(["daemon", "--help"])
+        .output()
+        .expect("spawn the real binary daemon --help");
+    assert_eq!(
+        help.status.code(),
+        Some(0),
+        "clap answers --help at parse time on the feature-off build too — the vacuous \
+         probe would have read this binary as daemon-live"
+    );
 
-    // The stub cargo: records its argv, creates the "built" binary (a stub
-    // chug whose --version reports a NEWER version — a checkout ahead of
-    // the release pipeline), exits 0.
-    let bin = tempfile::tempdir().expect("bin dir");
-    let built_version = "8.8.8";
-    let cargo_stub = bin.path().join("cargo");
-    let target_rel = checkout.path().join("target/release");
-    fs::create_dir_all(&target_rel).expect("target dir");
-    let built = target_rel.join("chug");
-    fs::write(&built, stub_chug_script(built_version, "1")).expect("write the built stub");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&built, fs::Permissions::from_mode(0o755)).expect("chmod built");
-        fs::write(
-            &cargo_stub,
-            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$PWD/cargo-argv.log\"\n\
-                 printf 'cargo build --release would compile here\\n' >&2\nexit 0\n",
-        )
-        .expect("write the cargo stub");
-        fs::set_permissions(&cargo_stub, fs::Permissions::from_mode(0o755)).expect("chmod cargo");
-    }
-
-    let (install, target) = install_fixture();
-    let before = fs::read(&target).unwrap();
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_chug"));
-    cmd.arg("update").arg("--source").arg(checkout.path());
-    cmd.env("CHUG_UPDATE_TARGET", &target)
-        .env("CHUG_RELEASE_URL_BASE", &url)
-        .env("CHUG_RELEASE_API_BASE", &url)
-        // The harness itself may carry a CARGO_TARGET_DIR (a shared build
-        // cache): the fixture pins the built binary WHERE THE CHECKOUT'S
-        // TARGET DIR puts it, so the assert is about THIS build.
-        .env("CARGO_TARGET_DIR", checkout.path().join("target"))
-        .env("PATH", format!("{}:{}", bin.path().display(), std::env::var("PATH").unwrap_or_default()));
+    let mut cmd = fix.update_cmd(&[], &url);
     let out = bounded_output(&mut cmd);
     stub.join().expect("stub served the metadata request only");
     assert_eq!(out.status.code(), Some(0), "source swap exit 0");
@@ -517,26 +617,220 @@ fn a_stale_release_takes_the_source_build_path() {
         stdout.contains("updated: ") && stdout.contains("source build from"),
         "the source-build swap is named: {stdout}"
     );
-    assert_ne!(fs::read(&target).unwrap(), before, "the built binary was swapped in");
     assert!(
-        fs::read(&target).unwrap().starts_with(b"#!/bin/sh"),
+        stdout.contains("-> 8.8.8"),
+        "the source leg renders the built version in dotted form, not a Debug tuple \
+         (finding 3): {stdout}"
+    );
+    assert!(
+        fs::read(&fix.target).unwrap().starts_with(b"#!/bin/sh"),
         "the swapped-in binary is the checkout's build (the stub), not a stray artifact"
     );
-    // The cargo invocation follows the probe of the binary BEING REPLACED:
-    // the fixture's installed binary is a copy of the REAL test binary, so
-    // ask IT what the probe says and assert the argv agrees (the daemon
-    // feature is probed, never assumed).
-    let probed_live = Command::new(&target)
-        .args(["daemon", "--help"])
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false);
-    let argv = fs::read_to_string(checkout.path().join("cargo-argv.log")).expect("cargo argv");
+    // THE PROBE ASSERT (the killing one): the cargo invocation follows the
+    // probe of the binary BEING REPLACED — a REAL feature-off binary — so
+    // the argv must NOT carry `--features daemon`. Against the vacuous
+    // probe mechanism this argv carried the flag (the blindness anchor
+    // above proves the old probe would have been fooled by this exact
+    // binary) and this assert failed.
+    let argv = fs::read_to_string(fix.argv_log()).expect("cargo argv");
     assert!(argv.contains("build --release"), "{argv}");
-    assert_eq!(
+    assert!(
+        !argv.contains("--features daemon"),
+        "the REAL feature-off installed binary must not flip the fallback build to \
+         daemon-on: {argv}"
+    );
+}
+
+/// The ON leg of the probe sweep: a daemon-live installed binary (the stub
+/// chug — its daemon surface answers `--help`, and, what the probe
+/// actually keys on, its bytes carry NO feature-off refusal literal) hands
+/// `--features daemon` to the fallback build. A real feature-on release
+/// binary is out of the suite's reach (the candle stack is a minutes-long
+/// build and the shared cache is single-tenant); the stub's literal-absence
+/// is exactly the byte property a real feature-on release binary has, and
+/// the OFF leg above pins the real-binary discrimination.
+#[test]
+fn the_daemon_probe_hands_features_daemon_to_a_live_daemon_binary() {
+    let (tarball, sidecar) = package_release(&stub_chug_script("8.8.8", "1"));
+    let (url, stub) = newer_release_server("v8.8.8", "2026-01-01T00:00:00Z", tarball, &sidecar, None);
+    let fix = SourceLegFixture::with_installed(Some(&stub_chug_script("0.22.0", "1")), "8.8.8");
+    let mut cmd = fix.update_cmd(&[], &url);
+    let out = bounded_output(&mut cmd);
+    stub.join().expect("stub served the metadata request only");
+    assert_eq!(out.status.code(), Some(0), "the source leg applied");
+    let argv = fs::read_to_string(fix.argv_log()).expect("the cargo stub ran");
+    assert!(
         argv.contains("--features daemon"),
-        probed_live,
-        "the daemon feature follows the probe of the binary being replaced (probed_live={probed_live}): {argv}"
+        "a daemon-live installed binary must flip the fallback build to daemon-on: {argv}"
+    );
+}
+
+/// The source-build version floor (finding 2, mutant m8's killing fixture):
+/// a source build OLDER than the running binary is REFUSED without --force
+/// — the floor checks the RESULT's self-reported version, not the release
+/// tag. Dropping the floor check swaps the older build in and fails the
+/// no-swap / non-zero-exit asserts.
+#[test]
+fn an_older_source_build_is_refused_unless_forced() {
+    let (tarball, sidecar) = package_release(&stub_chug_script("8.8.8", "1"));
+    // Apply leg: the built 0.1.0 is older than the running binary → refused.
+    let (url, stub) = newer_release_server(
+        "v8.8.8",
+        "2026-01-01T00:00:00Z",
+        tarball.clone(),
+        &sidecar,
+        None,
+    );
+    let fix = SourceLegFixture::new("0.1.0");
+    let before = fs::read(&fix.target).unwrap();
+    let mut cmd = fix.update_cmd(&[], &url);
+    let out = bounded_output(&mut cmd);
+    stub.join().expect("stub served the metadata request only");
+    assert_eq!(out.status.code(), Some(1), "a floor refusal is non-zero");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("refusing to downgrade") && stderr.contains("0.1.0"),
+        "the refusal names the source build's own version: {stderr}"
+    );
+    // The build RAN — the floor is a check on the RESULT, not a pre-filter
+    // that never reaches cargo.
+    let argv = fs::read_to_string(fix.argv_log()).expect("the cargo stub ran before the floor");
+    assert!(argv.contains("build --release"), "{argv}");
+    assert_eq!(fs::read(&fix.target).unwrap(), before, "NO swap on the floor refusal");
+
+    // --force leg: the older source build installs (the floor is
+    // force-licensable, the same rule as the download leg).
+    let (url2, stub2) = newer_release_server("v8.8.8", "2026-01-01T00:00:00Z", tarball, &sidecar, None);
+    let mut cmd = fix.update_cmd(&["--force"], &url2);
+    let out = bounded_output(&mut cmd);
+    stub2.join().expect("stub served the metadata request only");
+    assert_eq!(out.status.code(), Some(0), "--force licenses the downgrade");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("updated: ") && stdout.contains("-> 0.1.0"),
+        "the forced source downgrade renders the built version in dotted form: {stdout}"
+    );
+    assert!(
+        fs::read(&fix.target).unwrap().starts_with(b"#!/bin/sh"),
+        "the older source build was swapped in under --force"
+    );
+}
+
+/// The `--check --source` leg (finding 2): a stale release + a named
+/// checkout reports the SOURCE path at exit 10 — the machine contract's
+/// update-available — and the check never builds (a dry-run: the cargo
+/// stub never runs).
+#[test]
+fn check_with_source_reports_the_source_path_at_exit_10() {
+    let (tarball, sidecar) = package_release(&stub_chug_script("8.8.8", "1"));
+    let (url, stub) = newer_release_server("v8.8.8", "2026-01-01T00:00:00Z", tarball, &sidecar, None);
+    let fix = SourceLegFixture::new("8.8.8");
+    let mut cmd = fix.update_cmd(&["--check"], &url);
+    let out = bounded_output(&mut cmd);
+    stub.join().expect("stub served the metadata request only");
+    assert_eq!(out.status.code(), Some(10), "the source path is update-available");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("update available") && stdout.contains("source build from"),
+        "the check names the source path: {stdout}"
+    );
+    assert!(
+        !fix.argv_log().exists(),
+        "the check never builds (a dry-run) — the cargo stub never ran"
+    );
+}
+
+/// Finding 5b: a FRESH release wins over a named-but-unusable `--source` —
+/// the checkout is validated only when the source path is actually taken,
+/// so an unusable checkout cannot hard-error a run whose release already
+/// answers the question. Against the pre-fix order (validate-then-decide)
+/// this run exits 1 with "does not exist".
+#[test]
+fn a_fresh_release_wins_over_an_unusable_named_source() {
+    let (tarball, sidecar) = package_release(&stub_chug_script("9.9.9", "1"));
+    // 2099: always fresh — ahead of any suite run (the staleness window is
+    // 7 days behind whatever today is).
+    let (url, stub) = newer_release_server("v9.9.9", "2099-01-01T00:00:00Z", tarball, &sidecar, None);
+    let (install, target) = install_fixture();
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_chug"));
+    cmd.arg("update").arg("--source").arg("/definitely/not/here/t352");
+    cmd.env("CHUG_UPDATE_TARGET", &target)
+        .env("CHUG_RELEASE_URL_BASE", &url)
+        .env("CHUG_RELEASE_API_BASE", &url)
+        .env("CHUG_INSTALL_PLATFORM", "linux-x86_64");
+    let out = bounded_output(&mut cmd);
+    stub.join().expect("stub served the download requests");
+    assert_eq!(out.status.code(), Some(0), "the fresh-release path applied");
+    assert!(
+        fs::read(&target).unwrap().starts_with(b"#!/bin/sh"),
+        "the release tarball was installed — the source path was moot, not an error"
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        !stdout.contains("source build from"),
+        "the source path was not taken: {stdout}"
+    );
+    assert!(
+        !stdout.contains("NOTE: the release is"),
+        "a fresh release carries no staleness note: {stdout}"
+    );
+    let _ = install;
+}
+
+/// Finding 5a: a newer-but-STALE release still installs when no source is
+/// named (the checkout path is the operator's option, not a requirement),
+/// and the install line names the T347 smell and its remedy; the --check
+/// line carries the same note.
+#[test]
+fn a_stale_release_install_carries_the_staleness_note() {
+    let (tarball, sidecar) = package_release(&stub_chug_script("9.9.9", "1"));
+    let (url, stub) = newer_release_server(
+        "v9.9.9",
+        "2026-01-01T00:00:00Z",
+        tarball.clone(),
+        &sidecar,
+        None,
+    );
+    let (install, target) = install_fixture();
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_chug"));
+    cmd.arg("update");
+    cmd.env("CHUG_UPDATE_TARGET", &target)
+        .env("CHUG_RELEASE_URL_BASE", &url)
+        .env("CHUG_RELEASE_API_BASE", &url)
+        .env("CHUG_INSTALL_PLATFORM", "linux-x86_64");
+    let out = bounded_output(&mut cmd);
+    stub.join().expect("stub served the download requests");
+    assert_eq!(out.status.code(), Some(0), "the stale release still installs");
+    assert!(
+        fs::read(&target).unwrap().starts_with(b"#!/bin/sh"),
+        "the stale release was installed"
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("updated: ") && stdout.contains("NOTE: the release is"),
+        "the stale install names the T347 smell: {stdout}"
+    );
+    assert!(
+        stdout.contains("--source"),
+        "the note names the remedy (the source fallback): {stdout}"
+    );
+
+    // The --check line carries the same note (the machine surface loopd
+    // consumes sees the staleness too).
+    let (url2, stub2) = newer_release_server("v9.9.9", "2026-01-01T00:00:00Z", tarball, &sidecar, None);
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_chug"));
+    cmd.arg("update").arg("--check");
+    cmd.env("CHUG_UPDATE_TARGET", &target)
+        .env("CHUG_RELEASE_URL_BASE", &url2)
+        .env("CHUG_RELEASE_API_BASE", &url2)
+        .env("CHUG_INSTALL_PLATFORM", "linux-x86_64");
+    let out = bounded_output(&mut cmd);
+    stub2.join().expect("stub served the metadata request only");
+    assert_eq!(out.status.code(), Some(10));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("update available") && stdout.contains("NOTE: the release is"),
+        "the check line carries the staleness note too: {stdout}"
     );
     let _ = install;
 }
@@ -561,9 +855,15 @@ fn the_loop_wiring_is_the_contract() {
         loopd.contains(r#". "$(dirname "$0")/scripts/loopd_auto_update.sh""#),
         "loopd.sh sources the T352 fragment"
     );
+    // Line-anchored two-space indent — the finding-4 pin: the probe arm
+    // (`update-check)`) carries the same call at a DEEPER indent and
+    // substring-matched the old `"  loopd_auto_update_check\n"` pin, so the
+    // pin passed even with the body call deleted. The line-start anchor
+    // matches ONLY the while-body call site: delete it and this pin fails.
     let call_pos = loopd
-        .find("  loopd_auto_update_check\n")
-        .expect("loopd.sh calls the check in the while body");
+        .find("\n  loopd_auto_update_check\n")
+        .expect("loopd.sh calls the check in the while body (line-anchored two-space indent — \
+                 the deeper-indented probe arm must not satisfy this pin)");
     let driver_pos = loopd
         .find("Single-driver: never overlap another LOOP-SPEC run")
         .expect("the single-driver probe comment anchors the body order");

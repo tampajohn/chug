@@ -23,8 +23,12 @@
 //! cargo toolchain are available (`--source <path>` / `$CHUG_SOURCE`) the
 //! update is built FROM SOURCE instead (the T347-era path — the Fleet
 //! Primary's 9.7s cached build is the proof it is cheap), with
-//! `--features daemon` iff the binary being replaced has the daemon
-//! subcommand live (the loopd `judge_probe_ok` shape). Version-floor
+//! `--features daemon` iff the binary being replaced still hosts the judge
+//! daemon — probed from its own BYTES (the feature-off refusal literal
+//! compiles into every feature-off build and into no feature-on build),
+//! never from a `daemon --help` exit code: clap answers `--help` at parse
+//! time on EVERY build, so that probe reads true on 100% of real binaries
+//! and would silently flip feature-off installs to daemon-on. Version-floor
 //! protection still applies to the RESULT: a source build older than the
 //! running binary is refused without `--force`.
 //!
@@ -578,17 +582,48 @@ fn install_swapped(new_bin: &Path, target: &Path) -> anyhow::Result<()> {
 
 // ---------- the binary probes ----------
 
-/// The daemon feature probe (loopd's `judge_probe_ok` shape): does THIS
-/// binary host the judge daemon (`daemon --help` exits 0)? The feature-off
-/// build refuses the subcommand with the fail-open stub, so the probe is
-/// the honest answer about the binary being replaced, not a compile-time
-/// guess about a different one.
+/// The refusal literal ONLY a feature-off build compiles in: the
+/// `#[cfg(not(feature = "daemon"))]` `real_backend` bail (src/daemon.rs) —
+/// live code on serve's non-stub path, so it is present in every
+/// feature-off binary's bytes and absent from every feature-on one. This
+/// is loopd's own T142 mechanism (resolve_daemon_bin greps the repo binary
+/// for exactly this literal).
+const FEATURE_OFF_REFUSAL: &str = "built without the judge daemon";
+
+/// Does `haystack` contain `needle` as a byte substring? (The binary-grep
+/// core of the daemon probe — no shell-out; the search IS the probe.)
+fn contains_subslice(haystack: &[u8], needle: &[u8]) -> bool {
+    !needle.is_empty() && haystack.windows(needle.len()).any(|w| w == needle)
+}
+
+/// The daemon feature probe: does THIS binary host the judge daemon?
+///
+/// The obvious probe — `daemon --help` exiting 0 — is VACUOUS and must not
+/// be revived: clap answers `--help` at PARSE time on every build (the
+/// Daemon clap variant is not feature-gated; the feature-off refusal fires
+/// in serve mode after the flock), so a real feature-off binary exits 0
+/// too — that probe read true on 100% of real binaries, and the source
+/// fallback would have built the heaviest surface unconditionally,
+/// silently flipping feature-off installs to daemon-on. (The blindness is
+/// pinned as ACCEPTED for loopd's binary resolution by
+/// tests/daemon_feature_off.rs — accepted there because install.sh ships
+/// feature-on tarballs; here the probe DECIDES a build, so it must
+/// discriminate.) The honest probe reads the binary's own bytes: the
+/// feature-off refusal literal is compiled into every feature-off build
+/// and into no feature-on build, so literal-present = feature-off,
+/// literal-absent = feature-on — the same discrimination loopd's
+/// resolve_daemon_bin makes on the repo binary.
+///
+/// Unreadable/absent binary → `false`: the probe fails toward the LEAN
+/// build (a source build without `--features daemon` still yields a
+/// working chug; the daemon judge fails open) — silently flipping an
+/// unprobeable install to the heavy daemon-on surface is exactly the harm
+/// this probe exists to prevent.
 pub fn daemon_feature_live(bin: &Path) -> bool {
-    Command::new(bin)
-        .args(["daemon", "--help"])
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
+    match fs::read(bin) {
+        Ok(bytes) => !contains_subslice(&bytes, FEATURE_OFF_REFUSAL.as_bytes()),
+        Err(_) => false,
+    }
 }
 
 /// A binary's self-reported version (`chug --version` → `chug X.Y.Z`):
@@ -767,37 +802,35 @@ fn run_inner(check: bool, force: bool, source: &Option<PathBuf>) -> anyhow::Resu
     let release = fetch_latest_release()?;
     let stale = staleness(&release);
 
-    // The source fallback is a first-class path only when the operator
-    // named a checkout — and an EXPLICITLY named checkout that cannot
-    // build is an error (a silent fall-through to the stale release would
-    // hide exactly the problem the flag was given to solve).
+    // The source fallback is a first-class path only when the release is
+    // STALE and the operator named a checkout — so the checkout is
+    // validated only when that path is actually taken. A named-but-unusable
+    // checkout behind a FRESH release is moot (the release already answers
+    // the question) and must not hard-error the run: the fresh-release path
+    // wins. When the release IS stale, an unusable named checkout IS an
+    // error — the flag was given to solve exactly the problem hiding
+    // behind it, and a silent fall-through to the stale release would hide
+    // it.
     let named_source = source_checkout(source);
-    let source_usable = match &named_source {
-        Some(dir) => {
-            validate_named_source(dir)?;
-            true
-        }
-        None => false,
-    };
-
-    // The source path wins whenever the release is STALE and a usable
-    // checkout was named: a stale release is the T347 smell (the pipeline
-    // may be frozen while the repo runs ahead), and the checkout is the
-    // operator's own answer to that. A mirror-skipped or unknown
-    // staleness never takes the source path on its own.
-    let take_source = stale == Some(true) && source_usable;
-    if take_source {
-        let checkout = named_source.expect("source_usable implies a named checkout");
-        return source_leg(check, force, current, &release, &checkout);
+    let source_path_live = stale == Some(true);
+    if let Some(checkout) = named_source.as_ref().filter(|_| source_path_live) {
+        validate_named_source(checkout)?;
+        return source_leg(check, force, current, &release, checkout);
     }
 
     match cmp_versions(&release.version, &current) {
         Ordering::Greater => {
+            // A stale-but-newer release still installs (no checkout was
+            // named, or the named one was not the live path) — but the
+            // install names the T347 smell and its remedy (the remedy-naming
+            // doctrine): the pipeline may be stalled and the checkout was
+            // the fresher path.
+            let note = stale_note(&release, stale);
             if check {
-                println!("update available: {} -> {}", VERSION, release.tag);
+                println!("update available: {} -> {}{note}", VERSION, release.tag);
                 return Ok(EXIT_UPDATE_AVAILABLE);
             }
-            apply_download(&release, force)
+            apply_download(&release, force, &note)
         }
         Ordering::Equal => {
             // Fresh release at the running version: current. A stale one
@@ -821,7 +854,11 @@ fn run_inner(check: bool, force: bool, source: &Option<PathBuf>) -> anyhow::Resu
                     );
                     return Ok(EXIT_UPDATE_AVAILABLE);
                 }
-                return apply_download(&release, force);
+                // The stale note's remedy ("update from a checkout
+                // instead") is inapplicable here: the operator is
+                // deliberately going BACKWARDS, not chasing freshness —
+                // the note rides only the newer-release legs.
+                return apply_download(&release, force, "");
             }
             let msg = format!(
                 "refusing to downgrade: installed {} > latest release {} (no silent \
@@ -884,28 +921,37 @@ fn source_leg(
     let built_version = binary_version(&built)?;
     if cmp_versions(&built_version, &current) == Ordering::Less && !force {
         bail!(
-            "refusing to downgrade: the source build reports {built_version:?} but the \
-             installed binary is {} (no silent downgrades — re-run with --force to \
-             install it anyway)",
+            "refusing to downgrade: the source build reports {} but the installed binary \
+             is {} (no silent downgrades — re-run with --force to install it anyway)",
+            dotted(&built_version),
             VERSION
         );
     }
     let old_contract = contract_version_of(&target);
     install_swapped(&built, &target)?;
     println!(
-        "updated: {} -> {built_version:?} (source build from {}){}",
+        "updated: {} -> {} (source build from {}){}",
         VERSION,
+        dotted(&built_version),
         checkout.display(),
         contract_note(old_contract, &target)
     );
     Ok(0)
 }
 
+/// The dotted `X.Y.Z` rendering of a parsed version — the source-build
+/// result's report form (the download leg renders the release TAG; a source
+/// build has no tag, and a Debug tuple `(8, 8, 8)` is never user-facing).
+fn dotted(v: &SemVer) -> String {
+    format!("{}.{}.{}", v.0, v.1, v.2)
+}
+
 /// The download leg: fetch + verify + extract + probe + swap + report.
 /// The floor was already checked against the release tag; `force` exists
 /// here only for the forced-downgrade leg, the one caller that arrives
-/// with a release older than the running binary.
-fn apply_download(release: &LatestRelease, force: bool) -> anyhow::Result<i32> {
+/// with a release older than the running binary. `note` rides the report
+/// line when the installed release is stale (the T347 remedy note).
+fn apply_download(release: &LatestRelease, force: bool, note: &str) -> anyhow::Result<i32> {
     let platform_tag = platform()?;
     let target = update_target()?;
     let extracted = download_and_extract(&asset_base(), &platform_tag)?;
@@ -918,7 +964,7 @@ fn apply_download(release: &LatestRelease, force: bool) -> anyhow::Result<i32> {
         "updated"
     };
     println!(
-        "{label}: {} -> {}{}",
+        "{label}: {} -> {}{}{note}",
         VERSION,
         release.tag,
         contract_note(old_contract, &target)
@@ -1220,18 +1266,44 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn daemon_probe_reads_the_live_subcommand() {
+    fn daemon_probe_greps_the_feature_off_refusal_literal() {
         let tmp = tempfile::tempdir().unwrap();
-        // "Live": exit 0 for `daemon --help`.
-        let live = tmp.path().join("live");
-        write_stub(&live, "#!/bin/sh\n[ \"$1\" = daemon ] && exit 0\nexit 1\n");
-        assert!(daemon_feature_live(&live));
-        // The feature-off stub shape: nonzero for the subcommand.
+        // Feature-off bytes: the compiled-in refusal literal is present (a
+        // real feature-off build carries real_backend's bail string in its
+        // bytes) — the probe must read it as NOT live.
         let off = tmp.path().join("off");
-        write_stub(&off, "#!/bin/sh\nexit 1\n");
+        write_stub(
+            &off,
+            "#!/bin/sh\nexit 1 # this chug binary was built without the judge daemon\n",
+        );
         assert!(!daemon_feature_live(&off));
-        // A missing file: spawn failure → false, never a panic.
+        // Feature-on bytes: no refusal literal compiled in — live. The
+        // `daemon --help` surface on this stub is a RED HERRING the probe
+        // must ignore (clap answers --help on feature-off builds too).
+        let on = tmp.path().join("on");
+        write_stub(&on, "#!/bin/sh\n[ \"$1\" = daemon ] && exit 0\nexit 1\n");
+        assert!(daemon_feature_live(&on));
+        // The literal anywhere in the bytes counts (a byte grep, like
+        // loopd's `grep -aq` on the repo binary — not a shebang-line parse).
+        let trailing = tmp.path().join("trailing");
+        write_stub(&trailing, "#!/bin/sh\nexit 0\n# built without the judge daemon\n");
+        assert!(!daemon_feature_live(&trailing));
+        // Absent binary: fail toward the lean build, never a panic.
         assert!(!daemon_feature_live(&tmp.path().join("absent")));
+    }
+
+    #[test]
+    fn contains_subslice_legs() {
+        assert!(contains_subslice(b"hello world", b"world"));
+        assert!(contains_subslice(b"abc", b"abc"));
+        assert!(!contains_subslice(b"hello world", b"worlds"), "no prefix stop");
+        assert!(!contains_subslice(b"short", b"much longer needle"));
+        assert!(!contains_subslice(b"x", b""), "empty needle is never found");
+        // The exact house literal matches its own bytes.
+        assert!(contains_subslice(
+            FEATURE_OFF_REFUSAL.as_bytes(),
+            FEATURE_OFF_REFUSAL.as_bytes()
+        ));
     }
 
     #[cfg(unix)]
