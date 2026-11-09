@@ -1,0 +1,238 @@
+# The chug meta-harness capability contract
+
+A meta-harness (herdr, orca, bridge) supervises chug instead of driving it
+by hand. Until T339 every such harness version-sniffed — "is this chug new
+enough for X?" — which breaks both ways: a new feature reads as absent on
+an old binary it actually has, and a version guess breaks the day a
+backport lands. This contract replaces sniffing with **feature detection**:
+run `chug capabilities`, read one JSON document, branch on the keys.
+
+The document is stable. Anything that would break a conforming reader
+bumps `contract_version` (see [Versioning](#versioning)); everything else
+lands additively, so each later meta item (T340-T343) can ship without a
+single consumer edit.
+
+## Reading the document
+
+`chug capabilities` prints one pretty-JSON document and exits 0:
+
+```json
+{
+  "contract_version": "1",
+  "compat": "consumers must treat unknown features as false and ignore unknown keys",
+  "features": {
+    "daemon_status": false,
+    "lifecycle_events": false,
+    "permission_broker": false,
+    "usage_events": false,
+    "status_mod": false
+  },
+  "versions": {
+    "chug": "0.19.1",
+    "daemon": null
+  }
+}
+```
+
+- `contract_version` — which revision of THIS document the producer
+  speaks. The one key every document must carry.
+- `features` — the feature registry (below). `false` = not available on
+  this build; a version string = available, shipped at that version.
+- `versions.chug` — the version of the chug binary that printed it.
+- `versions.daemon` — the live daemon's self-reported version; `null`
+  when no daemon is live or the daemon wire does not carry a version yet
+  (today's `/healthz` does not — the report lands with T340's row).
+- `compat` — the stability rule, in-band, so a harness sees it every time
+  it reads capabilities rather than only in these docs.
+
+The command is cheap by construction — no daemon contact, no file I/O —
+so it is safe to call at harness startup, per cycle, or in a probe loop.
+It completes in well under 50ms with or without a live daemon; a missing
+daemon is reported `false`/`null`, never an error and never a hang.
+
+To validate or canonicalize a document (yours or a fixture's), run it
+through chug's reference reader:
+
+```console
+$ chug capabilities --check /path/to/document.json   # canonical form on stdout
+$ echo $?                                            # non-zero on a malformed document
+```
+
+## The stability rule
+
+A conforming consumer MUST do two things, and may rely on nothing else:
+
+1. **Reading an unknown feature MUST behave exactly as reading `false`.**
+   A feature the consumer has never heard of is not shipped, as far as it
+   is concerned. This is why chug's reader ([`Features::shipped`] in
+   `src/capabilities.rs`) returns false for any name outside its registry.
+2. **Unknown keys MUST be ignored.** Producers add keys (that is how
+   features and fields land); consumers that fail on them break by
+   construction.
+
+Both rules are pinned in `tests/capabilities_contract.rs`: an output with
+injected unknown keys/values parses identically through the reference
+reader, and the extra `compat` key in the output is itself an exercise of
+rule 2.
+
+## Feature keys
+
+All five are `false` today. Each flips on when its row lands; the "shipped
+value" column is the value it carries once available.
+
+| key | today | shipped value | landed by | what it reports when shipped |
+| --- | --- | --- | --- | --- |
+| `daemon_status` | `false` | boolean | T340 | a live chugd answers the typed status endpoints; `false` = absent or unreachable, never a hang |
+| `lifecycle_events` | `false` | version string | T340 | the lifecycle/status event surface and its wire version (`"1"` when shipped) |
+| `permission_broker` | `false` | boolean | T341 | the opt-in permission-broker hook pack is installed (detected by hook presence, not socket presence) |
+| `usage_events` | `false` | boolean | T343 | the per-turn usage-emitter hook pack is installed |
+| `status_mod` | `false` | boolean | T342 | the session-status mod hook pack is installed |
+
+## The typed status enum
+
+Surfaces that report what a session or loop is doing use ONE vocabulary —
+harnesses render it once and read it everywhere:
+
+| status | meaning |
+| --- | --- |
+| `working` | executing normally — a turn, an iteration, a cycle |
+| `blocked` | stopped, pending something; `blocked_reason` says what |
+| `needs-input` | stopped, pending an operator answer (a question) |
+| `done` | the work item finished |
+| `parked` | deliberately set aside by the operator (unpark to resume) |
+
+`blocked` and `needs-input` are the "the loop needs you" family; a
+harness treats both as attention-required, with the reason distinguishing
+them. A surface whose reality is narrower than the five (a turn-level
+view has no `parked`) maps onto the nearest member rather than inventing
+a value; extensions are additive ([Versioning](#versioning)).
+
+## Blocked-reason vocabulary
+
+A `blocked` status carries one of these reasons:
+
+| reason | meaning |
+| --- | --- |
+| `permission` | a permission ask is pending |
+| `question` | a question for the operator is pending |
+| `error` | the last step failed (retry/exhaustion state in the detail) |
+| `budget` | an iteration / wall-clock / token budget tripped |
+
+T340's loop endpoints add `external` — a blocker outside this repo (a
+missing remote, an absent path) — when that row lands; additive within
+the contract version.
+
+## Event shapes, as they land
+
+None of these surfaces exists yet. The shapes below are the contract each
+landing row implements against; fields are additive-only within a
+contract version, and **absent values are omitted keys — never fabricated
+zeros, never empty strings**.
+
+### T340 — chugd typed status endpoints (`daemon_status`, `lifecycle_events`)
+
+`GET /status/loop` on the daemon socket:
+
+```json
+{
+  "status": "working",
+  "cycle_id": "…",
+  "iteration": 3,
+  "item_id": "T341",
+  "blocked_reason": null,
+  "blocked_detail": null,
+  "children": [{ "kind": "impl", "id": "…", "state": "…" }],
+  "as_of": "…"
+}
+```
+
+with `status` drawn from the loop's own working/blocked/idle/dormant
+shape and every blocked case surfacing — the missing-repo case reports
+`blocked` with reason `external` and the detail, it never vanishes.
+`GET /status/items` returns one row per open TODO item:
+`{ id, title, pri, status, blocked_reason? }` — the queue view without
+parsing TODO.md. Every response carries `contract_version`. Socket
+absent or endpoints unreachable: `chug capabilities` reports
+`daemon_status: false` (bounded probe, never a hang).
+
+### T341 — permission broker (`permission_broker`)
+
+An opt-in PreToolUse hook pack. When `~/.claude/meta-broker.sock` exists
+and answers, the hook POSTs:
+
+```json
+{ "tool_name": "…", "input_summary": "…", "session_id": "…", "cwd": "…", "contract_version": "1" }
+```
+
+and honors the reply `{ "decision": "allow|deny|ask", "reason": "…", "ttl": "…" }`
+— `ask` falls through to the stock prompt path unchanged. Fail-open by
+construction: socket absent, >800ms, or a malformed reply → the stock
+path with zero interference (a broker crash can never wedge a session).
+Every brokered decision appends one JSONL audit line (decision, reason,
+broker latency) to `~/.claude/meta-broker-audit.jsonl`; stock-path
+decisions append nothing.
+
+### T342 — session status mod (`status_mod`)
+
+Hook handlers on turn/permission/error/question events rewrite
+`~/.claude/meta-status/<session-id>.json` atomically (tmp + rename —
+readers never observe a partial file):
+
+```json
+{ "status": "working", "blocked_reason": null, "detail": "…", "updated_at": "…", "contract_version": "1" }
+```
+
+Reader contract: absent file = not a meta session; stale (>10min) =
+treat as unknown; the mod never writes anything else and never touches
+the session's own state.
+
+### T343 — usage events (`usage_events`)
+
+One JSONL line per turn-complete, appended to `~/.claude/meta-usage.jsonl`:
+
+```json
+{ "ts": "…", "session_id": "…", "model_requested": "…", "model_served": "…", "input_tokens": 1234, "output_tokens": 567, "contract_version": "1" }
+```
+
+A full event carries the cache fields too (`cache_read_tokens`,
+`cache_creation_tokens`); the line above is what a partial event looks
+like — `model_served` is stamped only when the provider actually reports
+the as-served model (the requested name is never copied into the served
+slot; that conflation is the bug this row fixes), and token fields
+appear only when the event carries them.
+
+## Versioning
+
+Within one `contract_version`, every change is **additive**:
+
+- new feature keys (consumers read them as `false`),
+- a feature value upgrading `false` → `true` or → a version string (the
+  shape the registry already allows),
+- new optional fields on event shapes, new keys in `versions`,
+- new members of open vocabularies (a new status value, a new blocked
+  reason).
+
+**Breaking — bump `contract_version`:** removing or renaming any key,
+changing a value's type outside the boolean→version-string upgrade,
+changing the meaning of an existing value, or any change a conforming
+consumer (the two MUSTs above) could not ride through untouched. A
+consumer that reads `contract_version` it does not know should refuse the
+document loudly rather than guess — that is the bump doing its job.
+
+## Anthropic-side protocol surface
+
+The broker (T341) and the status mod (T342) ride Claude's hook protocol —
+PreToolUse permission decisions, turn/stop events — documented at
+<https://docs.claude.com/en/docs/claude-code/hooks>. Those protocol
+semantics are Anthropic-side and out of this contract's control; this
+document pins only what chug ships around them. Protocol asks that need
+Anthropic changes are tracked out-of-band, never here.
+
+## Where it lives
+
+- Producer + reference reader: `src/capabilities.rs`
+  (`chug capabilities`, `chug capabilities --check <file>`).
+- Contract pins: `tests/capabilities_contract.rs`, fixture
+  `tests/fixtures/capabilities/contract-v1.json`.
+- The landing rows: T340 (daemon status + lifecycle events), T341
+  (permission broker), T342 (session status mod), T343 (usage events).

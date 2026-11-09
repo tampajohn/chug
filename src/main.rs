@@ -4,6 +4,11 @@ mod attach;
 mod auth;
 mod autospec;
 mod build_info;
+/// T339: the meta-harness capability contract — the producer behind
+/// `chug capabilities` and the reference reader (`--check`) the contract
+/// tests pin the forward-compat rule on. Contract prose:
+/// docs/meta-harness.md.
+mod capabilities;
 mod chat;
 mod commands;
 mod complete;
@@ -295,6 +300,24 @@ enum CliCommand {
         #[arg(long, conflicts_with_all = ["stop", "status"])]
         ensure: bool,
     },
+    /// T339: print the meta-harness capability contract as one JSON
+    /// document — the feature-detection surface meta-harnesses (herdr,
+    /// orca) build against instead of version-sniffing. Contract v1:
+    /// consumers must treat unknown features as false and ignore unknown
+    /// keys; features are booleans (or version strings once shipped) and
+    /// flip on as their rows land (T340-T343). Cheap by construction — no
+    /// daemon contact, no I/O: a missing daemon is reported false/null,
+    /// never an error or a hang. The contract prose is
+    /// docs/meta-harness.md.
+    Capabilities {
+        /// T339: instead of printing this binary's document, run the
+        /// reference reader over a capabilities document file: parse it
+        /// tolerantly (unknown keys ignored, absent features false) and
+        /// print the canonical re-serialization on stdout; a malformed
+        /// document exits non-zero with the parse error on stderr.
+        #[arg(long, value_name = "FILE")]
+        check: Option<PathBuf>,
+    },
     /// Print the current LEDGER.md.
     Ledger {
         /// Working directory. Defaults to `.`.
@@ -444,6 +467,10 @@ fn main() -> ExitCode {
     // the queued events still flush before the process exits.
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match cli.command {
         CliCommand::Ledger { cwd } => cmd_ledger(cwd),
+        // T339: a pure CLI op in the cmd_ledger shape — no banner, no
+        // driver lock, no events write; stdout carries ONLY the JSON
+        // document (or the --check canonical form).
+        CliCommand::Capabilities { check } => cmd_capabilities(check),
         // T334: the loop subcommand is a pure CLI op in the cmd_fork shape
         // — no banner, no driver lock, no events write. `run` execs the
         // supervisor (the process image is replaced), so there is no
@@ -989,6 +1016,28 @@ fn cmd_ledger(cwd: Option<PathBuf>) -> anyhow::Result<i32> {
     let cwd = resolve_cwd(cwd)?;
     print!("{}", ledger::read(&cwd)?);
     Ok(0)
+}
+
+/// `chug capabilities` (T339): print the contract document to stdout, or —
+/// with `--check <file>` — run the reference reader over a document file
+/// and print its canonical form. Pure CLI op, cmd_ledger shape: no banner,
+/// no driver lock, no events write, no cwd resolution (the contract is
+/// cwd-independent — reading nothing is how it stays under budget).
+fn cmd_capabilities(check: Option<PathBuf>) -> anyhow::Result<i32> {
+    match check {
+        Some(path) => {
+            let raw = std::fs::read_to_string(&path)
+                .with_context(|| format!("reading {}", path.display()))?;
+            let doc = capabilities::parse(&raw)
+                .with_context(|| format!("parsing {}", path.display()))?;
+            println!("{}", capabilities::render(&doc));
+            Ok(0)
+        }
+        None => {
+            println!("{}", capabilities::document_json());
+            Ok(0)
+        }
+    }
 }
 
 /// F10 phase 1 (T124): run the stdio MCP server until stdin EOF, then exit 0.
