@@ -23,20 +23,21 @@
 #                     copy it there (mode 600) for the loop supervisor to
 #                     load at startup, and print the loop launch line.
 #
-# Flags (T341 — the permission-broker hook pack, docs/meta-harness.md):
-#   --with-meta-pack      install hooks/meta-broker/ into
-#                         <claude-dir>/hooks/meta-broker and wire its
-#                         PreToolUse hook into <claude-dir>/settings.json
-#                         additively (existing hooks untouched). The pack
-#                         comes from the SAME verified release tarball the
-#                         binary comes from — never a second fetch — or
-#                         from the working tree when this script runs from
-#                         a repo checkout that carries hooks/meta-broker/.
-#   --uninstall-meta-pack the exact reverse, offline: unwire the pack's
-#                         hook (exactly its own block) and remove the
-#                         installed pack dir. No download, no other change.
-#                         Takes no other flags: --profile is refused named
-#                         (a profile belongs to an install).
+# Flags (T341+T342 — the meta hook packs, docs/meta-harness.md):
+#   --with-meta-pack      install hooks/meta-broker/ and hooks/meta-status/
+#                         into <claude-dir>/hooks/<pack> and wire their
+#                         hooks into <claude-dir>/settings.json additively
+#                         (existing hooks untouched). The packs come from
+#                         the SAME verified release tarball the binary
+#                         comes from — never a second fetch — or from the
+#                         working tree when this script runs from a repo
+#                         checkout that carries them.
+#   --uninstall-meta-pack the exact reverse, offline: unwire the packs'
+#                         hooks (exactly their own blocks), remove the
+#                         installed pack dirs and the status mod's session
+#                         files. No download, no other change. Takes no
+#                         other flags: --profile is refused named (a
+#                         profile belongs to an install).
 #   <claude-dir> is $CLAUDE_CONFIG_DIR when set, else ~/.claude — the same
 #   resolution the hook itself uses at run time.
 set -eu
@@ -92,52 +93,64 @@ while [ $# -gt 0 ]; do
 done
 
 # The checkout's pack wins when this script runs from a repo checkout that
-# carries hooks/meta-broker/ (repo-checkout users install from the working
-# tree); otherwise the pack is extracted from the SAME verified tarball the
-# binary comes from. A curl|sh run has no checkout unless the cwd happens to
-# be one — the file-existence gate decides, exactly like ./profiles/ does.
+# carries hooks/<pack>/ (repo-checkout users install from the working
+# tree); otherwise the packs are extracted from the SAME verified tarball
+# the binary comes from. A curl|sh run has no checkout unless the cwd
+# happens to be one — the file-existence gate decides, exactly like
+# ./profiles/ does.
 case "$0" in
   */*) pack_checkout_dir=${0%/*} ;;
   *)   pack_checkout_dir=. ;;
 esac
-pack_checkout=
-if [ -f "$pack_checkout_dir/hooks/meta-broker/hook.sh" ]; then
-  pack_checkout=$pack_checkout_dir/hooks/meta-broker
-fi
+pack_checkout_src() { # $1 = pack name; prints the checkout-tree dir, or nothing
+  if [ -f "$pack_checkout_dir/hooks/$1/hook.sh" ]; then
+    printf '%s\n' "$pack_checkout_dir/hooks/$1"
+  fi
+}
 
-# --- T341: --uninstall-meta-pack (offline — no download, nothing else moves) ---
+# --- T341/T342: --uninstall-meta-pack (offline — no download, nothing else moves) ---
 if [ "$uninstall_meta_pack" = 1 ]; then
   if [ "$with_meta_pack" = 1 ]; then
     fail "--uninstall-meta-pack takes no other flags — it is the exact reverse of --with-meta-pack and runs offline"
   fi
   # A --profile belongs to an INSTALL (the loop supervisor loads it at
-  # startup); the uninstall is offline and moves nothing but the pack, so
+  # startup); the uninstall is offline and moves nothing but the packs, so
   # the combination is refused NAMED rather than silently ignored (the
   # uninstall leg runs before profile resolution and would otherwise drop
   # the flag on the floor).
   if [ -n "$profile_name" ]; then
-    fail "--uninstall-meta-pack does not take --profile — the uninstall is offline and moves nothing but the pack; a profile belongs to an install: run 'install.sh --profile <name>' on its own (docs/install-profiles.md)"
+    fail "--uninstall-meta-pack does not take --profile — the uninstall is offline and moves nothing but the packs; a profile belongs to an install: run 'install.sh --profile <name>' on its own (docs/install-profiles.md)"
   fi
   claude_dir=${CLAUDE_CONFIG_DIR:-$HOME/.claude}
   settings_file=$claude_dir/settings.json
-  pack_dir=$claude_dir/hooks/meta-broker
-  hook_command=$pack_dir/hook.sh
-  wire=
-  if [ -f "$pack_dir/wire.py" ]; then
-    wire=$pack_dir/wire.py
-  elif [ -n "$pack_checkout" ] && [ -f "$pack_checkout/wire.py" ]; then
-    wire=$pack_checkout/wire.py
-  elif [ -f "$settings_file" ] && grep -q 'meta-broker' "$settings_file" 2>/dev/null; then
-    fail "the meta-broker pack is wired in $settings_file but its uninstaller is gone (no wire.py in $pack_dir or $pack_checkout) — remove the meta-broker hook entry from $settings_file by hand, or reinstall the pack first: install.sh --with-meta-pack"
-  fi
-  if [ -n "$wire" ]; then
-    python3 "$wire" remove "$settings_file" "$hook_command" || fail "unwiring the meta-broker hook failed — $settings_file was left as the uninstaller reported; fix the named cause and retry"
-  fi
-  if [ -d "$pack_dir" ]; then
-    rm -rf "$pack_dir" || fail "cannot remove $pack_dir — check permissions (this script never elevates)"
-    printf 'install.sh: meta-broker pack removed (%s)\n' "$pack_dir"
-  else
-    printf 'install.sh: meta-broker pack not installed (%s absent)\n' "$pack_dir"
+  for pack in meta-broker meta-status; do
+    pack_dir=$claude_dir/hooks/$pack
+    hook_command=$pack_dir/hook.sh
+    checkout_src=$(pack_checkout_src "$pack")
+    wire=
+    if [ -f "$pack_dir/wire.py" ]; then
+      wire=$pack_dir/wire.py
+    elif [ -n "$checkout_src" ] && [ -f "$checkout_src/wire.py" ]; then
+      wire=$checkout_src/wire.py
+    elif [ -f "$settings_file" ] && grep -q "$pack" "$settings_file" 2>/dev/null; then
+      fail "the $pack pack is wired in $settings_file but its uninstaller is gone (no wire.py in $pack_dir or $checkout_src) — remove the $pack hook entries from $settings_file by hand, or reinstall the pack first: install.sh --with-meta-pack"
+    fi
+    if [ -n "$wire" ]; then
+      python3 "$wire" remove "$settings_file" "$hook_command" || fail "unwiring the $pack hook failed — $settings_file was left as the uninstaller reported; fix the named cause and retry"
+    fi
+    if [ -d "$pack_dir" ]; then
+      rm -rf "$pack_dir" || fail "cannot remove $pack_dir — check permissions (this script never elevates)"
+      printf 'install.sh: %s pack removed (%s)\n' "$pack" "$pack_dir"
+    else
+      printf 'install.sh: %s pack not installed (%s absent)\n' "$pack" "$pack_dir"
+    fi
+  done
+  # The status mod's session files are its on-disk footprint; the
+  # uninstall is the exact reverse, so they go too (readers treat a
+  # missing file as not-a-meta-session — the contract's absent posture).
+  if [ -d "$claude_dir/meta-status" ]; then
+    rm -rf "$claude_dir/meta-status" || fail "cannot remove $claude_dir/meta-status — check permissions (this script never elevates)"
+    printf 'install.sh: session-status files removed (%s)\n' "$claude_dir/meta-status"
   fi
   exit 0
 fi
@@ -285,33 +298,42 @@ mkdir -p "$install_dir" || fail "cannot create $install_dir — check \$HOME per
 mv "$tmp/chug" "$install_dir/chug" || fail "cannot move the binary into $install_dir — check write permission (this script never elevates)"
 chmod +x "$install_dir/chug"
 
-# --- T341: the meta-broker pack (--with-meta-pack) -----------------------------
-# The pack comes from the SAME verified tarball the binary came from (or the
-# working tree when this script runs from a repo checkout that carries it —
-# the checkout wins), lands in <claude-dir>/hooks/meta-broker, and its
-# PreToolUse hook is wired into <claude-dir>/settings.json additively:
-# existing hooks untouched, a re-run a no-op, the write atomic.
+# --- T341/T342: the meta hook packs (--with-meta-pack) -------------------------
+# Both packs come from the SAME verified tarball the binary came from (or
+# the working tree when this script runs from a repo checkout that carries
+# them — the checkout wins), land in <claude-dir>/hooks/<pack>, and their
+# hooks are wired into <claude-dir>/settings.json additively: existing
+# hooks untouched, a re-run a no-op, the write atomic. Both sources are
+# resolved BEFORE anything is created or wired — a release that predates
+# either pack fails named with nothing touched.
 if [ "$with_meta_pack" = 1 ]; then
-  pack_src=$pack_checkout
-  pack_src_desc="the working tree ($pack_checkout)"
-  if [ -z "$pack_src" ]; then
-    if [ -f "$tmp/hooks/meta-broker/hook.sh" ]; then
-      pack_src=$tmp/hooks/meta-broker
-      pack_src_desc="the verified release tarball"
-    else
-      fail "the downloaded release tarball does not carry the meta pack (no hooks/meta-broker/) — this release predates the permission-broker hook pack; use a newer release or build from source: git clone \"https://github.com/$REPO\" && cd chug && cargo install --path ."
-    fi
-  fi
-  command -v python3 >/dev/null 2>&1 || fail "python3 is required for --with-meta-pack (the pack's handler and settings wiring run on it) — install python3 and retry"
+  command -v python3 >/dev/null 2>&1 || fail "python3 is required for --with-meta-pack (the packs' handlers and settings wiring run on it) — install python3 and retry"
   claude_dir=${CLAUDE_CONFIG_DIR:-$HOME/.claude}
-  pack_dir=$claude_dir/hooks/meta-broker
   settings_file=$claude_dir/settings.json
-  mkdir -p "$claude_dir/hooks" || fail "cannot create $claude_dir/hooks — check permissions (this script never elevates)"
-  rm -rf "$pack_dir" || fail "cannot refresh $pack_dir — check permissions (this script never elevates)"
-  cp -R "$pack_src" "$pack_dir" || fail "cannot copy the meta-broker pack into $pack_dir — check permissions (this script never elevates)"
-  chmod 755 "$pack_dir/hook.sh" "$pack_dir/hook.py" "$pack_dir/wire.py" 2>/dev/null || true
-  printf 'install.sh: meta-broker pack installed from %s -> %s\n' "$pack_src_desc" "$pack_dir"
-  python3 "$pack_dir/wire.py" add "$settings_file" "$pack_dir/hook.sh" || fail "wiring the meta-broker hook into $settings_file failed — the pack is installed but NOT wired; fix the named cause and retry (uninstall: install.sh --uninstall-meta-pack)"
+  for pack in meta-broker meta-status; do
+    if [ -z "$(pack_checkout_src "$pack")" ] && [ ! -f "$tmp/hooks/$pack/hook.sh" ]; then
+      fail "the downloaded release tarball does not carry the meta pack (no hooks/$pack/) — this release predates the hook packs; use a newer release or build from source: git clone \"https://github.com/$REPO\" && cd chug && cargo install --path ."
+    fi
+  done
+  # The status mod's session files live in their own directory, created at
+  # install: the hook itself stays fork-free (a missing dir means skip, so
+  # the hot path never pays a mkdir).
+  mkdir -p "$claude_dir/hooks" "$claude_dir/meta-status" || fail "cannot create $claude_dir/hooks or $claude_dir/meta-status — check permissions (this script never elevates)"
+  for pack in meta-broker meta-status; do
+    pack_src=$(pack_checkout_src "$pack")
+    pack_src_desc="the working tree ($pack_src)"
+    if [ -z "$pack_src" ]; then
+      pack_src=$tmp/hooks/$pack
+      pack_src_desc="the verified release tarball"
+    fi
+    pack_dir=$claude_dir/hooks/$pack
+    rm -rf "$pack_dir" || fail "cannot refresh $pack_dir — check permissions (this script never elevates)"
+    cp -R "$pack_src" "$pack_dir" || fail "cannot copy the $pack pack into $pack_dir — check permissions (this script never elevates)"
+    chmod 755 "$pack_dir/hook.sh" "$pack_dir/wire.py" 2>/dev/null || true
+    chmod 755 "$pack_dir/hook.py" 2>/dev/null || true
+    printf 'install.sh: %s pack installed from %s -> %s\n' "$pack" "$pack_src_desc" "$pack_dir"
+    python3 "$pack_dir/wire.py" add "$settings_file" "$pack_dir/hook.sh" || fail "wiring the $pack hook into $settings_file failed — the pack is installed but NOT wired; fix the named cause and retry (uninstall: install.sh --uninstall-meta-pack)"
+  done
 fi
 
 # --- PATH hint + banner ----------------------------------------------------------
@@ -343,17 +365,18 @@ else
   printf '\n'
   printf '  next: point the loop at a model provider —\n'
   printf '    install.sh --profile <name>   # the LLM profile contract; docs/install-profiles.md\n'
-  printf '    install.sh --with-meta-pack   # the permission-broker hook pack; docs/meta-harness.md\n'
+  printf '    install.sh --with-meta-pack   # the meta hook packs (broker + status mod); docs/meta-harness.md\n'
   printf '\n'
 fi
 if [ "$with_meta_pack" = 1 ]; then
   printf '\n'
-  printf '  meta-broker pack: %s (hook wired into %s)\n' "$pack_dir" "$settings_file"
+  printf '  meta packs: %s/hooks/{meta-broker,meta-status} (hooks wired into %s)\n' "$claude_dir" "$settings_file"
   printf '    broker socket: %s/meta-broker.sock  (the harness listens here)\n' "$claude_dir"
   printf '    audit trail:   %s/meta-broker-audit.jsonl  (one JSONL line per brokered decision)\n' "$claude_dir"
-  printf '    behavior: stock permission prompts until a broker answers on the socket\n'
+  printf '    status files:  %s/meta-status/<session-id>.json  (one typed status doc per session)\n' "$claude_dir"
+  printf '    behavior: stock permission prompts until a broker answers on the socket; the status mod only ever writes its own files\n'
   printf '    uninstall: install.sh --uninstall-meta-pack\n'
-  printf '    contract:  docs/meta-harness.md (the T341 section)\n'
+  printf '    contract:  docs/meta-harness.md (the T341 and T342 sections)\n'
 fi
 printf '  quickstart:\n'
 printf '    chug run --spec SPEC.md --goal "Build X and make the check pass" \\\n'

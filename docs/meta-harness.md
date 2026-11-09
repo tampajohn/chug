@@ -245,17 +245,51 @@ hook uses at run time.
 
 ### T342 — session status mod (`status_mod`)
 
-Hook handlers on turn/permission/error/question events rewrite
-`~/.claude/meta-status/<session-id>.json` atomically (tmp + rename —
-readers never observe a partial file):
+An opt-in hook pack (`hooks/meta-status/`, same `--with-meta-pack` /
+`--uninstall-meta-pack` install legs as T341, same OFF-by-default rule)
+whose handlers ride the hook events that SEE the truth — turn ends,
+permission asks, errors, operator questions — and transcribe each into
+one typed status file per session,
+`<claude-dir>/meta-status/<session-id>.json`:
 
 ```json
-{ "status": "working", "blocked_reason": null, "detail": "…", "updated_at": "…", "contract_version": "1" }
+{ "status": "working", "blocked_reason": null, "detail": "Bash", "updated_at": "…", "contract_version": "1" }
 ```
 
-Reader contract: absent file = not a meta session; stale (>10min) =
-treat as unknown; the mod never writes anything else and never touches
-the session's own state.
+`status` is the typed enum above, exactly; `blocked_reason` the
+vocabulary above; `detail` (the tool name or the ask's message) rides
+only when known — absent values are omitted keys, never fabricated. The
+event table:
+
+| event | condition | written |
+| --- | --- | --- |
+| `UserPromptSubmit` | — | `working` |
+| `PreToolUse` | `AskUserQuestion` | `blocked` / `question` |
+| `PreToolUse` | any other tool | `working` (+ tool detail) |
+| `PostToolUse` | response carries an error marker | `blocked` / `error` |
+| `PostToolUse` | otherwise | `working` |
+| `Notification` | message mentions `permission` | `blocked` / `permission` |
+| `Notification` | otherwise | nothing (not a status fact) |
+| `Stop` | file says `blocked`/`question` | nothing (the question stays pending) |
+| `Stop` | otherwise | `done` |
+| `SessionEnd` | — | `done` |
+
+The write is a single equal-length overwrite of the same inode: the body
+is space-padded to a constant length (trailing spaces are legal JSON
+whitespace) and `date`'s format string IS the document, written through a
+`1<>` open — readers see the previous or the new COMPLETE document, never
+a partial one, with no rename and no truncate window. Session end leaves
+the file at `done` (no reaper needed).
+
+Reader contract: harnesses poll the file (inotify/fswatch optional);
+absent file = not-a-meta-session; stale (>10min by the file mtime or
+`updated_at`) = treat as unknown. The mod is pure transcription — <2ms
+per hook event (builtins plus one `exec date`), no network, no LLM calls
+— it never writes anything else and never touches the session's own
+state. Silent when unwatched: the pack's total footprint is one small
+file per session; nothing else changes, and a missing status dir means
+skip. Non-meta sessions are unaffected whether or not the pack is
+installed.
 
 ### T343 — usage events (`usage_events`)
 
@@ -310,3 +344,7 @@ Anthropic changes are tracked out-of-band, never here.
 - T341's shipping leg: `hooks/meta-broker/` (the hook pack),
   `install.sh --with-meta-pack` / `--uninstall-meta-pack` (the opt-in
   wiring), `tests/meta_broker_hook.rs` (the hook + audit battery).
+- T342's shipping leg: `hooks/meta-status/` (the status mod pack, the
+  same install legs), `tests/meta_status_hook.rs` (the typed-status
+  battery: event table, atomicity under a hammering reader, the
+  one-file footprint, session-end cleanup, the <2ms budget).

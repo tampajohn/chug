@@ -434,6 +434,45 @@ fn a_wired_hook_flips_permission_broker_without_any_socket() {
     );
 }
 
+/// The T342 mirror of the broker-flip leg: the status mod wired on its
+/// OWN event (Stop, matcher-less — the shape wire.py writes) flips
+/// `status_mod` without any socket, and leaves the other rows off.
+#[test]
+fn a_wired_status_hook_flips_status_mod_without_any_socket() {
+    let home = tempfile::tempdir().expect("tempdir");
+    let claude_dir = home.path().join(".claude");
+    std::fs::create_dir_all(claude_dir.join("hooks")).unwrap();
+    std::fs::write(
+        claude_dir.join("settings.json"),
+        r#"{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"/u/.claude/hooks/meta-status/hook.sh"}]}]}}"#,
+    )
+    .unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_chug"))
+        .arg("capabilities")
+        .current_dir(repo_root())
+        .env_remove("CHUG_DAEMON_SOCK")
+        .env_remove("CHUG_DELEGATE_BIN")
+        .env_remove("CHUG_LAYA_CHECKPOINT")
+        .env("CLAUDE_CONFIG_DIR", &claude_dir) // scoped: the probe's seam
+        .stdin(Stdio::null())
+        .output()
+        .expect("spawn chug capabilities");
+    assert!(out.status.success(), "{}", out_text(&out));
+    let value: Value = serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).unwrap();
+    assert_eq!(
+        value["features"]["status_mod"], true,
+        "the wired hook flips the row (hook presence, not file presence)"
+    );
+    assert_eq!(
+        value["features"]["permission_broker"], false,
+        "one row per landing: the T341 row stays off"
+    );
+    assert_eq!(
+        value["features"]["daemon_status"], false,
+        "no daemon here either"
+    );
+}
+
 /// An unwired claude dir (settings absent, or the pack nowhere in
 /// PreToolUse) keeps `permission_broker` false — the default posture the
 /// operator's constraint rides on. A foreign PreToolUse hook is not the
