@@ -54,7 +54,7 @@ if [ -f "$PROFILE_ENV_FILE" ]; then
     case "$_line" in ''|\#*) continue ;; esac
     _line="${_line#export }"
     case "$_line" in
-      CHUG_LLM_BASE_URL=*|CHUG_LLM_API_KEY=*|CHUG_LLM_API_KEY_CMD=*|CHUG_MODEL_REASONING=*|CHUG_MODEL_CODING=*|CHUG_DECISION_PROVIDER=*|CHUG_DECISION_PROXY_URL=*|CHUG_DECISION_PROXY_TOKEN=*|CHUG_LANGFUSE_*)
+      CHUG_LLM_BASE_URL=*|CHUG_LLM_API_KEY=*|CHUG_LLM_API_KEY_CMD=*|CHUG_MODEL_REASONING=*|CHUG_MODEL_CODING=*|CHUG_DECISION_PROVIDER=*|CHUG_DECISION_PROXY_URL=*|CHUG_DECISION_PROXY_TOKEN=*|CHUG_LANGFUSE_*|CHUG_AUTO_UPDATE=*)
         _key="${_line%%=*}"
         _val="${_line#*=}"
         case "$_val" in
@@ -73,6 +73,10 @@ if [ -f "$PROFILE_ENV_FILE" ]; then
           # pass-through is the identity, no translation, explicit env wins.
           CHUG_DECISION_PROVIDER|CHUG_DECISION_PROXY_URL|CHUG_DECISION_PROXY_TOKEN)
                                 loopd_profile_apply "$_key" "$_val" ;;
+          # T352 — the opt-in self-update flag is a native name too (the
+          # fragment reads ${CHUG_AUTO_UPDATE:-0} directly): identity
+          # pass-through, explicit env wins.
+          CHUG_AUTO_UPDATE)     loopd_profile_apply "$_key" "$_val" ;;
         esac
         ;;
       *) _prof_skipped=$((_prof_skipped + 1)) ;;

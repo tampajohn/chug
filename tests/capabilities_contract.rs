@@ -53,14 +53,16 @@ const BUDGET: Duration = Duration::from_millis(50);
 const DAEMON_DEADLINE: Duration = Duration::from_secs(60);
 const CLI_DEADLINE: Duration = Duration::from_secs(30);
 
-/// The five feature keys, in contract order — the registry both the
-/// fixture and the doc table must agree with.
-const FEATURE_KEYS: [&str; 5] = [
+/// The feature keys, in contract order — the registry both the
+/// fixture and the doc table must agree with. T352 appends
+/// `auto_update` (the self-update surface, always on when compiled in).
+const FEATURE_KEYS: [&str; 6] = [
     "daemon_status",
     "lifecycle_events",
     "permission_broker",
     "usage_events",
     "status_mod",
+    "auto_update",
 ];
 
 fn repo_root() -> PathBuf {
@@ -177,20 +179,26 @@ fn capabilities_output_matches_the_pinned_fixture() {
 
     assert_eq!(actual, expected, "the document drifted from {FIXTURE}");
 
-    // The registry posture, spelled out: all five features false today —
-    // T340-T343 flip theirs as they land — the chug version is this
-    // build's, and the daemon version is null (no self-report in T339).
+    // The registry posture, spelled out: the five T339 features are false
+    // until their rows land (T340-T343), the chug version is this build's,
+    // and the daemon version is null. T352's `auto_update` is the ONE
+    // always-on row: the feature IS the binary (compiled in, no probe).
     let features = actual["features"].as_object().expect("features object");
     assert_eq!(
         features.len(),
         FEATURE_KEYS.len(),
-        "the registry is exactly the five keys: {features:?}"
+        "the registry is exactly the contract keys: {features:?}"
     );
     for key in FEATURE_KEYS {
+        let expected = if key == "auto_update" {
+            Some(Some(true))
+        } else {
+            Some(Some(false))
+        };
         assert_eq!(
             features.get(key).map(Value::as_bool),
-            Some(Some(false)),
-            "{key} is false until its row lands"
+            expected,
+            "{key} matches its landed-by posture"
         );
     }
     assert_eq!(actual["versions"]["chug"], env!("CARGO_PKG_VERSION"));

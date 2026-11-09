@@ -65,3 +65,5 @@ behavior by default anywhere.
   separate `chug repo sync` item if wanted later).
 - Fleet-wide fan-out (boxes self-update; orchestrated rollout is a
   fleet item, not chug's).
+
+check: CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-validate-a cargo test --release --test update_cmd

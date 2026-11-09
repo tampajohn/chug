@@ -47,6 +47,7 @@ mod permissions;
 mod sse;
 mod tgrep;
 mod todos;
+mod update;
 mod valroute;
 mod webfetch;
 mod judge_pack;
@@ -324,6 +325,37 @@ enum CliCommand {
         #[arg(long)]
         cwd: Option<PathBuf>,
     },
+    /// T352: keep this box's chug current. Resolve the latest release
+    /// (GitHub API, honoring CHUG_RELEASE_URL_BASE for mirrors), compare
+    /// it against this binary's version, and — only when the release is
+    /// strictly NEWER (or `--force` names an explicit downgrade) —
+    /// download it, verify the sha256 sidecar (install.sh's contract, not
+    /// a fork of it), and replace the binary atomically (temp file +
+    /// rename, never an in-place overwrite of a running Mach-O). A release
+    /// OLDER than the installed one is refused without `--force` (no
+    /// silent downgrades). When the latest release is stale (older than 7
+    /// days — the T348 rule) and a checkout + cargo exist, the update is
+    /// built from source instead (the T347-era path). Opt-in by
+    /// construction: nothing happens unless invoked; the loop integration
+    /// (CHUG_AUTO_UPDATE=1 in the profile) only runs the daily `--check`
+    /// between cycles.
+    Update {
+        /// Dry-run: resolve + compare + report, never write. Exit 0 =
+        /// current, 10 = an update is available, 2 = the check itself
+        /// failed — the machine surface the loop integration consumes.
+        #[arg(long)]
+        check: bool,
+        /// License an explicit downgrade (the version floor is otherwise
+        /// refuse-only: a silent downgrade is never acceptable).
+        #[arg(long)]
+        force: bool,
+        /// The source checkout for the stale-release fallback (the
+        /// T348/T347 path): build this repo with cargo instead of
+        /// downloading a possibly-frozen release. Defaults to
+        /// $CHUG_SOURCE when unset.
+        #[arg(long, value_name = "PATH")]
+        source: Option<PathBuf>,
+    },
     /// T334: scaffold + run the continuous loop in ANY repo — no clone of
     /// chug required. `init` scaffolds this repo's own loop contract
     /// (LOOP-SPEC.md, TODO.md, .chug/, the .gitignore line; idempotent,
@@ -487,6 +519,11 @@ fn main() -> ExitCode {
     // the queued events still flush before the process exits.
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match cli.command {
         CliCommand::Ledger { cwd } => cmd_ledger(cwd),
+        // T352: a pure CLI op in the cmd_ledger shape — no banner, no
+        // driver lock, no events write. It reaches the network (the
+        // release API + assets) but touches nothing else; `--check` is
+        // the dry-run surface loopd's daily probe consumes.
+        CliCommand::Update { check, force, source } => cmd_update(check, force, &source),
         // T339: a pure CLI op in the cmd_ledger shape — no banner, no
         // driver lock, no events write; stdout carries ONLY the JSON
         // document (or the --check canonical form).
@@ -1036,6 +1073,15 @@ fn cmd_ledger(cwd: Option<PathBuf>) -> anyhow::Result<i32> {
     let cwd = resolve_cwd(cwd)?;
     print!("{}", ledger::read(&cwd)?);
     Ok(0)
+}
+
+/// `chug update` (T352): the self-update engine in src/update.rs. A pure
+/// CLI op in the cmd_ledger shape — no banner, no driver lock, no events
+/// write; stdout carries the human line (`updated: old -> new`, `already
+/// current`, the `--check` verdicts) and the exit code is the machine
+/// contract (see update::run).
+fn cmd_update(check: bool, force: bool, source: &Option<PathBuf>) -> anyhow::Result<i32> {
+    update::run(check, force, source)
 }
 
 /// `chug capabilities` (T339): print the contract document to stdout, or —
