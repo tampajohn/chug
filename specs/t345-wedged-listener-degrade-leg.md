@@ -1,6 +1,6 @@
 # T345 — chugd: wedged-listener degrade leg (the validator's t340 finding 2)
 
-check: set -o pipefail; CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared cargo test --release --test daemon_status_contract
+check: set -o pipefail; CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-impl-a cargo test --release --test daemon_status_contract
 
 ## Problem
 
