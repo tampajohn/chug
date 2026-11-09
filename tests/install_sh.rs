@@ -905,3 +905,169 @@ fn profile_static_pins_and_the_no_profile_footer() {
         "no profile block without --profile: {text}"
     );
 }
+
+// ---------- T341: the meta-broker pack (--with-meta-pack legs) ----------
+
+/// A fake release whose tarball carries the pack: `chug` + `hooks/` — the
+/// layout the release workflow's package step ships (the tarball-carries-
+/// the-pack pin in tests/release_workflow.rs).
+impl Run {
+    fn make_release_with_pack(&self, platform: &str) -> PathBuf {
+        let staging = self.release_dir.join(format!("stage-pack-{platform}"));
+        std::fs::create_dir_all(&staging).unwrap();
+        let stub = staging.join("chug");
+        std::fs::write(&stub, "#!/bin/sh\necho chug-stub\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let pack_src = install_sh().parent().unwrap().join("hooks/meta-broker");
+        let staging_hooks = staging.join("hooks");
+        std::fs::create_dir_all(&staging_hooks).unwrap();
+        let dst = staging_hooks.join("meta-broker");
+        std::fs::create_dir_all(&dst).unwrap();
+        for file in ["hook.sh", "hook.py", "wire.py", "README.md"] {
+            std::fs::copy(pack_src.join(file), dst.join(file)).unwrap();
+        }
+        let tarball = self.release_dir.join(format!("chug-{platform}.tar.gz"));
+        let ok = Command::new("tar")
+            .args(["czf"])
+            .arg(&tarball)
+            .args(["chug", "hooks"])
+            .current_dir(&staging)
+            .output()
+            .expect("tar czf");
+        assert!(ok.status.success(), "tar czf failed: {}", String::from_utf8_lossy(&ok.stderr));
+        let hash = sha256(&tarball);
+        std::fs::write(
+            self.release_dir.join(format!("chug-{platform}.tar.gz.sha256")),
+            format!("{hash}  chug-{platform}.tar.gz\n"),
+        )
+        .unwrap();
+        tarball
+    }
+
+    /// Run a COPY of install.sh from a non-checkout dir (no hooks/ sibling):
+    /// the $0-relative checkout source must NOT win, so the tarball leg —
+    /// extract the pack from the SAME verified tarball — is what runs.
+    fn run_pack_leg(&self, platform: &str, args: &[&str], envs: &[(&str, &str)]) -> Output {
+        let script_copy = self.release_dir.join(format!("install-{platform}.sh"));
+        std::fs::copy(install_sh(), &script_copy).unwrap();
+        let mut cmd = Command::new("sh");
+        cmd.arg(&script_copy)
+            .args(args)
+            .env("CHUG_RELEASE_URL_BASE", format!("file://{}", self.release_dir.display()))
+            .env("CHUG_INSTALL_DIR", &self.install_dir)
+            .env("HOME", &self.home)
+            .env("PATH", "/usr/bin:/bin:/usr/sbin:/sbin");
+        for (k, v) in envs {
+            cmd.env(k, v);
+        }
+        cmd.output().expect("spawning sh install.sh")
+    }
+}
+
+fn claude_dir(home: &Path) -> PathBuf {
+    home.join(".claude")
+}
+
+/// --with-meta-pack installs the pack from the verified tarball and wires
+/// the hook ADDITIVELY: pre-existing hooks untouched, the pack entry
+/// appended, a re-run a no-op.
+#[test]
+fn with_meta_pack_installs_from_the_tarball_and_wires_additively() {
+    let run = Run::new("with-meta-pack-additive");
+    run.make_release_with_pack("macos-arm64");
+    let claude = claude_dir(&run.home);
+    std::fs::create_dir_all(&claude).unwrap();
+    std::fs::write(
+        claude.join("settings.json"),
+        r#"{"model":"opus","hooks":{"PreToolUse":[{"matcher":"WebFetch","hooks":[{"type":"command","command":"echo keep-me"}]}]}}"#,
+    )
+    .unwrap();
+    let out = run.run_pack_leg("macos-arm64", &["--with-meta-pack"], &[("CHUG_INSTALL_PLATFORM", "macos-arm64")]);
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let pack = claude.join("hooks").join("meta-broker");
+    for file in ["hook.sh", "hook.py", "wire.py"] {
+        assert!(pack.join(file).is_file(), "{file} landed");
+    }
+    let settings: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(claude.join("settings.json")).unwrap()).unwrap();
+    let entries = settings["hooks"]["PreToolUse"].as_array().unwrap();
+    assert_eq!(entries.len(), 2, "the pack entry appended, nothing else moved");
+    assert_eq!(entries[0]["hooks"][0]["command"], "echo keep-me", "existing hooks untouched");
+    assert!(
+        entries[1]["hooks"][0]["command"]
+            .as_str()
+            .unwrap()
+            .ends_with("hooks/meta-broker/hook.sh"),
+        "the wired command points at the installed pack"
+    );
+    assert_eq!(settings["model"], "opus", "unrelated keys untouched");
+    // Idempotent re-run: still exit 0, still exactly one pack entry.
+    let out = run.run_pack_leg("macos-arm64", &["--with-meta-pack"], &[("CHUG_INSTALL_PLATFORM", "macos-arm64")]);
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let settings: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(claude.join("settings.json")).unwrap()).unwrap();
+    assert_eq!(settings["hooks"]["PreToolUse"].as_array().unwrap().len(), 2, "no duplicate wiring");
+}
+
+/// --uninstall-meta-pack is the exact reverse: the pack's block removed
+/// (the foreign hook survives), the pack dir gone, and it runs OFFLINE —
+/// on an unsupported platform too (no download, before the platform
+/// detect). A second uninstall is a no-op.
+#[test]
+fn uninstall_meta_pack_removes_exactly_its_own_block_offline() {
+    let run = Run::new("with-meta-pack-uninstall");
+    run.make_release_with_pack("macos-arm64");
+    let claude = claude_dir(&run.home);
+    std::fs::create_dir_all(&claude).unwrap();
+    std::fs::write(
+        claude.join("settings.json"),
+        r#"{"hooks":{"PreToolUse":[{"matcher":"WebFetch","hooks":[{"type":"command","command":"echo keep-me"}]}]}}"#,
+    )
+    .unwrap();
+    let envs = [("CHUG_INSTALL_PLATFORM", "macos-arm64")];
+    assert!(run.run_pack_leg("macos-arm64", &["--with-meta-pack"], &envs).status.success());
+    // Offline uninstall on an unsupported platform — no platform error.
+    let out = run.run_pack_leg(
+        "macos-arm64",
+        &["--uninstall-meta-pack"],
+        &[("CHUG_INSTALL_OS", "FreeBSD")],
+    );
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let settings: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(claude.join("settings.json")).unwrap()).unwrap();
+    let entries = settings["hooks"]["PreToolUse"].as_array().unwrap();
+    assert_eq!(entries.len(), 1, "only the pack's block removed");
+    assert_eq!(entries[0]["hooks"][0]["command"], "echo keep-me", "the foreign hook survives");
+    assert!(!claude.join("hooks").join("meta-broker").exists(), "the pack dir is gone");
+    // Idempotent: a second uninstall is a no-op exit 0.
+    let out = run.run_pack_leg(
+        "macos-arm64",
+        &["--uninstall-meta-pack"],
+        &[("CHUG_INSTALL_OS", "FreeBSD")],
+    );
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+}
+
+/// A release tarball that predates the pack fails NAMED — before anything
+/// is wired or installed (the old-layout tarball: `chug` only).
+#[test]
+fn a_pack_less_tarball_fails_named() {
+    let run = Run::new("with-meta-pack-old-tarball");
+    run.make_release("macos-arm64", "chug-stub");
+    let out = run.run_pack_leg("macos-arm64", &["--with-meta-pack"], &[("CHUG_INSTALL_PLATFORM", "macos-arm64")]);
+    assert!(!out.status.success(), "a pack-less tarball must not install");
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stderr),
+        String::from_utf8_lossy(&out.stdout)
+    );
+    assert!(text.contains("meta pack"), "the failure names the missing pack: {text}");
+    assert!(
+        !claude_dir(&run.home).join("hooks").exists(),
+        "nothing installed on the failed leg"
+    );
+}

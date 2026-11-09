@@ -78,7 +78,10 @@ fn out_text(out: &Output) -> String {
 /// Run `chug capabilities` (plus caller args) in the repo root with the
 /// ambient env — the document is cwd- and env-independent by contract,
 /// and asserting stdout parses as JSON IS the stdout-purity check (a
-/// stray banner would break every parse in this file).
+/// stray banner would break every parse in this file). The T341 probe
+/// reads `$CLAUDE_CONFIG_DIR`/`$HOME` (hook presence in the user-level
+/// settings), so the ambient-env run stays honest by NOT pinning those:
+/// whichever claude dir this box has, the run must parse and total.
 fn run_caps(extra: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_chug"))
         .arg("capabilities")
@@ -203,6 +206,14 @@ fn timed_caps(home: &Path) -> (Duration, Output) {
         .env_remove("CHUG_DAEMON_SOCK")
         .env_remove("CHUG_DELEGATE_BIN")
         .env_remove("CHUG_LAYA_CHECKPOINT")
+        // The T341 broker probe is scoped the same way: point
+        // CLAUDE_CONFIG_DIR at a scratch dir so the document is the
+        // all-absent posture no matter what this operator box has wired —
+        // the latency budget and the feature grid must not depend on the
+        // ambient claude dir. (The probe's FILE leg — a wired settings
+        // file flipping `permission_broker` — is exercised end to end in
+        // the broker-flip fixture below and in tests/meta_broker_hook.rs.)
+        .env_remove("CLAUDE_CONFIG_DIR")
         .stdin(Stdio::null())
         .output()
         .expect("spawn chug capabilities");
@@ -362,6 +373,88 @@ fn capabilities_completes_under_50ms_with_a_live_daemon() {
         value["versions"]["daemon"].is_null(),
         "no self-report until T340 lands it"
     );
+}
+
+// ---------- T341: the permission_broker flip is hook presence ----------
+
+/// A wired meta-broker hook in the user-level settings flips
+/// `permission_broker` to true — HOOK PRESENCE, not socket presence: no
+/// socket exists here at all, and the document is scoped to this scratch
+/// claude dir so ambient wiring on the operator box cannot touch it.
+#[test]
+fn a_wired_hook_flips_permission_broker_without_any_socket() {
+    let home = tempfile::tempdir().expect("tempdir");
+    let claude_dir = home.path().join(".claude");
+    std::fs::create_dir_all(claude_dir.join("hooks")).unwrap();
+    std::fs::write(
+        claude_dir.join("settings.json"),
+        r#"{"model":"opus","hooks":{"PreToolUse":[
+            {"matcher":"Bash","hooks":[{"type":"command","command":"echo keep-me"}]},
+            {"matcher":"*","hooks":[{"type":"command","command":"/u/.claude/hooks/meta-broker/hook.sh"}]}]}}"#,
+    )
+    .unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_chug"))
+        .arg("capabilities")
+        .current_dir(repo_root())
+        .env_remove("CHUG_DAEMON_SOCK")
+        .env_remove("CHUG_DELEGATE_BIN")
+        .env_remove("CHUG_LAYA_CHECKPOINT")
+        .env("CLAUDE_CONFIG_DIR", &claude_dir) // scoped: the probe's seam
+        .stdin(Stdio::null())
+        .output()
+        .expect("spawn chug capabilities");
+    assert!(out.status.success(), "{}", out_text(&out));
+    let value: Value = serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).unwrap();
+    assert_eq!(
+        value["features"]["permission_broker"], true,
+        "the wired hook flips the row (hook presence, not socket presence)"
+    );
+    assert_eq!(
+        value["features"]["daemon_status"], false,
+        "one row per landing: no daemon here, the T340 rows stay off"
+    );
+}
+
+/// An unwired claude dir (settings absent, or the pack nowhere in
+/// PreToolUse) keeps `permission_broker` false — the default posture the
+/// operator's constraint rides on. A foreign PreToolUse hook is not the
+/// pack.
+#[test]
+fn an_unwired_claude_dir_keeps_permission_broker_false() {
+    for (label, settings) in [
+        ("no settings file", None),
+        (
+            "foreign PreToolUse hook only",
+            Some(r#"{"hooks":{"PreToolUse":[{"matcher":"*","hooks":[{"type":"command","command":"echo hi"}]}]}}"#),
+        ),
+        (
+            "the pack under PostToolUse is not PreToolUse wiring",
+            Some(r#"{"hooks":{"PostToolUse":[{"matcher":"*","hooks":[{"type":"command","command":"/x/hooks/meta-broker/hook.sh"}]}]}}"#),
+        ),
+    ] {
+        let home = tempfile::tempdir().expect("tempdir");
+        let claude_dir = home.path().join(".claude");
+        std::fs::create_dir_all(&claude_dir).unwrap();
+        if let Some(text) = settings {
+            std::fs::write(claude_dir.join("settings.json"), text).unwrap();
+        }
+        let out = Command::new(env!("CARGO_BIN_EXE_chug"))
+            .arg("capabilities")
+            .current_dir(repo_root())
+            .env_remove("CHUG_DAEMON_SOCK")
+            .env_remove("CHUG_DELEGATE_BIN")
+            .env_remove("CHUG_LAYA_CHECKPOINT")
+            .env("CLAUDE_CONFIG_DIR", &claude_dir)
+            .stdin(Stdio::null())
+            .output()
+            .expect("spawn chug capabilities");
+        assert!(out.status.success(), "{label}: {}", out_text(&out));
+        let value: Value = serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).unwrap();
+        assert_eq!(
+            value["features"]["permission_broker"], false,
+            "{label}: stock posture"
+        );
+    }
 }
 
 // ---------- contract doc link-check ----------
