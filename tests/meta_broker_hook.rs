@@ -97,7 +97,12 @@ fn run_hook_bounded(claude_dir: &Path, bound: Duration) -> (bool, Option<i32>, S
 }
 
 fn pack_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("hooks/meta-broker")
+    // T48: resolve the repo root at RUNTIME (cargo runs test binaries with
+    // cwd = the package root) — the compile-time manifest macro is what
+    // false-redded the cycle-21 post-merge gates under the T47 shared cache
+    // and is refused by the no_compile lint on every .rs file.
+    let root = std::env::current_dir().expect("cargo sets the test cwd to the package root");
+    root.join("hooks/meta-broker")
 }
 
 /// The scratch claude dir with hooks/ present (the pack directory itself is
