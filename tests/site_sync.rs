@@ -3618,7 +3618,7 @@ fn t349_features_backfill_parses_the_flagship_rows() {
     todo.push_str(&t349_done_row("T33", "beta item", "specs/beta.md", &refs[0]));
     std::fs::write(f.chug.join("TODO.md"), todo).unwrap();
     // the REAL backfilled FEATURES.md (this repo's own, copied at test time)
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let root = std::env::current_dir().expect("cargo sets the test cwd to the package root (the runtime resolution the manifest-dir pin mandates)");
     std::fs::copy(root.join("FEATURES.md"), f.chug.join("FEATURES.md")).unwrap();
     site_fixture_t349(&f.site);   // writes + commits the page
 
