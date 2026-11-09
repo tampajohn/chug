@@ -303,19 +303,55 @@ fn ask_reply_falls_through_to_the_stock_path_and_still_audits() {
 
 /// A broker slower than the 800ms budget fails open: the hook finishes long
 /// before the 3s stall ends, prints nothing, and appends nothing.
+///
+/// The budget is pinned TWO-SIDED at its real granularity (the t341
+/// validator's finding 3: a lone `<2s` bound cannot tell an 800ms budget
+/// from a 1900ms one). The exact "<5ms" number the spec pins is the
+/// ABSENT-socket latency ADDED over a no-op hook — pinned by
+/// `an_absent_socket_is_the_stock_path_with_zero_added_latency` below,
+/// where both legs pay the identical spawn+parse cost. The timeout path
+/// cannot be pinned that exactly: it inherently pays one `sh` + `python3`
+/// spawn and a connect on top of the 800ms wait, so the mechanically
+/// assertable pin is a band on the BEST of 3 runs (best-of-3 so one
+/// scheduler hiccup inflating a single spawn is not the hook's doing):
+/// - LOWER 750ms: the hook genuinely waited out the stalled broker — an
+///   early-fail-open mutant (timeout never armed, connect aborted) would
+///   finish in ~100ms;
+/// - UPPER 1300ms: the 800ms budget plus ~500ms of spawn/connect slack —
+///   a budget mutant >= 1.3s, or the broker's 3s stall leaking through,
+///   cannot fit under it.
 #[test]
 fn a_slow_broker_times_out_to_the_stock_path() {
-    let (_home, claude_dir) = scratch();
-    serve(&claude_dir, Broker::Slow);
-    let (exited, code, stdout, elapsed) = run_hook_bounded(&claude_dir, Duration::from_millis(2500));
-    assert!(exited, "the hook must not wait out the broker's stall");
-    assert_eq!(code, Some(0), "fail-open exit");
-    assert!(stdout.is_empty(), "stock path: no output");
+    let mut best: Option<Duration> = None;
+    for i in 0..3 {
+        // A fresh scratch + socket per run: the Slow broker thread holds
+        // its socket for the whole 3s stall, so a second run against the
+        // same path would race the previous thread's teardown.
+        let (_home, claude_dir) = scratch();
+        serve(&claude_dir, Broker::Slow);
+        let (exited, code, stdout, elapsed) =
+            run_hook_bounded(&claude_dir, Duration::from_millis(2500));
+        assert!(exited, "run {i}: the hook must not wait out the broker's stall");
+        assert_eq!(code, Some(0), "run {i}: fail-open exit");
+        assert!(stdout.is_empty(), "run {i}: stock path: no output");
+        assert!(
+            !audit_path(&claude_dir).exists(),
+            "run {i}: no audit line for a stock-path outcome"
+        );
+        best = Some(best.map_or(elapsed, |b: Duration| b.min(elapsed)));
+    }
+    let best = best.expect("three runs ran");
     assert!(
-        elapsed < Duration::from_millis(2000),
-        "the 800ms budget bounded the hook, not the broker's 3s (took {elapsed:?})"
+        best >= Duration::from_millis(750),
+        "the hook finished in {best:?} — the 800ms budget did not bound the \
+         wait on the stalled broker (an early fail-open?)"
     );
-    assert!(!audit_path(&claude_dir).exists(), "no audit line for a stock-path outcome");
+    assert!(
+        best < Duration::from_millis(1300),
+        "best of 3 was {best:?} — the stock-path fail-open must sit inside \
+         the 800ms budget + ~500ms spawn/connect slack; a longer wait means \
+         the budget mutated or the broker's 3s stall leaked through"
+    );
 }
 
 /// A malformed reply body is the stock path (fail-open) — exit 0, no

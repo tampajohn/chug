@@ -76,12 +76,18 @@ fn out_text(out: &Output) -> String {
 }
 
 /// Run `chug capabilities` (plus caller args) in the repo root with the
-/// ambient env — the document is cwd- and env-independent by contract,
-/// and asserting stdout parses as JSON IS the stdout-purity check (a
-/// stray banner would break every parse in this file). The T341 probe
-/// reads `$CLAUDE_CONFIG_DIR`/`$HOME` (hook presence in the user-level
-/// settings), so the ambient-env run stays honest by NOT pinning those:
-/// whichever claude dir this box has, the run must parse and total.
+/// ambient env. Every consumer of THIS runner is value-independent by
+/// construction — the stdout-purity check (a parse), the doc-registry
+/// link-check (key sets, not values), the forward-compat roundtrip (the
+/// injected document and its canonical form derive from the SAME run, so
+/// any ambient wiring cancels on both sides) — which is why ambient is
+/// safe here: on a box with the meta-broker pack wired into
+/// `$HOME/.claude` (or `$CLAUDE_CONFIG_DIR`), the document carries
+/// `permission_broker: true` and every one of those asserts still holds.
+/// The VALUE-posture asserts (all-off fixture, flip fixtures) never run
+/// through this runner — they go through `timed_caps`, which scopes
+/// `CLAUDE_CONFIG_DIR` to a scratch dir (the t341 validator's finding-1
+/// class: an env_remove is NOT scoping — it falls back to `$HOME/.claude`).
 fn run_caps(extra: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_chug"))
         .arg("capabilities")
@@ -96,7 +102,8 @@ fn run_caps(extra: &[&str]) -> Output {
 /// a freshly built binary can park a child in `_dyld_start` for tens of
 /// seconds — see tests/daemon_lifecycle.rs): exec the binary once,
 /// bounded, BEFORE any timed section. `--version` is instant and
-/// side-effect-free.
+/// side-effect-free (and touches no probe surface — no capabilities
+/// document is built — so the ambient env is safe here).
 fn warm_exec() {
     let mut child = Command::new(env!("CARGO_BIN_EXE_chug"))
         .arg("--version")
@@ -206,14 +213,20 @@ fn timed_caps(home: &Path) -> (Duration, Output) {
         .env_remove("CHUG_DAEMON_SOCK")
         .env_remove("CHUG_DELEGATE_BIN")
         .env_remove("CHUG_LAYA_CHECKPOINT")
-        // The T341 broker probe is scoped the same way: point
-        // CLAUDE_CONFIG_DIR at a scratch dir so the document is the
-        // all-absent posture no matter what this operator box has wired —
-        // the latency budget and the feature grid must not depend on the
-        // ambient claude dir. (The probe's FILE leg — a wired settings
-        // file flipping `permission_broker` — is exercised end to end in
-        // the broker-flip fixture below and in tests/meta_broker_hook.rs.)
-        .env_remove("CLAUDE_CONFIG_DIR")
+        // The T341 broker probe is scoped the same way: CLAUDE_CONFIG_DIR
+        // is SET to a scratch dir inside the scoped home, so the document
+        // is the all-absent posture no matter what this operator box has
+        // wired — the latency budget and the feature grid must not depend
+        // on the ambient claude dir. SET, never REMOVE: with the var
+        // removed the probe falls back to `$HOME/.claude` (the ambient
+        // dir), and on a box with the pack wired there the fixture's
+        // all-off posture flips `permission_broker` true and REDs the
+        // pinned fixture — the t341 validator's finding 1 (the t339
+        // finding-1 class: env_remove is not scoping). The probe's FILE
+        // leg — a wired settings file flipping `permission_broker` — is
+        // exercised end to end in the broker-flip fixture below and in
+        // tests/meta_broker_hook.rs.
+        .env("CLAUDE_CONFIG_DIR", home.join("claude-scratch"))
         .stdin(Stdio::null())
         .output()
         .expect("spawn chug capabilities");
@@ -281,6 +294,12 @@ impl StubDaemon {
             .env_remove("CHUG_DAEMON_SOCK")
             .env_remove("CHUG_DELEGATE_BIN")
             .env_remove("CHUG_LAYA_CHECKPOINT")
+            // Ambient CLAUDE_CONFIG_DIR/HOME is safe on the DAEMON child:
+            // the T341 probe runs only inside the `capabilities` document
+            // builder (src/capabilities.rs), and the daemon serves
+            // /healthz, /sessions and /status — it never builds the
+            // document. The timed/asserted runs go through `timed_caps`,
+            // which scopes the probe seam itself.
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())

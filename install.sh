@@ -35,6 +35,8 @@
 #   --uninstall-meta-pack the exact reverse, offline: unwire the pack's
 #                         hook (exactly its own block) and remove the
 #                         installed pack dir. No download, no other change.
+#                         Takes no other flags: --profile is refused named
+#                         (a profile belongs to an install).
 #   <claude-dir> is $CLAUDE_CONFIG_DIR when set, else ~/.claude — the same
 #   resolution the hook itself uses at run time.
 set -eu
@@ -107,6 +109,14 @@ fi
 if [ "$uninstall_meta_pack" = 1 ]; then
   if [ "$with_meta_pack" = 1 ]; then
     fail "--uninstall-meta-pack takes no other flags — it is the exact reverse of --with-meta-pack and runs offline"
+  fi
+  # A --profile belongs to an INSTALL (the loop supervisor loads it at
+  # startup); the uninstall is offline and moves nothing but the pack, so
+  # the combination is refused NAMED rather than silently ignored (the
+  # uninstall leg runs before profile resolution and would otherwise drop
+  # the flag on the floor).
+  if [ -n "$profile_name" ]; then
+    fail "--uninstall-meta-pack does not take --profile — the uninstall is offline and moves nothing but the pack; a profile belongs to an install: run 'install.sh --profile <name>' on its own (docs/install-profiles.md)"
   fi
   claude_dir=${CLAUDE_CONFIG_DIR:-$HOME/.claude}
   settings_file=$claude_dir/settings.json
