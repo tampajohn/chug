@@ -58,3 +58,26 @@ No flags, no change: bare `chug loop init` behaves exactly as today
   eval cycle's existing job once the loop is alive).
 
 check: CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-validate-b cargo test --release --test loop_goal_seeding
+
+## Field findings (Fleet Primary, 2026-11-09 — verified on F94 0.21.0)
+
+1. **No generation-only spec path exists in the binary today.** `chug
+   plan --goal --out` writes a PLAN (Findings/Assumptions/Deliverables —
+   no check: line, wrong shape for the goal-gate); the autospec draft is
+   chat-driven (interactive approve flow in src/chat.rs). T355 must either
+   build the generation-only mode OR make the same direct proxy call the
+   fleet wrapper proved (profile base URL + key-cmd + reasoning model).
+2. **PROXY THINKING-BLOCK GOTCHA (load-bearing)**: the proxy models
+   ALWAYS emit a thinking block first; elaborate multi-section prompts
+   ("Required shape EXACTLY... rules...") send them into burn loops —
+   max_tokens exhausted with ZERO text output, and thinking:budget /
+   thinking:disabled flags are IGNORED by the proxy (verified failure
+   modes: 1500/6000 caps, budget caps, disabled flags — all thinking-
+   only). What completes reliably (~18s, stop=end_turn, full spec): a
+   COMPACT prompt (~5 lines naming the sections) + max_tokens 16000
+   (headroom for thinking + ~1.5k of text). The auto-spec call in this
+   item MUST follow the compact-prompt shape or it will burn silently.
+3. The fleet wrapper (herdr-fleet-mods 614240d) already implements the
+   seed path against option (b) — idempotent via spec-path presence,
+   fail-open to the inline row, hostile-goal argv-safe. It is the
+   working reference implementation for this item's spec generation.
