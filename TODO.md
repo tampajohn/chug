@@ -349,6 +349,7 @@
 | T347 | release pipeline: every run since v0.17.28 cancelled; GitHub releases stuck at v0.17.27 — pilots install a month-old binary | specs/t347-release-pipeline-cancelled.md | 1 | open | operator-filed 2026-11-09 — found during K7 update; install.sh latest=0.17.27, missing the whole adoption stack (renumbered from T346, id collision) |
 | T348 | install.sh: release-staleness detection (--allow-stale gate) + --with-daemon/--with-loopd launchd legs | specs/t348-installsh-staleness-services.md | 2 | open | operator-filed 2026-11-09 — script silently installed month-old 0.17.27 during the T347 outage; supervision is tribal knowledge |
 | T349 | features list auto-feed: site renders shipped work from TODO done rows + F17-F23 backfill (grid is hand-maintained, drifts) | specs/t349-features-autofeed.md | 2 | open | operator-filed 2026-11-09 — features list on the site stopped at F15 while the whole meta series shipped |
+| T350 | STATS cycles counter on durable source (cycle-*.log count, not rotating loopd.log lines) — site says 1,042, loop is at ~3,172 | specs/t350-stats-cycles-durable.md | 3 | open | operator-filed 2026-11-09 — staleness audit follow-up to T349 |
 
 ## Proposed
 
