@@ -1,13 +1,19 @@
 # Ledger
 
 ## Done
-- Cycle 3164 CLOSED (zero-item corridor; books closed, main == origin/main):
-  - Phase 1 SKIPPED (routing d1794225473-1): predicate HOLDS both halves (T328 open-BLOCKED the 1 row + eval fresh 35d7c283 same-UTC-day 11:40Z); loopd routing 11:54:25Z todo_rows=1 eval_fresh=yes -> routine cycle on glm; delta since marker bookkeeping-only (the 3163 close-out 560d371b); child deaths 0; evals-behind 0; STATE-HIT read-path per T260 (digest 11:52:10Z files=1736 + delta 11:53:56Z verdict STATE-HIT; state + delta consumed, no full corpus).
-  - Phase 2: T328 re-verified BLOCKED same-root (work-routing d1794225476-2 zero-dispatch-park): chug-watch clean at 13eca32 — no operator decision since the T344 handoff d20261109060232-1; ~/workspace/chug-watch/package.json ABSENT rc=2 (the battery check RED by design); P001/P003/P004 operator-parked; P006/P007 proposed (never self-flipped). ZERO items landed — nothing dispatchable (T81 anti-sprint-burn: wrap).
-  - Wrap: corridor aebd4347 (prep: Outcomes 3164 full + 3158 one-lined, the 6-full set 3164/3163/3162/3161/3160/3159; the T316-leg DESIGNED fire adjudicated 0-REAL pre-write) -> 4ac4d77f (notes, token-free, T257 color 27 iters / ~398.867 wall; post-commit probe 60 0 machine==TRUE 0) -> 5246dbc8 (fill, ALL SEVEN assert legs GREEN first attempt — T309/T310/T319/T317/T321/T323/T311; datum FINAL 55 iters / ~732.360 wall at the 12:06:48.000Z stamp; ok:false SEVEN == SEVEN all designed 0-REAL pre-commit catches: the record-shape probe + the decision_log choice-field omission + the bg-window tail + the state-compose KeyError + the corpus-tail mis-scope fire + the T309 compose-from-prior-probe fire + the count-guard abort; trim 0 == 0 claim-free T321-inert) pushed; state write keyed to the prep (T311 self-probe + T323 untracked + the facade validate_state GREEN with the outcome-class corpus-tail identity, ring prepend-2/carry-10; T184 fresh-input 1,037,428 / cache-read 6,280,480 probed); pins battery 225/225 (12.497s PINS_RC=0) + docs-only guard floor todo_consistency 21/21 (0.20s GUARD_RC=0, T242 bg pid 92974); T261 batch TWO (d1794225531-3 <- d1794225473-1, d1794225535-4 <- d1794225476-2, both landed-clean); audit REPORT-only (malformed HOLDS 3 / dups HOLDS 2, 63/92/83 zero-growth); NO TAG (TRUE 0 distinct flip-ids since v0.21.0, ANCESTOR-OK, describe v0.21.0-12-g560d371b, FEATURES 0 unchecked); harvest NO-OP (zero children, main-only all cycle).
+- Cycle-3165 Phase 1: routine-skip disposition (routing d1794226600-1 — predicate HOLDS both halves: T328 open-BLOCKED + eval fresh aebd4347 same-UTC-day 12:02Z; delta bookkeeping-only; STATE-HIT read-path per T260)
+- Cycle-3165 Phase 2: zero-dispatch park (work-routing d1794226603-2 — T328 re-verified BLOCKED same-root: chug-watch clean at 13eca32, package.json ABSENT rc=2, operator A/B/C menu pending; P001/P003/P004 operator-parked; P006/P007 proposed-never-self-flipped)
 
 ## Next
-- Next cycle reads: queue = T328 open-BLOCKED on the OPERATOR's decision (menu in chug-watch docs/testing-harness-investigation.md — A wait-upstream recommended / B sanctioned fail-closed shim / C fleet runner); P001/P003/P004 operator-parked; P006/P007 proposed (never self-flipped). Eval fresh 2026-11-09 (this corridor's prep aebd4347) — the freshness predicate holds until the 2026-11-10 UTC roll forces a fresh eval.
+- Wrap corridor (THIS cycle): prep commit 32a5531f (Outcomes 3165 full + 3159 one-lined + this T207 wrap-state) -> T261 batch TWO LANDED (d1794226772-3 <- d1794226600-1, d1794226775-4 <- d1794226603-2; the prep's predicted ids d1794226615-3/d1794226619-4 falsified at the record time, corrected pre-push per T70) -> audit REPORT-only -> state rewrite (facade, T311/T323) -> token-free notes (T257 color) -> probe -> fill (T309/T310/T311 legs) -> close-out -> push -> flips -> goal_complete
 
 ## Blockers
-- T328: operator decision pending (not a loop blocker — the loop parks; next cycle re-verifies).
+- T328 BLOCKED-operator-pending (decision menu A wait-upstream / B sanctioned shim / C fleet runner — the check greens ONLY via the REAL claude-code/testing module per the t344 acceptance invariant); P001 operator-steps; P003 spark-GPU headroom; P004 operator Q4 deliverable
+
+## Wrap-state note (T207, written at the stop-dispatch boundary)
+- merged-but-unflipped rows: NONE (zero items landed this cycle)
+- unharvested worktrees: NONE (git worktree list main-only; zero children)
+- unpushed commits: 0 at boot (d9a25d4a == origin/main); the corridor commits below are the wrap push's payload
+- missing decision records: NONE pending at this write — the two routing records (d1794226600-1, d1794226603-2) just landed; their outcome backfills batch at the wrap per T261 (the T261 wrap-boundary trigger, one pass per cycle)
+- single-driver: verified (ps census 1 = THIS run pid 40155 glm-5-3-flash max-iters 200)
+- boot LEDGER dirty file: the launcher's reseed template, read-first per T251, healed by THIS write
