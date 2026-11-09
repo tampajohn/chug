@@ -733,6 +733,15 @@ with `install.sh --with-meta-pack` (uninstall:
 `--uninstall-meta-pack`); the wire contract is in `docs/meta-harness.md`
 and the pack's operating card in `hooks/meta-broker/README.md`.
 
+**Session-status pack** (opt-in, same `--with-meta-pack` install leg,
+`hooks/meta-status/`): maintains a typed status file per session —
+`<claude-dir>/meta-status/<session-id>.json` with
+`{status: working|blocked|done, blocked_reason: permission|question|error|null, detail, updated_at, contract_version}` — so a harness reads one file instead of
+scraping terminals. Absent file = not a meta session; stale (>10 min) =
+unknown; session end leaves the file with `done`. The transcription is
+atomic (readers never observe a partial file) and adds <2 ms per hook
+event; `chug capabilities` reports `status_mod: true` when installed.
+
 ## Permissions (`.chug/permissions.json`)
 
 Declarative per-tool deny rules, evaluated in-process before every tool
