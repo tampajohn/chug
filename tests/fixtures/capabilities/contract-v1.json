@@ -1,0 +1,15 @@
+{
+  "contract_version": "1",
+  "compat": "consumers must treat unknown features as false and ignore unknown keys",
+  "features": {
+    "daemon_status": false,
+    "lifecycle_events": false,
+    "permission_broker": false,
+    "usage_events": false,
+    "status_mod": false
+  },
+  "versions": {
+    "chug": "$CHUG_VERSION",
+    "daemon": null
+  }
+}

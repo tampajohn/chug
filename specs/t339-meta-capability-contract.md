@@ -49,3 +49,5 @@ in behavior.
 
 - The features themselves (T340-T343).
 - Anthropic-side protocol asks (out of our control; the doc links them).
+
+check: set -o pipefail; CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared cargo test --release --test capabilities_contract
