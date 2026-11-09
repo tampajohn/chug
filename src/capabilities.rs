@@ -9,11 +9,12 @@
 //! producer AND the reference consumer (see [`parse`]).
 //!
 //! Cheap by construction: the document is built from constants and the
-//! package version — no daemon contact, no file I/O, no env reads. A
-//! missing daemon is reported false/null, never an error and never a hang;
-//! the <50ms budget is structural, not a tuning target. (The liveness
-//! probe behind `daemon_status` lands with T340's row, which owns the
-//! bounded-probe budget; T339 ships the contract and the reader.)
+//! package version — no file I/O, no env reads ([`document`] stays pure).
+//! The `chug capabilities` COMMAND adds exactly one bounded daemon probe
+//! (T340): a missing, stale, or unreachable daemon reports
+//! `daemon_status: false` / `lifecycle_events: false` and `versions.daemon:
+//! null` — never an error, never a hang (the probe budget is the daemon
+//! client's own 2s socket bound; the spec's ">2s budget per probe").
 //!
 //! The stability rule, stated in-band in every document (`compat`) and in
 //! the doc: consumers MUST treat unknown features as false and MUST ignore
@@ -25,14 +26,15 @@
 //! `lifecycle_events: "1"`), with [`Features::shipped`] collapsing both to
 //! the shipped/falseness a harness acts on.
 
-// The reader half (`FEATURE_KEYS`, `is_shipped`, `shipped`) has no
-// production caller until T340-T343 wire their flips; the contract tests
-// (src unit tests + tests/capabilities_contract.rs through `--check`)
-// consume it today. Same posture as attach.rs/observ.rs: the API is the
-// deliverable, the callers land with the rows that implement against it.
+// The reader half (`FEATURE_KEYS`, `is_shipped`, `shipped`) has production
+// callers only in the contract tests today; the writer half's remaining
+// feature flips land with T341-T343. Same posture as attach.rs/observ.rs:
+// the API is the deliverable, the callers land with the rows that implement
+// against it.
 #![allow(dead_code)]
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 /// The contract version. Additive-only within this value (new feature
 /// keys, new optional fields, new vocabulary members); anything that
@@ -133,7 +135,10 @@ pub struct Versions {
     /// The chug package version of the binary that printed the document.
     pub chug: String,
     /// The live daemon's self-reported version; `null` when no daemon is
-    /// live or the daemon wire carries no version (T340 lands the report).
+    /// live or the daemon wire carries no version. T340 leaves this null —
+    /// /healthz is compat-protected (untouched) and carries no version key
+    /// yet, and the status probe does not invent one; the self-report rides
+    /// a later row.
     #[serde(default)]
     pub daemon: Option<String>,
 }
@@ -182,7 +187,68 @@ pub fn render(doc: &Document) -> String {
 
 /// The document this binary prints (producer path).
 pub fn document_json() -> String {
-    render(&document())
+    render(&document_with_daemon(&probe_daemon_status()))
+}
+
+// T340 — the bounded daemon probe behind `daemon_status`/`lifecycle_events`.
+// ---------------------------------------------------------------------------
+
+/// The outcome of one bounded daemon status probe: a live chugd that answers
+/// `GET /status/loop` with a `contract_version` names the status wire
+/// version; everything else (no socket, a stale socket, a daemon that does
+/// not serve the status endpoints, a malformed body) is the absent posture.
+pub struct DaemonProbe {
+    pub status_wire_version: Option<String>,
+}
+
+impl DaemonProbe {
+    /// No daemon contact: the all-off posture.
+    pub fn absent() -> Self {
+        Self {
+            status_wire_version: None,
+        }
+    }
+}
+
+/// ONE `GET /status/loop` over the daemon socket — the same transport, the
+/// same 2s bound, the same all-off failure posture as the judge client's
+/// healthz probe. 200 + a JSON body carrying `contract_version` flips
+/// `daemon_status` true and names the version in `lifecycle_events`; any
+/// other answer is absent. Never errors, never hangs beyond the socket
+/// bound.
+pub fn probe_daemon_status() -> DaemonProbe {
+    let Ok(sock) = crate::daemon::sock_path() else {
+        return DaemonProbe::absent();
+    };
+    let version = match crate::daemon::uds_request(&sock, "GET", "/status/loop", None) {
+        Ok((200, body)) => serde_json::from_str::<Value>(&body)
+            .ok()
+            .and_then(|value| {
+                value
+                    .get("contract_version")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+            }),
+        _ => None,
+    };
+    DaemonProbe {
+        status_wire_version: version,
+    }
+}
+
+/// The pure document merged with a probe result. The flip is additive
+/// within contract v1: two feature values upgrade (`daemon_status` false →
+/// true, `lifecycle_events` false → the probed version string); no key
+/// changes shape, no key disappears. A daemon that serves the status
+/// endpoints but not the (older) versioned shape probes as absent — a
+/// pre-T340 daemon cannot honestly claim the surface.
+pub fn document_with_daemon(probe: &DaemonProbe) -> Document {
+    let mut doc = document();
+    if let Some(version) = &probe.status_wire_version {
+        doc.features.daemon_status = FeatureValue::Bool(true);
+        doc.features.lifecycle_events = FeatureValue::Version(version.clone());
+    }
+    doc
 }
 
 /// The reference reader — the consumer rule, executable. Tolerant by
@@ -350,5 +416,81 @@ mod tests {
         assert!(!FeatureValue::Bool(false).is_shipped());
         assert!(FeatureValue::Bool(true).is_shipped());
         assert!(FeatureValue::Version("0.20.0".into()).is_shipped());
+    }
+
+    // ---------- the T340 probe + merge ----------
+
+    /// The absent probe leaves the document exactly as T339 printed it:
+    /// all-off, daemon null — the additive-only rule's baseline.
+    #[test]
+    fn document_with_an_absent_probe_is_the_t339_document() {
+        assert_eq!(document_with_daemon(&DaemonProbe::absent()), document());
+    }
+
+    /// A live status daemon flips exactly its two keys: daemon_status true
+    /// (bool) and lifecycle_events "1" (the probed wire version) — §3's
+    /// registration flip, additive within contract v1.
+    #[test]
+    fn document_with_a_live_status_daemon_flips_exactly_its_two_keys() {
+        let probe = DaemonProbe {
+            status_wire_version: Some(CONTRACT_VERSION.to_string()),
+        };
+        let doc = document_with_daemon(&probe);
+        assert_eq!(doc.features.daemon_status, FeatureValue::Bool(true));
+        assert_eq!(
+            doc.features.lifecycle_events,
+            FeatureValue::Version("1".to_string())
+        );
+        // Every other key is untouched.
+        for key in ["permission_broker", "usage_events", "status_mod"] {
+            assert!(!doc.features.shipped(key), "{key} must stay off");
+        }
+        // And the flip survives the wire roundtrip both ways.
+        let rendered = serde_json::to_value(&doc).unwrap();
+        assert_eq!(rendered["features"]["daemon_status"], json!(true));
+        assert_eq!(rendered["features"]["lifecycle_events"], json!("1"));
+        let parsed = parse(&render(&doc)).expect("the flipped document parses");
+        assert!(parsed.features.shipped("daemon_status"));
+        assert!(parsed.features.shipped("lifecycle_events"));
+    }
+
+    /// A live daemon serving the surface at a LATER wire version still
+    /// reports that version verbatim — additive, never rewritten.
+    #[test]
+    fn document_carries_the_probed_wire_version_verbatim() {
+        let probe = DaemonProbe {
+            status_wire_version: Some("2".to_string()),
+        };
+        let doc = document_with_daemon(&probe);
+        assert_eq!(
+            doc.features.lifecycle_events,
+            FeatureValue::Version("2".to_string())
+        );
+        assert!(doc.features.shipped("daemon_status"));
+    }
+
+    /// The probe's body parse: a 200 body with contract_version names it; a
+    /// 200 body without the key (a pre-T340 daemon), a non-200, and a
+    /// malformed body all degrade to the absent posture.
+    #[test]
+    fn probe_degrades_to_absent_on_every_non_status_answer() {
+        let extract = |status: u16, body: &str| -> Option<String> {
+            match status {
+                200 => serde_json::from_str::<Value>(body)
+                    .ok()
+                    .and_then(|value| {
+                        value
+                            .get("contract_version")
+                            .and_then(Value::as_str)
+                            .map(str::to_string)
+                    }),
+                _ => None,
+            }
+        };
+        assert_eq!(extract(200, r#"{"contract_version":"1","status":"idle"}"#), Some("1".into()));
+        assert_eq!(extract(200, r#"{"status":"ok"}"#), None, "pre-T340 body");
+        assert_eq!(extract(404, r#"{"detail":"not found"}"#), None);
+        assert_eq!(extract(500, r#"{"detail":"refused"}"#), None);
+        assert_eq!(extract(200, "not json at all"), None);
     }
 }

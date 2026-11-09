@@ -133,7 +133,17 @@ fn caps_value(extra: &[&str]) -> Value {
 /// package version the test and the binary share).
 #[test]
 fn capabilities_output_matches_the_pinned_fixture() {
-    let actual = caps_value(&[]);
+    warm_exec();
+    // Scoped CHUG_HOME, never the ambient env: post-T340 document_json()
+    // probes the ambient daemon socket, so an ambient run flips
+    // daemon_status on any host with a live T340-era daemon — the fixture
+    // asserts the OFF document (validator finding 1, t340 arc).
+    let home = tempfile::tempdir().expect("tempdir");
+    let (_elapsed, out) = timed_caps(home.path());
+    assert!(out.status.success(), "{}", out_text(&out));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let actual: Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("stdout must parse as JSON ({e}): {stdout}"));
 
     // Required keys, named one by one — a missing key reads as an
     // actionable failure, not a whole-document diff.

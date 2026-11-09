@@ -49,3 +49,5 @@ new exposure surface.
 - Writing/control endpoints (this is observation only; control is a
   separate, explicitly-approved future item).
 - Cross-box federation (host-scoped, as today).
+
+check: set -o pipefail; CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-validate-a cargo test --release --test daemon_status_contract

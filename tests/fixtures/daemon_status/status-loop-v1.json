@@ -1,0 +1,13 @@
+{
+  "contract_version": "1",
+  "status": "working",
+  "cycle_id": "cycle-20261109-031122",
+  "iteration": 3,
+  "item_id": "T341",
+  "blocked_reason": null,
+  "blocked_detail": null,
+  "children": [
+    { "kind": "impl", "id": "chug-loop-t341-impl", "state": "ready" }
+  ],
+  "as_of": "2026-11-09T03:11:22Z"
+}
