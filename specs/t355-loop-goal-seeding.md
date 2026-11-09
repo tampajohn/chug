@@ -57,4 +57,4 @@ No flags, no change: bare `chug loop init` behaves exactly as today
 - Goal decomposition (one row per goal; multi-row breakdowns are the
   eval cycle's existing job once the loop is alive).
 
-check: CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-impl-a cargo test --release --test loop_goal_seeding
+check: CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-validate-b cargo test --release --test loop_goal_seeding
