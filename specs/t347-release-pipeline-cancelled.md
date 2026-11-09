@@ -46,3 +46,7 @@ pack** — the entire adoption path this quarter depends on.
 - CI minutes/cost policy (a green release per tag is the requirement;
   cadence of TAGS is the loop's existing business).
 - Publishing the meta pack to any marketplace (P004's lane).
+
+## check
+
+check: CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-impl-a cargo test --release --test release_workflow
