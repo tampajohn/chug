@@ -442,6 +442,7 @@ impl Machine {
                 reason,
                 model,
                 budget,
+                ..
             } => (Kind::Abort, abort_message(reason, model, budget.as_ref())),
             Event::ValidationVerdict { item, passed } => {
                 (Kind::Validation, validation_message(item, *passed))
@@ -784,11 +785,13 @@ mod tests {
             reason: "iteration budget exceeded".into(),
             model: "muse-glimmer-30b".into(),
             budget: Some(BudgetExceeded::Iterations { max: 40 }),
+            model_served: None,
         });
         machine.observe(&Event::Aborted {
             reason: "stuck: repeated error".into(),
             model: "claude-sonnet-4-6".into(),
             budget: None,
+            model_served: None,
         });
         drop(machine);
         let messages = transport.0.lock().unwrap().clone();
@@ -847,6 +850,7 @@ mod tests {
             reason: "interrupted".into(),
             model: "m".into(),
             budget: None,
+            model_served: None,
         });
         drop(machine);
         let messages = transport.0.lock().unwrap().clone();
@@ -890,6 +894,7 @@ mod tests {
             reason: "interrupted".into(),
             model: "m".into(),
             budget: None,
+            model_served: None,
         });
         machine.observe(&Event::Iteration {
             n: 1,
@@ -959,6 +964,7 @@ mod tests {
             reason: "interrupted".into(),
             model: "m".into(),
             budget: None,
+            model_served: None,
         });
         let stats = Arc::clone(&machine.stats);
         drop(machine); // both deliveries fail during the drain; drain + join first

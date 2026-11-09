@@ -1194,12 +1194,61 @@ impl Response {
         usage_from(&self.body)
     }
 
+    /// T343: the provider's AS-SERVED model identity — the response body's
+    /// top-level `model` field, which the Messages API (and its streaming
+    /// `message_start` frame, which the accumulator copies into the
+    /// synthesized body) sets to the model that actually answered. Through a
+    /// proxy that name is frequently NOT the one the request asked for; this
+    /// is the only honest source for the served slot. `None` when the
+    /// provider reports none, and callers must never fall back to the
+    /// requested name here — copying it in is exactly the conflation T343
+    /// fixes.
+    pub fn served_model(&self) -> Option<String> {
+        self.body
+            .get("model")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+    }
+
     pub fn text(&self) -> String {
         self.content_blocks()
             .iter()
             .filter_map(ContentBlock::text)
             .collect::<Vec<_>>()
             .join("\n")
+    }
+}
+
+/// T343: `served_model` reads the response body's top-level `model` — the
+/// as-served identity — and NOTHING else (no requested-name fallback).
+#[cfg(test)]
+mod served_model_tests {
+    use super::*;
+
+    #[test]
+    fn served_model_reads_the_body_and_never_falls_back() {
+        let with = Response {
+            body: serde_json::json!({
+                "model": "glm-4.6",
+                "usage": {"input_tokens": 1, "output_tokens": 2},
+                "content": []
+            }),
+        };
+        assert_eq!(with.served_model().as_deref(), Some("glm-4.6"));
+
+        let without = Response {
+            body: serde_json::json!({"content": []}),
+        };
+        assert_eq!(
+            without.served_model(),
+            None,
+            "a provider that reports none stays None — never the requested name"
+        );
+
+        let non_string = Response {
+            body: serde_json::json!({"model": 42}),
+        };
+        assert_eq!(non_string.served_model(), None, "a non-string model is no identity");
     }
 }
 

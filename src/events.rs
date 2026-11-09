@@ -39,6 +39,13 @@ pub enum Event {
         /// Model in use when the loop died (T12: named so the operator can
         /// resume with a different one).
         model: String,
+        /// T343: the AS-SERVED model identity of the last response the loop
+        /// got, from the response's served-model metadata — recorded
+        /// distinctly from `model` (the requested name). `None` when the
+        /// provider reported none (or the loop died before any response):
+        /// the key is omitted downstream, never filled with the requested
+        /// name — that conflation is the bug this stamp fixes.
+        model_served: Option<String>,
         /// Which budget ran out — `Some` only on budget deaths (T12);
         /// operator/stuck aborts carry `None`.
         budget: Option<BudgetExceeded>,
@@ -55,6 +62,12 @@ pub enum Event {
         /// already parses `cache_creation_input_tokens`); 0 until a response
         /// reports one. Same ride-along as `cache_read`.
         cache_creation: u64,
+        /// T343: the AS-SERVED model identity of the response that produced
+        /// these tokens — the provider's served-model metadata, stamped onto
+        /// the serialized iteration line so downstream consumers stop
+        /// guessing. `None` when the provider reported none: the key is
+        /// omitted, never filled with the requested name (the T343 bug).
+        model_served: Option<String>,
     },
     /// T184 telemetry: one transcript-trim pass (T77) collapsed frozen 16k
     /// segments. The advisory lives in the transcript as `[trimmed: …]`
@@ -360,6 +373,7 @@ impl EventSink for ConsoleSink {
                 reason,
                 model,
                 budget,
+                ..
             } => {
                 // F7 phase 1: if a streamed response was still open (the loop
                 // died mid-generation), terminate the line so abort output
@@ -573,6 +587,7 @@ mod tests {
             reason: "budget".into(),
             model: "m".into(),
             budget: None,
+            model_served: None,
         });
         assert_eq!(
             out_bytes(&err),
@@ -648,6 +663,7 @@ mod tests {
             reason: "iteration budget exceeded".into(),
             model: "muse-glimmer-30b".into(),
             budget: Some(BudgetExceeded::Iterations { max: 40 }),
+            model_served: None,
         });
 
         assert_eq!(out_bytes(&err), "chug: abort: iteration budget exceeded\n");
@@ -672,6 +688,7 @@ mod tests {
             reason: "stuck: repeated error".into(),
             model: "claude-sonnet-4-6".into(),
             budget: None,
+            model_served: None,
         });
 
         assert_eq!(out_bytes(&err), "chug: abort: stuck: repeated error\n");
@@ -695,6 +712,7 @@ mod tests {
             output: 1_243_749,
             cache_read: 0,
             cache_creation: 0,
+            model_served: None,
         });
         sink.emit(Event::GoalAccepted {
             summary: "did it".into(),
@@ -719,17 +737,20 @@ mod tests {
             output: 100,
             cache_read: 0,
             cache_creation: 0,
+            model_served: None,
         });
         sink.emit(Event::Usage {
             input: 8_683_323,
             output: 1_243_749,
             cache_read: 0,
             cache_creation: 0,
+            model_served: None,
         });
         sink.emit(Event::Aborted {
             reason: "iteration budget exceeded".into(),
             model: "muse-glimmer-30b".into(),
             budget: Some(BudgetExceeded::Iterations { max: 40 }),
+            model_served: None,
         });
 
         let stdout = out_bytes(&out);
@@ -750,6 +771,7 @@ mod tests {
             reason: "interrupted".into(),
             model: "muse-glimmer-30b".into(),
             budget: None,
+            model_served: None,
         });
 
         let stdout = out_bytes(&out);
@@ -790,6 +812,7 @@ mod tests {
             output: 20,
             cache_read: 0,
             cache_creation: 0,
+            model_served: None,
         });
         sink.emit(Event::SteeringQueued("note".into()));
         // T38: the truncation advisory is telemetry-only here too.

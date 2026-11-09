@@ -293,18 +293,66 @@ installed.
 
 ### T343 — usage events (`usage_events`)
 
-One JSONL line per turn-complete, appended to `~/.claude/meta-usage.jsonl`:
+One JSONL line per turn-complete (the pack wires Claude's `Stop` event),
+appended to `~/.claude/meta-usage.jsonl`:
 
 ```json
-{ "ts": "…", "session_id": "…", "model_requested": "…", "model_served": "…", "input_tokens": 1234, "output_tokens": 567, "contract_version": "1" }
+{ "ts": "…", "session_id": "…", "model_requested": "…", "model_served": "…", "input_tokens": 1234, "output_tokens": 567, "cache_read_tokens": 7, "cache_creation_tokens": 2, "contract_version": "1" }
 ```
 
-A full event carries the cache fields too (`cache_read_tokens`,
-`cache_creation_tokens`); the line above is what a partial event looks
-like — `model_served` is stamped only when the provider actually reports
-the as-served model (the requested name is never copied into the served
-slot; that conflation is the bug this row fixes), and token fields
-appear only when the event carries them.
+**Presence contract — the row's rule.** A field is in the line only when
+the event carries it. An absent value is an OMITTED KEY — never a
+fabricated zero, never the requested name copied into the served slot
+(that conflation is the bug this row fixes). Consumers must treat every
+key except `ts`, `session_id` and `contract_version` as optional, and a
+carried zero as data (a cache accounting that reads zero is a fact, not a
+gap).
+
+| Field | Extracted from | Present when |
+| :- | :- | :- |
+| `ts` | the write itself (RFC3339 UTC) | always |
+| `session_id` | the payload's `session_id` | always — a payload without a safe one emits NO line (an unattributable turn is no row, not a blank one) |
+| `model_requested` | the payload's `model_requested`, else its `model` (the session's configured name — what was ASKED for) | the payload carries either |
+| `model_served` | the payload's `model_served` ONLY | the payload carries it — never derived from `model` |
+| `input_tokens` / `output_tokens` | the payload's first `"usage":{…}` object (Messages-API shape; a `message.usage` embedding matches the same rule) | the usage object carries them |
+| `cache_read_tokens` / `cache_creation_tokens` | the same usage object's `cache_read_input_tokens` / `cache_creation_input_tokens` (renamed to the line's schema) | the usage object carries them |
+| `contract_version` | the pack | always (`"1"`) |
+
+Today's Claude Code `Stop` payloads carry none of the model or usage
+fields (the only turn-final fact they pin is `last_assistant_message` —
+text), so today's lines are the honest marker
+`{"ts":…,"session_id":…,"contract_version":"1"}`. The transcript is
+deliberately NOT read: it is written asynchronously and may not yet
+include the current turn, so mining it would attribute the PREVIOUS
+turn's usage to this one — exactly the wrongness this pack exists to end.
+A payload that does carry the fields — a harness re-emitting enriched
+events on the T327 pattern, or a future Claude build — is transcribed in
+full. The emitter is pure transcription: one `exec date` per turn (the
+line IS the format string), <2ms added, no network — Langfuse shipping
+stays with the OTel path, never in this hook. Install:
+`install.sh --with-meta-pack`; uninstall removes the emitter and leaves
+the accumulated log in place (a historical record, not state).
+Detection: `chug capabilities` flips `usage_events: true` when the hook
+is wired (hook presence, never file presence).
+
+**Chug-side model-identity truth (the same row, chug's own streams).**
+The loop stamps the AS-SERVED identity — `Response::served_model()`, the
+response body's top-level `model` field, which the Messages API (and the
+streaming `message_start` frame) sets to the model that actually
+answered — into its own telemetry, populated only when the provider
+reports it, for proxy and daemon paths alike:
+
+- `.chug/events.jsonl` — every `iteration` line carries `model_served`
+  (the as-served name of the response that produced that line's tokens);
+- the `abort` line carries BOTH names distinctly — `model` (the requested
+  name, the T12 resume hint) and `model_served`;
+- `.chug/decisions.jsonl` — records gain the optional tail key
+  `model_served` (the deciding turn's as-served identity), so the F13
+  corpus names the model that actually decided.
+
+On all three, a provider that reports none leaves the key out — the
+requested name is never copied into the served slot. Additive optional
+keys: existing consumers parse unchanged.
 
 ## Versioning
 
@@ -348,3 +396,9 @@ Anthropic changes are tracked out-of-band, never here.
   same install legs), `tests/meta_status_hook.rs` (the typed-status
   battery: event table, atomicity under a hammering reader, the
   one-file footprint, session-end cleanup, the <2ms budget).
+- T343's shipping leg: `hooks/meta-usage/` (the usage emitter pack, the
+  same install legs — the accumulated log survives uninstall),
+  `tests/meta_usage_hook.rs` (the usage battery: full/partial event
+  transcription, the presence contract, the never-conflate rule, the
+  <2ms no-network budget), plus the chug-side stamping pins
+  (`src/eventlog.rs`, `src/driver/tests/events.rs`, `src/decisions.rs`).
