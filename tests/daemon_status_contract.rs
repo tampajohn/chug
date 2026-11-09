@@ -24,8 +24,12 @@
 //! (f) the stub serves /healthz only — /status refuses there exactly as
 //!     /sessions refuses, and capabilities against a stub stays all-off;
 //! (g) a live status daemon flips the capabilities document
-//!     (daemon_status true, lifecycle_events "1), and a socket-absent
-//!     probe degrades: daemon_status false, never a hang;
+//!     (daemon_status true, lifecycle_events "1), a socket-absent
+//!     probe degrades: daemon_status false, never a hang, and the
+//!     T345 wedged-listener leg pins the bound harder: a listener
+//!     that ACCEPTS and never answers still yields a bounded (< 5s),
+//!     exit-0, all-off document — the 2s `uds_request` read timeout
+//!     is load-bearing;
 //! (h) the legacy surfaces are untouched: /healthz and /sessions shapes,
 //!     a query string on a legacy path still 404s, and non-GET /status
 //!     404s.
@@ -33,7 +37,7 @@
 #![cfg(unix)]
 
 use std::io::{Read, Write};
-use std::os::unix::net::UnixStream;
+use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -591,6 +595,101 @@ fn socket_absent_capabilities_degrade_bounded_and_false() {
         elapsed < Duration::from_secs(10),
         "the absent probe took {elapsed:?} — the degrade is bounded"
     );
+}
+
+/// (g/T345) Wedged-listener degrade: a listener that ACCEPTS and never
+/// answers wedges the client's READ — connect alone proves nothing (the
+/// t340 m3 mutant survived the socket-absent leg for exactly that reason:
+/// connect fails at ENOENT before any read). The 2s `uds_request` read
+/// bound must hold end-to-end: `chug capabilities` pointed at the wedged
+/// socket still exits 0 all-off, bounded (< 5s — the real code lands ~2s
+/// via the inherited JUDGE_TIMEOUT), never an error. The bounded wait IS
+/// the mutant killer: with the read/write timeouts removed, the probe
+/// never exits and this leg goes red at the deadline instead of hanging
+/// the suite.
+#[test]
+fn wedged_listener_capabilities_degrade_bounded_and_false() {
+    let wedge = tempfile::tempdir().expect("tempdir");
+    let home = tempfile::tempdir().expect("tempdir");
+    let sock = wedge.path().join("wedged.sock");
+    let listener = UnixListener::bind(&sock).expect("bind the wedged listener");
+    // The wedge: accept and HOLD every connection, never answering — the
+    // client's read blocks on a live socket (dropping after accept would
+    // EOF the read and prove nothing). The count pins the premise: the
+    // probe connected before anything timed out.
+    let accepted = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counter = std::sync::Arc::clone(&accepted);
+    std::thread::spawn(move || {
+        let mut held = Vec::new();
+        while let Ok((stream, _)) = listener.accept() {
+            counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            held.push(stream);
+        }
+    });
+    // Warm-up exec — the macOS dyld stall can swallow the first exec and
+    // pollute the timing below (the same shape as Home::spawn).
+    let exe = env!("CARGO_BIN_EXE_chug");
+    let _ = Command::new(exe)
+        .arg("--help")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+    // The bounded probe: the harness has no per-test timeout, so the exec
+    // rides its own deadline — a hang is killed and failed, never absorbed.
+    let started = Instant::now();
+    let bound = Duration::from_secs(5);
+    let deadline = started + bound;
+    let mut child = Command::new(exe)
+        .arg("capabilities")
+        .env("CHUG_HOME", home.path())
+        .env("CHUG_DAEMON_SOCK", &sock)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn chug capabilities");
+    let code = loop {
+        match child.try_wait().expect("poll the probe") {
+            Some(status) => break status.code().unwrap_or(-1),
+            None => {
+                if Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    panic!(
+                        "chug capabilities hung past 5s against a wedged listener \
+                         (accepted, never answered) — the 2s uds_request read bound \
+                         is missing or inflated"
+                    );
+                }
+                std::thread::sleep(Duration::from_millis(25));
+            }
+        }
+    };
+    let elapsed = started.elapsed();
+    let mut stdout = String::new();
+    if let Some(pipe) = child.stdout.as_mut() {
+        let _ = pipe.read_to_string(&mut stdout);
+    }
+    let mut stderr = String::new();
+    if let Some(pipe) = child.stderr.as_mut() {
+        let _ = pipe.read_to_string(&mut stderr);
+    }
+    assert_eq!(
+        code, 0,
+        "the wedged probe degrades, never an error (took {elapsed:?}, stderr: {stderr:?})"
+    );
+    assert!(
+        accepted.load(std::sync::atomic::Ordering::SeqCst) >= 1,
+        "the wedged listener must have accepted the probe connection — \
+         the wedge premise failed (exit {code}, took {elapsed:?})"
+    );
+    assert!(
+        elapsed < bound,
+        "the wedged probe took {elapsed:?} — the degrade must stay bounded"
+    );
+    let doc: serde_json::Value = serde_json::from_str(&stdout).expect("capabilities parses");
+    assert_eq!(doc["features"]["daemon_status"], false, "{doc}");
+    assert_eq!(doc["features"]["lifecycle_events"], false, "{doc}");
+    assert_eq!(doc["versions"]["daemon"], serde_json::Value::Null, "{doc}");
 }
 
 /// (h) The legacy surfaces are untouched: healthz and /sessions shapes, a
