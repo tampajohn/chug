@@ -5,6 +5,11 @@ input. This file is the contract every launch obeys. It was scaffolded by
 `chug loop init` for THIS repo — edit it freely; the loop re-reads it at
 every cycle.
 
+The loop's work comes from the QUEUE, never from a session prompt: a
+spawned goal must be seeded into TODO.md (harnesses pass it as
+`chug loop init --goal "<goal text>"`, which files the row + spec; a
+prompt-carrying goal is dead text to the loop).
+
 ## The queue
 
 - `TODO.md` is the ONE queue. A row is work: id, title, spec path,
