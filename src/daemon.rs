@@ -39,6 +39,14 @@
 //! no completion/stuck/verdict-final surface, and the `CHUG_DAEMON_STUB=1`
 //! test seam refuses `/judge` outright — a stub must never fabricate
 //! classifications (see [`StubBackend`]).
+//!
+//! * Observation (T219, T340) — `GET /sessions` (the host-scoped chug
+//!   registry) and `GET /status/loop` + `GET /status/items` (the T339 typed
+//!   status contract, rendered from a repo's loop state files under a
+//!   `?repo=` selector) are served by every real serve mode; they are
+//!   observation only — nothing is written and there is no control surface.
+//!   The stub serves /healthz only and refuses the rest, exactly as it
+//!   refuses /judge.
 
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -1122,6 +1130,713 @@ pub fn register_session(role: &str, id: &str, status: &str) {
 }
 
 // ---------------------------------------------------------------------------
+// T340 — the typed status endpoints: GET /status/loop, GET /status/items.
+//
+// Observation only: the daemon READS a repo's loop state files and renders
+// the T339 contract's typed status model — what the loop is doing, what it
+// is blocked on, what children (worktrees) it has, what the open queue looks
+// like. Nothing is written and there is no control surface (control is a
+// separate, explicitly-approved future item); the socket policy is unchanged
+// (0600, host-scoped) — a /status reader could already read the same files
+// the response names.
+//
+// Sourcing (all read-only, all bounded):
+//   <repo>/.chug/loopd/loopd.pid    the supervisor's pid (liveness)
+//   <repo>/.chug/loopd/HALTED       the supervisor's halt latch (+ reason)
+//   <repo>/.chug/loopd/cycle-*.log  the supervisor's per-cycle logs (cycle_id)
+//   <repo>/.chug/events.jsonl       the driver's event log (the run segment)
+//   <repo>/TODO.md                  the queue (the /status/items view)
+//   <repo>/.git[/worktrees/]        registered worktrees (the children)
+//
+// Every response carries `contract_version` (the T339 registry's value);
+// fields are additive-only within a version, and a component that cannot be
+// read degrades to null/empty — a missing repo is the exception: it is the
+// T328 blocked/external case and must SURFACE with its detail, never vanish.
+// ---------------------------------------------------------------------------
+
+/// The loop's status, drawn from the loop's own working/blocked/idle/dormant
+/// shape (the T339 contract's loop row).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LoopStatus {
+    /// A driver is producing events right now (the events tail is fresh).
+    Working,
+    /// Stopped pending something; [`LoopReport::blocked_reason`] says what.
+    Blocked,
+    /// Alive between activities: the supervisor is up but no driver is
+    /// producing (between cycles, or the last cycle completed).
+    Idle,
+    /// The loop machinery is not cycling: no live supervisor, or a live one
+    /// with an empty queue (the T334 dormant gate), or the last run finished
+    /// with no supervisor to relaunch.
+    Dormant,
+}
+
+impl LoopStatus {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Working => "working",
+            Self::Blocked => "blocked",
+            Self::Idle => "idle",
+            Self::Dormant => "dormant",
+        }
+    }
+}
+
+/// Why a `blocked` loop is blocked — the T339 blocked-reason vocabulary. The
+/// loop surface derives `external` (the T328 missing-repo class), `budget`
+/// (a budget-kind abort), and `error` (a plain abort or the supervisor's
+/// HALTED latch). `permission` and `question` are vocabulary members this
+/// surface never derives: a headless loop has no permission prompt and no
+/// operator question, and inventing either would fabricate a blocker — they
+/// ride the same enum so harnesses render ONE vocabulary (the session-status
+/// surfaces, T341/T342, are the ones that carry them).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BlockedReason {
+    /// Not derived by this surface (see the enum doc) — carried so the wire
+    /// enum is the full shared vocabulary.
+    #[allow(dead_code)]
+    Permission,
+    /// Not derived by this surface (see the enum doc) — carried so the wire
+    /// enum is the full shared vocabulary.
+    #[allow(dead_code)]
+    Question,
+    Error,
+    Budget,
+    External,
+}
+
+impl BlockedReason {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Permission => "permission",
+            Self::Question => "question",
+            Self::Error => "error",
+            Self::Budget => "budget",
+            Self::External => "external",
+        }
+    }
+}
+
+/// One child: a worktree registered under the repo's git dir, classified by
+/// the loop's lane naming (`impl` / `validate` worktrees; anything else is
+/// the generic `worktree` kind).
+struct StatusChild {
+    kind: &'static str,
+    id: String,
+    state: String,
+}
+
+/// The derived loop state behind `GET /status/loop`.
+struct LoopReport {
+    status: LoopStatus,
+    cycle_id: Option<String>,
+    iteration: u32,
+    item_id: Option<String>,
+    blocked_reason: Option<BlockedReason>,
+    blocked_detail: Option<String>,
+    children: Vec<StatusChild>,
+}
+
+/// How long an events tail may stay silent before the driver behind it reads
+/// as no-longer-working: a live driver emits iteration/tool events every
+/// turn, and an LLM turn exceeding five minutes with zero events is rare
+/// enough that silence means between-cycles (or a dead driver). The loop's
+/// own pacing bounds it too — loopd relaunches within `LOOPD_SLEEP_FAIL`
+/// (300s) of a failed cycle.
+const FRESH_DRIVER_SECS: u64 = 300;
+/// Bounded reads: the events tail window (the delegate status read's bound),
+/// the children and queue-row caps. A repo whose state files exceed a cap
+/// renders the newest/capped slice — never an error, never unbounded I/O.
+const EVENTS_TAIL_BYTES: u64 = 64 * 1024;
+const MAX_CHILDREN: usize = 64;
+const MAX_TODO_ROWS: usize = 512;
+const MAX_TODO_BYTES: u64 = 1024 * 1024;
+/// `CHUG_DAEMON_REPO` — the serve-time default repo for the status endpoints
+/// (a supervisor pins it at spawn). The `?repo=` query parameter wins over
+/// it; the daemon process's cwd is the last fallback.
+pub const REPO_ENV: &str = "CHUG_DAEMON_REPO";
+
+/// The whole `GET /status/loop` body: the derived report plus the contract
+/// version and the server's `as_of` stamp.
+fn status_loop_body(repo: &Path, now: u64) -> String {
+    let report = loop_report(repo, now);
+    json!({
+        "contract_version": crate::capabilities::CONTRACT_VERSION,
+        "status": report.status.as_str(),
+        "cycle_id": report.cycle_id,
+        "iteration": report.iteration,
+        "item_id": report.item_id,
+        "blocked_reason": report.blocked_reason.map(|r| r.as_str()),
+        "blocked_detail": report.blocked_detail,
+        "children": report
+            .children
+            .iter()
+            .map(|child| json!({"kind": child.kind, "id": child.id, "state": child.state}))
+            .collect::<Vec<_>>(),
+        "as_of": rfc3339(now),
+    })
+    .to_string()
+}
+
+/// The whole `GET /status/items` body: one row per open TODO item — the
+/// harness's queue view without parsing TODO.md.
+fn status_items_body(repo: &Path, _now: u64) -> String {
+    json!({
+        "contract_version": crate::capabilities::CONTRACT_VERSION,
+        "items": open_todo_rows(repo),
+    })
+    .to_string()
+}
+
+/// Derive the loop state from the repo's state files, in documented order:
+/// (1) a missing repo is blocked/external; (2) the supervisor's HALTED latch
+/// is blocked/error; (3) the last run segment's terminal state — a budget
+/// abort is blocked/budget, a plain abort blocked/error, a goal-accepted
+/// completion is idle/dormant; (4) an open segment with a fresh tail is
+/// working; (5) otherwise the supervisor decides: alive with open queue rows
+/// is idle, everything else is dormant.
+fn loop_report(repo: &Path, now: u64) -> LoopReport {
+    let blocked = |reason, detail: String| LoopReport {
+        status: LoopStatus::Blocked,
+        cycle_id: None,
+        iteration: 0,
+        item_id: None,
+        blocked_reason: Some(reason),
+        blocked_detail: Some(detail),
+        children: Vec::new(),
+    };
+    // (1) The T328 class: a repo that is not there is blocked/external and
+    // names the path — it never vanishes into a 404.
+    if !repo.is_dir() {
+        return blocked(
+            BlockedReason::External,
+            format!("repo path missing or not a directory: {}", repo.display()),
+        );
+    }
+    let children = status_children(repo);
+    let mut report = LoopReport {
+        status: LoopStatus::Dormant,
+        cycle_id: cycle_id(repo),
+        iteration: 0,
+        item_id: item_id(repo),
+        blocked_reason: None,
+        blocked_detail: None,
+        children,
+    };
+    // (2) The supervisor's halt latch (3 consecutive cycles without
+    // goal_complete): the loop needs an operator — blocked/error.
+    if let Some(halted) = read_small_text(&repo.join(".chug/loopd/HALTED"), 4096) {
+        report.status = LoopStatus::Blocked;
+        report.blocked_reason = Some(BlockedReason::Error);
+        report.blocked_detail = Some(halted);
+        return report;
+    }
+    // (3) + (4): the driver's event tail decides the run-segment state.
+    let segment = segment_state(&events_tail(&repo.join(".chug/events.jsonl")));
+    report.iteration = segment.iteration;
+    if report.cycle_id.is_none() {
+        report.cycle_id = segment.run_start_ts.clone();
+    }
+    if let Some((reason, detail)) = segment.terminal_block {
+        report.status = LoopStatus::Blocked;
+        report.blocked_reason = Some(reason);
+        report.blocked_detail = Some(detail);
+        return report;
+    }
+    if segment.completed {
+        // The last run finished cleanly: between cycles (idle) unless no
+        // supervisor will relaunch (dormant).
+        report.status = if supervisor_alive(repo) {
+            LoopStatus::Idle
+        } else {
+            LoopStatus::Dormant
+        };
+        return report;
+    }
+    if segment.fresh(now) {
+        report.status = LoopStatus::Working;
+        return report;
+    }
+    // (5) No driver evidence: the supervisor (or its absence) decides.
+    report.status = if supervisor_alive(repo) && !open_todo_rows(repo).is_empty() {
+        LoopStatus::Idle
+    } else {
+        LoopStatus::Dormant
+    };
+    report
+}
+
+/// The run-segment state read out of one bounded events tail (newest last).
+struct SegmentState {
+    /// The last `iteration` line's `n` in the window (0 when none — a
+    /// long-running driver's earlier iteration lines can scroll out of the
+    /// tail window; the count then understates, never overstates).
+    iteration: u32,
+    /// The tail's newest line timestamp — the freshness clock.
+    last_ts: Option<u64>,
+    /// The newest `run_start`'s ts string — the cycle_id fallback for repos
+    /// without supervisor cycle logs.
+    run_start_ts: Option<String>,
+    /// The segment's terminal block, when the tail shows the run ended in an
+    /// abort: (reason, detail).
+    terminal_block: Option<(BlockedReason, String)>,
+    /// The segment's terminal completion (goal accepted): not a block.
+    completed: bool,
+}
+
+impl SegmentState {
+    fn fresh(&self, now: u64) -> bool {
+        self.last_ts
+            .is_some_and(|ts| now.saturating_sub(ts) <= FRESH_DRIVER_SECS)
+    }
+}
+
+/// Walk one events tail BACKWARD for the last run segment's state. The walk
+/// stops at the first terminal line (abort / goal accepted) or the newest
+/// `run_start` (an open segment); a goal REJECTION does not terminate — the
+/// driver keeps iterating past a rejected goal gate. Unparseable lines are
+/// skipped, so a truncated first line (the window cut) is harmless.
+fn segment_state(lines: &[String]) -> SegmentState {
+    let mut state = SegmentState {
+        iteration: 0,
+        last_ts: None,
+        run_start_ts: None,
+        terminal_block: None,
+        completed: false,
+    };
+    for line in lines.iter().rev() {
+        let Ok(value) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        if state.last_ts.is_none() {
+            state.last_ts = value.get("ts").and_then(Value::as_str).and_then(parse_rfc3339);
+        }
+        match value.get("type").and_then(Value::as_str) {
+            Some("iteration") => {
+                if state.iteration == 0 {
+                    state.iteration = value
+                        .get("n")
+                        .and_then(Value::as_u64)
+                        .unwrap_or(0)
+                        .min(u32::MAX as u64) as u32;
+                }
+            }
+            Some("abort") => {
+                let reason = value
+                    .get("reason")
+                    .and_then(Value::as_str)
+                    .unwrap_or("aborted");
+                state.terminal_block = Some(match value.get("budget_kind").and_then(Value::as_str) {
+                    Some(kind) => (
+                        BlockedReason::Budget,
+                        format!(
+                            "{kind} budget exhausted (max {}): {reason}",
+                            value.get("budget_max").and_then(Value::as_u64).unwrap_or(0)
+                        ),
+                    ),
+                    None => (BlockedReason::Error, reason.to_string()),
+                });
+                break;
+            }
+            Some("goal") if value.get("outcome").and_then(Value::as_str) == Some("accepted") => {
+                state.completed = true;
+                break;
+            }
+            Some("run_start") => {
+                state.run_start_ts = value.get("ts").and_then(Value::as_str).map(str::to_string);
+                break;
+            }
+            _ => {}
+        }
+    }
+    state
+}
+
+/// The supervisor's liveness: the pid in `.chug/loopd/loopd.pid` names a live
+/// process. Missing, unparseable, or dead → false (the loop is not being
+/// supervised).
+fn supervisor_alive(repo: &Path) -> bool {
+    read_small_text(&repo.join(".chug/loopd/loopd.pid"), 64)
+        .and_then(|text| text.lines().next()?.trim().parse::<u32>().ok())
+        .is_some_and(crate::driver_lock::pid_alive)
+}
+
+/// The cycle id: the newest supervisor cycle log's stem (`cycle-<ts>`), else
+/// the segment's `run_start` ts (a repo without supervisor logs still has a
+/// current run), else None.
+fn cycle_id(repo: &Path) -> Option<String> {
+    let mut newest: Option<String> = None;
+    if let Ok(entries) = std::fs::read_dir(repo.join(".chug/loopd")) {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if !(name.starts_with("cycle-") && name.ends_with(".log")) {
+                continue;
+            }
+            let stem = name.trim_end_matches(".log").to_string();
+            if newest.as_ref().is_none_or(|best| stem > *best) {
+                newest = Some(stem);
+            }
+        }
+    }
+    newest
+}
+
+/// The item the loop is working: the newest run's `spec` when it names a
+/// `tNNN` spec file, else the newest harvested `LEDGER-tNNN-*` /
+/// `verdict-tNNN-*` file's item, else None (a pilot repo's queue may not use
+/// the convention at all — absent, never fabricated).
+fn item_id(repo: &Path) -> Option<String> {
+    let spec_item = events_tail(&repo.join(".chug/events.jsonl"))
+        .iter()
+        .rev()
+        .find_map(|line| {
+            let value = serde_json::from_str::<Value>(line).ok()?;
+            let spec = value.get("spec")?.as_str()?;
+            item_id_from_spec(spec)
+        });
+    spec_item.or_else(|| item_id_from_ledgers(repo))
+}
+
+/// `specs/t340-chugd-typed-status.md` (or a bare `t340-name.md`) → `T340`.
+/// The digits must run to the stem's end or a `-`/`_` separator (the
+/// convention) — `t9x` is not an item. Anything else (LOOP-SPEC.md, a
+/// pilot's custom name) → None.
+fn item_id_from_spec(spec: &str) -> Option<String> {
+    let name = spec.rsplit('/').next()?;
+    let stem = name.strip_suffix(".md").unwrap_or(name);
+    let rest = stem.strip_prefix('t').or_else(|| stem.strip_prefix('T'))?;
+    let digits_end = rest.find(|c: char| !c.is_ascii_digit()).unwrap_or(rest.len());
+    if digits_end == 0 {
+        return None;
+    }
+    let digits = &rest[..digits_end];
+    let tail_ok = rest[digits_end..]
+        .chars()
+        .next()
+        .is_none_or(|c| c == '-' || c == '_');
+    tail_ok.then(|| format!("T{digits}"))
+}
+
+/// The newest `.chug/LEDGER-tNNN-*` / `.chug/verdict-tNNN-*` file's item, by
+/// modification time (the harvest artifacts land in the loop repo's .chug as
+/// a cycle closes, so the newest names the current item).
+fn item_id_from_ledgers(repo: &Path) -> Option<String> {
+    let mut newest: Option<(std::time::SystemTime, String)> = None;
+    let entries = std::fs::read_dir(repo.join(".chug")).ok()?;
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        let stem = if name.starts_with("LEDGER-t") {
+            name.strip_prefix("LEDGER-")
+        } else if name.starts_with("verdict-t") {
+            name.strip_prefix("verdict-")
+        } else {
+            None
+        };
+        let Some(rest) = stem else { continue };
+        let digits: String = rest
+            .strip_prefix('t')
+            .unwrap_or(rest)
+            .chars()
+            .take_while(char::is_ascii_digit)
+            .collect();
+        if digits.is_empty() {
+            continue;
+        }
+        let Ok(modified) = entry.metadata().and_then(|meta| meta.modified()) else {
+            continue;
+        };
+        if newest.as_ref().is_none_or(|(best, _)| modified > *best) {
+            newest = Some((modified, format!("T{digits}")));
+        }
+    }
+    newest.map(|(_, item)| item)
+}
+
+/// The repo's registered worktrees (the children), read straight from the
+/// git dir's worktree admin area — pure bounded file reads, no subprocess.
+/// The main worktree IS the repo, so it is never listed; a linked-worktree
+/// repo (its `.git` is a file naming the main admin dir) lists its siblings
+/// and itself.
+fn status_children(repo: &Path) -> Vec<StatusChild> {
+    let Some(worktrees_dir) = git_worktrees_dir(repo) else {
+        return Vec::new();
+    };
+    let Ok(entries) = std::fs::read_dir(&worktrees_dir) else {
+        return Vec::new();
+    };
+    let mut names: Vec<String> = entries
+        .flatten()
+        .filter(|entry| entry.path().is_dir())
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    names.truncate(MAX_CHILDREN);
+    names
+        .into_iter()
+        .map(|name| {
+            let dir = worktrees_dir.join(&name);
+            // The branch rides HEAD ("ref: refs/heads/loop-t302-validate");
+            // a raw sha is a detached worktree.
+            let head = read_small_text(&dir.join("HEAD"), 256).unwrap_or_default();
+            let branch = head.trim().strip_prefix("ref: ").unwrap_or("");
+            let state = if dir.join("locked").exists() {
+                "locked"
+            } else if dir.join("prunable").exists() {
+                "prunable"
+            } else if branch.is_empty() {
+                "detached"
+            } else {
+                "ready"
+            };
+            // The loop's lane naming: validate first (the more specific
+            // marker), then impl; anything else is a plain worktree.
+            let label = format!("{name} {branch}");
+            let kind = if label.contains("validate") {
+                "validate"
+            } else if label.contains("impl") {
+                "impl"
+            } else {
+                "worktree"
+            };
+            StatusChild {
+                kind,
+                id: name,
+                state: state.to_string(),
+            }
+        })
+        .collect()
+}
+
+/// The git dir's worktree admin dir for `repo`: `<repo>/.git/worktrees/`
+/// when `.git` is a directory; when `.git` is a FILE (a linked worktree) its
+/// `gitdir:` line names `<main>/.git/worktrees/<name>` and the parent of
+/// that is the admin dir. Non-git repos have none.
+fn git_worktrees_dir(repo: &Path) -> Option<PathBuf> {
+    let dot_git = repo.join(".git");
+    if dot_git.is_dir() {
+        return Some(dot_git.join("worktrees"));
+    }
+    if dot_git.is_file() {
+        let text = read_small_text(&dot_git, 4096)?;
+        let target = text.trim().strip_prefix("gitdir:")?.trim();
+        return Path::new(target).parent().map(Path::to_path_buf);
+    }
+    None
+}
+
+/// One row per open TODO item (the loop's own open-row rule: the status cell
+/// is `todo` or `open`, plus a `blocked` cell so a queue-level blocked row
+/// surfaces). The title echoes verbatim; `pri` parses when it can; a row
+/// blocked at the queue level (a `blocked` status cell, or notes opening
+/// with `BLOCKED` — the T328 shape) carries `blocked_reason`.
+fn open_todo_rows(repo: &Path) -> Vec<Value> {
+    let Some(text) = read_small_text(&repo.join("TODO.md"), MAX_TODO_BYTES) else {
+        return Vec::new();
+    };
+    let mut items = Vec::new();
+    for line in text.lines() {
+        if !line.starts_with('|') {
+            continue;
+        }
+        // | id | title | spec | pri | status | notes | → cells[1..=6].
+        let cells: Vec<&str> = line.split('|').map(str::trim).collect();
+        if cells.len() < 7 {
+            continue;
+        }
+        let (id, title, pri, status, notes) =
+            (cells[1], cells[2], cells[4], cells[5], cells[6]);
+        if !is_todo_id(id) {
+            continue; // header/separator rows and anything unkeyed
+        }
+        if !matches!(status, "todo" | "open" | "blocked") {
+            continue;
+        }
+        let mut row = json!({"id": id, "title": title, "status": status});
+        if let Ok(parsed) = pri.parse::<u64>() {
+            row["pri"] = json!(parsed);
+        }
+        if let Some(reason) = row_blocked_reason(notes, status) {
+            row["blocked_reason"] = json!(reason);
+        }
+        items.push(row);
+        if items.len() >= MAX_TODO_ROWS {
+            break;
+        }
+    }
+    items
+}
+
+/// A TODO id: `T`/`P` + digits (the queue's real rows; the header, the
+/// separator, and prose tables never match).
+fn is_todo_id(id: &str) -> bool {
+    let mut chars = id.chars();
+    matches!(chars.next(), Some('T') | Some('P')) && !id[1..].is_empty() && id[1..].bytes().all(|b| b.is_ascii_digit())
+}
+
+/// The queue-level blocked reason: a `blocked` status cell, or notes opening
+/// with `BLOCKED`. `BLOCKED (<keyword>` names the vocabulary member when the
+/// row says so; a queue row's blocker defaults to `external` — it lives
+/// outside the row itself (the T328 class: the harness axis, not the code).
+fn row_blocked_reason(notes: &str, status: &str) -> Option<&'static str> {
+    let after = if status == "blocked" {
+        notes.trim()
+    } else {
+        notes.trim().strip_prefix("BLOCKED")?.trim_start()
+    };
+    let paren = after.strip_prefix('(').unwrap_or(after);
+    for (keyword, reason) in [
+        ("permission", "permission"),
+        ("question", "question"),
+        ("budget", "budget"),
+        ("error", "error"),
+    ] {
+        if paren.starts_with(keyword) {
+            return Some(reason);
+        }
+    }
+    Some("external")
+}
+
+/// A small regular file's text, bounded: anything that is not a regular file
+/// (a directory, a FIFO, a device) or past the cap reads as absent — the
+/// derivation degrades, it never blocks and never errors.
+fn read_small_text(path: &Path, cap: u64) -> Option<String> {
+    use std::io::Read;
+    let meta = std::fs::metadata(path).ok()?;
+    if !meta.is_file() {
+        return None;
+    }
+    let mut file = std::fs::File::open(path).ok()?;
+    let mut raw = Vec::new();
+    (&mut file)
+        .take(cap)
+        .read_to_end(&mut raw)
+        .ok()?;
+    let text = String::from_utf8_lossy(&raw);
+    let text = text.trim_end();
+    (!text.is_empty()).then(|| text.to_string())
+}
+
+/// The bounded events tail: the last [`EVENTS_TAIL_BYTES`] of the driver's
+/// JSONL event log, newest last. The window's first line may be a partial —
+/// it is dropped (the walk skips unparseable lines anyway, but a partial
+/// JSON line that HAPPENS to parse would be a lie). Missing/empty log → an
+/// empty tail (no driver evidence at all).
+fn events_tail(path: &Path) -> Vec<String> {
+    use std::io::{Read, Seek, SeekFrom};
+    let Ok(meta) = std::fs::metadata(path) else {
+        return Vec::new();
+    };
+    if !meta.is_file() {
+        return Vec::new();
+    }
+    let len = meta.len();
+    let start = len.saturating_sub(EVENTS_TAIL_BYTES);
+    let Ok(mut file) = std::fs::File::open(path) else {
+        return Vec::new();
+    };
+    if file.seek(SeekFrom::Start(start)).is_err() {
+        return Vec::new();
+    }
+    let mut raw = Vec::new();
+    if (&mut file).take(EVENTS_TAIL_BYTES).read_to_end(&mut raw).is_err() {
+        return Vec::new();
+    }
+    let text = String::from_utf8_lossy(&raw);
+    let mut lines: Vec<String> = text.lines().map(str::to_string).collect();
+    if start > 0 {
+        lines.remove(0); // the window cut: the first line may be partial
+    }
+    lines.retain(|line| !line.trim().is_empty());
+    lines
+}
+
+/// The status endpoints' repo selector, in precedence order: the
+/// `?repo=<path>` query parameter (percent-decoded), then `CHUG_DAEMON_REPO`
+/// (the serve-time pin), then the daemon process's cwd (the loop repo a
+/// spawned daemon inherits).
+fn status_repo(raw_path: &str) -> PathBuf {
+    raw_path
+        .split_once('?')
+        .and_then(|(_, query)| query_param(query, "repo"))
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var_os(REPO_ENV)
+                .filter(|value| !value.is_empty())
+                .map(PathBuf::from)
+        })
+        .or_else(|| std::env::current_dir().ok())
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
+/// The typed status path a raw request line carries (`None` = not a status
+/// route). The legacy routes above keep matching the RAW path, so a query
+/// string on /healthz, /judge, or /sessions stays a 404 exactly as pre-T340.
+fn status_route(raw: &str) -> Option<&'static str> {
+    match raw.split('?').next().unwrap_or(raw) {
+        "/status/loop" => Some("/status/loop"),
+        "/status/items" => Some("/status/items"),
+        _ => None,
+    }
+}
+
+/// One query parameter, percent-decoded (`%XX` triplets; `+` reads as a
+/// space — the form encoding curl's `--data-urlencode` produces). A malformed
+/// `%` is literal; undecodable bytes render lossily.
+fn query_param(query: &str, key: &str) -> Option<String> {
+    query
+        .split('&')
+        .find_map(|pair| {
+            let (name, value) = pair.split_once('=')?;
+            (percent_decode(name) == key).then(|| percent_decode(value))
+        })
+}
+
+fn percent_decode(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'+' {
+            out.push(b' ');
+            i += 1;
+        } else if bytes[i] == b'%' && i + 2 < bytes.len() {
+            let decoded = std::str::from_utf8(&bytes[i + 1..i + 3])
+                .ok()
+                .and_then(|hex| u8::from_str_radix(hex, 16).ok());
+            match decoded {
+                Some(byte) => {
+                    out.push(byte);
+                    i += 3;
+                }
+                None => {
+                    out.push(b'%');
+                    i += 1;
+                }
+            }
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// The stub's refusal shape for /status — exactly the stub /judge and
+/// /sessions refusal (non-2xx + `{"detail": …}`): the stub seam exists for
+/// the transport/lifecycle pins and serves /healthz only. It has no repo
+/// context to report, and a fabricated empty-but-200 status would be
+/// exactly the lie the stub must never tell.
+fn stub_status_refusal() -> (u16, String) {
+    (
+        500,
+        detail("CHUG_DAEMON_STUB test backend: /status is never served by the stub"),
+    )
+}
+
+// ---------------------------------------------------------------------------
 // The server: the inference seam + the UDS HTTP loop
 // ---------------------------------------------------------------------------
 
@@ -1188,7 +1903,11 @@ pub fn serve() -> anyhow::Result<i32> {
     } else {
         Some(SessionsHost::with_self())
     };
-    serve_unix_with(&sock_path()?, backend, sessions)
+    // T340: the typed status endpoints ride every real serve mode the same
+    // way (they need no model — pure observation of the loop's state files);
+    // the stub refuses them exactly as it refuses /sessions.
+    let serve_status = !stub_requested();
+    serve_unix_with(&sock_path()?, backend, sessions, serve_status)
 }
 
 /// The `CHUG_DAEMON_STUB=1` test seam switch.
@@ -1264,23 +1983,26 @@ impl JudgeBackend for crate::judge_model::JudgeModel {
 /// the healthz probes).
 #[cfg(test)]
 pub fn serve_unix(sock: &Path, backend: std::sync::Arc<dyn JudgeBackend>) -> anyhow::Result<i32> {
-    serve_unix_with(sock, backend, Some(SessionsHost::default()))
+    serve_unix_with(sock, backend, Some(SessionsHost::default()), true)
 }
 
 /// The parameterized serve: `sessions` carries the registry (and the
 /// daemon's own identity); `None` refuses /sessions (the stub serve — a
-/// stub must never fabricate a registry).
+/// stub must never fabricate a registry). `serve_status` gates the T340
+/// typed status endpoints the same way.
 fn serve_unix_with(
     sock: &Path,
     backend: std::sync::Arc<dyn JudgeBackend>,
     sessions: Option<SessionsHost>,
+    serve_status: bool,
 ) -> anyhow::Result<i32> {
     #[cfg(unix)]
     {
         let listener = bind_socket(sock).with_context(|| format!("binding {}", sock.display()))?;
         eprintln!(
-            "chug daemon: serving /healthz + /judge{} on {} (mode 0600) — {}",
+            "chug daemon: serving /healthz + /judge{}{} on {} (mode 0600) — {}",
             if sessions.is_some() { " + /sessions" } else { "" },
+            if serve_status { " + /status" } else { "" },
             sock.display(),
             backend.describe()
         );
@@ -1291,7 +2013,7 @@ fn serve_unix_with(
                     let sessions = sessions.clone();
                     if let Err(e) = std::thread::Builder::new()
                         .name("chug-daemon-conn".into())
-                        .spawn(move || handle_conn(backend, sessions, stream))
+                        .spawn(move || handle_conn(backend, sessions, serve_status, stream))
                     {
                         eprintln!("chug daemon: could not spawn a connection thread: {e}");
                     }
@@ -1303,7 +2025,7 @@ fn serve_unix_with(
     }
     #[cfg(not(unix))]
     {
-        let _ = (sock, backend, sessions);
+        let _ = (sock, backend, sessions, serve_status);
         bail!("unix domain sockets are not supported on this platform")
     }
 }
@@ -1354,12 +2076,13 @@ fn set_file_mode(path: &Path, mode: u32) -> anyhow::Result<()> {
 fn handle_conn(
     backend: std::sync::Arc<dyn JudgeBackend>,
     sessions: Option<SessionsHost>,
+    serve_status: bool,
     mut stream: std::os::unix::net::UnixStream,
 ) {
     let _ = stream.set_read_timeout(Some(JUDGE_TIMEOUT));
     let _ = stream.set_write_timeout(Some(JUDGE_TIMEOUT));
     let (status, body) = match read_request(&mut stream) {
-        Ok(request) => route(&*backend, sessions.as_ref(), &request),
+        Ok(request) => route(&*backend, sessions.as_ref(), serve_status, &request),
         Err(message) => (400, detail(message)),
     };
     if let Err(e) = write_response(&mut stream, status, &body) {
@@ -1433,6 +2156,7 @@ fn read_request<R: Read>(stream: &mut R) -> Result<HttpRequest, String> {
 fn route(
     backend: &dyn JudgeBackend,
     sessions: Option<&SessionsHost>,
+    serve_status: bool,
     request: &HttpRequest,
 ) -> (u16, String) {
     match (request.method.as_str(), request.path.as_str()) {
@@ -1462,6 +2186,21 @@ fn route(
             Some(host) => (200, sessions_body(host, epoch_now())),
             None => stub_sessions_refusal(),
         },
+        // T340: the typed status endpoints — observation only, sourced from
+        // the loop's state files. The legacy routes above match the RAW
+        // path, so they are untouched (a query string on them stays a 404);
+        // only the status routes carry a `?repo=` selector.
+        ("GET", raw) if status_route(raw).is_some() => {
+            if !serve_status {
+                stub_status_refusal()
+            } else {
+                let repo = status_repo(raw);
+                match status_route(raw) {
+                    Some("/status/loop") => (200, status_loop_body(&repo, epoch_now())),
+                    _ => (200, status_items_body(&repo, epoch_now())),
+                }
+            }
+        }
         _ => (404, detail("not found")),
     }
 }
@@ -2476,6 +3215,7 @@ mod tests {
                 &server_sock,
                 Arc::new(SessionsBackend),
                 Some(SessionsHost::with_self()),
+                true,
             );
         });
         let deadline = Instant::now() + Duration::from_secs(10);
@@ -2560,7 +3300,7 @@ mod tests {
         let stub_sock = tmp.path().join("stub.sock");
         let stub_server_sock = stub_sock.clone();
         std::thread::spawn(move || {
-            let _ = serve_unix_with(&stub_server_sock, Arc::new(StubBackend), None);
+            let _ = serve_unix_with(&stub_server_sock, Arc::new(StubBackend), None, false);
         });
         let deadline = Instant::now() + Duration::from_secs(10);
         while Instant::now() < deadline && healthz_ok(&stub_sock).is_err() {
@@ -2685,5 +3425,390 @@ mod tests {
             elapsed < Duration::from_secs(2),
             "the warm judge took {elapsed:?} — over the fail-fast budget"
         );
+    }
+
+    // -------------------------------------------------------------------
+    // T340 — the typed status endpoints: derivation + wire-shape units.
+    // The full wire battery (fixture repos, a real spawned daemon, the
+    // capabilities flips) lives in tests/daemon_status_contract.rs; these
+    // units pin the pure edges.
+    // -------------------------------------------------------------------
+
+    fn write_small(path: &Path, contents: &str) {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).expect("create parent dirs");
+        }
+        std::fs::write(path, contents).expect("write fixture file");
+    }
+
+    #[test]
+    fn status_route_matches_only_the_typed_paths() {
+        assert_eq!(status_route("/status/loop"), Some("/status/loop"));
+        assert_eq!(status_route("/status/loop?repo=%2Ftmp"), Some("/status/loop"));
+        assert_eq!(status_route("/status/items"), Some("/status/items"));
+        assert_eq!(status_route("/status/items?x=1"), Some("/status/items"));
+        assert_eq!(status_route("/status/loopy"), None);
+        assert_eq!(status_route("/status"), None);
+        assert_eq!(status_route("/healthz"), None);
+        // POST /status/loop falls through to the 404 arm: the guard only
+        // arms on ("GET", raw).
+        assert_eq!(status_route("/status/loop/extra"), None);
+    }
+
+    #[test]
+    fn query_param_and_percent_decode_handle_paths_plus_and_malformed() {
+        assert_eq!(
+            query_param("repo=%2Ftmp%2Fchug-loop-t1", "repo"),
+            Some("/tmp/chug-loop-t1".to_string())
+        );
+        assert_eq!(
+            query_param("repo=%2Ftmp%2Fmy+repo", "repo"),
+            Some("/tmp/my repo".to_string())
+        );
+        assert_eq!(query_param("repo=%2Ftmp&x=1", "repo"), Some("/tmp".to_string()));
+        assert_eq!(query_param("x=1&repo=%2Ftmp", "repo"), Some("/tmp".to_string()));
+        assert_eq!(query_param("x=1", "repo"), None);
+        assert_eq!(query_param("repo", "repo"), None);
+        // A malformed % is literal; the selector still resolves.
+        assert_eq!(percent_decode("100%"), "100%");
+        assert_eq!(percent_decode("%ZZ"), "%ZZ");
+        assert_eq!(percent_decode("a+b%2Fc"), "a b/c");
+        // The ?repo= selector decodes a real absolute path end to end.
+        assert_eq!(
+            status_repo("/status/loop?repo=%2Ftmp%2Fchug-loop-t340"),
+            PathBuf::from("/tmp/chug-loop-t340")
+        );
+    }
+
+    #[test]
+    fn loop_report_missing_repo_is_blocked_external_and_names_the_path() {
+        let repo = Path::new("/tmp/chug-t340-does-not-exist-anywhere");
+        let _ = std::fs::remove_dir_all(repo);
+        let report = loop_report(repo, epoch_now());
+        assert_eq!(report.status, LoopStatus::Blocked);
+        assert_eq!(report.blocked_reason, Some(BlockedReason::External));
+        let detail = report.blocked_detail.expect("the external case carries its detail");
+        assert!(detail.contains("/tmp/chug-t340-does-not-exist-anywhere"), "{detail}");
+        assert!(report.children.is_empty());
+        assert_eq!(report.item_id, None);
+    }
+
+    #[test]
+    fn loop_report_halted_supervisor_is_blocked_error_with_the_latch_detail() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let reason = "3 consecutive cycles without goal_complete — manual review required";
+        write_small(&tmp.path().join(".chug/loopd/HALTED"), reason);
+        let report = loop_report(tmp.path(), epoch_now());
+        assert_eq!(report.status, LoopStatus::Blocked);
+        assert_eq!(report.blocked_reason, Some(BlockedReason::Error));
+        assert_eq!(report.blocked_detail.as_deref(), Some(reason));
+    }
+
+    #[test]
+    fn loop_report_repo_with_no_evidence_is_dormant_with_empty_children() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let report = loop_report(tmp.path(), epoch_now());
+        assert_eq!(report.status, LoopStatus::Dormant);
+        assert_eq!(report.blocked_reason, None);
+        assert_eq!(report.blocked_detail, None);
+        assert!(report.children.is_empty());
+        assert_eq!(report.iteration, 0);
+    }
+
+    #[test]
+    fn segment_state_reads_budget_abort_plain_abort_and_completion() {
+        let ts = rfc3339(epoch_now());
+        let budget = format!(
+            r#"{{"type":"abort","ts":"{ts}","reason":"hit the iteration ceiling","budget_kind":"iterations","budget_max":80}}"#
+        );
+        let state = segment_state(&[budget]);
+        assert_eq!(state.iteration, 0);
+        let (reason, detail) = state.terminal_block.expect("budget abort terminates");
+        assert_eq!(reason, BlockedReason::Budget);
+        assert_eq!(
+            detail,
+            "iterations budget exhausted (max 80): hit the iteration ceiling"
+        );
+        assert!(!state.completed);
+
+        let plain = format!(r#"{{"type":"abort","ts":"{ts}","reason":"checkpoint unload failed"}}"#);
+        let state = segment_state(&[plain]);
+        let (reason, detail) = state.terminal_block.expect("plain abort terminates");
+        assert_eq!(reason, BlockedReason::Error);
+        assert_eq!(detail, "checkpoint unload failed");
+
+        let accepted = format!(r#"{{"type":"goal","ts":"{ts}","outcome":"accepted"}}"#);
+        let state = segment_state(&[accepted]);
+        assert!(state.completed, "a goal acceptance completes the segment");
+        assert!(state.terminal_block.is_none());
+
+        // A goal REJECTION does not terminate — the driver iterates past a
+        // rejected gate; the segment stays open.
+        let rejected = format!(r#"{{"type":"goal","ts":"{ts}","outcome":"rejected"}}"#);
+        let state = segment_state(&[rejected]);
+        assert!(!state.completed);
+        assert!(state.terminal_block.is_none());
+    }
+
+    #[test]
+    fn segment_state_walk_stops_at_the_newest_run_start_and_reads_iteration() {
+        let old = rfc3339(epoch_now().saturating_sub(3600));
+        let fresh = rfc3339(epoch_now());
+        // An abort in the PREVIOUS segment (before the newest run_start) must
+        // not block the current one: the walk hits run_start first.
+        let lines = vec![
+            format!(r#"{{"type":"run_start","ts":"{old}","model":"glm"}}"#),
+            format!(r#"{{"type":"iteration","ts":"{old}","n":80}}"#),
+            format!(r#"{{"type":"abort","ts":"{old}","reason":"budget","budget_kind":"iterations","budget_max":80}}"#),
+            format!(r#"{{"type":"run_start","ts":"{fresh}","model":"glm"}}"#),
+            format!(r#"{{"type":"iteration","ts":"{fresh}","n":3}}"#),
+            format!(r#"{{"type":"iteration","ts":"{fresh}","n":4}}"#),
+        ];
+        let state = segment_state(&lines);
+        assert!(state.terminal_block.is_none(), "the old abort is behind the boundary");
+        assert!(!state.completed);
+        assert_eq!(state.iteration, 4, "the newest iteration line's n");
+        assert_eq!(state.run_start_ts.as_deref(), Some(fresh.as_str()));
+        assert!(state.fresh(epoch_now()), "a fresh tail reads as working");
+        // Garbage and partial lines are skipped, not fatal.
+        let state = segment_state(&["{oops".to_string(), lines[4].clone()]);
+        assert_eq!(state.iteration, 3);
+    }
+
+    #[test]
+    fn segment_state_stale_tail_is_not_fresh() {
+        let stale = rfc3339(epoch_now().saturating_sub(FRESH_DRIVER_SECS + 30));
+        let lines = vec![
+            format!(r#"{{"type":"run_start","ts":"{stale}"}}"#),
+            format!(r#"{{"type":"iteration","ts":"{stale}","n":7}}"#),
+        ];
+        let state = segment_state(&lines);
+        assert!(!state.fresh(epoch_now()));
+        assert_eq!(state.iteration, 7);
+    }
+
+    #[test]
+    fn loop_report_fresh_segment_is_working_and_carries_item_and_iteration() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let now = epoch_now();
+        let ts = rfc3339(now);
+        write_small(
+            &tmp.path().join(".chug/events.jsonl"),
+            &concat!(
+                    r#"{"type":"run_start","ts":"{TS}","spec":"specs/t341-permission-broker-hook.md"}"#,
+                    "\n",
+                    r#"{"type":"iteration","ts":"{TS}","n":2}"#,
+                    "\n"
+                )
+                .replace("{TS}", &ts),
+        );
+        write_small(
+            &tmp.path().join("TODO.md"),
+            "| id | title | spec | pri | status | notes |\n|----|-------|------|-----|--------|-------|\n| T341 | x | specs/t341.md | 2 | todo | |\n",
+        );
+        let report = loop_report(tmp.path(), now);
+        assert_eq!(report.status, LoopStatus::Working);
+        assert_eq!(report.iteration, 2);
+        assert_eq!(report.item_id.as_deref(), Some("T341"));
+        assert_eq!(report.cycle_id.as_deref(), Some(ts.as_str()), "run_start ts is the cycle fallback");
+    }
+
+    #[test]
+    fn loop_report_completed_run_is_idle_with_a_live_supervisor() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let now = epoch_now();
+        let ts = rfc3339(now);
+        write_small(
+            &tmp.path().join(".chug/events.jsonl"),
+            &format!(r#"{{"type":"goal","ts":"{ts}","outcome":"accepted"}}"#),
+        );
+        // This test process is alive: a valid stand-in supervisor pid.
+        write_small(
+            &tmp.path().join(".chug/loopd/loopd.pid"),
+            &format!("{}", std::process::id()),
+        );
+        write_small(
+            &tmp.path().join("TODO.md"),
+            "| id | title | spec | pri | status | notes |\n|----|-------|------|-----|--------|-------|\n| T340 | x | specs/t340.md | 2 | open | |\n",
+        );
+        let report = loop_report(tmp.path(), now);
+        assert_eq!(report.status, LoopStatus::Idle);
+        // Without a live supervisor the same completion reads dormant.
+        write_small(&tmp.path().join(".chug/loopd/loopd.pid"), "999999999");
+        let report = loop_report(tmp.path(), now);
+        assert_eq!(report.status, LoopStatus::Dormant);
+    }
+
+    #[test]
+    fn loop_report_budget_abort_surfaces_blocked_budget() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let stale = rfc3339(epoch_now().saturating_sub(FRESH_DRIVER_SECS + 10));
+        write_small(
+            &tmp.path().join(".chug/events.jsonl"),
+            &concat!(
+                    r#"{"type":"run_start","ts":"{TS}","spec":"specs/t340-chugd-typed-status.md"}"#,
+                    "\n",
+                    r#"{"type":"iteration","ts":"{TS}","n":50}"#,
+                    "\n",
+                    r#"{"type":"abort","ts":"{TS}","reason":"wrap unfinished","budget_kind":"iterations","budget_max":50}"#,
+                    "\n"
+                )
+                .replace("{TS}", &stale),
+        );
+        let report = loop_report(tmp.path(), epoch_now());
+        assert_eq!(report.status, LoopStatus::Blocked);
+        assert_eq!(report.blocked_reason, Some(BlockedReason::Budget));
+        assert_eq!(
+            report.blocked_detail.as_deref(),
+            Some("iterations budget exhausted (max 50): wrap unfinished")
+        );
+        assert_eq!(report.item_id.as_deref(), Some("T340"));
+    }
+
+    #[test]
+    fn item_id_from_spec_handles_the_convention_and_declines_others() {
+        assert_eq!(
+            item_id_from_spec("specs/t340-chugd-typed-status.md"),
+            Some("T340".to_string())
+        );
+        assert_eq!(item_id_from_spec("t324-one-liner-anchor-skip-rule.md"), Some("T324".to_string()));
+        assert_eq!(item_id_from_spec("specs/T9-api-retry.md"), Some("T9".to_string()));
+        assert_eq!(item_id_from_spec("LOOP-SPEC.md"), None);
+        assert_eq!(item_id_from_spec("specs/t9x-not-a-number.md"), None);
+        assert_eq!(item_id_from_spec(""), None);
+    }
+
+    #[test]
+    fn item_id_falls_back_to_the_newest_harvest_artifact() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        assert_eq!(item_id(tmp.path()), None, "no events, no artifacts");
+        write_small(
+            &tmp.path().join(".chug/events.jsonl"),
+            r#"{"type":"run_start","ts":"2026-11-09T00:00:00Z","spec":"LOOP-SPEC.md"}"#,
+        );
+        assert_eq!(item_id(tmp.path()), None, "LOOP-SPEC.md names no item");
+        // mtime ordering needs real distance (coarse filesystem timestamps):
+        // the verdict lands first, the LEDGER a moment later and wins.
+        write_small(&tmp.path().join(".chug/verdict-t310-validate.md"), "x");
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        write_small(&tmp.path().join(".chug/LEDGER-t309-impl-20261028-133351.md"), "x");
+        assert_eq!(item_id(tmp.path()), Some("T309".to_string()), "newest by mtime wins");
+    }
+
+    #[test]
+    fn git_worktrees_dir_resolves_the_real_and_the_linked_layout() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        assert_eq!(git_worktrees_dir(tmp.path()), None, "not a git repo");
+        // A plain repo: .git is a directory.
+        write_small(&tmp.path().join(".git/HEAD"), "ref: refs/heads/main");
+        assert_eq!(
+            git_worktrees_dir(tmp.path()),
+            Some(tmp.path().join(".git/worktrees"))
+        );
+        // A linked worktree: .git is a FILE naming the main admin dir, and
+        // the worktrees dir is its parent.
+        let tmp2 = tempfile::tempdir().expect("tempdir");
+        write_small(
+            &tmp2.path().join(".git"),
+            "gitdir: /Users/x/chug/.git/worktrees/chug-loop-t339\n",
+        );
+        assert_eq!(
+            git_worktrees_dir(tmp2.path()),
+            Some(PathBuf::from("/Users/x/chug/.git/worktrees"))
+        );
+    }
+
+    #[test]
+    fn status_children_enumerate_and_classify_the_worktree_lanes() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let wt = tmp.path().join(".git/worktrees");
+        write_small(&wt.join("chug-t302-validate/HEAD"), "ref: refs/heads/loop-t302-validate-20261023\n");
+        write_small(&wt.join("chug-loop-t309-impl/HEAD"), "ref: refs/heads/loop-t309-impl\n");
+        write_small(&wt.join("scratch/HEAD"), "ref: refs/heads/scratch\n");
+        write_small(&wt.join("locked-lane/HEAD"), "ref: refs/heads/locked-lane\n");
+        write_small(&wt.join("locked-lane/locked"), "reason");
+        write_small(&wt.join("prunable-one/HEAD"), "ref: refs/heads/prunable-one\n");
+        write_small(&wt.join("prunable-one/prunable"), "");
+        write_small(&wt.join("detached/HEAD"), "b2707ba6\n");
+        // Files (not dirs) under the admin dir are not worktrees.
+        write_small(&wt.join("stray-file"), "x");
+        let children = status_children(tmp.path());
+        let names: Vec<&str> = children.iter().map(|c| c.id.as_str()).collect();
+        assert_eq!(
+            names,
+            vec!["chug-loop-t309-impl", "chug-t302-validate", "detached", "locked-lane", "prunable-one", "scratch"],
+            "sorted, deterministic, files skipped"
+        );
+        let by_id = |id: &str| children.iter().find(|c| c.id == id).expect("child");
+        assert_eq!(by_id("chug-loop-t309-impl").kind, "impl");
+        assert_eq!(by_id("chug-t302-validate").kind, "validate");
+        assert_eq!(by_id("scratch").kind, "worktree");
+        assert_eq!(by_id("locked-lane").state, "locked");
+        assert_eq!(by_id("prunable-one").state, "prunable");
+        assert_eq!(by_id("detached").state, "detached");
+        assert_eq!(by_id("scratch").state, "ready");
+    }
+
+    #[test]
+    fn open_todo_rows_renders_the_open_queue_and_skips_the_rest() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let todo = concat!(
+            "# TODO\n\n",
+            "| id | title | spec | pri | status | notes |\n",
+            "|----|-------|------|-----|--------|-------|\n",
+            "| T340 | typed status endpoints | specs/t340.md | 2 | open | |\n",
+            "| T341 | permission broker | specs/t341.md | 2 | todo | operator-filed |\n",
+            "| T328 | daemon provider | specs/t328.md | 3 | open | BLOCKED (re-assessed cycle-3155): the harness axis |\n",
+            "| T345 | budget thing | specs/t345.md | 1 | open | BLOCKED (budget exhausted on two children) |\n",
+            "| T344 | harness | specs/t344.md | 3 | todo | |\n",
+            "| T324 | anchor skip-rule | specs/t324.md | 4 | done | landed |\n",
+            "| P7 | proposed idea | specs/p7.md | 3 | proposed | |\n",
+            "\n",
+            "## Proposed\n",
+            "| id | title | spec | pri | status | notes |\n",
+            "|----|-------|------|-----|--------|-------|\n",
+            "| P9 | another | specs/p9.md | 2 | proposed | |\n",
+        );
+        write_small(&tmp.path().join("TODO.md"), todo);
+        let items = open_todo_rows(tmp.path());
+        let ids: Vec<&str> = items.iter().filter_map(|i| i["id"].as_str()).collect();
+        assert_eq!(ids, vec!["T340", "T341", "T328", "T345", "T344"], "open+todo only, in file order");
+        let by_id = |id: &str| items.iter().find(|i| i["id"] == serde_json::json!(id)).expect("row");
+        let row = by_id("T340");
+        assert_eq!(row["pri"], serde_json::json!(2));
+        assert_eq!(row["status"], serde_json::json!("open"));
+        assert!(row.get("blocked_reason").is_none(), "unblocked rows carry no reason");
+        assert_eq!(
+            by_id("T341")["title"],
+            serde_json::json!("permission broker"),
+            "verbatim title"
+        );
+        assert_eq!(by_id("T328")["blocked_reason"], serde_json::json!("external"));
+        assert_eq!(by_id("T345")["blocked_reason"], serde_json::json!("budget"));
+        assert_eq!(by_id("T344")["status"], serde_json::json!("todo"));
+        // A missing TODO.md is an empty queue, never an error.
+        assert!(open_todo_rows(Path::new("/tmp/chug-t340-does-not-exist-anywhere")).is_empty());
+    }
+
+    #[test]
+    fn is_todo_id_and_row_blocked_reason_pin_the_queue_rules() {
+        assert!(is_todo_id("T340"));
+        assert!(is_todo_id("P7"));
+        assert!(is_todo_id("T9"));
+        assert!(!is_todo_id("id"));
+        assert!(!is_todo_id(""));
+        assert!(!is_todo_id("T"));
+        assert!(!is_todo_id("----"));
+        assert!(!is_todo_id("T3x4"));
+
+        assert_eq!(row_blocked_reason("clean notes", "open"), None);
+        assert_eq!(row_blocked_reason("", "todo"), None);
+        assert_eq!(row_blocked_reason("anything", "blocked"), Some("external"));
+        assert_eq!(row_blocked_reason("BLOCKED (re-assessed cycle-3155): the axis", "open"), Some("external"));
+        assert_eq!(row_blocked_reason("BLOCKED (budget exhausted)", "open"), Some("budget"));
+        assert_eq!(row_blocked_reason("BLOCKED (permission broker not installed)", "open"), Some("permission"));
+        assert_eq!(row_blocked_reason("BLOCKED (error in the harness)", "open"), Some("error"));
+        assert_eq!(row_blocked_reason("BLOCKED (question pending)", "open"), Some("question"));
+        assert_eq!(row_blocked_reason("BLOCKED on the harness axis", "open"), Some("external"));
     }
 }
