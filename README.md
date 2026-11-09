@@ -721,6 +721,18 @@ problem) and the run continues. A hook never triggers hooks. Phase 2 scope
 (again as config, no doctrine forks): Stop/GoalComplete events, arg-glob
 matchers, `--hooks` CLI flag, and the Laya stop-hook reference consumer.
 
+**Meta-broker pack** (opt-in, ships in the tarball as
+`hooks/meta-broker/`): routes Claude's own PreToolUse permission decisions
+to an external meta-harness broker (herdr, orca) when one is listening on
+`<claude-dir>/meta-broker.sock`, and stays a byte-for-byte no-op when one
+is not — no socket, refused, >800ms, or any other failure prints nothing
+and exits 0, so stock permission evaluation is untouched. Every brokered
+decision is denied/allowed by the broker (the meta-harness is the
+approver-of-record) and appended to `meta-broker-audit.jsonl`. Install
+with `install.sh --with-meta-pack` (uninstall:
+`--uninstall-meta-pack`); the wire contract is in `docs/meta-harness.md`
+and the pack's operating card in `hooks/meta-broker/README.md`.
+
 ## Permissions (`.chug/permissions.json`)
 
 Declarative per-tool deny rules, evaluated in-process before every tool
