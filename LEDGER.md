@@ -6,6 +6,8 @@
 - LIVE_CTX compacted (416KB → 23KB; first attempt rejected on orphaned tool_result, retry window opens on an assistant block — the pattern for future compactions)
 
 ## Next
+- Phase 3 wrap IN FLIGHT: Outcomes 3155 + compact 3148 landed (prep commit); remaining: state rewrite -> notes -> probe -> fill -> push -> goal_complete
+- T345 filed (t340 validator finding 2, wedged-listener leg, RED-prove spec ready, pri 4)
 - T340 arc: impl child flying (pid 29730, /tmp/t340-impl.log, worktree /tmp/chug-loop-t340, branch loop-t340 @b2707ba6, glm 80/50) → review → kimi REQUIRED (core-adjacent: daemon + capabilities) → merge/flip/push
 - Phase 3 wrap: Outcomes cycle-3155, decisions-audit + T261 batch (d1794189727-1/-2, d1794192709-3/-4/-5, d1794193697-6), state rewrite, token-free notes + T257 color, probe, fill, push, goal_complete
 
