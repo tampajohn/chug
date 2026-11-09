@@ -1,16 +1,12 @@
 # Ledger
 
 ## Done
-- Cycle-3160 COMPLETE + PUSHED (main == origin/main 8b42a7f8): zero-item corridor, books closed
-- Phase 1: routine-skip logged (eval fresh 0d95acc1 same UTC day 10:22Z; todo_rows=2; delta bookkeeping-only since marker) → glm-routed; eval-routing record d1794220482-1
-- Phase 2 disposition: T344 re-probed — all three resolution paths still closed (chug-watch/package.json ABSENT rc=1 [check RED holds], npm view exports rc=0 EMPTY, installed 2.1.235, `claude plugin` no test subcommand) → dispatch refused (the cycle-3155 shape d1794189727-2; re-probe record d1794220483-2); T328 re-verified BLOCKED same-root; ZERO dispatchable rows → wrap per the T81 anti-sprint-burn
-- Wrap corridor: prep cf96126a (Outcomes 3160 full + 3154 one-lined, the 6-full set 3160/3159/3158/3157/3156/3155) + notes 7d295fde (token-free per T248, T257 color 33/400.799 at the notes stamp) + fill 8b42a7f8 (amended pre-push — the leg-list truncation slip corrected, 3-leg enumeration with all legs named + adjudicated; datum FINAL 45/500.100 at the 10:40:07.000Z stamp re-derived FRESH in the commit leg; T309/T310/T317/T321/T323/T311 all GREEN at the named stamp); probe 60 0 post-notes (machine==TRUE 0); battery 225/225 + floor 21/21 GREEN; state write FACADE-GREEN first attempt
-- T261 batch TWO (d1794220596-3 <- d1794220482-1 + d1794220596-4 <- d1794220483-2, both landed-clean); audit REPORT-only (malformed 3 / dups 2, unlabeled 63/92/83 zero-growth)
-- NO TAG (TRUE 2 distinct flip-ids since v0.20.0 = T342 + T343 carried, ZERO flips this cycle, 2 < 3; v0.20.0 ANCESTOR-OK per T245; describe v0.20.0-28-g8b42a7f8)
+- Phase 1: routine-skip disposition recorded (d1794221603-1) — predicate HOLDS (todo rows T344 + eval fresh cf96126a same UTC day), Phase 2 entered directly.
+- Phase 2: T344 worked (orchestrator-finish, routing d1794221687-2): probe chain 2026-11-09 exhaustively dead on all three resolution paths (npm stub claude-code@1.0.0 pointer-only; official @anthropic-ai/claude-code@2.1.319 tarball 7 files, no testing entry, no exports; installed 2.1.235 exports []; 313MB binary strings 0 hits x4 variants; `claude plugin` 14 subcommands, no test runner; 4 plugin caches markdown-only). The spec's operator-handoff branch landed: chug-watch 13eca32 docs/testing-harness-investigation.md (+95, ff-merged to master, no remote). TODO: T344 → done (flip a74b8591); T328 notes refreshed (operator decision menu A/B/C). todo_consistency 21/21 GREEN.
 
 ## Next
-- T344 stays todo (spec ready; BLOCKED-adjacent on the chug-watch host harness) — the next cycle's input alongside any operator delta
-- T328 BLOCKED (parked, same root as T344); the unlabeled legacy tail (d1794095048-1 / d1794098358-2 / d1794099148-3 / d1794170250-3) carried zero-growth
+- Release v0.21.0 (trigger FIRES: 3 distinct flip-ids since v0.20.0 = T342+T343+T344, ancestor-OK; T342/T343 features → minor bump).
+- Wrap corridor: Outcomes 3161 + compact 3155, T261 batch (2 routing ids), audit, eval-state rewrite keyed to prep, token-free notes + probe, fill with T309/T310/T311/T317/T321/T323 legs, push (commit + tag together), goal_complete.
 
 ## Blockers
-- T328/T344: no chug-watch host-runnable test harness on this host (npm pointer stub, no testing export, no plugin test subcommand, no package.json in chug-watch) — the RED-proven unblock probe lives in specs/t344-chugwatch-host-test-harness.md; decision rests with the operator per the spec's hand-off clause
+- none (T328 stays blocked pending the OPERATOR's decision — menu in chug-watch docs/testing-harness-investigation.md; not a loop blocker)
