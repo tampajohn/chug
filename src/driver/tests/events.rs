@@ -314,6 +314,114 @@ fn drive_loop_events_jsonl_records_abort() {
     assert_eq!(lines.last().unwrap()["budget_max"], 1);
 }
 
+/// T343: a response carrying served-model metadata stamps the per-turn
+/// iteration line, and the run's abort line records BOTH names distinctly —
+/// `model` (the requested name, T12's resume hint) vs `model_served` (the
+/// as-served identity the provider reported).
+#[test]
+fn served_model_is_stamped_on_iteration_and_abort_lines() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (_utx, urx) = mpsc::channel::<SlashUpdate>();
+    let controls = Controls::detached();
+    let ctx = ctx_for(
+        &tmp,
+        Mode::Autonomous,
+        &controls,
+        &urx,
+        None,
+        &observ::Sink::Noop,
+    );
+    let mut knobs = knobs_with(1); // die on the iteration budget after one pass
+    let mut response = text_only_response("thinking");
+    response["model"] = json!("glm-4.6"); // the provider's AS-SERVED name
+    let mut llm = ScriptedLlm::new(vec![response]);
+    let mut gate = None;
+    let mut messages = Vec::new();
+    let outcome = drive_loop(
+        &ctx,
+        &mut knobs,
+        &mut llm,
+        &mut gate,
+        &mut messages,
+        None,
+        &mut RecordingSink::default(),
+        &mut McpRegistry::new(tmp.path(), true, None).unwrap(),
+    )
+    .unwrap();
+    assert!(matches!(outcome, DriveOutcome::RunFinished(1)));
+    let lines = events_jsonl(&tmp);
+    let iteration = lines
+        .iter()
+        .find(|l| l["type"] == "iteration")
+        .expect("iteration line");
+    assert_eq!(
+        iteration["model_served"],
+        "glm-4.6",
+        "the as-served name rides the turn's iteration line"
+    );
+    let abort = lines.last().unwrap();
+    assert_eq!(abort["type"], "abort");
+    assert_eq!(
+        abort["model"],
+        "scripted-model",
+        "the requested name stays the resume hint"
+    );
+    assert_eq!(
+        abort["model_served"],
+        "glm-4.6",
+        "the served name rides beside it — recorded distinctly"
+    );
+}
+
+/// T343: a provider silent about the served model leaves `model_served` OFF
+/// both lines — absent, never the requested name copied into the slot.
+#[test]
+fn silent_provider_leaves_the_served_slot_absent() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (_utx, urx) = mpsc::channel::<SlashUpdate>();
+    let controls = Controls::detached();
+    let ctx = ctx_for(
+        &tmp,
+        Mode::Autonomous,
+        &controls,
+        &urx,
+        None,
+        &observ::Sink::Noop,
+    );
+    let mut knobs = knobs_with(1);
+    // The scripted body carries NO model field — the provider-silent shape.
+    let mut llm = ScriptedLlm::new(vec![text_only_response("thinking")]);
+    let mut gate = None;
+    let mut messages = Vec::new();
+    let outcome = drive_loop(
+        &ctx,
+        &mut knobs,
+        &mut llm,
+        &mut gate,
+        &mut messages,
+        None,
+        &mut RecordingSink::default(),
+        &mut McpRegistry::new(tmp.path(), true, None).unwrap(),
+    )
+    .unwrap();
+    assert!(matches!(outcome, DriveOutcome::RunFinished(1)));
+    let lines = events_jsonl(&tmp);
+    for kind in ["iteration", "abort"] {
+        let line = lines
+            .iter()
+            .find(|l| l["type"] == kind)
+            .unwrap_or_else(|| panic!("{kind} line"));
+        assert!(
+            line.get("model_served").is_none(),
+            "{kind}: no served key when the provider reported none: {line}"
+        );
+    }
+    assert!(
+        lines.last().unwrap()["model"] == "scripted-model",
+        "the requested name is untouched"
+    );
+}
+
 /// T12: the Aborted event itself carries the dying model + the exhausted
 /// budget, so sinks can render the resume-with-fallback hint.
 #[test]
@@ -354,6 +462,7 @@ fn budget_abort_event_names_model_and_exhausted_budget() {
                 reason,
                 model,
                 budget,
+                ..
             } => Some((reason.clone(), model.clone(), *budget)),
             _ => None,
         })

@@ -1272,11 +1272,21 @@ pub(crate) fn drive_loop(
             .get("cache_creation_input_tokens")
             .and_then(Value::as_u64)
             .unwrap_or(0);
+        // T343: the response's AS-SERVED model identity — the one fact the
+        // loop owns that names the model that ACTUALLY answered. Two stamps
+        // read it: this turn's `Usage` event (the iteration line), and the
+        // decision_log corpus (`note_served_model` — the deciding-model
+        // field on every record the tools write until the next response). A
+        // provider that reports none clears the stamp: absent stays absent,
+        // never the requested name copied into the served slot.
+        let served = resp.served_model();
+        crate::decisions::note_served_model(served.as_deref());
         sink.emit(Event::Usage {
             input: usage_in,
             output: usage_out,
             cache_read: usage_cache_read,
             cache_creation: usage_cache_creation,
+            model_served: served,
         });
 
         // T38: a response cut off at the output-token ceiling is fresh,
@@ -2228,6 +2238,10 @@ fn abort_exit(
     sink.emit(Event::Aborted {
         reason: reason.to_string(),
         model: model.to_string(),
+        // T343: the AS-SERVED identity of the last response the loop got,
+        // beside the requested name (`model`). None when the provider
+        // reported none or no response ever landed.
+        model_served: crate::decisions::current_served_model(),
         budget,
     });
     if let Some(trace) = ctx.trace {

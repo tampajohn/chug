@@ -96,7 +96,7 @@ const OUTCOME_CHOICES: [&str; 3] = ["landed-clean", "fixed-up", "reverted"];
 /// One decision record. Field order here IS the line's key order (serde
 /// serializes struct fields in declaration order), matching the documented
 /// record shape `{"id","ts","class","subject","inputs","options","choice",
-/// "confidence"}`.
+/// "confidence"}` — plus the T343 optional `model_served` tail key.
 #[derive(Debug, Clone, Serialize)]
 struct DecisionRecord {
     id: String,
@@ -107,7 +107,45 @@ struct DecisionRecord {
     options: String,
     choice: String,
     confidence: f64,
+    /// T343: the AS-SERVED model identity of the turn that made this
+    /// decision — the provider's served-model metadata for the response
+    /// that produced it (the deciding model's TRUE name, not the requested
+    /// one). Absent when the provider reported none: the key is omitted,
+    /// never a fabricated value, never the requested name copied in (that
+    /// conflation is the T343 bug). Additive optional tail key — existing
+    /// record consumers parse unchanged.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    model_served: Option<String>,
 }
+
+// T343: the AS-SERVED model identity of the most recent response on this
+// loop's thread, set by the driver right after each `complete` and read at
+// decision-record build time (tools — `decision_log` included — dispatch on
+// the loop's own thread, so the stamp is the deciding turn's). A
+// thread-local, not a global: concurrent loops in tests (and any future
+// multi-loop process) each keep their own stamp, and a response whose
+// provider reported none clears it — absent stays absent, never the
+// requested name copied into the served slot.
+thread_local! {
+    static SERVED_MODEL: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+}
+
+/// T343: called by the driver after every response — `Some` stamps the
+/// served identity, `None` clears it (the provider reported none this turn;
+/// carrying the stale previous value would mis-attribute later decisions).
+pub(crate) fn note_served_model(served: Option<&str>) {
+    SERVED_MODEL.with(|slot| {
+        *slot.borrow_mut() = served.map(str::to_string);
+    });
+}
+
+/// The stamp a decision record written right now carries. Also read by the
+/// driver's abort tail (same thread): the abort line names the AS-SERVED
+/// identity of the last response the loop got, beside the requested model.
+pub(crate) fn current_served_model() -> Option<String> {
+    SERVED_MODEL.with(|slot| slot.borrow().clone())
+}
+
 
 /// JSON schema for the `decision_log` tool, registered alongside the
 /// builtins.
@@ -240,6 +278,9 @@ pub fn decision_log(cwd: &Path, input: &Value) -> anyhow::Result<ToolResult> {
         options: options.to_string(),
         choice: choice.to_string(),
         confidence,
+        // T343: the deciding turn's as-served identity, stamped at write
+        // time. Absent when the provider reported none (key omitted).
+        model_served: current_served_model(),
     };
 
     append_record(cwd, &record)?;
@@ -491,6 +532,66 @@ mod tests {
     const RECORD_KEYS: [&str; 8] = [
         "id", "ts", "class", "subject", "inputs", "options", "choice", "confidence",
     ];
+
+    // ---------- T343: the served-model stamp ----------
+
+    /// T343: a decision written on a turn whose response carried served-model
+    /// metadata records it — the AS-SERVED name on the record, so the F13
+    /// corpus names the model that ACTUALLY decided.
+    #[test]
+    fn decision_records_carry_the_served_model_stamp() {
+        note_served_model(Some("glm-4.6"));
+        let tmp = TempDir::new().unwrap();
+        let out = dispatch(
+            &tool_ctx(tmp.path()),
+            "decision_log",
+            &sample_input(),
+        );
+        assert!(!out.is_error, "{}", out.content);
+        let records = read_records(tmp.path());
+        assert_eq!(records.len(), 1);
+        assert_eq!(
+            records[0]["model_served"],
+            "glm-4.6",
+            "the as-served identity, not the requested name"
+        );
+        // The additive tail key rides LAST — the documented 8-key shape
+        // stays in front, old consumers parse unchanged.
+        let raw = fs::read_to_string(log_path(tmp.path())).unwrap();
+        assert_key_order(raw.trim_end(), &RECORD_KEYS);
+        assert!(
+            raw.trim_end().ends_with(r#""model_served":"glm-4.6"}"#),
+            "the stamp is the tail key: {raw}"
+        );
+    }
+
+    /// T343: a provider silent about the served model — or a cleared stamp —
+    /// leaves the key OUT of the record. Never the requested name, never a
+    /// fabricated value.
+    #[test]
+    fn decision_records_omit_the_stamp_when_the_provider_is_silent() {
+        note_served_model(Some("glm-4.6"));
+        note_served_model(None);
+        let tmp = TempDir::new().unwrap();
+        let out = dispatch(
+            &tool_ctx(tmp.path()),
+            "decision_log",
+            &sample_input(),
+        );
+        assert!(!out.is_error, "{}", out.content);
+        let records = read_records(tmp.path());
+        assert_eq!(records.len(), 1);
+        assert!(
+            records[0].get("model_served").is_none(),
+            "absent, not fabricated: {:?}",
+            records[0]
+        );
+        let raw = fs::read_to_string(log_path(tmp.path())).unwrap();
+        assert!(
+            !raw.contains("model_served"),
+            "the key is not even present: {raw}"
+        );
+    }
 
     // ---------- schema pin (T22 convention) ----------
 

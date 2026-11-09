@@ -434,6 +434,50 @@ fn a_wired_hook_flips_permission_broker_without_any_socket() {
     );
 }
 
+/// The T343 mirror: the usage emitter wired on Stop (the shape its
+/// wire.py writes) flips `usage_events` with nothing but a settings file —
+/// no log file needed (hook presence, never file presence) — and the
+/// sibling pack's marker never flips the row.
+#[test]
+fn a_wired_usage_hook_flips_usage_events_and_sibling_markers_do_not() {
+    let home = tempfile::tempdir().expect("tempdir");
+    let claude_dir = home.path().join(".claude");
+    std::fs::create_dir_all(claude_dir.join("hooks")).unwrap();
+    std::fs::write(
+        claude_dir.join("settings.json"),
+        r#"{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"/u/.claude/hooks/meta-usage/hook.sh"}]}]}}"#,
+    )
+    .unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_chug"))
+        .arg("capabilities")
+        .current_dir(repo_root())
+        .env_remove("CHUG_DAEMON_SOCK")
+        .env_remove("CHUG_DELEGATE_BIN")
+        .env_remove("CHUG_LAYA_CHECKPOINT")
+        .env("CLAUDE_CONFIG_DIR", &claude_dir) // scoped: the probe's seam
+        .stdin(Stdio::null())
+        .output()
+        .expect("spawn chug capabilities");
+    assert!(out.status.success(), "{}", out_text(&out));
+    let value: Value = serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).unwrap();
+    assert_eq!(
+        value["features"]["usage_events"], true,
+        "the wired hook flips the row (hook presence, not file presence)"
+    );
+    assert_eq!(
+        value["features"]["status_mod"], false,
+        "one row per landing: the T342 row stays off"
+    );
+    assert_eq!(
+        value["features"]["permission_broker"], false,
+        "one row per landing: the T341 row stays off"
+    );
+    assert_eq!(
+        value["contract_version"], "1",
+        "the flip is additive: the contract version is untouched"
+    );
+}
+
 /// The T342 mirror of the broker-flip leg: the status mod wired on its
 /// OWN event (Stop, matcher-less — the shape wire.py writes) flips
 /// `status_mod` without any socket, and leaves the other rows off.

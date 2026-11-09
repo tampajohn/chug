@@ -10,7 +10,7 @@
 //!
 //! Cheap by construction: the document is built from constants and the
 //! package version — no file I/O, no env reads ([`document`] stays pure).
-//! The `chug capabilities` COMMAND adds exactly three bounded probes (T340,
+//! The `chug capabilities` COMMAND adds bounded probes (T340 daemon,
 //! T341, T342): a missing, stale, or unreachable daemon reports
 //! `daemon_status: false` / `lifecycle_events: false` and `versions.daemon:
 //! null`, an unwired (or unreadable) meta-broker hook reports
@@ -201,6 +201,11 @@ pub fn document_json() -> String {
     if probe_status_mod() {
         doc.features.status_mod = FeatureValue::Bool(true);
     }
+    // T343: the usage-events emitter's row — the pack is installed (its
+    // hook is wired) when its command marker shows up in the user settings.
+    if probe_usage_events() {
+        doc.features.usage_events = FeatureValue::Bool(true);
+    }
     render(&doc)
 }
 
@@ -365,17 +370,22 @@ pub fn probe_permission_broker() -> bool {
 /// hook a harness wires by hand still reads installed.
 pub const STATUS_MOD_MARKER: &str = "meta-status";
 
-/// The PURE half of the probe: does this settings document wire the
-/// session-status pack on ANY hook event? The pack is wired on six events
-/// (PreToolUse matched to AskUserQuestion, PostToolUse, UserPromptSubmit,
-/// Notification, Stop, SessionEnd), so — unlike the PreToolUse-only broker
-/// probe — the walk covers every event key, and an entry without a
-/// `matcher` (the non-tool-event shape `wire.py` writes) still counts.
-/// HOOK PRESENCE, never file presence — a status file a harness finds
+/// The hook-command marker the usage-events probe matches (T343): the
+/// pack's directory name (`…/hooks/meta-usage/hook.sh`) — the same string
+/// `install.sh --with-meta-pack` wires and `--uninstall-meta-pack` removes.
+/// Substring, not an exact-path match, so a compatible usage emitter a
+/// harness wires by hand still reads installed.
+pub const USAGE_EVENTS_MARKER: &str = "meta-usage";
+
+/// The PURE half of BOTH all-events pack probes (T342 status mod, T343
+/// usage emitter): does this settings document wire a hook whose command
+/// carries `marker` on ANY hook event? Both packs wire non-tool events
+/// (which carry no `matcher`), so the walk covers every event key. HOOK
+/// PRESENCE, never file presence — a log or status file a harness finds
 /// without the wired hook is a leftover, not an install. Fail-open by
 /// contract: anything unreadable, unparseable, or shaped otherwise than
 /// Claude's hooks schema is `false`.
-pub fn status_mod_installed_from_str(settings_json: &str) -> bool {
+fn hook_pack_installed_from_str(settings_json: &str, marker: &str) -> bool {
     let Ok(parsed) = serde_json::from_str::<Value>(settings_json) else {
         return false;
     };
@@ -392,7 +402,7 @@ pub fn status_mod_installed_from_str(settings_json: &str) -> bool {
                         hooks.iter().any(|hook| {
                             hook.get("command")
                                 .and_then(Value::as_str)
-                                .is_some_and(|command| command.contains(STATUS_MOD_MARKER))
+                                .is_some_and(|command| command.contains(marker))
                         })
                     })
             })
@@ -400,11 +410,43 @@ pub fn status_mod_installed_from_str(settings_json: &str) -> bool {
     })
 }
 
+/// The PURE half of the probe: does this settings document wire the
+/// session-status pack on ANY hook event? The pack is wired on six events
+/// (PreToolUse matched to AskUserQuestion, PostToolUse, UserPromptSubmit,
+/// Notification, Stop, SessionEnd), so — unlike the PreToolUse-only broker
+/// probe — the walk covers every event key, and an entry without a
+/// `matcher` (the non-tool-event shape `wire.py` writes) still counts.
+/// HOOK PRESENCE, never file presence — a status file a harness finds
+/// without the wired hook is a leftover, not an install. Fail-open by
+/// contract: anything unreadable, unparseable, or shaped otherwise than
+/// Claude's hooks schema is `false`.
+pub fn status_mod_installed_from_str(settings_json: &str) -> bool {
+    hook_pack_installed_from_str(settings_json, STATUS_MOD_MARKER)
+}
+
+/// The PURE half of the usage-events probe (T343): does this settings
+/// document wire the meta-usage pack on ANY hook event? The pack wires one
+/// event (Stop, no matcher), and the all-events walk above is the rule
+/// every non-tool pack probe shares. HOOK PRESENCE, never file presence —
+/// a `meta-usage.jsonl` a harness finds without the wired hook is a
+/// leftover log, not an install. Fail-open by contract, same posture as
+/// the broker and status-mod probes.
+pub fn usage_events_installed_from_str(settings_json: &str) -> bool {
+    hook_pack_installed_from_str(settings_json, USAGE_EVENTS_MARKER)
+}
+
 /// The probe behind `status_mod`: the bounded settings read, then the pure
 /// walk above. Same fail-open posture as the broker probe — every failure
 /// mode is `false`, never an error.
 pub fn probe_status_mod() -> bool {
     status_mod_installed_from_str(&read_settings_bounded().unwrap_or_default())
+}
+
+/// The probe behind `usage_events` (T343): the bounded settings read, then
+/// the pure walk above. Same fail-open posture as the other pack probes —
+/// every failure mode is `false`, never an error.
+pub fn probe_usage_events() -> bool {
+    usage_events_installed_from_str(&read_settings_bounded().unwrap_or_default())
 }
 
 /// The reference reader — the consumer rule, executable. Tolerant by
@@ -424,6 +466,43 @@ mod tests {
     use serde_json::json;
 
     // ---------- the producer ----------
+
+    // ---------- T343: the usage-events probe ----------
+
+    /// The pure walk: a settings document wiring the meta-usage hook on ANY
+    /// event reads installed; the same document without it does not.
+    #[test]
+    fn usage_events_probe_matches_the_packs_wiring() {
+        let command = r#"/home/u/.claude/hooks/meta-usage/hook.sh"#;
+        let wired = serde_json::json!({
+            "hooks": {"Stop": [{"hooks": [{"type": "command", "command": command}]}]}
+        })
+        .to_string();
+        assert!(usage_events_installed_from_str(&wired));
+        // The broker/status markers are distinct strings — a sibling pack's
+        // wiring never flips the usage row.
+        let sibling = wired.replace("meta-usage", "meta-status");
+        assert!(!usage_events_installed_from_str(&sibling), "substring-adjacent markers stay distinct");
+        assert!(!usage_events_installed_from_str("{}"));
+        assert!(!usage_events_installed_from_str("not json"));
+        assert!(!usage_events_installed_from_str(
+            r#"{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"echo other"}]}]}}"#
+        ));
+        // HOOK PRESENCE, never file presence: the log file proves nothing.
+        assert!(!usage_events_installed_from_str(r#"{"other":1}"#));
+    }
+
+    /// The producer flips the row only when the pack is wired in the probed
+    /// settings — and the flip is additive (the other five rows untouched).
+    #[test]
+    fn producer_flips_usage_events_when_the_pack_is_wired() {
+        // Default HOME has no wired pack: the row stays false.
+        let doc = document_json();
+        assert!(
+            !doc.contains(r#""usage_events":true"#),
+            "no wired pack → no flip: {doc}"
+        );
+    }
 
     #[test]
     fn document_carries_contract_version_compat_and_versions() {

@@ -1413,6 +1413,7 @@ mod tests {
             reason: "operator abort".into(),
             model: "test-model".into(),
             budget: None,
+            model_served: None,
         });
         assert_eq!(b.status, Status::Aborted);
     }
@@ -1425,12 +1426,14 @@ mod tests {
             output: 10,
             cache_read: 0,
             cache_creation: 0,
+            model_served: None,
         });
         a.apply(Event::Usage {
             input: 250,
             output: 40,
             cache_read: 90,
             cache_creation: 7,
+            model_served: None,
         });
         assert_eq!(a.input_tokens, 250);
         assert_eq!(a.output_tokens, 40);
@@ -1474,6 +1477,7 @@ mod tests {
             output: 4_100,
             cache_read: 0,
             cache_creation: 0,
+            model_served: None,
         });
         let t = a.title();
         assert!(t.starts_with(" chug ─ build the thing ─ model: test-model ─ iter 7/40 ─ "));
@@ -1685,6 +1689,7 @@ mod tests {
             reason: "operator interrupt".into(),
             model: "test-model".into(),
             budget: None,
+            model_served: None,
         });
         f.app.apply(Event::TurnEnd {
             reason: TurnEndReason::Interrupted,
@@ -1709,6 +1714,7 @@ mod tests {
             reason: "iteration budget exceeded".into(),
             model: "test-model".into(),
             budget: Some(crate::events::BudgetExceeded::Iterations { max: 40 }),
+            model_served: None,
         });
         f.app.apply(Event::TurnEnd {
             reason: TurnEndReason::BudgetExceeded,
@@ -1883,6 +1889,7 @@ mod tests {
             reason: "operator interrupt".into(),
             model: "test-model".into(),
             budget: None,
+            model_served: None,
         });
         f.app.apply(Event::TurnEnd {
             reason: TurnEndReason::Interrupted,

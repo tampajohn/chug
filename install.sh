@@ -123,7 +123,7 @@ if [ "$uninstall_meta_pack" = 1 ]; then
   fi
   claude_dir=${CLAUDE_CONFIG_DIR:-$HOME/.claude}
   settings_file=$claude_dir/settings.json
-  for pack in meta-broker meta-status; do
+  for pack in meta-broker meta-status meta-usage; do
     pack_dir=$claude_dir/hooks/$pack
     hook_command=$pack_dir/hook.sh
     checkout_src=$(pack_checkout_src "$pack")
@@ -151,6 +151,16 @@ if [ "$uninstall_meta_pack" = 1 ]; then
   if [ -d "$claude_dir/meta-status" ]; then
     rm -rf "$claude_dir/meta-status" || fail "cannot remove $claude_dir/meta-status — check permissions (this script never elevates)"
     printf 'install.sh: session-status files removed (%s)\n' "$claude_dir/meta-status"
+  fi
+  # The usage log (T343) is deliberately NOT removed: it is an append-only
+  # HISTORICAL RECORD (per-turn cost/model-identity facts a harness reads),
+  # not per-session state — deleting recorded telemetry is data loss, and
+  # the uninstall's "exact reverse" promise covers the packs' footprint
+  # (code + wiring + state files), never recorded data. Readers treat a
+  # log that stops growing as an uninstalled emitter (the contract's
+  # absent posture).
+  if [ -f "$claude_dir/meta-usage.jsonl" ]; then
+    printf 'install.sh: usage log kept (a historical record, not state): %s\n' "$claude_dir/meta-usage.jsonl"
   fi
   exit 0
 fi
@@ -310,7 +320,7 @@ if [ "$with_meta_pack" = 1 ]; then
   command -v python3 >/dev/null 2>&1 || fail "python3 is required for --with-meta-pack (the packs' handlers and settings wiring run on it) — install python3 and retry"
   claude_dir=${CLAUDE_CONFIG_DIR:-$HOME/.claude}
   settings_file=$claude_dir/settings.json
-  for pack in meta-broker meta-status; do
+  for pack in meta-broker meta-status meta-usage; do
     if [ -z "$(pack_checkout_src "$pack")" ] && [ ! -f "$tmp/hooks/$pack/hook.sh" ]; then
       fail "the downloaded release tarball does not carry the meta pack (no hooks/$pack/) — this release predates the hook packs; use a newer release or build from source: git clone \"https://github.com/$REPO\" && cd chug && cargo install --path ."
     fi
@@ -319,7 +329,7 @@ if [ "$with_meta_pack" = 1 ]; then
   # install: the hook itself stays fork-free (a missing dir means skip, so
   # the hot path never pays a mkdir).
   mkdir -p "$claude_dir/hooks" "$claude_dir/meta-status" || fail "cannot create $claude_dir/hooks or $claude_dir/meta-status — check permissions (this script never elevates)"
-  for pack in meta-broker meta-status; do
+  for pack in meta-broker meta-status meta-usage; do
     pack_src=$(pack_checkout_src "$pack")
     pack_src_desc="the working tree ($pack_src)"
     if [ -z "$pack_src" ]; then
@@ -370,13 +380,14 @@ else
 fi
 if [ "$with_meta_pack" = 1 ]; then
   printf '\n'
-  printf '  meta packs: %s/hooks/{meta-broker,meta-status} (hooks wired into %s)\n' "$claude_dir" "$settings_file"
+  printf '  meta packs: %s/hooks/{meta-broker,meta-status,meta-usage} (hooks wired into %s)\n' "$claude_dir" "$settings_file"
   printf '    broker socket: %s/meta-broker.sock  (the harness listens here)\n' "$claude_dir"
   printf '    audit trail:   %s/meta-broker-audit.jsonl  (one JSONL line per brokered decision)\n' "$claude_dir"
   printf '    status files:  %s/meta-status/<session-id>.json  (one typed status doc per session)\n' "$claude_dir"
+  printf '    usage log:     %s/meta-usage.jsonl  (one JSONL usage line per turn)\n' "$claude_dir"
   printf '    behavior: stock permission prompts until a broker answers on the socket; the status mod only ever writes its own files\n'
   printf '    uninstall: install.sh --uninstall-meta-pack\n'
-  printf '    contract:  docs/meta-harness.md (the T341 and T342 sections)\n'
+  printf '    contract:  docs/meta-harness.md (the T341, T342 and T343 sections)\n'
 fi
 printf '  quickstart:\n'
 printf '    chug run --spec SPEC.md --goal "Build X and make the check pass" \\\n'

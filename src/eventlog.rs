@@ -255,27 +255,44 @@ impl EventSink for EventLogSink<'_> {
                 output,
                 cache_read,
                 cache_creation,
+                model_served,
             } => Some(match self.pending_iter.take() {
-                Some(n) => json!({
-                    "type": "iteration",
-                    "ts": now_rfc3339(),
-                    "n": n,
-                    "input_tokens": input,
-                    "output_tokens": output,
-                    // T184: cumulative cache counters from the turn's response
-                    // usage — 0 when the endpoint reported none, so every
-                    // consumer can default on old-shape files the same way.
-                    "cache_read_input_tokens": cache_read,
-                    "cache_creation_input_tokens": cache_creation,
-                }),
-                None => json!({
-                    "type": "usage",
-                    "ts": now_rfc3339(),
-                    "input_tokens": input,
-                    "output_tokens": output,
-                    "cache_read_input_tokens": cache_read,
-                    "cache_creation_input_tokens": cache_creation,
-                }),
+                Some(n) => {
+                    // T343: the as-served model identity rides the iteration
+                    // line it belongs to (the tokens above are that same
+                    // response's usage). A provider that reported none leaves
+                    // the key out — never the requested name in its place.
+                    let mut line = json!({
+                        "type": "iteration",
+                        "ts": now_rfc3339(),
+                        "n": n,
+                        "input_tokens": input,
+                        "output_tokens": output,
+                        // T184: cumulative cache counters from the turn's response
+                        // usage — 0 when the endpoint reported none, so every
+                        // consumer can default on old-shape files the same way.
+                        "cache_read_input_tokens": cache_read,
+                        "cache_creation_input_tokens": cache_creation,
+                    });
+                    if let Some(served) = model_served {
+                        line["model_served"] = json!(served);
+                    }
+                    line
+                }
+                None => {
+                    let mut line = json!({
+                        "type": "usage",
+                        "ts": now_rfc3339(),
+                        "input_tokens": input,
+                        "output_tokens": output,
+                        "cache_read_input_tokens": cache_read,
+                        "cache_creation_input_tokens": cache_creation,
+                    });
+                    if let Some(served) = model_served {
+                        line["model_served"] = json!(served);
+                    }
+                    line
+                }
             }),
             // T184: one line per fired transcript-trim pass (events-sink
             // JSONL only — console/TUI stay silent). `segments_collapsed` is
@@ -431,16 +448,24 @@ impl EventSink for EventLogSink<'_> {
             Event::Aborted {
                 reason,
                 model,
+                model_served,
                 budget,
             } => {
                 // T12: the abort line names the model that died, plus the
-                // exhausted budget on budget deaths.
+                // exhausted budget on budget deaths. T343: the AS-SERVED
+                // identity of the last response the loop got rides beside it
+                // (`model` is the requested name) — both fields recorded
+                // distinctly, and the served key is omitted when the provider
+                // reported none, never filled with the requested name.
                 let mut line = json!({
                     "type": "abort",
                     "ts": now_rfc3339(),
                     "reason": reason,
                     "model": model,
                 });
+                if let Some(served) = model_served {
+                    line["model_served"] = json!(served);
+                }
                 if let Some(budget) = budget {
                     let (kind, max) = match budget {
                         BudgetExceeded::Iterations { max } => ("iterations", u64::from(*max)),
@@ -905,6 +930,7 @@ mod tests {
             output: 56,
             cache_read: 0,
             cache_creation: 0,
+            model_served: None,
         });
         let lines = read_lines(tmp.path());
         assert_eq!(lines.len(), 1);
@@ -935,6 +961,7 @@ mod tests {
             output: 1_243_749,
             cache_read: 7_900_112,
             cache_creation: 640,
+            model_served: None,
         });
         let lines = read_lines(tmp.path());
         assert_eq!(lines.len(), 1);
@@ -1200,6 +1227,7 @@ mod tests {
             reason: "iteration budget exceeded".into(),
             model: "test-model".into(),
             budget: Some(BudgetExceeded::Iterations { max: 40 }),
+            model_served: None,
         });
         let lines = read_lines(tmp.path());
         let types: Vec<&str> = lines.iter().map(|l| l["type"].as_str().unwrap()).collect();
@@ -1234,11 +1262,13 @@ mod tests {
             output: 1,
             cache_read: 0,
             cache_creation: 0,
+            model_served: None,
         });
         sink.emit(Event::Aborted {
             reason: "operator abort".into(),
             model: "m".into(),
             budget: None,
+            model_served: None,
         });
         run_start(tmp.path(), "run", None, "m", 5, 120, 0, crate::api::DEFAULT_MAX_TOKENS, None, None, None, None, None);
     }
@@ -1256,5 +1286,106 @@ mod tests {
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0]["type"], "image_degraded");
         assert!(lines[0]["ts"].as_str().unwrap().ends_with('Z'));
+    }
+
+    // ---------- T343: model-identity stamping ----------
+
+    /// T343: the response's as-served identity rides the iteration line it
+    /// belongs to — a distinct key from nothing (the line never carried a
+    /// model field before; the requested name stays on run_start/abort).
+    #[test]
+    fn sink_stamps_served_model_on_the_iteration_line() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut inner = NullSink;
+        let mut sink = EventLogSink::new(tmp.path(), &mut inner);
+        sink.emit(Event::Iteration {
+            n: 1,
+            max: 40,
+            messages: 3,
+        });
+        sink.emit(Event::Usage {
+            input: 10,
+            output: 2,
+            cache_read: 0,
+            cache_creation: 0,
+            model_served: Some("glm-4.6".into()),
+        });
+        let lines = read_lines(tmp.path());
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0]["type"], "iteration");
+        assert_eq!(
+            lines[0]["model_served"],
+            "glm-4.6",
+            "the as-served name, as the provider reported it"
+        );
+    }
+
+    /// T343: a provider silent about the served model leaves the key OUT —
+    /// absent, never the requested name copied into the slot.
+    #[test]
+    fn sink_omits_served_model_when_the_provider_is_silent() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut inner = NullSink;
+        let mut sink = EventLogSink::new(tmp.path(), &mut inner);
+        sink.emit(Event::Iteration {
+            n: 1,
+            max: 40,
+            messages: 3,
+        });
+        sink.emit(Event::Usage {
+            input: 10,
+            output: 2,
+            cache_read: 0,
+            cache_creation: 0,
+            model_served: None,
+        });
+        let lines = read_lines(tmp.path());
+        assert_eq!(lines.len(), 1);
+        assert!(
+            lines[0].get("model_served").is_none(),
+            "no served key when the provider reported none: {:?}",
+            lines[0]
+        );
+    }
+
+    /// T343: the abort line records BOTH names distinctly — `model` (the
+    /// requested one, T12's resume hint) and `model_served` (the as-served
+    /// identity of the last response the loop got).
+    #[test]
+    fn sink_records_requested_and_served_distinctly_on_the_abort_line() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut inner = NullSink;
+        let mut sink = EventLogSink::new(tmp.path(), &mut inner);
+        sink.emit(Event::Aborted {
+            reason: "token budget exceeded".into(),
+            model: "claude-sonnet-4-5".into(),
+            model_served: Some("glm-4.6".into()),
+            budget: Some(BudgetExceeded::Tokens { max: 1000 }),
+        });
+        let lines = read_lines(tmp.path());
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0]["type"], "abort");
+        assert_eq!(lines[0]["model"], "claude-sonnet-4-5", "requested");
+        assert_eq!(lines[0]["model_served"], "glm-4.6", "served — distinct");
+    }
+
+    /// T343: an abort with no served identity (or a death before any
+    /// response) omits the key — additive; old consumers parse unchanged.
+    #[test]
+    fn sink_omits_served_model_on_the_abort_line_when_absent() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut inner = NullSink;
+        let mut sink = EventLogSink::new(tmp.path(), &mut inner);
+        sink.emit(Event::Aborted {
+            reason: "operator abort".into(),
+            model: "m".into(),
+            model_served: None,
+            budget: None,
+        });
+        let lines = read_lines(tmp.path());
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0]["type"], "abort");
+        assert_eq!(lines[0]["model"], "m");
+        assert!(lines[0].get("model_served").is_none());
     }
 }

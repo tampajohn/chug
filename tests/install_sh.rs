@@ -938,11 +938,19 @@ impl Run {
         for file in ["hook.sh", "wire.py", "README.md"] {
             std::fs::copy(status_src.join(file), status_dst.join(file)).unwrap();
         }
+        // T343: the usage emitter rides the same tarball (three packs now).
+        let usage_src = install_sh().parent().unwrap().join("hooks/meta-usage");
+        let usage_dst = staging_hooks.join("meta-usage");
+        std::fs::create_dir_all(&usage_dst).unwrap();
+        for file in ["hook.sh", "wire.py", "README.md"] {
+            std::fs::copy(usage_src.join(file), usage_dst.join(file)).unwrap();
+        }
         // The tarball-source marker: lets the fixtures PROVE which pack
         // source won (tarball vs repo checkout) instead of implying it —
         // the checkout-wins fixture below asserts this file did NOT land.
         std::fs::write(dst.join("tarball-pack-marker.txt"), "from-the-verified-tarball\n").unwrap();
         std::fs::write(status_dst.join("tarball-pack-marker.txt"), "from-the-verified-tarball\n").unwrap();
+        std::fs::write(usage_dst.join("tarball-pack-marker.txt"), "from-the-verified-tarball\n").unwrap();
         let tarball = self.release_dir.join(format!("chug-{platform}.tar.gz"));
         let ok = Command::new("tar")
             .args(["czf"])
@@ -1071,10 +1079,32 @@ fn with_meta_pack_installs_from_the_tarball_and_wires_additively() {
         3,
         "no duplicate wiring (both packs idempotent)"
     );
-    assert_eq!(settings["hooks"]["Stop"].as_array().unwrap().len(), 1, "no duplicate status wiring");
+    assert_eq!(
+        settings["hooks"]["Stop"].as_array().unwrap().len(),
+        2,
+        "no duplicate wiring: Stop now carries the status mod AND the usage emitter"
+    );
+    assert!(
+        settings["hooks"]["Stop"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e["hooks"][0]["command"].as_str().is_some_and(|c| c.contains("meta-usage"))),
+        "the usage emitter is wired on Stop"
+    );
+    let usage_pack = claude.join("hooks").join("meta-usage");
+    for file in ["hook.sh", "wire.py", "README.md"] {
+        assert!(usage_pack.join(file).is_file(), "{file} landed");
+    }
     // The status dir exists from install (the hook never mkdirs on the
     // hot path).
     assert!(claude.join("meta-status").is_dir(), "the status dir is created at install");
+    // The usage log, by contrast, is NOT created at install: the hook
+    // appends it on the first real turn, and install writes no telemetry.
+    assert!(
+        !claude.join("meta-usage.jsonl").exists(),
+        "no usage log until a turn completes"
+    );
 }
 
 /// --uninstall-meta-pack is the exact reverse: the pack's block removed
@@ -1108,6 +1138,7 @@ fn uninstall_meta_pack_removes_exactly_its_own_block_offline() {
     assert_eq!(entries[0]["hooks"][0]["command"], "echo keep-me", "the foreign hook survives");
     assert!(!claude.join("hooks").join("meta-broker").exists(), "the broker pack dir is gone");
     assert!(!claude.join("hooks").join("meta-status").exists(), "the status pack dir is gone");
+    assert!(!claude.join("hooks").join("meta-usage").exists(), "the usage pack dir is gone");
     for event in ["PostToolUse", "UserPromptSubmit", "Notification", "Stop", "SessionEnd"] {
         assert!(
             settings["hooks"].get(event).is_none(),
@@ -1115,6 +1146,18 @@ fn uninstall_meta_pack_removes_exactly_its_own_block_offline() {
         );
     }
     assert!(!claude.join("meta-status").exists(), "the status files went with the uninstall");
+    // The usage log is a HISTORICAL RECORD, not state: uninstall removes
+    // the emitter (code + wiring), never recorded telemetry.
+    std::fs::write(claude.join("meta-usage.jsonl"), "{}\n").unwrap();
+    assert!(
+        run.run_pack_leg("macos-arm64", &["--uninstall-meta-pack"], &[("CHUG_INSTALL_OS", "FreeBSD")])
+            .status
+            .success()
+    );
+    assert!(
+        claude.join("meta-usage.jsonl").is_file(),
+        "recorded usage survives the uninstall (data, not state)"
+    );
     // Idempotent: a second uninstall is a no-op exit 0.
     let out = run.run_pack_leg(
         "macos-arm64",
