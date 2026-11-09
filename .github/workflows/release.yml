@@ -2,12 +2,24 @@
 #
 # Cutting a `vX.Y.Z` tag (LOOP-SPEC Phase 3 tag doctrine: gates green at
 # HEAD, one tag per wrap max, tags immutable) publishes:
-#   - chug-<platform>.tar.gz + .sha256 for macos-arm64 (macos-14, the
+#   - chug-<platform>.tar.gz + .sha256 for macos-arm64 (macos-15, the
 #     primary), linux-x86_64 and linux-aarch64 (cross-compiled on
 #     ubuntu-22.04 — no native arm64 ubuntu-22.04 runner), built
 #     `--release --locked` against the tagged commit;
 #   - a GitHub Release whose body is scripts/release-notes.sh's mechanical
 #     grouping of the semantic commits since the previous tag.
+#
+# T347 — why this shape: GitHub retired the `macos-14` arm64 hosted label
+# after v0.17.27, and every release run for v0.17.28..v0.21.0 died at runner
+# provisioning in seconds ("The configuration 'macos-14-arm64-us-default' is
+# not supported") — so releases stalled at v0.17.27 while tags kept coming.
+# Three guards now: the arm64 leg runs on `macos-15`; a workflow-level
+# concurrency group with `cancel-in-progress: false` means nothing (a
+# re-tag, a queue pileup, a future mechanism) cancels an in-flight release
+# build; and a `workflow_dispatch` `tag` input is the durable backfill —
+# re-running an old tag's failed run re-uses the OLD workflow file, so only
+# a dispatch from THIS file (checking out `inputs.tag`) can rebuild a tag
+# whose run predates it.
 #
 # Supply-chain hygiene: every `uses:` is pinned by full 40-hex commit SHA
 # (never a moving tag/branch ref). The release is created by the preinstalled
@@ -21,12 +33,31 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "tag to (re)build (T347 backfill, e.g. v0.21.0) — empty falls through to the triggering ref"
+        required: false
+        default: ""
+        type: string
+
+# T347: a release build is never cancelled. One workflow-wide group, and an
+# in-flight run always finishes — the starvation that stopped releases at
+# v0.17.27 must not be re-introduceable by any future mechanism.
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 permissions:
   contents: write
 
 env:
   CARGO_TERM_COLOR: never
+  # T347: the tag being released — `inputs.tag` on a manual backfill
+  # dispatch, else the pushed tag name (on a v* push github.ref_name IS the
+  # tag; on a dispatch it is the triggering BRANCH, so GITHUB_REF cannot
+  # name what is being rebuilt).
+  TAG: ${{ inputs.tag || github.ref_name }}
 
 jobs:
   build:
@@ -35,7 +66,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: macos-14
+          - runner: macos-15
             target: aarch64-apple-darwin
             platform: macos-arm64
           - runner: ubuntu-22.04
@@ -50,6 +81,10 @@ jobs:
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           fetch-depth: 0
+          # T347 backfill: a dispatch from main must build the TAG's commit,
+          # not main's — `inputs.tag` when dispatching, the pushed tag name
+          # on a v* push (where this resolves to the same ref as before).
+          ref: ${{ inputs.tag || github.ref_name }}
 
       - name: rust toolchain (stable + this job's target)
         uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
@@ -58,7 +93,10 @@ jobs:
           targets: ${{ matrix.target }}
 
       - name: tag matches Cargo.toml version (fail before building)
-        run: scripts/check-tag-version.sh "${GITHUB_REF#refs/tags/}"
+        # TAG (workflow env: dispatch input or pushed tag) with the pushed
+        # GITHUB_REF as the fallback — the check always consumes the
+        # event-derived tag, never a hardcoded version.
+        run: scripts/check-tag-version.sh "${TAG:-${GITHUB_REF#refs/tags/}}"
 
       - name: aarch64 cross linker (ubuntu arm64 leg only)
         if: matrix.target == 'aarch64-unknown-linux-gnu'
@@ -66,7 +104,7 @@ jobs:
 
       - name: build (release, locked, with the judge daemon)
         # T204/F15: release binaries ship the baked-in judge daemon (metal on
-        # macos-14, cpu on linux). `cargo build --release --locked` stays a
+        # macos-15, cpu on linux). `cargo build --release --locked` stays a
         # substring (tests/release_workflow.rs pins it); the `daemon` feature
         # adds candle/hf-hub/tokenizers.
         run: cargo build --release --locked --features daemon --target ${{ matrix.target }}
@@ -107,6 +145,9 @@ jobs:
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           fetch-depth: 0
+          # Same T347 backfill ref as the build job: the notes and the
+          # release must describe the tag's history, not main's.
+          ref: ${{ inputs.tag || github.ref_name }}
 
       - name: download all build artifacts
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
@@ -115,8 +156,10 @@ jobs:
           merge-multiple: true
 
       - name: generate release notes (mechanical, since the previous tag)
+        # TAG (workflow env) — on a backfill dispatch GITHUB_REF is the
+        # triggering branch, so the tag must come from the dispatch input.
         run: |
-          scripts/release-notes.sh "${GITHUB_REF#refs/tags/}" > release-notes.md
+          scripts/release-notes.sh "${TAG}" > release-notes.md
           cat release-notes.md
 
       - name: create the GitHub release with the archives attached
@@ -124,8 +167,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
-          gh release create "${GITHUB_REF#refs/tags/}" \
+          gh release create "${TAG}" \
             --verify-tag \
-            --title "chug ${GITHUB_REF#refs/tags/}" \
+            --title "chug ${TAG}" \
             --notes-file release-notes.md \
             dist/chug-*.tar.gz dist/chug-*.tar.gz.sha256

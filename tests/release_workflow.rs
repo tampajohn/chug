@@ -213,7 +213,7 @@ fn every_uses_is_pinned_by_full_40_hex_sha() {
     }
 }
 
-/// (c) The matrix builds exactly the three fleet platforms — macos-14 arm64
+/// (c) The matrix builds exactly the three fleet platforms — macos-15 arm64
 /// (primary), ubuntu-22.04 x86_64, and aarch64 (cross-compiled on
 /// ubuntu-22.04) — each running `cargo build --release --locked --target`.
 #[test]
@@ -253,7 +253,7 @@ fn matrix_covers_the_three_fleet_platforms() {
         );
     }
     for (runner, target, platform) in [
-        ("macos-14", "aarch64-apple-darwin", "macos-arm64"),
+        ("macos-15", "aarch64-apple-darwin", "macos-arm64"),
         ("ubuntu-22.04", "x86_64-unknown-linux-gnu", "linux-x86_64"),
         ("ubuntu-22.04", "aarch64-unknown-linux-gnu", "linux-aarch64"),
     ] {
@@ -427,4 +427,169 @@ fn permissions_and_full_history_checkout() {
              back to the previous tag, which a depth-1 checkout cannot see"
         );
     }
+}
+
+/// (f) T347 — releases can neither be starved nor stranded, and old tags
+/// stay rebuildable. Root cause of the v0.17.28..v0.21.0 stall: GitHub
+/// retired the `macos-14` arm64 hosted label, every release run died at
+/// runner provisioning in seconds, and the publish job skipped — releases
+/// stopped at v0.17.27 while tags kept coming. This pins the three guards:
+/// (1) a workflow-level concurrency group (`release`,
+/// `cancel-in-progress: false`) so no future mechanism cancels an in-flight
+/// release build; (2) the durable backfill trigger (`workflow_dispatch`
+/// with an optional `tag` string input — a re-run of an old tag's run
+/// re-uses the OLD workflow file, so only a dispatch from the CURRENT one
+/// can rebuild a tag whose run predates it); (3) the workflow-level `TAG`
+/// env (the dispatch input, else the pushed tag name) consumed by the notes
+/// and release-create steps; and (4) both checkouts resolving to that same
+/// ref — a dispatch from main must build and publish the TAG's commit,
+/// never main's.
+#[test]
+fn concurrency_guard_and_dispatch_backfill() {
+    let doc = parse(&workflow_text());
+
+    // (1) The starvation guard: one workflow-wide `release` group whose
+    // in-flight run is never cancelled.
+    let concurrency = doc
+        .as_mapping()
+        .expect("top-level mapping")
+        .get(Value::String("concurrency".into()))
+        .expect("the workflow must declare a concurrency group (T347: no \
+                 future mechanism may cancel or starve a release build)")
+        .as_mapping()
+        .expect("`concurrency:` must be a mapping")
+        .clone();
+    assert_eq!(
+        concurrency
+            .get(Value::String("group".into()))
+            .and_then(Value::as_str),
+        Some("release"),
+        "the concurrency group must be the single workflow-wide `release` \
+             group"
+    );
+    assert_eq!(
+        concurrency
+            .get(Value::String("cancel-in-progress".into()))
+            .and_then(Value::as_bool),
+        Some(false),
+        "cancel-in-progress must be false — cancelling the in-flight run is \
+             exactly the starvation that stopped releases at v0.17.27"
+    );
+
+    // (2) The backfill trigger: workflow_dispatch carrying an optional
+    // string `tag` input defaulting to empty (fall through to the
+    // triggering ref — never a hardcoded version).
+    let dispatch = trigger(&doc)
+        .as_mapping()
+        .expect("`on:` must be a mapping")
+        .get(Value::String("workflow_dispatch".into()))
+        .expect("the workflow must accept workflow_dispatch (T347 backfill: \
+                 a re-run of an old tag's run re-uses the OLD workflow file, \
+                 so only a dispatch from the CURRENT one can rebuild a tag \
+                 whose run predates it)")
+        .as_mapping()
+        .expect("`on.workflow_dispatch` must be a mapping (it declares inputs)")
+        .clone();
+    let tag_input = dispatch
+        .get(Value::String("inputs".into()))
+        .expect("workflow_dispatch must declare `inputs:`")
+        .as_mapping()
+        .expect("`inputs:` must be a mapping")
+        .get(Value::String("tag".into()))
+        .expect("workflow_dispatch must accept a `tag` input (the backfill \
+                 handle: which tag to rebuild)")
+        .as_mapping()
+        .expect("the `tag` input must be a mapping")
+        .clone();
+    assert_eq!(
+        tag_input
+            .get(Value::String("type".into()))
+            .and_then(Value::as_str),
+        Some("string"),
+        "the `tag` backfill input must be a string (a tag name like \
+             v0.21.0, not a boolean or choice)"
+    );
+    assert!(
+        tag_input
+            .get(Value::String("default".into()))
+            .map(|d| d.as_str().map(str::is_empty).unwrap_or(true))
+            .unwrap_or(true),
+        "the `tag` input must default to empty — a plain dispatch falls \
+             through to the triggering ref; the version check (req 3) still \
+             fails the run before anything is built or published"
+    );
+
+    // (3) TAG = the dispatch input, else the pushed tag name; the steps
+    // that NAME the release consume it (on a dispatch GITHUB_REF is the
+    // triggering branch, so re-deriving from GITHUB_REF would mislabel the
+    // release).
+    let tag_env = doc
+        .as_mapping()
+        .expect("top-level mapping")
+        .get(Value::String("env".into()))
+        .expect("the workflow must carry a workflow-level `env:` mapping")
+        .as_mapping()
+        .expect("`env:` must be a mapping")
+        .get(Value::String("TAG".into()))
+        .and_then(Value::as_str)
+        .expect("the workflow must define env.TAG — the dispatch alias for \
+                 the tag being released");
+    assert!(
+        tag_env.contains("inputs.tag") && tag_env.contains("github.ref_name"),
+        "env.TAG must resolve to the dispatch input with the pushed tag \
+             name as the fallback — got {tag_env:?}"
+    );
+    let release_steps: Vec<String> = steps(job(&doc, "release"))
+        .iter()
+        .map(step_run)
+        .collect();
+    let notes = release_steps
+        .iter()
+        .find(|r| r.contains("scripts/release-notes.sh"))
+        .expect("the release job generates notes (pinned by (d))");
+    let create = release_steps
+        .iter()
+        .find(|r| r.contains("gh release create"))
+        .expect("the release job creates the release (pinned by (d))");
+    for (what, step) in [("notes", notes), ("create", create)] {
+        assert!(
+            step.contains("${TAG}"),
+            "the {what} step must consume ${{TAG}} (the dispatch input or \
+             the pushed tag name) — on a backfill dispatch GITHUB_REF is \
+             the triggering BRANCH, not the tag being rebuilt"
+        );
+    }
+
+    // (4) Both checkouts resolve to the same ref: on a dispatch from main
+    // this checks out `inputs.tag`, so the binaries, the notes, and the
+    // release all describe the TAG's commit — not main's.
+    let mut backfill_refs = 0usize;
+    for name in ["build", "release"] {
+        for step in steps(job(&doc, name)) {
+            if !step_uses(step).starts_with("actions/checkout") {
+                continue;
+            }
+            backfill_refs += 1;
+            let checkout_ref = step
+                .as_mapping()
+                .and_then(|m| m.get(Value::String("with".into())))
+                .and_then(|w| w.as_mapping().unwrap().get(Value::String("ref".into())).cloned())
+                .and_then(|v| v.as_str().map(str::to_string))
+                .expect("every checkout must pin its `ref:` — the backfill \
+                         dispatch checks out inputs.tag, not the triggering \
+                         branch");
+            assert!(
+                checkout_ref.contains("inputs.tag")
+                    && checkout_ref.contains("github.ref_name"),
+                "checkout ref must resolve to the backfill tag or the pushed \
+                 tag name — got {checkout_ref:?}"
+            );
+        }
+    }
+    assert_eq!(
+        backfill_refs, 2,
+        "both jobs (build + release) must honor the backfill ref — a \
+         release job still on main would generate notes from the wrong \
+         history"
+    );
 }
