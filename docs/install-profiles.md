@@ -94,6 +94,21 @@ set -a; . ~/.chug/profile.env; set +a   # then translate per the table, or use l
 
 (One-off runs are the folklore path; the supervisor is the supported one.)
 
+On macOS, install.sh can also wire the launchd jobs so the loop survives a
+reboot instead of relying on the operator's plist dance. `install.sh
+--with-daemon` installs the chugd job (`scripts/com.tampajohn.chugd.plist`
+into `~/Library/LaunchAgents`, bootstrapped in the gui domain; an
+already-bootstrapped job is kickstarted on re-runs, so the leg is
+idempotent) and prints the socket path (`~/.chug/daemon.sock`) with the
+fail-open note: the risk gate fails OPEN — an unreachable daemon never
+blocks a run, it only costs the semantic judge layer. `install.sh
+--with-loopd` is the same shape for the loop supervisor, but ONLY inside a
+repo whose loop scaffold exists (`chug loop init` has run): it writes a
+`com.tampajohn.chug-loopd.plist` whose `ProgramArguments` run the installed
+binary's `chug loop run` against THAT repo (logs under its `.chug/loopd/`);
+elsewhere it prints the init hint and skips. Both legs are macOS-only — on
+Linux they print the systemd TODO note and continue.
+
 ## Example
 
 `profiles/local-openai-compat.env` in the repo — copy it to
