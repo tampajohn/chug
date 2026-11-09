@@ -21,6 +21,7 @@ exports EXACTLY these keys — nothing else is profile-owned:
 | `CHUG_MODEL_REASONING` | yes | `LOOP_ORCH_MODEL` — the fresh-eval / judgment orchestrator model |
 | `CHUG_MODEL_CODING` | yes | `LOOP_ROUTINE_MODEL` — the routine queue-working (coding) model |
 | `CHUG_LANGFUSE_HOST`<br>`CHUG_LANGFUSE_PUBLIC_KEY`<br>`CHUG_LANGFUSE_SECRET_KEY` | optional | `LANGFUSE_HOST` / `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` — Langfuse tracing (all three or none; see SPEC-8) |
+| `CHUG_AUTO_UPDATE` | optional | the opt-in self-update flag (T352): `1` makes loopd run `chug update --check` once per day BETWEEN cycles and apply an available update there (never mid-cycle); unset/`0` keeps today's no-auto-update behavior |
 
 Model values are FULL provider-routed ids exactly as `--model` takes them
 (there is no alias layer — whatever you write goes verbatim into the API

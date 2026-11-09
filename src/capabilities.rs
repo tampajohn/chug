@@ -54,13 +54,16 @@ pub const COMPAT_PROMISE: &str =
     "consumers must treat unknown features as false and ignore unknown keys";
 
 /// The feature registry, in contract order (the wire order is serde's —
-/// sorted — and consumers must not depend on key order anyway).
-pub const FEATURE_KEYS: [&str; 5] = [
+/// sorted — and consumers must not depend on key order anyway). T352
+/// appends `auto_update`: `chug update` exists, compiled into every build
+/// of this binary.
+pub const FEATURE_KEYS: [&str; 6] = [
     "daemon_status",
     "lifecycle_events",
     "permission_broker",
     "usage_events",
     "status_mod",
+    "auto_update",
 ];
 
 /// One feature's value in a capabilities document: `false` until the
@@ -112,6 +115,12 @@ pub struct Features {
     pub usage_events: FeatureValue,
     #[serde(default)]
     pub status_mod: FeatureValue,
+    /// T352: `chug update` exists — the self-update surface (version-floor
+    /// protection + the stale-release source-build fallback) is compiled
+    /// into every build of this binary, so the producer flips this row
+    /// unconditionally (no probe: the feature is the binary itself).
+    #[serde(default)]
+    pub auto_update: FeatureValue,
 }
 
 impl Features {
@@ -125,6 +134,7 @@ impl Features {
             "permission_broker" => self.permission_broker.is_shipped(),
             "usage_events" => self.usage_events.is_shipped(),
             "status_mod" => self.status_mod.is_shipped(),
+            "auto_update" => self.auto_update.is_shipped(),
             // The stability rule, as code: unknown features read as false.
             _ => false,
         }
@@ -206,6 +216,10 @@ pub fn document_json() -> String {
     if probe_usage_events() {
         doc.features.usage_events = FeatureValue::Bool(true);
     }
+    // T352: the self-update surface is the binary itself — unconditional,
+    // no probe. Update decisions (old/new + contract_version) ride the
+    // `chug update` output so harnesses can plan around feature changes.
+    doc.features.auto_update = FeatureValue::Bool(true);
     render(&doc)
 }
 
@@ -517,10 +531,11 @@ mod tests {
         assert_eq!(doc.versions.daemon, None, "no self-report in T339");
     }
 
-    /// T339 posture: all five features off, and the registry is exactly
-    /// the five spec'd keys — no more, no fewer.
+    /// T339 posture + T352's row: `document()` (the pure producer, before
+    /// the probes merge) keeps every feature off, and the registry is
+    /// exactly the spec'd keys — no more, no fewer.
     #[test]
-    fn all_features_are_false_and_the_registry_is_exactly_the_five_keys() {
+    fn all_features_are_false_and_the_registry_is_exactly_the_contract_keys() {
         let doc = document();
         let rendered: serde_json::Value = serde_json::to_value(&doc).unwrap();
         let features = rendered["features"].as_object().expect("features object");

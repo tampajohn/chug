@@ -82,6 +82,13 @@ PROFILE_ENV_FILE="${CHUG_PROFILE_ENV:-$HOME/.chug/profile.env}"
 . "$(dirname "$0")/scripts/loopd_profile_loader.sh"
 loopd_load_profile
 
+# T352 — the opt-in self-update check (CHUG_AUTO_UPDATE=1 in the profile).
+# The fragment defines loopd_auto_update_check: the daily `chug update
+# --check` + the between-cycles apply, best-effort end to end (an update
+# check must never gate a cycle). Resolved relative to THIS script's own
+# path, never the cwd.
+. "$(dirname "$0")/scripts/loopd_auto_update.sh"
+
 # T81 — per-phase model routing (operator-approved 2026-09-26). The
 # ORCHESTRATOR's model is per-cycle and the switch is the freshness rule —
 # never model judgment: when the queue holds `todo` rows AND EVALUATION.md
@@ -1064,6 +1071,15 @@ case "${1:-run}" in
     echo "$(ok_sleep_seconds) $(empty_wrap_streak)"
     exit 0
     ;;
+  update-check)
+    # T352: run the auto-update check ONCE, now — the same call the while
+    # body makes between cycles (the routing/sleep-ok probe pattern: the
+    # operator's and the tests' behavioral surface for the opt-in
+    # CHUG_AUTO_UPDATE=1 self-update). Writes what the real call writes
+    # (the cadence latch + the log lines); launches nothing.
+    loopd_auto_update_check
+    exit 0
+    ;;
   predicate)
     # T258: print the eval-cycle gate decision for a WOULD-BE eval cycle,
     # launching nothing and writing nothing — the routing/sleep-ok probe
@@ -1291,6 +1307,12 @@ while [ ! -f "$STOP" ]; do
     echo "$(ts) LOOPD_MAX_LOOPS=$LOOPD_MAX_LOOPS_N reached — self-terminating after $((loops - 1)) main-loop iterations (T254 fixture-leak fail-safe)" >> "$LOG"
     exit 0
   fi
+  # T352 — the opt-in self-update check, BETWEEN cycles: this sits after
+  # the max-loops bound and BEFORE the single-driver probe and any cycle
+  # launch, so no cycle is running here and the apply can never interleave
+  # with one (the cycle-id capture in tests/update_cmd.rs asserts it).
+  # Best-effort end to end — the function returns 0 on every leg.
+  loopd_auto_update_check
   # Single-driver: never overlap another LOOP-SPEC run (e.g. a manual one).
   # ps, never pgrep: on this host pgrep persistently fails to enumerate the
   # launchd-spawned loopd tree — pgrep -f/-l/-P all miss a live in-tree

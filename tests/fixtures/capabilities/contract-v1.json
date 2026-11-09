@@ -6,7 +6,8 @@
     "lifecycle_events": false,
     "permission_broker": false,
     "usage_events": false,
-    "status_mod": false
+    "status_mod": false,
+    "auto_update": true
   },
   "versions": {
     "chug": "$CHUG_VERSION",

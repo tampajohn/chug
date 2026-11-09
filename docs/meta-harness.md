@@ -77,8 +77,8 @@ rule 2.
 
 ## Feature keys
 
-All five are `false` today. Each flips on when its row lands; the "shipped
-value" column is the value it carries once available.
+All rows before T352 were `false` until landed; each flips on when its row
+lands. The "shipped value" column is the value it carries once available.
 
 | key | today | shipped value | landed by | what it reports when shipped |
 | --- | --- | --- | --- | --- |
@@ -87,6 +87,7 @@ value" column is the value it carries once available.
 | `permission_broker` | `false` | boolean | T341 | the opt-in permission-broker hook pack is installed (detected by hook presence, not socket presence) |
 | `usage_events` | `false` | boolean | T343 | the per-turn usage-emitter hook pack is installed |
 | `status_mod` | `false` | boolean | T342 | the session-status mod hook pack is installed |
+| `auto_update` | `true` | boolean | T352 | `chug update` exists (self-update with version-floor protection + the stale-release source-build fallback) — compiled into every build, no probe |
 
 ## The typed status enum
 
