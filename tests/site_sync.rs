@@ -712,7 +712,10 @@ fn t99_timeline_bootstrap_entries_dedupe_and_audit() {
     assert!(!html.contains("ghost item"), "unverifiable ref must not render");
     assert!(String::from_utf8_lossy(&out.stderr).contains("T9"), "audit warning missing");
     // fallback: T10 cites 0badc0de then the hand-cited seed ref -> deduped away
-    assert!(!html.contains("fallback item"), "fallback row must dedupe against hand entry");
+    // (scoped to the timeline: the T349 shipped feed is a different region
+    // with a different doctrine — it renders every done row whose cited ref
+    // verifies, dedupe-free, so the page CAN contain the row's title)
+    assert!(!tl.contains("fallback item"), "fallback row must dedupe against hand entry");
     // title truncation at 100 bytes with an ellipsis
     let t11 = &tl[i11.saturating_sub(400)..(i11 + 40).min(tl.len())];
     assert!(t11.contains("…"), "long title truncated: {t11}");
@@ -3371,4 +3374,316 @@ fn t331_missing_risk_gate_source_renders_placeholder_and_sync_succeeds() {
         d2.contains("<li><a href=\"#risk-gate\">Why it's safe to let the loop write code</a></li>"),
         "the index label follows the restored source"
     );
+}
+
+// --- T349 — the SHIPPED feed: the site renders shipped work straight from
+// the TODO.md done record, and FEATURES.md's flagship backfill parses through
+// the grid's own extractor legs ----------------------------------------------
+
+/// T349 chug fixture: the base files the sync's facts need, then `n` item
+/// commits at staggered dates (the feed's date source). Returns the commit
+/// refs newest-last in commit order.
+fn chug_fixture_t349_base(dir: &Path) {
+    std::fs::create_dir_all(dir.join(".chug/loopd")).unwrap();
+    std::fs::write(dir.join("EVALUATION.md"), "# EVALUATION — fixture\n").unwrap();
+    std::fs::write(dir.join("TODO.md"), "# TODO\n").unwrap();
+    std::fs::write(
+        dir.join("FEATURES.md"),
+        "# FEATURES\n\n| # | Feature | What | Benchmark |\n|---|---------|------|-----------|\n| F1 | **delegate collect** | Structured child result. | Claude Code Task |\n",
+    )
+    .unwrap();
+    std::fs::write(dir.join(".chug/loopd/loopd.log"), "2026-09-19T00:00:00Z cycle OK: seed\n").unwrap();
+    commit(dir, "seed: fixture base", None, "2026-09-19", false);
+}
+
+fn chug_fixture_t349_items(dir: &Path, n: usize, day0: usize) -> Vec<String> {
+    let mut refs = Vec::new();
+    for i in 0..n {
+        let day = format!("2026-09-{:02}", day0 + i);
+        std::fs::write(dir.join(format!("item{i}.txt")), format!("item {i}\n")).unwrap();
+        refs.push(commit(dir, &format!("t{}: feed item {}", i + 1, i + 1), None, &day, true));
+    }
+    refs
+}
+
+/// T349 site fixture: the T241 anchors (style/nav/get-started, so docs.html
+/// can render) + a feature grid (the SHIPPED feed renders directly above it)
+/// + the STATS markers.
+fn site_fixture_t349(dir: &Path) {
+    let page = concat!(
+        "<html><head><style>body{color:#eee}</style></head><body>\n",
+        "<nav class=\"nav\"><div class=\"wrap nav-in\">\n",
+        "  <a class=\"brand\" href=\"https://chug.sh\">chug<b>_</b></a>\n",
+        "  <div class=\"nav-links\">\n",
+        "    <a href=\"https://github.com/tampajohn/chug\">source</a>\n",
+        "  </div>\n",
+        "</div></nav>\n",
+        "<section id=\"get-started\"><div class=\"wrap\"><p>install</p></div></section>\n",
+        "<section id=\"features\"><div class=\"wrap\">\n",
+        "  <div class=\"grid\">\n",
+        "  <div class=\"card\">\n",
+        "    <h3><span>tools</span> x4</h3>\n",
+        "    <p>read_file and friends.</p>\n",
+        "  </div>\n",
+        "  </div>\n",
+        "</div></section>\n",
+        "<!-- STATS:BEGIN -->\n<div class=\"stats\"><b>stale</b></div>\n<!-- STATS:END -->\n",
+        "</body></html>\n",
+    );
+    std::fs::write(dir.join("index.html"), page).unwrap();
+    commit(dir, "initial page", None, "2026-09-18", false);
+}
+
+/// `t349_done_row` — a done row citing `ref` ("" = undated: no hex in notes),
+/// `(title, spec)` empty cells = the malformed shape the feed must skip.
+fn t349_done_row(id: &str, title: &str, spec: &str, r: &str) -> String {
+    let notes = if r.is_empty() {
+        "done — no ref cited".to_string()
+    } else {
+        format!("done {r} — landed")
+    };
+    format!("| {id} | {title} | {spec} | 1 | done | {notes} |\n")
+}
+
+#[test]
+fn t349_shipped_feed_renders_newest_first_with_spec_links() {
+    let f = fixture();
+    chug_fixture_t349_base(&f.chug);
+    // three verifiable commits, oldest first: 09-20, 09-21, 09-22
+    let refs = chug_fixture_t349_items(&f.chug, 3, 20);
+    let mut todo = String::from(
+        "# TODO\n\n| id | title | spec | pri | status | notes |\n|----|-------|------|-----|--------|-------|\n",
+    );
+    // feed order must be newest-first: T34 (09-22) above T33 (09-21) above T32
+    todo.push_str(&t349_done_row("T34", "gamma item", "specs/gamma.md", &refs[2]));
+    todo.push_str(&t349_done_row("T33", "beta item", "specs/beta.md", &refs[1]));
+    todo.push_str(&t349_done_row("T32", "alpha item", "specs/alpha.md", &refs[0]));
+    // a malformed done row (empty spec cell): skipped, named count, not fatal
+    todo.push_str(&t349_done_row("T31", "broken row", "", &refs[0]));
+    // a done row citing no verifiable ref: skipped by the timeline's own
+    // req-5 discipline (a git-derived date is verified or the row does not
+    // render), with a named count — never fatal
+    todo.push_str(&t349_done_row("T30", "unref item", "specs/unref.md", ""));
+    // a pending row: not shipped, absent from the feed
+    todo.push_str("| T5 | pending item | specs/pending.md | 2 | todo | x |\n");
+    std::fs::write(f.chug.join("TODO.md"), todo).unwrap();
+    site_fixture_t349(&f.site);   // writes + commits the page
+
+    let out = run_sync(&f, true);
+    assert!(out.status.success(), "sync failed: {}", String::from_utf8_lossy(&out.stderr));
+    let page = page(&f);
+    // the region bootstrapped directly above the grid (never inside it), with
+    // exactly one marker pair
+    assert_eq!(count(&page, "<!-- SHIPPED:BEGIN -->"), 1);
+    assert_eq!(count(&page, "<!-- SHIPPED:END -->"), 1);
+    let grid_at = page.find("<div class=\"grid\">").unwrap();
+    let ship_at = page.find("<!-- SHIPPED:BEGIN -->").unwrap();
+    assert!(ship_at < grid_at, "the feed renders above the grid container");
+    let ship = region(&page, "SHIPPED");
+    // newest first
+    let t34 = ship.find("<code>T34</code>").expect("newest item rendered");
+    let t33 = ship.find("<code>T33</code>").expect("middle item rendered");
+    let t32 = ship.find("<code>T32</code>").expect("oldest item rendered");
+    assert!(t34 < t33 && t33 < t32, "newest-first ordering: {ship}");
+    // dates + whole titles + spec links
+    assert!(ship.contains("<li>2026-09-22 · <code>T34</code> · <a href=\"https://github.com/tampajohn/chug/blob/main/specs/gamma.md\">gamma item</a></li>"), "item line shape: {ship}");
+    assert!(ship.contains("<li>2026-09-21 · <code>T33</code> · <a href=\"https://github.com/tampajohn/chug/blob/main/specs/beta.md\">beta item</a></li>"));
+    assert!(ship.contains("<li>2026-09-20 · <code>T32</code> · <a href=\"https://github.com/tampajohn/chug/blob/main/specs/alpha.md\">alpha item</a></li>"));
+    // the malformed row is absent; the pending row is absent
+    assert!(!ship.contains("T31"), "malformed row skipped: {ship}");
+    assert!(!ship.contains("T5"), "pending row not shipped: {ship}");
+    // the unref'd row is skipped too (named, like the timeline's audit)
+    assert!(!ship.contains("T30"), "unverifiable ref must not render: {ship}");
+    assert!(String::from_utf8_lossy(&out.stderr).contains("1 done row(s) cite no verifiable commit ref"), "named unref skip: {}", String::from_utf8_lossy(&out.stderr));
+    // the T349 grid-annotation rule, exactly once
+    assert_eq!(count(&ship, "The curated feature grid below is the flagship list; this feed is the complete shipped record."), 1);
+    // the malformed skip is named, never fatal
+    assert!(String::from_utf8_lossy(&out.stderr).contains("1 malformed done row"), "named skip count: {}", String::from_utf8_lossy(&out.stderr));
+    // the bootstrap + the sync commit both landed
+    assert!(all_commit_subjects(&f).iter().any(|m| m.contains("site: SHIPPED region markers bootstrap (T349)")));
+    let bodies = git(&f.site, &["log", "--format=%B"], None);
+    let bodies = String::from_utf8_lossy(&bodies.stdout);
+    assert!(bodies.contains("shipped: ok (3 done rows, 1 malformed skipped)"), "commit records the feed state: {bodies}");
+    // idempotent: a second sync changes nothing
+    let out2 = run_sync(&f, true);
+    assert!(out2.status.success());
+    assert!(String::from_utf8_lossy(&out2.stdout).contains("page unchanged") || String::from_utf8_lossy(&out2.stdout).contains("nothing to commit"), "feed is deterministic: {}", String::from_utf8_lossy(&out2.stdout));
+}
+
+#[test]
+fn t349_feed_freshness_flip_appears_without_hand_edits() {
+    let f = fixture();
+    chug_fixture_t349_base(&f.chug);
+    let refs = chug_fixture_t349_items(&f.chug, 2, 20);
+    // one shipped row + one PENDING row the loop will flip done later
+    let mut todo = String::from(
+        "# TODO\n\n| id | title | spec | pri | status | notes |\n|----|-------|------|-----|--------|-------|\n",
+    );
+    todo.push_str(&t349_done_row("T33", "older item", "specs/older.md", &refs[0]));
+    todo.push_str("| T50 | fresh item | specs/fresh.md | 1 | todo | x |\n");
+    std::fs::write(f.chug.join("TODO.md"), todo).unwrap();
+    site_fixture_t349(&f.site);   // writes + commits the page
+
+    let out1 = run_sync(&f, true);
+    assert!(out1.status.success());
+    let p1 = region(&page(&f), "SHIPPED");
+    assert!(!p1.contains("T50"), "pending row absent before the flip: {p1}");
+
+    // the flip: operator/loop edits TODO.md's status cell and commits the row
+    // (the standard orchestrator flip). The SITE page is never touched.
+    let flipped = format!(
+        "# TODO\n\n| id | title | spec | pri | status | notes |\n|----|-------|------|-----|--------|-------|\n| T33 | older item | specs/older.md | 1 | done | done {} — landed |\n| T50 | fresh item | specs/fresh.md | 1 | done | done {} — landed |\n",
+        refs[0], refs[1]
+    );
+    std::fs::write(f.chug.join("TODO.md"), flipped).unwrap();
+    commit(&f.chug, "flip t50: fresh item shipped", None, "2026-09-21", false);
+
+    // no hand edit anywhere on the site: the NEXT sync alone picks the flip up
+    let out2 = run_sync(&f, true);
+    assert!(out2.status.success());
+    let p2 = region(&page(&f), "SHIPPED");
+    let t50 = p2.find("<code>T50</code>").expect("the flipped item renders at the next sync — the acceptance test");
+    let t33 = p2.find("<code>T33</code>").expect("older item still rendered");
+    assert!(t50 < t33, "the newly flipped item is the newest: {p2}");
+    assert!(p2.contains("<li>2026-09-21 · <code>T50</code> · <a href=\"https://github.com/tampajohn/chug/blob/main/specs/fresh.md\">fresh item</a></li>"), "fresh item with its date + spec link: {p2}");
+    assert!(String::from_utf8_lossy(&out2.stdout).contains("shipped ok"), "state recorded: {}", String::from_utf8_lossy(&out2.stdout));
+}
+
+#[test]
+fn t349_empty_done_set_renders_placeholder() {
+    let f = fixture();
+    chug_fixture_t349_base(&f.chug);
+    chug_fixture_t349_items(&f.chug, 1, 20);
+    // every row pending — nothing shipped yet
+    std::fs::write(
+        f.chug.join("TODO.md"),
+        "# TODO\n\n| id | title | spec | pri | status | notes |\n|----|-------|------|-----|--------|-------|\n| T5 | pending item | specs/pending.md | 2 | todo | x |\n",
+    )
+    .unwrap();
+    site_fixture_t349(&f.site);   // writes + commits the page
+
+    let out = run_sync(&f, true);
+    assert!(out.status.success());
+    let ship = region(&page(&f), "SHIPPED");
+    assert!(ship.contains("No shipped items recorded yet — TODO.md has no done rows; the feed fills in as the loop flips rows done."), "explicit empty shape: {ship}");
+    assert!(!ship.contains("<li>"), "no item lines in the placeholder: {ship}");
+    assert!(ship.contains("The curated feature grid below is the flagship list; this feed is the complete shipped record."), "the annotation rule holds on the empty shape");
+    assert!(String::from_utf8_lossy(&out.stdout).contains("shipped placeholder"), "state recorded: {}", String::from_utf8_lossy(&out.stdout));
+    let bodies = git(&f.site, &["log", "--format=%B"], None);
+    let bodies = String::from_utf8_lossy(&bodies.stdout);
+    assert!(bodies.contains("shipped: placeholder (0 done rows, 0 malformed skipped)"), "commit records the empty state: {bodies}");
+}
+
+#[test]
+fn t349_feed_caps_at_20_and_collapses_to_the_full_record() {
+    let f = fixture();
+    chug_fixture_t349_base(&f.chug);
+    // 22 shipped items at 22 distinct dates: the newest 20 render in full,
+    // the older 2 collapse to one named line
+    let refs = chug_fixture_t349_items(&f.chug, 22, 1);
+    let mut todo = String::from(
+        "# TODO\n\n| id | title | spec | pri | status | notes |\n|----|-------|------|-----|--------|-------|\n",
+    );
+    for (i, r) in refs.iter().enumerate() {
+        todo.push_str(&t349_done_row(&format!("T{}", i + 1), &format!("cap item {}", i + 1), &format!("specs/c{}.md", i + 1), r));
+    }
+    std::fs::write(f.chug.join("TODO.md"), todo).unwrap();
+    site_fixture_t349(&f.site);   // writes + commits the page
+
+    let out = run_sync(&f, true);
+    assert!(out.status.success());
+    let ship = region(&page(&f), "SHIPPED");
+    assert_eq!(count(&ship, "<li>"), 21, "20 items + the one collapse line: {ship}");
+    // newest first across the cap: T22 (2026-09-22) leads
+    let t22 = ship.find("<code>T22</code>").unwrap();
+    let t3 = ship.find("<code>T3</code>").unwrap();
+    assert!(t22 < t3, "newest-first across the cap boundary");
+    assert!(ship.contains("…and 2 earlier shipped items"), "the collapse is named with its count: {ship}");
+    // docs.html was not rendered (no runbooks) — the collapse must NOT link a
+    // page that does not exist; the pointer names the source instead
+    assert!(ship.contains("the full record lives in TODO.md"), "no dangling docs link: {ship}");
+    assert!(!ship.contains("docs.html#shipped"), "never a link to a page that is not rendered: {ship}");
+    assert!(String::from_utf8_lossy(&out.stdout).contains("shipped ok"), "state recorded: {}", String::from_utf8_lossy(&out.stdout));
+}
+
+#[test]
+fn t349_features_backfill_parses_the_flagship_rows() {
+    let f = fixture();
+    chug_fixture_t349_base(&f.chug);
+    let refs = chug_fixture_t349_items(&f.chug, 2, 20);
+    let mut todo = String::from(
+        "# TODO\n\n| id | title | spec | pri | status | notes |\n|----|-------|------|-----|--------|-------|\n",
+    );
+    todo.push_str(&t349_done_row("T34", "gamma item", "specs/gamma.md", &refs[1]));
+    todo.push_str(&t349_done_row("T33", "beta item", "specs/beta.md", &refs[0]));
+    std::fs::write(f.chug.join("TODO.md"), todo).unwrap();
+    // the REAL backfilled FEATURES.md (this repo's own, copied at test time)
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    std::fs::copy(root.join("FEATURES.md"), f.chug.join("FEATURES.md")).unwrap();
+    site_fixture_t349(&f.site);   // writes + commits the page
+
+    let out = run_sync(&f, true);
+    assert!(out.status.success(), "sync failed: {}", String::from_utf8_lossy(&out.stderr));
+    let ft = region(&page(&f), "FEATURES");
+    // same-or-more cards: the 15 pre-existing F-rows plus the 7 backfilled ones
+    // all synthesize (>= 22 F-cards + the fixture's own card)
+    assert!(count(&ft, "<div class=\"card\">") >= 23, "the backfill adds cards, none are lost: {}", count(&ft, "<div class=\"card\">"));
+    // every backfilled flagship renders as a landed card, name cell parsed
+    // per the existing extractor legs (text before the em-dash, LANDED badge)
+    for (id, name) in [
+        ("F17", "Dormant-mode cost program"),
+        ("F18", "Ideation lane"),
+        ("F19", "Loop subcommand"),
+        ("F20", "Install profiles"),
+        ("F21", "Decision-model providers: local Laya + proxy Jev"),
+        ("F22", "Meta-harness pack"),
+        ("F23", "Adopt + risk-gate docs surface"),
+    ] {
+        let card = format!("<h3><span>{name}</span><i class=\"q\">landed</i></h3>");
+        assert!(ft.contains(&card), "{id} renders as a landed card: {ft}");
+    }
+    // the what cells parse per the existing legs: backticks -> <code>, no raw
+    // pipes ever phantom-splitting a cell
+    assert!(ft.contains("<code>chug loop</code>"), "F19's backtick cell converts: {ft}");
+    assert!(ft.contains("<code>CHUG_DECISION_PROVIDER=auto,local,proxy</code>"), "F21's backtick cell converts: {ft}");
+    // the shipped feed rides the same page (2 done rows, uncapped below 20)
+    let ship = region(&page(&f), "SHIPPED");
+    assert!(ship.contains("<code>T34</code>") && ship.contains("<code>T33</code>"), "the feed coexists with the grid: {ship}");
+}
+
+#[test]
+fn t349_docs_page_gains_the_full_shipped_list() {
+    let f = fixture();
+    chug_fixture_t349_base(&f.chug);
+    let refs = chug_fixture_t349_items(&f.chug, 22, 1);
+    let mut todo = String::from(
+        "# TODO\n\n| id | title | spec | pri | status | notes |\n|----|-------|------|-----|--------|-------|\n",
+    );
+    for (i, r) in refs.iter().enumerate() {
+        todo.push_str(&t349_done_row(&format!("T{}", i + 1), &format!("cap item {}", i + 1), &format!("specs/c{}.md", i + 1), r));
+    }
+    std::fs::write(f.chug.join("TODO.md"), todo).unwrap();
+    chug_fixture_t241_runbooks(&f.chug, false);   // writes + commits the corpus
+    site_fixture_t349(&f.site);   // writes + commits the page
+
+    let out = run_sync(&f, true);
+    assert!(out.status.success());
+    let d = docs(&f);
+    // the slot + anchor exist, after the risk-gate story and before the cost table
+    let rg = d.find("id=\"risk-gate\"").unwrap();
+    let sh = d.find("id=\"shipped\"").unwrap();
+    assert!(rg < sh, "the shipped feed sits after the risk-gate story");
+    if let Some(co) = d.find("id=\"cost\"") {
+        assert!(sh < co, "the shipped feed sits before the cost table");
+    } // no cost section on a fresh fixture (no collector data) — absent is fine
+    assert!(d.contains("<li><a href=\"#shipped\">Shipped — the complete record</a></li>"), "on-this-page entry");
+    // the FULL list: the docs page is uncapped — all 22 items render
+    let sec = docs_section(&d, "shipped");
+    assert_eq!(count(&sec, "<li>"), 22, "the docs feed is the complete record: {sec}");
+    assert!(sec.contains("<li>2026-09-22 · <code>T22</code> · <a href=\"https://github.com/tampajohn/chug/blob/main/specs/c22.md\">cap item 22</a></li>"), "newest-first with dates + spec links: {sec}");
+    // while the home page's feed caps at 20 + collapses — pointing at the docs
+    // page, which exists now (rendered this same sync)
+    let ship = region(&page(&f), "SHIPPED");
+    assert_eq!(count(&ship, "<li>"), 21);
+    assert!(ship.contains("the full record on the <a href=\"https://chug.sh/docs.html#shipped\">docs page</a>"), "the collapse links the live docs page: {ship}");
 }

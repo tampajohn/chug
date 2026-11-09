@@ -1309,6 +1309,12 @@ docs_generate() {
     } >> "$TMPD/docs-riskgate"
   fi
   printf '      <li><a href="#risk-gate">%s</a></li>\n' "$RG_TITLE" >> "$TMPD/docs-index-li"
+  # T349: the shipped feed — the FULL done list rides the docs page after the
+  # risk-gate story, with its index entry directly after the risk-gate one
+  # (the home page's feed caps at 20; the docs page is the complete record).
+  # The slot + anchor exist even when the done set is empty (placeholder).
+  shipped_docs_section "$TMPD/docs-shipped"
+  printf '      <li><a href="#shipped">Shipped — the complete record</a></li>\n' >> "$TMPD/docs-index-li"
   {
     printf '<!doctype html>\n<html lang="en">\n<head>\n'
     printf '<meta charset="utf-8">\n'
@@ -1390,6 +1396,9 @@ STYLE
     # explicit placeholder), after the runbooks and before the cost table
     # (T327 keeps the cost table at the page's end).
     cat "$TMPD/docs-riskgate"
+    # T349: the shipped feed — the full done list, newest first (the home
+    # page's feed caps at 20; the docs page is the complete record).
+    cat "$TMPD/docs-shipped"
     # T327: the per-day cost table rides at the page's end — the quickstart
     # still LEADS (the T241 doctrine) and the runbooks stay in corpus order.
     # Rendered from usable collector data, or kept from the published page
@@ -1870,6 +1879,240 @@ done_rows() { # -> lines "<id>\t<cand1 cand2 ...>\t<title>" (title escaped+trunc
     }' "$CHUG/TODO.md"
 }
 
+# --- T349: the SHIPPED feed — the loop's own done record, rendered -----------
+# The operator's 2026-11-09 finding: chug.sh's feature grid sat weeks stale
+# because the grid is hand-maintained. The feed's source is TODO.md's done
+# rows — the AUTHORITATIVE shipped record the loop's own flip process
+# maintains — so the region is mechanical and cannot drift the same way: a
+# row flipped done renders at the next sync with no hand edit. index.html
+# renders the newest SHIP_CAP items above the curated grid; docs.html renders
+# the full list. Done date = the first cited commit ref that VERIFIES in the
+# chug repo — the same boundary-checked hex extraction + verify-before-write
+# discipline as done_rows (req 5), batched into two git calls for the whole
+# corpus (the timeline's per-row spawns would triple the sync's cost at 340+
+# done rows). A row with no verifiable ref still renders — the done row IS
+# the record — undated and sorted last: absence is shown, never a fabricated
+# date. Malformed done rows (empty title or spec cell) are skipped with a
+# named count, never fatal (T217 discipline). No done rows at all renders the
+# explicit empty-shape placeholder (the T216 letter). None of this touches
+# the curated grid's render.
+SHIP_CAP=20                                  # index feed: the newest ~20 items
+
+ship_rows() { # rowsfile malfile — done rows -> "<id>\t<cands>\t<title>\t<spec>"; malformed ids -> malfile
+  [ -f "$CHUG/TODO.md" ] || return 0
+  : > "$2"                                    # the malformed-ids file exists even when empty
+  awk -v mal="$2" '
+    function esc_trunc(s,   n, w, out, kept, i, cand) {   # done_rows esc_trunc, verbatim
+      gsub(/^[ \t]+|[ \t]+$/, "", s)
+      n = split(s, w, " "); out = ""; kept = 0
+      for (i = 1; i <= n; i++) {
+        cand = (out == "") ? w[i] : out " " w[i]
+        if (length(cand) > 100) break
+        out = cand; kept = i
+      }
+      if (kept < n) out = out "…"
+      gsub(/&/, "\\&amp;", out); gsub(/</, "\\&lt;", out); gsub(/>/, "\\&gt;", out)
+      return out
+    }
+    function attr(s) { gsub(/&/, "\\&amp;", s); gsub(/</, "\\&lt;", s); gsub(/>/, "\\&gt;", s); gsub(/"/, "\\&quot;", s); return s }
+    BEGIN { ph = "\001" }
+    # the feed is the COMPLETE record: the row anchor is space-tolerant —
+    # T24/T25/T26 carry a leading space the stats grammar (^[|]) misses.
+    # (The stats counters keep their own grammar; only this feed widens it.)
+    /^[ \t]*[|]/ {
+      line = $0
+      gsub(/\\[|]/, ph, line)               # T216: park markdown-escaped pipes on a line COPY
+      split(line, f, "|")
+      id = f[2]; gsub(/[ \t]/, "", id)
+      if (id !~ /^T[0-9]+$/) next           # not an item row (header/separator): not a feed item
+      s = f[6]; gsub(/[ \t]/, "", s)
+      if (s != "done") next
+      title = f[3]; gsub(ph, "|", title); gsub(/^[ \t]+|[ \t]+$/, "", title)
+      spec = f[4]; gsub(ph, "|", spec); gsub(/^[ \t]+|[ \t]+$/, "", spec)
+      if (title == "" || spec == "") { print id > mal; next }   # malformed: named count, never fatal
+      notes = " " f[7] " "
+      cands = ""; pos = 1; ncand = 0
+      while (ncand < 6 && match(substr(notes, pos), /[0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F]*/)) {
+        mstart = pos + RSTART - 1
+        mlen = RLENGTH; if (mlen > 40) mlen = 40
+        before = substr(notes, mstart - 1, 1); after = substr(notes, mstart + RLENGTH, 1)
+        if (before !~ /[0-9a-fA-F]/ && after !~ /[0-9a-fA-F]/) {
+          cands = cands (cands == "" ? "" : " ") tolower(substr(notes, mstart, mlen))
+          ncand++
+        }
+        pos = mstart + RLENGTH
+      }
+      print id "\t" cands "\t" esc_trunc(title) "\t" attr(spec)
+    }' "$CHUG/TODO.md" > "$1"
+}
+
+ship_dates() { # rowsfile datesfile — "<ref>\t<ct>\t<date>" per VERIFIED candidate ref
+  local reqs resp oks show nreq nok
+  reqs="$TMPD/ship-reqs"; resp="$TMPD/ship-resp"; oks="$TMPD/ship-oks"; show="$TMPD/ship-show"
+  : > "$2"
+  awk -F'\t' '{ n = split($2, a, " "); for (i = 1; i <= n; i++) if (a[i] != "") print a[i] }' "$1" \
+    | awk '!seen[$0]++' > "$TMPD/ship-cands"          # every candidate token once, first-seen order
+  [ -s "$TMPD/ship-cands" ] || return 0
+  awk '{ print $1 "^{commit}" }' "$TMPD/ship-cands" > "$reqs"
+  # ONE batched existence+type check for the whole corpus (cat-file
+  # --batch-check): done_rows/timeline verify per row with per-row spawns —
+  # at 340+ done rows that is the sync's dominant cost; the feed resolves
+  # every candidate in two git calls total.
+  if ! git --no-pager -C "$CHUG" cat-file --batch-check < "$reqs" > "$resp" 2>/dev/null; then
+    warn "git cat-file --batch-check failed — the shipped feed renders undated (never a fabricated date)"
+    return 0
+  fi
+  # positional: request i verified iff response i resolves to a commit object
+  # (batch-check answers one line per request, in order)
+  awk 'NR == FNR { req[FNR] = $0; next } { if ($2 == "commit") print req[FNR] }' "$reqs" "$resp" > "$oks"
+  [ -s "$oks" ] || return 0
+  awk '{ sub(/\^\{commit\}$/, ""); print $1 }' "$oks" > "$TMPD/ship-ver"
+  if ! git --no-pager -C "$CHUG" show -s --format='%H%x09%ct%x09%as' $(cat "$TMPD/ship-ver") > "$show" 2>/dev/null; then
+    warn "git show (batched shipped-feed dates) failed — the feed renders undated"
+    return 0
+  fi
+  nreq=$(wc -l < "$oks" | tr -d ' '); nok=$(wc -l < "$show" | tr -d ' ')
+  if [ "$nreq" != "$nok" ]; then
+    warn "shipped-feed date map misaligned ($nok lines for $nreq refs) — the feed renders undated"
+    return 0
+  fi
+  # map short ref -> (ct, date) by prefix: a verified short ref is an
+  # unambiguous prefix of exactly one object
+  awk 'NR == FNR { ref[FNR] = $0; n = FNR; next }
+       { for (i = 1; i <= n; i++) if (index($1, ref[i]) == 1) { print ref[i] "\t" $2 "\t" $3; next } }' \
+    "$TMPD/ship-ver" "$show" > "$2"
+}
+
+ship_sorted() { # rowsfile datesfile outfile skipfile — newest-first (ct desc), file order ties;
+  # a done row with NO verifiable ref is skipped with a named count (the T99
+  # req-5 discipline the timeline already pins: a git-derived date is either
+  # verified or the row does not render) — the skip is named, never fatal
+  awk -F'\t' -v skip="$4" '
+    NR == FNR { d[$1] = $2 "\034" $3; next }          # ref -> ct US date
+    {
+      n = split($2, c, " "); ct = -1; date = ""
+      for (i = 1; i <= n; i++) {
+        if (c[i] in d) { split(d[c[i]], dd, "\034"); ct = dd[1] + 0; date = dd[2]; break }
+      }
+      if (ct < 0) { print $1 > skip; next }           # unverifiable ref: named skip
+      # packed sort key for a whole-line LC_ALL=C sort: "0" + (BIG - ct)
+      # ascending == ct descending; the zero-padded row number keeps TODO.md
+      # file order as the deterministic tiebreak (same-commit rows stay in
+      # queue order)
+      printf "0%012d\t%08d\t%s\t%s\t%s\t%s\n", 999999999999 - ct, NR, $1, date, $3, $4
+    }' "$2" "$1" | sort > "$3"
+}
+
+# ship_lis OUTFILE CAP DOCSLINK — the feed's <li> lines from the sorted file
+# (sorted fields: key, rownum, id, date, title, spec). Both surfaces share
+# this shape: date · id · spec link. An undated row renders without a date
+# segment; the index-only collapse line appears when the corpus exceeds the
+# cap, pointing at the docs page only when that page exists (never a link to
+# a page that is not rendered — the fail-closed leg).
+ship_lis() { # outfile cap docslink
+  awk -F'\t' -v cap="$2" -v ghref="$DOCS_GH_BLOB" -v docslink="$3" '
+    NR <= cap {
+      d = ($4 == "" ? "" : $4 " · ")
+      printf "  <li>%s<code>%s</code> · <a href=\"%s%s\">%s</a></li>\n", d, $3, ghref, $6, $5
+    }
+    NR == cap + 1 { more = 1 }
+    END {
+      if (more) {
+        if (docslink == 1)
+          printf "  <li>…and %d earlier shipped items — the full record on the <a href=\"https://chug.sh/docs.html#shipped\">docs page</a></li>\n", NR - cap
+        else
+          printf "  <li>…and %d earlier shipped items — the full record lives in TODO.md\047s done rows</li>\n", NR - cap
+      }
+    }' "$SHIP_SORTED" > "$1"
+}
+
+# shipped_generate OUTFILE — the index.html feed (the newest SHIP_CAP items)
+# or, with no done rows at all, the explicit empty shape. Sets SHIP_SHAPE
+# (ok | placeholder) for the splice gate and the commit message. The last
+# line is the T349 grid-annotation rule: the curated grid below is the
+# flagship list; the feed is the complete record.
+shipped_generate() { # outfile
+  SHIP_SHAPE=placeholder
+  {
+    printf '<div class="shipped">\n'
+    if [ "$SHIP_N" -gt 0 ]; then
+      SHIP_SHAPE=ok
+      printf '  <p class="lede">Recently shipped — the newest %s of %s done rows in TODO.md, newest first; auto-fed from the loop'"'"'s own flip record at every sync, never hand-edited:</p>\n' "$SHIP_CAP" "$SHIP_N"
+      printf '  <ul>\n'
+      ship_lis "$TMPD/ship-lis" "$SHIP_CAP" "$DOCS_LIVE"
+      cat "$TMPD/ship-lis"
+      printf '  </ul>\n'
+    else
+      printf '  <p class="lede">No shipped items recorded yet — TODO.md has no done rows; the feed fills in as the loop flips rows done.</p>\n'
+    fi
+    printf '  <p class="lede">The curated feature grid below is the flagship list; this feed is the complete shipped record.</p>\n'
+    printf '</div>\n'
+  } > "$1"
+  return 0
+}
+
+# shipped_docs_section OUTFILE — docs.html gains the same feed as the FULL
+# done list (the home page caps at 20; the docs page is the complete record),
+# newest first, each item linking its spec.
+shipped_docs_section() { # outfile
+  {
+    printf '<section id="shipped"><div class="wrap">\n'
+    printf '  <p class="kicker"><span class="hash">##</span> shipped · TODO.md done rows</p>\n'
+    printf '  <h2>Shipped — the complete record</h2>\n'
+    if [ "$SHIP_N" -gt 0 ]; then
+      printf '  <p class="lede">Every item the loop has flipped done (%s items), newest first — auto-fed from TODO.md at every sync. The curated feature grid on the home page is the flagship list; this feed is the complete shipped record.</p>\n' "$SHIP_N"
+      printf '  <div class="doctext">\n    <ul>\n'
+      awk -F'\t' -v ghref="$DOCS_GH_BLOB" '
+        {
+          d = ($4 == "" ? "" : $4 " · ")
+          printf "    <li>%s<code>%s</code> · <a href=\"%s%s\">%s</a></li>\n", d, $3, ghref, $6, $5
+        }' "$SHIP_SORTED"
+      printf '    </ul>\n  </div>\n'
+    else
+      printf '  <p class="lede">No shipped items recorded yet — TODO.md has no done rows; the feed fills in as the loop flips rows done. The curated feature grid on the home page is the flagship list; this feed is the complete shipped record.</p>\n'
+    fi
+    printf '</div></section>\n'
+  } > "$1"
+}
+
+# bootstrap_shipped — T349: the SHIPPED markers go directly ABOVE the feature
+# grid's <div class="grid"> container (the feed renders above the curated
+# grid — outside the container, so the feed is never a grid item). Own
+# bootstrap commit, one per run, the T99/T240 pattern; absent grid or
+# malformed markers: warn + skip, never fail the cycle.
+bootstrap_shipped() {
+  local nb ne blk start
+  nb=$(grep -cE "^[[:space:]]*<!-- SHIPPED:BEGIN -->[[:space:]]*\$" "$INDEX" 2>/dev/null) || nb=0
+  ne=$(grep -cE "^[[:space:]]*<!-- SHIPPED:END -->[[:space:]]*\$" "$INDEX" 2>/dev/null) || ne=0
+  if [ "$nb" -eq 1 ] && [ "$ne" -eq 1 ]; then return 0; fi
+  if [ "$nb" -ne 0 ] || [ "$ne" -ne 0 ]; then
+    warn "index.html has malformed SHIPPED markers (found $nb/$ne, expected 0 or 1/1) — skipping the SHIPPED region"
+    return 1
+  fi
+  blk=$(find_block "$INDEX" '<div class="grid">') || true
+  if [ -z "$blk" ]; then
+    warn "no <div class=\"grid\"> block in index.html — cannot place the SHIPPED feed above the feature grid, skipping the region"
+    return 1
+  fi
+  set -- $blk; start=$1
+  awk -v at="$start" 'NR == at { print "<!-- SHIPPED:BEGIN -->"; print "<!-- SHIPPED:END -->" } { print }' "$INDEX" > "$TMPD/boot-ship" \
+    || { warn "SHIPPED bootstrap splice failed — skipping the region"; return 1; }
+  cat "$TMPD/boot-ship" > "$INDEX" \
+    || { warn "SHIPPED bootstrap page write failed — index.html may be truncated, NOT committing"; return 1; }
+  if ! git -C "$SITE" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    warn "$SITE is not a git work tree — SHIPPED markers written but not committed"
+    return 0
+  fi
+  git -C "$SITE" add index.html
+  if git -C "$SITE" commit -q -m "site: SHIPPED region markers bootstrap (T349)" \
+    -m "scripts/site-sync.sh (T349): SHIPPED region markers inserted directly above the <div class=\"grid\"> container (the shipped feed renders above the curated feature grid, outside the grid container). The region is empty until the same sync fills it from TODO.md's done rows."; then
+    echo "site-sync: bootstrapped SHIPPED markers ($(git -C "$SITE" rev-parse --short HEAD 2>/dev/null))"
+  else
+    warn "SHIPPED bootstrap commit failed (git identity?) — markers written but uncommitted"
+  fi
+  return 0
+}
+
 # hex_spans — hex tokens cited inside <span class="hash">…</span> of a file
 # (boundary-checked, like done_rows; these are the region's existing facts).
 hex_spans() { # file -> one ref per line
@@ -2131,6 +2374,7 @@ TMP_NEW2="$TMPD/splice-timeline"
 TMP_NEW3="$TMPD/splice-features"
 TMP_NEW4="$TMPD/splice-release"
 TMP_NEW5="$TMPD/splice-cost"               # T327: the COST region splices last
+TMP_NEW6="$TMPD/splice-shipped"            # T349: then the SHIPPED feed region
 TMP_CARD="$TMPD/card"                     # current card chunk (features walk)
 TMP_TLITEM="$TMPD/tlitem"                 # current tl-item chunk (timeline walk)
 {
@@ -2212,6 +2456,29 @@ bootstrap_region TIMELINE tl || true
 bootstrap_region FEATURES grid || true
 bootstrap_release || true
 bootstrap_cost || true
+bootstrap_shipped || true
+
+# --- T349: the shipped-feed facts (the index region + docs both consume) ------
+# Parsed once per sync: rows (with malformed rows counted to their own file),
+# verified dates in two batched git calls, then the sorted newest-first stream.
+# Both renderers are pure reads of $SHIP_SORTED — index caps at SHIP_CAP,
+# docs renders the full list.
+SHIP_ROWS="$TMPD/ship-rows"; SHIP_MAL="$TMPD/ship-mal"; SHIP_SORTED="$TMPD/ship-sorted"
+SHIP_SKIP="$TMPD/ship-skip"
+SHIP_N=0; SHIP_MAL_N=0; SHIP_SKIP_N=0
+ship_rows "$SHIP_ROWS" "$SHIP_MAL"
+ship_dates "$SHIP_ROWS" "$TMPD/ship-dates"
+: > "$SHIP_SKIP"
+ship_sorted "$SHIP_ROWS" "$TMPD/ship-dates" "$SHIP_SORTED" "$SHIP_SKIP"
+SHIP_N=$(wc -l < "$SHIP_SORTED" | tr -d ' ')
+SHIP_MAL_N=$(wc -l < "$SHIP_MAL" | tr -d ' ')
+SHIP_SKIP_N=$(wc -l < "$SHIP_SKIP" | tr -d ' ')
+if [ "$SHIP_MAL_N" -gt 0 ]; then
+  warn "$SHIP_MAL_N malformed done row(s) in TODO.md skipped (empty title or spec cell) — the shipped feed renders the rest, never fatal"
+fi
+if [ "$SHIP_SKIP_N" -gt 0 ]; then
+  warn "$SHIP_SKIP_N done row(s) cite no verifiable commit ref — skipped by the same req-5 discipline as the timeline (a git-derived date is verified or the row does not render)"
+fi
 
 # region_ok NAME — the region is generatable iff exactly one BEGIN/END pair
 # exists, in order (malformed => warn + skip, best-effort, req 3)
@@ -2270,6 +2537,20 @@ if region_ok FEATURES; then
   features_generate "$TMPD/ft-region" "$TMPD/ft-out" && FT_STATE=ok
 else
   warn "no well-formed FEATURES markers in index.html — feature grid not updated"
+fi
+# --- T349: regenerate the SHIPPED region — the mechanical shipped feed --------
+# ok          done rows exist -> the feed regenerates (newest first, cap 20)
+# placeholder no done rows -> the explicit empty shape
+# skip        no well-formed SHIPPED markers -> nothing touched
+SHIP_STATE=skip
+DOCS_LIVE=0
+if [ "$DOCS_STATE" = ok ] || grep -qF 'rel="canonical" href="https://chug.sh/docs.html"' "$SITE/docs.html" 2>/dev/null; then
+  DOCS_LIVE=1    # the docs page exists (rendered this sync, or published) — the collapse line may link it
+fi
+if region_ok SHIPPED; then
+  if shipped_generate "$TMPD/ship-out"; then SHIP_STATE="$SHIP_SHAPE"; fi
+else
+  warn "no well-formed SHIPPED markers in index.html — shipped feed not updated"
 fi
 REL_STATE=skip
 if region_ok RELEASE; then
@@ -2338,13 +2619,24 @@ else
   cp "$TMP_NEW4" "$TMP_NEW5"
 fi
 
-if cmp -s "$TMP_NEW5" "$INDEX" && [ "$DOCS_CHANGED" != 1 ] && [ "$ADOPT_CHANGED" != 1 ]; then
+# T349: the SHIPPED region splices the same way — the feed (ok) or the
+# fresh-region placeholder; skip passes the bytes through untouched.
+if [ "$SHIP_STATE" = ok ] || [ "$SHIP_STATE" = placeholder ]; then
+  splice_region "$TMP_NEW5" "$TMP_NEW6" \
+    "^[[:space:]]*<!-- SHIPPED:BEGIN -->[[:space:]]*\$" \
+    "^[[:space:]]*<!-- SHIPPED:END -->[[:space:]]*\$" "$TMPD/ship-out" \
+    || cp "$TMP_NEW5" "$TMP_NEW6"
+else
+  cp "$TMP_NEW5" "$TMP_NEW6"
+fi
+
+if cmp -s "$TMP_NEW6" "$INDEX" && [ "$DOCS_CHANGED" != 1 ] && [ "$ADOPT_CHANGED" != 1 ]; then
   echo "site-sync: page unchanged — no commit"
   exit 0
 fi
-if ! cmp -s "$TMP_NEW5" "$INDEX"; then
-  cat "$TMP_NEW5" > "$INDEX"   # in place: keeps the inode and the page's permissions
-  echo "site-sync: rewrote the marked regions of $INDEX (items $DONE/$TOTAL, tests $TEST_N, cycles $CYC_N, last eval $EVAL_D, cost $COST_STATE)"
+if ! cmp -s "$TMP_NEW6" "$INDEX"; then
+  cat "$TMP_NEW6" > "$INDEX"   # in place: keeps the inode and the page's permissions
+  echo "site-sync: rewrote the marked regions of $INDEX (items $DONE/$TOTAL, tests $TEST_N, cycles $CYC_N, last eval $EVAL_D, cost $COST_STATE, shipped $SHIP_STATE)"
 fi
 # T241 req 3: docs.html is ADD/OVERWRITE — written in the same sync, committed
 # in the same commit as index.html when either changed (req 5)
@@ -2380,7 +2672,7 @@ git -C "$SITE" add index.html
 if [ "$DOCS_CHANGED" = 1 ]; then git -C "$SITE" add docs.html; fi  # T241 finding 1: stage docs.html only when THIS sync rendered it — a fail-closed leg never sweeps a stray file, a failed write never commits a partial
 if [ "$ADOPT_CHANGED" = 1 ]; then git -C "$SITE" add adopt.html; fi  # T329, same rule: stage adopt.html only when THIS sync rendered it
 if ! git -C "$SITE" commit -q -m "site: stats sync $SYNC_DATE" \
-  -m "scripts/site-sync.sh (T98+T99), deterministic — items $DONE/$TOTAL (TODO.md), tests $TEST_N ($TEST_SRC${TEST_REF:+, $TEST_REF}), cycles $CYC_N ($CYC_SRC), last eval $EVAL_D; last-5 landed: $LANDED_REFS; timeline: $TL_STATE (cap $TL_CAP), features: $FT_STATE; release: ${RELEASE_TAG:-none}; cost: $COST_STATE; docs: $DOCS_NOTE; adopt: $ADOPT_NOTE"; then
+  -m "scripts/site-sync.sh (T98+T99), deterministic — items $DONE/$TOTAL (TODO.md), tests $TEST_N ($TEST_SRC${TEST_REF:+, $TEST_REF}), cycles $CYC_N ($CYC_SRC), last eval $EVAL_D; last-5 landed: $LANDED_REFS; timeline: $TL_STATE (cap $TL_CAP), features: $FT_STATE; shipped: $SHIP_STATE ($SHIP_N done rows${SHIP_MAL_N:+, $SHIP_MAL_N malformed skipped}); release: ${RELEASE_TAG:-none}; cost: $COST_STATE; docs: $DOCS_NOTE; adopt: $ADOPT_NOTE"; then
   warn "commit failed (git identity?) — page updated but uncommitted"
   exit 0
 fi

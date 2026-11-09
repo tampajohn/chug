@@ -56,6 +56,26 @@ retired: driver already batches (cycle-11 eval).
   first distilled judge lands and an alternate-runtime comparison has a
   consumer again.
 
+## Shipped flagships (F-row backfill, 2026-11-09 — T349)
+
+Backfill, not roadmap: every row below SHIPPED without ever carrying an
+F-row (the operator's 2026-11-09 finding — chug.sh's feature grid sat weeks
+stale because the grid was hand-maintained), and every row is LANDED, so
+nothing here is pullable queue work. The complete mechanical record of
+shipped work is the SHIPPED feed on chug.sh (site-sync T349, rendered from
+TODO.md's done rows at every sync); this table is the curated flagship
+slice of it.
+
+| # | Feature | What | Benchmark |
+|---|---------|------|-----------|
+| F17 | **Dormant-mode cost program** — LANDED (T325, 2d6ed05) | Empty queue = cheap-exit always + a weekly read-only audit eval; no manufactured meta-filings while idle. The dormant-era burn stays visible on the chug.sh cost tile (T327, true-streak). | n/a (cost program) |
+| F18 | **Ideation lane** — LANDED (T326, ec19843) | The dormant loop proposes outward-facing features into a Proposed lane (specs/proposed/, TODO P-rows); the operator flips, the loop never self-flips — ideation with a human gate. | n/a (chug-native) |
+| F19 | **Loop subcommand** — LANDED (T334) | `chug loop` init + run in ANY repo, no clone: scaffolds a generic LOOP-SPEC/TODO.md/.chug (idempotent, --force backups) and execs the supervisor against the current repo; the clone step is gone from docs/adopt + README. | adoption funnel |
+| F20 | **Install profiles** — LANDED (T330, 1cf0588) | `install.sh --profile <name>`: a profile contract for LLM-proxy config — company values ship out-of-band, the installer stays public and key-free. | company adoption (Q4) |
+| F21 | **Decision-model providers: local Laya + proxy Jev** — LANDED (T332, 350d66f) | `CHUG_DECISION_PROVIDER=auto,local,proxy` (src/decision/): LocalDaemon (the baked-in Laya judge) + ProxySystem (a served OpenAI-compatible judge) — pilot boxes need no daemon; auto degrades gracefully. | pilot-fleet constraint |
+| F22 | **Meta-harness pack** — LANDED (T339+T340+T341+T342+T343) | Harness surfaces for driving chug from outside, no scraping anywhere: `chug capabilities` versioned feature doc (T339), chugd typed status endpoints /status/loop + /status/items (T340), the permission-broker hook pack + install --with-meta-pack (T341), the per-session typed status file mod (T342), and the usage-events emitter with model_served stamping (T343). | Claude Code hooks/status; fleet ops |
+| F23 | **Adopt + risk-gate docs surface** — LANDED (T329, 6e14a5b + T331, a50c4a3) | chug.sh/adopt.html — quickstart, mental model, first-feature walkthrough, FAQ — machine-rendered from docs/adopt/ (the front door for a curious engineer), plus the docs.html risk-gate story section (docs/risk-gate.md) written for a skeptical staff engineer. | adoption funnel |
+
 ## Working rules
 
 - One item per evaluation pull, top-down within a tier; a tier may be
