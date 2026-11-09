@@ -388,7 +388,17 @@ fn run_one_pass(f: &Fixture, sock: &Path) -> std::process::Output {
         .env("GIT_COMMITTER_EMAIL", "t259@example.test")
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_CONFIG_SYSTEM", "/dev/null")
-        .stdout(Stdio::null());
+        .stdout(Stdio::null())
+        // T332 hermeticity for the FULL-RUN spawn, same contract as
+        // run_predicate: the decision-provider selection is per-leg
+        // explicit — a host environment (the driving loopd's sourced
+        // ~/.chug/profile.env, riding this test process's env) may never
+        // flip a daemon-path fixture onto the proxy (auto with no
+        // configured proxy is today's shape byte for byte). The proxy-leg
+        // fixtures set the provider explicitly per test via run_predicate.
+        .env_remove("CHUG_DECISION_PROVIDER")
+        .env_remove("CHUG_DECISION_PROXY_URL")
+        .env_remove("CHUG_DECISION_PROXY_TOKEN");
     // T329: belt-and-braces beside the HOME redirect — pin the loader files
     // so a host ~/.chug profile can never reach the fixture (T330 loader).
     common::pin_loopd_env_files(&mut cmd, f.path());

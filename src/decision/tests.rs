@@ -342,6 +342,12 @@ fn the_auto_selection_matrix_is_pinned() {
     let sock = tmp.path().join("matrix.sock");
 
     // absent socket + no proxy -> local (the daemon client's own shape).
+    // The host's staged CHUG_DECISION_PROVIDER rides the driving loopd's
+    // env into this unit test (the 2026-11-09 profile.env bite): the mode
+    // table's explicit legs bypass the auto probe, so the auto legs below
+    // are only the documented matrix when the provider var is ABSENT. The
+    // explicit-leg rows re-set it themselves after this removal.
+    _env.remove(PROVIDER_ENV);
     _env.remove(PROXY_URL_ENV);
     _env.set(crate::daemon::SOCK_ENV, sock.to_str().expect("sock str"));
     let provider = provider_from_env().expect("auto constructs");
