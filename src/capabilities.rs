@@ -10,11 +10,14 @@
 //!
 //! Cheap by construction: the document is built from constants and the
 //! package version — no file I/O, no env reads ([`document`] stays pure).
-//! The `chug capabilities` COMMAND adds exactly one bounded daemon probe
-//! (T340): a missing, stale, or unreachable daemon reports
+//! The `chug capabilities` COMMAND adds exactly two bounded probes (T340 +
+//! T341): a missing, stale, or unreachable daemon reports
 //! `daemon_status: false` / `lifecycle_events: false` and `versions.daemon:
-//! null` — never an error, never a hang (the probe budget is the daemon
-//! client's own 2s socket bound; the spec's ">2s budget per probe").
+//! null`, and an unwired (or unreadable) meta-broker hook reports
+//! `permission_broker: false` — never an error, never a hang (the daemon
+//! probe budget is the daemon client's own 2s socket bound, the spec's
+//! ">2s budget per probe"; the broker probe is one stat + one bounded read
+//! of Claude's settings.json).
 //!
 //! The stability rule, stated in-band in every document (`compat`) and in
 //! the doc: consumers MUST treat unknown features as false and MUST ignore
@@ -28,13 +31,14 @@
 
 // The reader half (`FEATURE_KEYS`, `is_shipped`, `shipped`) has production
 // callers only in the contract tests today; the writer half's remaining
-// feature flips land with T341-T343. Same posture as attach.rs/observ.rs:
+// feature flips land with T342-T343. Same posture as attach.rs/observ.rs:
 // the API is the deliverable, the callers land with the rows that implement
 // against it.
 #![allow(dead_code)]
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::path::PathBuf;
 
 /// The contract version. Additive-only within this value (new feature
 /// keys, new optional fields, new vocabulary members); anything that
@@ -185,9 +189,15 @@ pub fn render(doc: &Document) -> String {
     serde_json::to_string_pretty(doc).expect("the contract document always serializes")
 }
 
-/// The document this binary prints (producer path).
+/// The document this binary prints (producer path): the daemon probe (T340)
+/// merged first, then the broker probe (T341). Both flips are additive
+/// within contract v1.
 pub fn document_json() -> String {
-    render(&document_with_daemon(&probe_daemon_status()))
+    let mut doc = document_with_daemon(&probe_daemon_status());
+    if probe_permission_broker() {
+        doc.features.permission_broker = FeatureValue::Bool(true);
+    }
+    render(&doc)
 }
 
 // T340 — the bounded daemon probe behind `daemon_status`/`lifecycle_events`.
@@ -249,6 +259,98 @@ pub fn document_with_daemon(probe: &DaemonProbe) -> Document {
         doc.features.lifecycle_events = FeatureValue::Version(version.clone());
     }
     doc
+}
+
+// T341 — the bounded permission-broker probe behind `permission_broker`.
+// ---------------------------------------------------------------------------
+
+/// The hook-command marker the probe matches: the pack's PreToolUse entry
+/// carries the pack's directory name (`…/hooks/meta-broker/hook.sh`) — the
+/// same string `install.sh --with-meta-pack` wires and
+/// `--uninstall-meta-pack` removes. Substring, not an exact-path match, so
+/// a compatible broker hook a harness wires by hand still reads installed.
+pub const PERMISSION_BROKER_MARKER: &str = "meta-broker";
+
+/// The settings read cap: Claude's settings.json is a few KB; a file past
+/// this is not a settings file chug will walk (bounded probe — never a
+/// giant read on a wedged path).
+const BROKER_SETTINGS_MAX_BYTES: u64 = 4 * 1024 * 1024;
+
+/// The Claude config dir: `$CLAUDE_CONFIG_DIR` when set (Claude's own
+/// override, and the fixtures' seam), else `$HOME/.claude` (`USERPROFILE`
+/// on windows). `None` when the platform gives neither — the probe is then
+/// absent by construction.
+pub fn claude_dir() -> Option<PathBuf> {
+    if let Some(dir) = std::env::var_os("CLAUDE_CONFIG_DIR")
+        .map(PathBuf::from)
+        .filter(|p| !p.as_os_str().is_empty())
+    {
+        return Some(dir);
+    }
+    #[cfg(unix)]
+    let var = "HOME";
+    #[cfg(windows)]
+    let var = "USERPROFILE";
+    std::env::var_os(var)
+        .map(PathBuf::from)
+        .filter(|p| !p.as_os_str().is_empty())
+        .map(|home| home.join(".claude"))
+}
+
+/// The PURE half of the probe: does this settings document wire a
+/// permission-broker PreToolUse hook? HOOK PRESENCE, never socket presence —
+/// a listening socket without the wired hook brokers nothing (the spec's
+/// explicit distinction). Fail-open by contract: anything unreadable,
+/// unparseable, or shaped otherwise than Claude's hooks schema is `false`.
+/// Only `hooks.PreToolUse` counts — the pack is a PreToolUse hook; a
+/// PostToolUse entry naming the pack is not the wiring that brokers.
+pub fn permission_broker_installed_from_str(settings_json: &str) -> bool {
+    let Ok(parsed) = serde_json::from_str::<Value>(settings_json) else {
+        return false;
+    };
+    let Some(entries) = parsed
+        .get("hooks")
+        .and_then(|hooks| hooks.get("PreToolUse"))
+        .and_then(Value::as_array)
+    else {
+        return false;
+    };
+    entries.iter().any(|entry| {
+        entry
+            .get("hooks")
+            .and_then(Value::as_array)
+            .is_some_and(|hooks| {
+                hooks.iter().any(|hook| {
+                    hook.get("command")
+                        .and_then(Value::as_str)
+                        .is_some_and(|command| command.contains(PERMISSION_BROKER_MARKER))
+                })
+            })
+    })
+}
+
+/// The probe behind `permission_broker`: one stat + one bounded read of the
+/// user settings (`<claude-dir>/settings.json`), then the pure walk above.
+/// Every failure mode — no home, no file, unreadable, unparseable,
+/// oversized — is `false`, never an error: the command stays cheap and
+/// total. The project-level settings are deliberately NOT probed — the pack
+/// installs at the user level and the capabilities document reports that
+/// install.
+pub fn probe_permission_broker() -> bool {
+    let Some(dir) = claude_dir() else {
+        return false;
+    };
+    let path = dir.join("settings.json");
+    let Ok(meta) = std::fs::metadata(&path) else {
+        return false;
+    };
+    if !meta.is_file() || meta.len() > BROKER_SETTINGS_MAX_BYTES {
+        return false;
+    }
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return false;
+    };
+    permission_broker_installed_from_str(&text)
 }
 
 /// The reference reader — the consumer rule, executable. Tolerant by
@@ -492,5 +594,91 @@ mod tests {
         assert_eq!(extract(404, r#"{"detail":"not found"}"#), None);
         assert_eq!(extract(500, r#"{"detail":"refused"}"#), None);
         assert_eq!(extract(200, "not json at all"), None);
+    }
+
+    // ---------- the T341 probe + merge ----------
+
+    /// The exact shape install.sh wires (via wire.py) reads as installed:
+    /// a PreToolUse entry whose hook command carries the pack marker.
+    #[test]
+    fn the_wired_pack_shape_reads_installed() {
+        let wired = r#"{
+            "model": "opus",
+            "hooks": {
+                "PreToolUse": [
+                    {"matcher": "Bash", "hooks": [{"type": "command", "command": "echo other"}]},
+                    {"matcher": "*", "hooks": [{"type": "command", "command": "/home/u/.claude/hooks/meta-broker/hook.sh"}]}
+                ]
+            }
+        }"#;
+        assert!(permission_broker_installed_from_str(wired));
+        // Idempotence shape: the pack entry alone, nothing else wired.
+        let only_pack = r#"{"hooks":{"PreToolUse":[{"matcher":"*","hooks":[{"type":"command","command":"/x/.claude/hooks/meta-broker/hook.sh"}]}]}}"#;
+        assert!(permission_broker_installed_from_str(only_pack));
+    }
+
+    /// HOOK PRESENCE, not socket presence — and every non-wiring shape
+    /// reads false: other PreToolUse hooks, the pack under the wrong event,
+    /// no hooks block, malformed JSON, an empty document.
+    #[test]
+    fn every_non_wiring_shape_reads_false() {
+        let other_hook = r#"{"hooks":{"PreToolUse":[{"matcher":"*","hooks":[{"type":"command","command":"echo hi"}]}]}}"#;
+        assert!(
+            !permission_broker_installed_from_str(other_hook),
+            "a foreign PreToolUse hook is not the pack"
+        );
+        let wrong_event = r#"{"hooks":{"PostToolUse":[{"matcher":"*","hooks":[{"type":"command","command":"/x/hooks/meta-broker/hook.sh"}]}]}}"#;
+        assert!(
+            !permission_broker_installed_from_str(wrong_event),
+            "only PreToolUse wiring counts — the pack is a PreToolUse hook"
+        );
+        assert!(!permission_broker_installed_from_str("{}"));
+        assert!(!permission_broker_installed_from_str(
+            r#"{"hooks":{"PreToolUse":[]}}"#
+        ));
+        assert!(!permission_broker_installed_from_str("{broken"));
+        assert!(!permission_broker_installed_from_str(""));
+    }
+
+    /// The merge: an installed probe flips EXACTLY `permission_broker`
+    /// (true, the registry's shipped value for this row) and the flip
+    /// survives the wire roundtrip.
+    #[test]
+    fn an_installed_probe_flips_exactly_permission_broker() {
+        let mut doc = document_with_daemon(&DaemonProbe::absent());
+        doc.features.permission_broker = FeatureValue::Bool(true);
+        assert!(doc.features.shipped("permission_broker"));
+        // The T340 rows stay off — one row per landing, never a bleed.
+        assert!(!doc.features.shipped("daemon_status"));
+        assert!(!doc.features.shipped("lifecycle_events"));
+        assert!(!doc.features.shipped("usage_events"));
+        assert!(!doc.features.shipped("status_mod"));
+        let rendered = serde_json::to_value(&doc).unwrap();
+        assert_eq!(rendered["features"]["permission_broker"], serde_json::json!(true));
+        let parsed = parse(&render(&doc)).expect("the flipped document parses");
+        assert!(parsed.features.shipped("permission_broker"));
+    }
+
+    /// The probe's file leg, driven through the fixture seam
+    /// (`CLAUDE_CONFIG_DIR`): a wired settings file flips true, an absent
+    /// dir / a malformed file / a directory-named settings.json all degrade
+    /// to false without erroring.
+    #[test]
+    fn probe_reads_the_scoped_claude_dir_and_fails_open() {
+        // Scoped env without mutating process env (edition 2024 makes that
+        // unsafe): the file leg's scoping is exercised end to end in
+        // tests/capabilities_contract.rs; here the PURE leg carries the
+        // matrix and this test pins the fail-open postures that do not
+        // depend on ambient env at all.
+        assert!(!permission_broker_installed_from_str("null"));
+        assert!(!permission_broker_installed_from_str("[]"));
+        assert!(!permission_broker_installed_from_str(
+            r#"{"hooks":{"PreToolUse":[{"matcher":"*","hooks":[{"type":"command"}]}]}}"#
+        ));
+        // A command sitting directly on the entry (not Claude's hooks[]
+        // schema) is not the wiring — the walker skips it.
+        assert!(!permission_broker_installed_from_str(
+            r#"{"hooks":{"PreToolUse":[{"matcher":"*","command":"meta-broker-hook"}]}}"#
+        ));
     }
 }

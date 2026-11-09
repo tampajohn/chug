@@ -74,11 +74,17 @@ jobs:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
 
       - name: package (tar.gz + sha256)
+        # T341: the tarball carries the meta pack (hooks/) beside the binary —
+        # install.sh --with-meta-pack extracts the pack from the SAME verified
+        # tarball it already downloads (no second fetch). The hooks/ copy and
+        # the `chug hooks` tar args are pinned by tests/release_workflow.rs.
         run: |
           mkdir -p dist
           cp "target/${{ matrix.target }}/release/chug" dist/chug
-          tar -czf "dist/chug-${{ matrix.platform }}.tar.gz" -C dist chug
+          cp -R hooks dist/hooks
+          tar -czf "dist/chug-${{ matrix.platform }}.tar.gz" -C dist chug hooks
           rm dist/chug
+          rm -rf dist/hooks
           if command -v sha256sum >/dev/null 2>&1; then SUM="sha256sum"; else SUM="shasum -a 256"; fi
           (cd dist && $SUM "chug-${{ matrix.platform }}.tar.gz" > "chug-${{ matrix.platform }}.tar.gz.sha256")
           cat "dist/chug-${{ matrix.platform }}.tar.gz.sha256"

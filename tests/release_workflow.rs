@@ -338,6 +338,46 @@ fn version_check_precedes_build_and_release_uses_notes() {
     );
 }
 
+/// (d2) T341 — the tarball carries the meta pack: the package step copies
+/// `hooks/` into the staging dir and tars `chug hooks`, so install.sh
+/// --with-meta-pack extracts the pack from the SAME verified tarball it
+/// already downloads (the spec's shipping mechanic — no second fetch, no
+/// raw-URL fragility). A pack-less tarball would make every --with-meta-pack
+/// install fail with "release predates the meta pack".
+#[test]
+fn package_step_carries_the_meta_pack_in_the_tarball() {
+    let doc = parse(&workflow_text());
+    let package = steps(job(&doc, "build"))
+        .iter()
+        .map(|s| {
+            (
+                s.as_mapping()
+                    .and_then(|m| m.get(Value::String("name".into())))
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+                step_run(s),
+            )
+        })
+        .find(|(name, _)| name.contains("package"))
+        .expect("the build job must carry the package step");
+    let run = package.1;
+    for needle in [
+        // the pack copy into staging (verbatim — a renamed copy escapes the pin)
+        "cp -R hooks dist/hooks",
+        // the tar args: BOTH the binary and the hooks tree ride the archive
+        "-C dist chug hooks",
+    ] {
+        assert!(
+            run.contains(needle),
+            "the package step must carry {needle:?} — the release tarball \
+             carries the meta pack (hooks/) beside the binary, and \
+             install.sh --with-meta-pack extracts the pack from that SAME \
+             verified tarball"
+        );
+    }
+}
+
 /// (e) The workflow's permissions are least-privilege (contents: write —
 /// the release creation needs it) and the checkouts fetch full history
 /// (release-notes.sh needs the previous tag, which a depth-1 checkout

@@ -22,6 +22,21 @@
 #                     installs nothing and never writes ~/.chug/profile.env),
 #                     copy it there (mode 600) for the loop supervisor to
 #                     load at startup, and print the loop launch line.
+#
+# Flags (T341 — the permission-broker hook pack, docs/meta-harness.md):
+#   --with-meta-pack      install hooks/meta-broker/ into
+#                         <claude-dir>/hooks/meta-broker and wire its
+#                         PreToolUse hook into <claude-dir>/settings.json
+#                         additively (existing hooks untouched). The pack
+#                         comes from the SAME verified release tarball the
+#                         binary comes from — never a second fetch — or
+#                         from the working tree when this script runs from
+#                         a repo checkout that carries hooks/meta-broker/.
+#   --uninstall-meta-pack the exact reverse, offline: unwire the pack's
+#                         hook (exactly its own block) and remove the
+#                         installed pack dir. No download, no other change.
+#   <claude-dir> is $CLAUDE_CONFIG_DIR when set, else ~/.claude — the same
+#   resolution the hook itself uses at run time.
 set -eu
 export LC_ALL=C
 
@@ -39,6 +54,85 @@ banner() {
   printf '  \\____|_| |_|\\___/ |___/ \n'
   printf '\n'
 }
+
+# --- T330/T341: flag parsing + the offline uninstall leg ----------------------
+# --profile resolves before any download (a bad profile fails fast and
+# offline). The meta-pack uninstall is offline by contract: it runs before
+# the platform detect, needs no network, and moves nothing else.
+# --with-meta-pack rides the normal install flow (binary + pack, one fetch).
+profile_name=
+with_meta_pack=0
+uninstall_meta_pack=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --profile)
+      [ $# -ge 2 ] || fail "--profile needs a profile name — usage: install.sh --profile <name> (docs/install-profiles.md)"
+      profile_name=$2
+      shift 2
+      ;;
+    --profile=*)
+      profile_name=${1#--profile=}
+      [ -n "$profile_name" ] || fail "--profile= needs a profile name — usage: install.sh --profile <name> (docs/install-profiles.md)"
+      shift
+      ;;
+    --with-meta-pack)
+      with_meta_pack=1
+      shift
+      ;;
+    --uninstall-meta-pack)
+      uninstall_meta_pack=1
+      shift
+      ;;
+    *)
+      fail "unknown argument '$1' — the flags are --profile <name>, --with-meta-pack and --uninstall-meta-pack (docs/install-profiles.md, docs/meta-harness.md)"
+      ;;
+  esac
+done
+
+# The checkout's pack wins when this script runs from a repo checkout that
+# carries hooks/meta-broker/ (repo-checkout users install from the working
+# tree); otherwise the pack is extracted from the SAME verified tarball the
+# binary comes from. A curl|sh run has no checkout unless the cwd happens to
+# be one — the file-existence gate decides, exactly like ./profiles/ does.
+case "$0" in
+  */*) pack_checkout_dir=${0%/*} ;;
+  *)   pack_checkout_dir=. ;;
+esac
+pack_checkout=
+if [ -f "$pack_checkout_dir/hooks/meta-broker/hook.sh" ]; then
+  pack_checkout=$pack_checkout_dir/hooks/meta-broker
+fi
+
+# --- T341: --uninstall-meta-pack (offline — no download, nothing else moves) ---
+if [ "$uninstall_meta_pack" = 1 ]; then
+  if [ "$with_meta_pack" = 1 ]; then
+    fail "--uninstall-meta-pack takes no other flags — it is the exact reverse of --with-meta-pack and runs offline"
+  fi
+  claude_dir=${CLAUDE_CONFIG_DIR:-$HOME/.claude}
+  settings_file=$claude_dir/settings.json
+  pack_dir=$claude_dir/hooks/meta-broker
+  hook_command=$pack_dir/hook.sh
+  wire=
+  if [ -f "$pack_dir/wire.py" ]; then
+    wire=$pack_dir/wire.py
+  elif [ -n "$pack_checkout" ] && [ -f "$pack_checkout/wire.py" ]; then
+    wire=$pack_checkout/wire.py
+  elif [ -f "$settings_file" ] && grep -q 'meta-broker' "$settings_file" 2>/dev/null; then
+    fail "the meta-broker pack is wired in $settings_file but its uninstaller is gone (no wire.py in $pack_dir or $pack_checkout) — remove the meta-broker hook entry from $settings_file by hand, or reinstall the pack first: install.sh --with-meta-pack"
+  fi
+  if [ -n "$wire" ]; then
+    python3 "$wire" remove "$settings_file" "$hook_command" || fail "unwiring the meta-broker hook failed — $settings_file was left as the uninstaller reported; fix the named cause and retry"
+  fi
+  if [ -d "$pack_dir" ]; then
+    rm -rf "$pack_dir" || fail "cannot remove $pack_dir — check permissions (this script never elevates)"
+    printf 'install.sh: meta-broker pack removed (%s)\n' "$pack_dir"
+  else
+    printf 'install.sh: meta-broker pack not installed (%s absent)\n' "$pack_dir"
+  fi
+  exit 0
+fi
+
+
 
 # --- platform detect ----------------------------------------------------------
 # Both legs are overridable (tests/CI) and the arch mapping is OS-aware: the
@@ -65,29 +159,6 @@ case "$platform" in
   macos-arm64|linux-x86_64|linux-aarch64) ;;
   *) fail "no prebuilt binary for platform '$platform' (os=$os arch=$mach) — supported: macos-arm64, linux-x86_64, linux-aarch64; build from source: git clone \"https://github.com/$REPO\" && cd chug && cargo install --path ." ;;
 esac
-
-# --- T330: the --profile leg (docs/install-profiles.md) -----------------------
-# Runs BEFORE any download so a bad profile fails fast and offline: resolve,
-# validate every contract rule, then copy. The launch-line print happens in
-# the footer, after the binary lands.
-profile_name=
-while [ $# -gt 0 ]; do
-  case "$1" in
-    --profile)
-      [ $# -ge 2 ] || fail "--profile needs a profile name — usage: install.sh --profile <name> (docs/install-profiles.md)"
-      profile_name=$2
-      shift 2
-      ;;
-    --profile=*)
-      profile_name=${1#--profile=}
-      [ -n "$profile_name" ] || fail "--profile= needs a profile name — usage: install.sh --profile <name> (docs/install-profiles.md)"
-      shift
-      ;;
-    *)
-      fail "unknown argument '$1' — the only flag is --profile <name> (point the loop at a model provider; docs/install-profiles.md)"
-      ;;
-  esac
-done
 
 profile_file=
 if [ -n "$profile_name" ]; then
@@ -204,6 +275,35 @@ mkdir -p "$install_dir" || fail "cannot create $install_dir — check \$HOME per
 mv "$tmp/chug" "$install_dir/chug" || fail "cannot move the binary into $install_dir — check write permission (this script never elevates)"
 chmod +x "$install_dir/chug"
 
+# --- T341: the meta-broker pack (--with-meta-pack) -----------------------------
+# The pack comes from the SAME verified tarball the binary came from (or the
+# working tree when this script runs from a repo checkout that carries it —
+# the checkout wins), lands in <claude-dir>/hooks/meta-broker, and its
+# PreToolUse hook is wired into <claude-dir>/settings.json additively:
+# existing hooks untouched, a re-run a no-op, the write atomic.
+if [ "$with_meta_pack" = 1 ]; then
+  pack_src=$pack_checkout
+  pack_src_desc="the working tree ($pack_checkout)"
+  if [ -z "$pack_src" ]; then
+    if [ -f "$tmp/hooks/meta-broker/hook.sh" ]; then
+      pack_src=$tmp/hooks/meta-broker
+      pack_src_desc="the verified release tarball"
+    else
+      fail "the downloaded release tarball does not carry the meta pack (no hooks/meta-broker/) — this release predates the permission-broker hook pack; use a newer release or build from source: git clone \"https://github.com/$REPO\" && cd chug && cargo install --path ."
+    fi
+  fi
+  command -v python3 >/dev/null 2>&1 || fail "python3 is required for --with-meta-pack (the pack's handler and settings wiring run on it) — install python3 and retry"
+  claude_dir=${CLAUDE_CONFIG_DIR:-$HOME/.claude}
+  pack_dir=$claude_dir/hooks/meta-broker
+  settings_file=$claude_dir/settings.json
+  mkdir -p "$claude_dir/hooks" || fail "cannot create $claude_dir/hooks — check permissions (this script never elevates)"
+  rm -rf "$pack_dir" || fail "cannot refresh $pack_dir — check permissions (this script never elevates)"
+  cp -R "$pack_src" "$pack_dir" || fail "cannot copy the meta-broker pack into $pack_dir — check permissions (this script never elevates)"
+  chmod 755 "$pack_dir/hook.sh" "$pack_dir/hook.py" "$pack_dir/wire.py" 2>/dev/null || true
+  printf 'install.sh: meta-broker pack installed from %s -> %s\n' "$pack_src_desc" "$pack_dir"
+  python3 "$pack_dir/wire.py" add "$settings_file" "$pack_dir/hook.sh" || fail "wiring the meta-broker hook into $settings_file failed — the pack is installed but NOT wired; fix the named cause and retry (uninstall: install.sh --uninstall-meta-pack)"
+fi
+
 # --- PATH hint + banner ----------------------------------------------------------
 case ":$PATH:" in
   *":$install_dir:"*) ;;
@@ -233,7 +333,17 @@ else
   printf '\n'
   printf '  next: point the loop at a model provider —\n'
   printf '    install.sh --profile <name>   # the LLM profile contract; docs/install-profiles.md\n'
+  printf '    install.sh --with-meta-pack   # the permission-broker hook pack; docs/meta-harness.md\n'
   printf '\n'
+fi
+if [ "$with_meta_pack" = 1 ]; then
+  printf '\n'
+  printf '  meta-broker pack: %s (hook wired into %s)\n' "$pack_dir" "$settings_file"
+  printf '    broker socket: %s/meta-broker.sock  (the harness listens here)\n' "$claude_dir"
+  printf '    audit trail:   %s/meta-broker-audit.jsonl  (one JSONL line per brokered decision)\n' "$claude_dir"
+  printf '    behavior: stock permission prompts until a broker answers on the socket\n'
+  printf '    uninstall: install.sh --uninstall-meta-pack\n'
+  printf '    contract:  docs/meta-harness.md (the T341 section)\n'
 fi
 printf '  quickstart:\n'
 printf '    chug run --spec SPEC.md --goal "Build X and make the check pass" \\\n'
