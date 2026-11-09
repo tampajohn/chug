@@ -350,6 +350,7 @@
 | T348 | install.sh: release-staleness detection (--allow-stale gate) + --with-daemon/--with-loopd launchd legs | specs/t348-installsh-staleness-services.md | 2 | open | operator-filed 2026-11-09 — script silently installed month-old 0.17.27 during the T347 outage; supervision is tribal knowledge |
 | T349 | features list auto-feed: site renders shipped work from TODO done rows + F17-F23 backfill (grid is hand-maintained, drifts) | specs/t349-features-autofeed.md | 2 | open | operator-filed 2026-11-09 — features list on the site stopped at F15 while the whole meta series shipped |
 | T350 | STATS cycles counter on durable source (cycle-*.log count, not rotating loopd.log lines) — site says 1,042, loop is at ~3,172 | specs/t350-stats-cycles-durable.md | 3 | open | operator-filed 2026-11-09 — staleness audit follow-up to T349 |
+| T351 | README entry-path cleanup: install-first quickstart, chug loop leads continuous mode, generic model in public example | specs/t351-readme-entry-path.md | 3 | open | operator-filed 2026-11-09 — docs audit: quickstart needs Rust toolchain, continuous mode is clone-era, internal serving name in public example |
 
 ## Proposed
 
