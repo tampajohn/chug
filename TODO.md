@@ -348,6 +348,7 @@
 | T346 | RED-proven guard: every loopd-spawning test harness pins CHUG_LOOPD_ENV/CHUG_PROFILE_ENV to ABSENT fixture paths (the T329 absent-file contract) — mechanical scan over tests/*.rs for Command::new("bash") sites that exec loopd.sh without common::pin_loopd_env_files | specs/t346-loader-pin-guard.md | 4 | done | merge 97f4740d (7f57f044 guard + 38a3076b T332 riding-env fix); kimi PASS d1794239243-3, 9 mutants 7/2 minor; RED-proven 5 live sites |
 | T347 | release pipeline: every run since v0.17.28 cancelled; GitHub releases stuck at v0.17.27 — pilots install a month-old binary | specs/t347-release-pipeline-cancelled.md | 1 | open | operator-filed 2026-11-09 — found during K7 update; install.sh latest=0.17.27, missing the whole adoption stack (renumbered from T346, id collision) |
 | T348 | install.sh: release-staleness detection (--allow-stale gate) + --with-daemon/--with-loopd launchd legs | specs/t348-installsh-staleness-services.md | 2 | open | operator-filed 2026-11-09 — script silently installed month-old 0.17.27 during the T347 outage; supervision is tribal knowledge |
+| T349 | features list auto-feed: site renders shipped work from TODO done rows + F17-F23 backfill (grid is hand-maintained, drifts) | specs/t349-features-autofeed.md | 2 | open | operator-filed 2026-11-09 — features list on the site stopped at F15 while the whole meta series shipped |
 
 ## Proposed
 
