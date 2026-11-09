@@ -1,22 +1,19 @@
 # Ledger
 
 ## Done
-- Phase-1 disposition: routine freshness-skip (predicate HOLDS — todo rows open + eval fresh cd3e6003 same-UTC-day); routing d1794241440-1
-- Read-first reconstruction (T251): operator filings T348-T351 specs-only; mid-cycle T352/T353/T354 filings; the operator's OWN T349 child (delegate 16:49:31Z) died 80/80 17:03:25Z with site-sync edits uncommitted — lane left to the operator, worktree /tmp/chug-loop-t349 preserved
-- T347 arc: root-caused (macos-14 retired, live-API verified; loop tag-deletion ruled out) → glm impl 0331fc28 (26/80) → worktree gates GREEN (clippy ZERO + nextest 2049/2049) → kimi REQUIRED (d) d1794242900-2 → PASS d1794244759-4 (7 mutants 5 killed) → merge dd4407c2
-- T348 arc: glm impl cd658edd (67/80) → worktree gates GREEN (clippy ZERO + nextest 2059/2059, 40/40 install_sh) → kimi REQUIRED (b) d1794242900-3 → PASS d1794245005-5 (7 mutants 5 killed) → merge 9e737d90
-- Flips 8c68100c (ONE todo: commit, both rows + refs); harvest disk-only (8 artifacts); worktrees removed post-liveness (t349 operator lane preserved)
-- THE BACKFILL: gh workflow run tag=v0.21.0 → run 42666475705 GREEN (macos-15 arm64 4m53s) → v0.21.0 PUBLISHED all 6 assets → releases/latest current
-- RELEASE v0.22.0 CUT (extraction 3 == TRUE 3 ≥ 3; minor; pairing + notes + tag 223815c4 pushed; run 42669096203 provisioned)
-- Final gates T242 bg GREEN at 606d71a6 (clippy ZERO + nextest 2060/2060); T261 batch FIVE; state write keyed to e40b192e (T311 GREEN)
-
-- Wrap fill CLOSED: datum FINAL 118 iters / ~5944.433s wall [2026-11-09T16:22:30.837Z -> 2026-11-09T18:01:35.270Z off the stream anchors] at the fill stamp 2026-11-09T18:01:36.000Z per scripts/stream_datum.py re-derived FRESH in THIS commit leg (the notes-stamp figures superseded, the T305 no-carry rule); ok:false 6 == 6 [the enumeration re-run off the canonical jq filter in the SAME leg, cross-checked against the datum tool's own leg list — at the fill stamp: SIX legs, each with its stream preview: 2026-11-09T17:21:58.444Z [stream preview:  M FEATURES.md  M scripts/site-sync.sh ---uncommitted count: 2 .chug/LEDGER-20261109-164931.md .chug] + 2026-11-09T17:36:26.649Z [stream preview: tool error: delegate: cwd does not exist or is not a directory: /tmp/chug-loop-t348] + 2026-11-09T17:48:17.903Z [stream preview: tool error: invalid decision_log call: options must be a string, got missing; one record per call; r] + 2026-11-09T17:58:06.842Z [stream preview: On branch main Your branch is ahead of 'origin/main' by 1 commit.   (use "git push" to publish your ] + 2026-11-09T17:59:32.819Z [stream preview: fill text composed, 2237 bytes  --- stderr --- Traceback (most recent call last):   File "<stdin>", ] + 2026-11-09T17:59:58.966Z [stream preview: figures updated: 115 iters / 5846.538 [2026-11-09T16:22:30.837Z -> 2026-11-09T17:59:57.375Z] ok:fals]]; every leg a designed read-only/zero-mutation mis-address or retry adjudicated 0-REAL at the fill]; ctx-edit accepted 0 / rejected 1 [the LIVE_CTX compaction attempt — rejected by the driver validator (turn-1 pairing), the file left non-canonical on disk and never pushed, the driver's own trim supersedes — the cycle-3173 precedent]; trim 1 == 1 [the datum count at the stamp; ZERO trim legs in THIS stream — the streak figure claim-free, the T321 leg INERT per its claim-free contract]; T323 eval-state-untracked GREEN in the same leg [git ls-files count-0 for BOTH the T260 disk-only pair]; T311 assert_state_on_disk GREEN over the on-disk state keyed to the prep e40b192e [validate_state FULL re-run in THIS leg]; the post-notes T237-watch probe reads 60 0 machine==TRUE 0 [FIRST-probe clean — the token-free subject verified]; goal gate post-fill per T255; the push lands main == origin/main; NO TAG rides this push [v0.22.0 cut mid-cycle per the T100 trigger — one tag per wrap spent]
+- Phase 1 skipped per T81 (glm routine; routing d1794248276-1)
+- T349 arc DONE+PUSHED: resume → review fix 62c47d60 → kimi PASS d1794249438-3 → merge 52ff78e1 → flip 383e2b40 (harvest 3 artifacts disk-only)
+- T355 arc DONE+PUSHED: transport-death resume → kimi PASS d1794249931-4 → merge 39abe72b → flip 5a09b9a0 → post-merge gates GREEN 2093/2093; operator docs 4fb53b2b rode along
+- T352 arc: budget-death resume (d1794254673-7) pid 55774 ACCEPTED 72/80 → review caught 5 reds the child skipped (clippy nits 7de7c892; loader CHUG_LANGFUSE_* wildcard clobbered + README layout line 52d36e20) → worktree gates GREEN clippy ZERO + 2127/2127 → kimi REQUIRED d1794258303-8 (loopd.sh doctrine carrier + new CLI surface + 2,369 lines) → validator pid 40507 FLYING (validate-a)
+- T350 arc: budget-death resume (d1794254673-7) pid 55827 ACCEPTED 27/80 → worktree gates GREEN clippy ZERO + 2094/2094 → kimi REQUIRED d1794259493-9 (check-line flip, ~200 lines) → validator pid 71028 FLYING (validate-b, pattern iv legal)
+- LIVE_CTX compaction attempt REJECTED (5th driver-side refusal; file grew via re-escaping) — per standing discipline NO RETRY; file disk-only never pushed; driver's own trim supersedes
 
 ## Next
-- Wrap tail: fill (assert legs) → push → flips (this ledger's wrap todos) → goal_complete
-- Next cycle: T349 operator-lane check (resume their 80/80-dead child or dispatch fresh if the operator's session is gone); T350-T354 operator-lane; T328 parked (A/B/C menu)
+- Poll both validators → verdicts (validation-verdict records) → harvest t352/t350 → serial merges (T352 FIRST, then T350) → T242 bg post-merge gates per merge → flips (T352 ref 9c52b79d+fixes, T350 ref 25970392) → push
+- Budget check: if <30 iters left → wrap instead of T353/T351/T354/T356 (they stay `open`, specs ready)
+- Wrap: T261 batch (d1794248276-1, d1794249054-2, d1794249438-3, d1794249931-4, d1794252043-5, d1794252276-6, d1794254673-7, d1794258303-8, d1794259493-9 + verdicts), Outcomes (4 items this cycle), release recount (T349+T355 pushed + T352/T350 pending — ≥3 since v0.22.0 → TAG LIKELY), state rewrite, T237 probe (worked wrap → token-free per T248), push, goal_complete
+- T352 doctrine-note: spec's item-3 loopd integration wasn't in the named-targets list — loopd.sh carrier ran overlapped (disjoint files, serial merges); no further dispatches until this arc resolves; next eval weighs a named-targets-honesty row
 
 ## Blockers
-- T328 BLOCKED (operator A/B/C menu unanswered)
-- Operator ACTIVE in the shared checkout (T354 filed 17:4xZ mid-cycle) — the loop must re-verify tree state read-first every boot
-- LIVE_CTX: the compaction attempt REJECTED (turn-1 pairing) — file non-canonical on disk, never pushed, the driver's own trim supersedes (the 3173 precedent)
+- T328 BLOCKED (operator A/B/C menu unanswered) — re-verify at wrap
+- LIVE_CTX: NO RETRY (5 refusals) — driver's own trim supersedes
