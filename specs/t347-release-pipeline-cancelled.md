@@ -1,4 +1,4 @@
-# T346 — release pipeline: every run since v0.17.28 cancelled; GitHub releases stop at v0.17.27
+# T347 — release pipeline: every run since v0.17.28 cancelled; GitHub releases stop at v0.17.27
 
 estimate: ~60 changed lines (release.yml + possibly loopd release-cadence logic + fixtures/notes)
 

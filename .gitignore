@@ -13,3 +13,4 @@ target-shared-validate-b/
 LEDGER.md
 __pycache__/
 *.pyc
+target-daemon/
