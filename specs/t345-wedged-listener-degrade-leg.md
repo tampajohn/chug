@@ -1,5 +1,7 @@
 # T345 — chugd: wedged-listener degrade leg (the validator's t340 finding 2)
 
+check: set -o pipefail; CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared cargo test --release --test daemon_status_contract
+
 ## Problem
 
 The t340 validator's mutation leg m3 (read/write timeouts removed from `uds_request`)

@@ -1,6 +1,7 @@
 # T341 — permission-broker hook pack: meta-harness as approver-of-record (opt-in, fail-open)
 
 estimate: ~180 changed lines (hooks/meta-broker/ pack + install.sh --with-meta-pack leg + broker socket protocol doc + fixtures)
+check: set -o pipefail; CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared cargo test --release --test install_sh --test capabilities_contract
 
 ## Why
 
@@ -48,6 +49,17 @@ Default OFF: the pack installs only via the explicit flag; without the
 socket the hook is a <5ms no-op; stock permission prompts are the
 unaltered default in every non-harness session. No global settings change
 beyond the opt-in hook entry.
+
+## Shipping mechanic (discovered at dispatch — the tarball carries the pack)
+
+Today the release tarball carries ONLY the `chug` binary
+(.github/workflows/release.yml package step). "Shipped in-repo and
+installed by install.sh --with-meta-pack" therefore implies: the workflow
+package step also copies `hooks/` into the tarball (one line), and
+`tests/release_workflow.rs`'s pin updates to match; install.sh
+--with-meta-pack then extracts the pack from the SAME verified tarball it
+already downloads (no second fetch, no raw-URL fragility). Repo-checkout
+users install from the working tree.
 
 ## Out of scope
 

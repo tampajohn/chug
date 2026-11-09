@@ -344,7 +344,7 @@
 | T342 | session-status mod: typed status file per session for harnesses (no scraping); no-op when unwatched | specs/t342-session-status-mod.md | 3 | open | operator-filed 2026-11-09 — shares the T341 install leg; <2ms per event, observation only |
 | T343 | usage events emitter + model-identity stamping (model_served distinct from requested; additive) | specs/t343-usage-events.md | 3 | open | operator-filed 2026-11-09 — per-turn JSONL + chug event stamping; absent keys never fabricated |
 | T344 | chug-watch host-runnable test harness: resolve claude-code/testing on host (SDK publication, fleet runner, or sanctioned shim) so T328's battery check executes | specs/t344-chugwatch-host-test-harness.md | 3 | todo | filed cycle-3155 after the T328 dispatch refusal (d1794189727-2): the tree landed d962b00 but the harness is absent on host — npm pointer stub, no testing export in the official package, no plugin test subcommand, plugin not installed; the RED-proven unblock probe is the check in the spec |
-| T345 | chugd: wedged-listener degrade leg (t340 validator finding 2 — pin the 2s read bound) | specs/t345-wedged-listener-degrade-leg.md | 4 | todo | follow-up hardening from the t340 kimi PASS; RED-prove vs the m3 mutant |
+| T345 | chugd: wedged-listener degrade leg (t340 validator finding 2 — pin the 2s read bound) | specs/t345-wedged-listener-degrade-leg.md | 4 | todo | follow-up hardening from the t340 kimi PASS; RED-prove vs the m3 mutant; check: line added at dispatch (filing repair d1794198989-1 tail) |
 
 ## Proposed
 

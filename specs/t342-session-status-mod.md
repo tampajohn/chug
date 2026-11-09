@@ -1,6 +1,7 @@
 # T342 — session-status mod: typed status surface for any Claude session (no-op when unwatched)
 
 estimate: ~150 changed lines (hooks/meta-status/ pack sharing the T341 install leg + status writer + fixtures)
+check: set -o pipefail; CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared cargo test --release --test install_sh --test capabilities_contract
 
 ## Why
 

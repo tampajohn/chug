@@ -1,6 +1,7 @@
 # T343 — usage events emitter + model-identity truth (additive telemetry leg)
 
 estimate: ~120 changed lines (hooks/meta-usage/ in the meta pack + chug event stamping + docs + fixtures)
+check: set -o pipefail; CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared cargo test --release --test install_sh --test capabilities_contract
 
 ## Why
 
