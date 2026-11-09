@@ -1,15 +1,12 @@
 # Ledger
 
 ## Done
-- Cycle-3157 COMPLETE + PUSHED (main == origin/main 844377c2): T342 session-status mod (merge e19cfde6 + remedy 47406e10 + README 37c1e4e2 + flip 76cab715; kimi PASS d1794211960-4; 8 mutants; impl glm 80/80 died uncommitted → T63 resume d1794209590-2 accepted; post-merge cost-test host red → pairwise-delta statistic remedy d1794212606-5) + T343 usage-events emitter (merge 65ee407f + README 051dabf7 + flip 010145fa; kimi PASS d1794216762-8, 7/7 mutants; impl glm 80/80 died uncommitted → T63 resume d1794213527-6 accepted 56)
-- Phase 1: routine-skip (eval fresh 40843b41, same UTC day; queue 3 open rows) → glm-routed; d1794207660-1; T328 re-verified BLOCKED
-- Wrap corridor: prep 13847880 (Outcomes 3157 full + 3150 one-lined) + notes e6034b59 (T257 color 106/9,588.747, token-free) + fill 844377c2 (datum FINAL 113/9,686.158, ok:false SEVEN==7 with the compose-leg walk documented 4→5→6→7, T309/T310/T311/T323 legs GREEN, T321 inert-claim-free) — all pushed
-- T261 batch EIGHT (d1794217096-9..d1794217105-16, all landed-clean); audit REPORT-only (legacy counts carried); release recount NO TAG (TRUE 2 < 3, v0.20.0 ANCESTOR-OK); probe 60 0 machine==TRUE 0
-- LIVE_CTX compacted 435,011→121,143 bytes (shape-valid stubs: long string values truncated in place, structure preserved; turn 0 pinned verbatim; 2 rejection rounds — bare-string content + control-char — both shape-corrected forward)
+- Phase 1: routine-skip logged (eval fresh 13847880, same UTC day 09:57Z; todo_rows=2) → glm-routed; eval-routing record d1794218347-1
+- Phase 2 disposition: T344 re-probed — all three resolution paths still closed (installed @anthropic-ai/claude-code 2.1.235 exports [], npm latest 2.1.319 has no exports field, `claude plugin` has no test subcommand, chug-watch has no package.json) → dispatch refused (the cycle-3155 shape d1794189727-2); T328 re-verified BLOCKED same-root; ZERO dispatchable rows
+- T207 wrap-state note: zero-item corridor — no merged-but-unflipped rows, no worktrees (main-only), no unpushed commits, missing decision records: 3 T261 backfills owed at the batch (d1794218347-1 this-cycle + the inherited t339 pair d1794192449-3/-4)
 
 ## Next
-- T344 stays todo (spec ready; BLOCKED-adjacent on the chug-watch host harness) — the next cycle's input alongside any operator delta
-- T328 BLOCKED (parked, same root as T344)
+- Wrap cycle-3158: Outcomes entry + compact 3151 → prep commit → eval-state rewrite → token-free notes + T257 color → probe → fill (T309/T310/T321/T323/T311 legs) → push → flips → goal_complete
 
 ## Blockers
-- T328/T344: no chug-watch host-runnable test harness on this host (npm pointer stub, no testing export) — RED-proven unblock probe lives in specs/t344-chugwatch-host-test-harness.md
+- T328/T344: no chug-watch host-runnable test harness on this host (npm pointer stub, no testing export, no plugin test subcommand, no package.json in chug-watch) — the RED-proven unblock probe lives in specs/t344-chugwatch-host-test-harness.md; decision rests with the operator per the spec's hand-off clause
