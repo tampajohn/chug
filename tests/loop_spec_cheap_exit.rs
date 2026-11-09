@@ -337,6 +337,10 @@ fn run_predicate(root: &Path, envs: &[(&str, &str)]) -> String {
     // — inside the fixture, where nothing listens unless a test binds its own
     // (see the_probe_runner_never_consults_a_daemon_outside_the_fixture).
     cmd.env("HOME", root);
+    // T329: pin the T213/T330 loader files to empty fixture paths — a host
+    // ~/.chug/profile.env must never re-export routing knobs into the probe
+    // (the T332 hermeticity contract).
+    common::pin_loopd_env_files(&mut cmd, root);
     let out = cmd.output().expect("spawn loopd.sh predicate");
     assert!(
         out.status.success(),
@@ -895,8 +899,8 @@ fn the_skip_path_writes_the_disposition_itself_end_to_end() {
     );
     let sock = f.path().join(".chug/no-daemon.sock");
     let run_one_pass = || {
-        Command::new("bash")
-            .arg(f.path().join("loopd.sh"))
+        let mut cmd = Command::new("bash");
+        cmd.arg(f.path().join("loopd.sh"))
             .arg("run")
             .current_dir(f.path())
             .env("PATH", &path)
@@ -914,8 +918,10 @@ fn the_skip_path_writes_the_disposition_itself_end_to_end() {
             .env("GIT_COMMITTER_NAME", "t258-fixture")
             .env("GIT_COMMITTER_EMAIL", "t258@example.test")
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .env("GIT_CONFIG_SYSTEM", "/dev/null")
-            .output()
+            .env("GIT_CONFIG_SYSTEM", "/dev/null");
+        // T329: pin the T213/T330 loader files to empty fixture paths.
+        common::pin_loopd_env_files(&mut cmd, f.path());
+        cmd.output()
             .expect("spawn loopd.sh run")
     };
     let out = run_one_pass();
@@ -962,13 +968,15 @@ fn the_skip_path_writes_the_disposition_itself_end_to_end() {
         files.is_empty(),
         "the disposition is an EMPTY commit — loopd touches no eval-domain file: {files:?}"
     );
-    let probe = Command::new("bash")
-        .arg(f.path().join("loopd.sh"))
+    let mut cmd = Command::new("bash");
+    cmd.arg(f.path().join("loopd.sh"))
         .arg("sleep-ok")
         .current_dir(f.path())
         .env("CHUG_ROUTINE_TODAY", FRESH_DAY)
-        .env_remove("LOOPD_SLEEP_OK")
-        .output()
+        .env_remove("LOOPD_SLEEP_OK");
+    // T329: pin the T213/T330 loader files to empty fixture paths.
+    common::pin_loopd_env_files(&mut cmd, f.path());
+    let probe = cmd.output()
         .expect("spawn sleep-ok probe");
     let line = String::from_utf8_lossy(&probe.stdout);
     assert_eq!(

@@ -126,6 +126,10 @@ fn run_sleep_ok(root: &Path, envs: &[(&str, &str)]) -> String {
     for (k, v) in envs {
         cmd.env(k, v);
     }
+    // T329: pin the T213/T330 loader files to empty fixture paths — a host
+    // ~/.chug profile must never reach the sleep-ok walk (the T332
+    // hermeticity contract).
+    common::pin_loopd_env_files(&mut cmd, root);
     let out = cmd.output().expect("spawn loopd.sh sleep-ok");
     assert!(
         out.status.success(),

@@ -31,6 +31,8 @@
 
 #![cfg(unix)]
 
+mod common;
+
 use std::fs;
 use std::io::Read;
 use std::os::unix::fs::PermissionsExt;
@@ -302,6 +304,8 @@ impl Sandbox {
             }
         }
         cmd.stdout(Stdio::null()).stderr(Stdio::null());
+        // T329: pin the T213/T330 loader files to empty fixture paths.
+        common::pin_loopd_env_files(&mut cmd, &self.root);
         cmd.spawn().expect("spawn bash loopd.sh run")
     }
 

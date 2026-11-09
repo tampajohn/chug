@@ -1872,6 +1872,10 @@ fn run_predicate(root: &Path, envs: &[(&str, &str)]) -> String {
     }
     cmd.env_remove("CHUG_DAEMON_SOCK").env_remove("CHUG_HOME");
     cmd.env("HOME", root);
+    // T329: the T330 profile loader resolves CHUG_PROFILE_ENV against the
+    // loopd env-loader contract, not HOME alone — pin both loader files to
+    // empty fixture paths (a host ~/.chug/profile.env must never leak in).
+    common::pin_loopd_env_files(&mut cmd, root);
     let out = cmd.output().expect("spawn loopd.sh predicate");
     assert!(
         out.status.success(),

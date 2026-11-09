@@ -422,6 +422,11 @@ fn run_routing(root: &Path, envs: &[(&str, &str)]) -> String {
     for (k, v) in envs {
         cmd.env(k, v);
     }
+    // T329: pin the T213/T330 loader files to empty fixture paths — a host
+    // ~/.chug/profile.env re-exports LOOP_ORCH_MODEL inside the spawned
+    // script (after any env_remove) and would flip the routing off the
+    // defaults these pins assert (the T332 hermeticity contract).
+    common::pin_loopd_env_files(&mut cmd, root);
     let out = cmd.output().expect("spawn loopd.sh routing");
     assert!(
         out.status.success(),

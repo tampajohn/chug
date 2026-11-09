@@ -307,6 +307,14 @@ fn run_predicate(root: &Path, envs: &[(&str, &str)]) -> String {
     for (k, v) in envs {
         cmd.env(k, v);
     }
+    // T329: the T330 profile loader runs INSIDE the spawned script and
+    // re-exports LOOP_ORCH_MODEL / CHUG_DECISION_PROVIDER from the HOST's
+    // ~/.chug/profile.env (staged 2026-11-09: a `[1m]`-suffixed reasoning
+    // id leaked into the gate line's model field, and provider=proxy
+    // starved the daemon-socket judge fixtures — laya=down). Pin both
+    // loader files to empty fixture paths so the harness sees exactly the
+    // defaults it pins (the T332 hermeticity contract).
+    common::pin_loopd_env_files(&mut cmd, root);
     let out = cmd.output().expect("spawn loopd.sh predicate");
     assert!(
         out.status.success(),
@@ -360,8 +368,8 @@ fn run_one_pass(f: &Fixture, sock: &Path) -> std::process::Output {
         bin.display(),
         std::env::var("PATH").unwrap_or_else(|_| "/usr/bin:/bin".to_string())
     );
-    Command::new("bash")
-        .arg(f.path().join("loopd.sh"))
+    let mut cmd = Command::new("bash");
+    cmd.arg(f.path().join("loopd.sh"))
         .arg("run")
         .current_dir(f.path())
         .env("PATH", &path)
@@ -380,9 +388,11 @@ fn run_one_pass(f: &Fixture, sock: &Path) -> std::process::Output {
         .env("GIT_COMMITTER_EMAIL", "t259@example.test")
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_CONFIG_SYSTEM", "/dev/null")
-        .stdout(Stdio::null())
-        .output()
-        .expect("spawn loopd.sh run")
+        .stdout(Stdio::null());
+    // T329: belt-and-braces beside the HOME redirect — pin the loader files
+    // so a host ~/.chug profile can never reach the fixture (T330 loader).
+    common::pin_loopd_env_files(&mut cmd, f.path());
+    cmd.output().expect("spawn loopd.sh run")
 }
 
 fn fixture_log(f: &Fixture) -> String {

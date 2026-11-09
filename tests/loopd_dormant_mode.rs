@@ -335,8 +335,8 @@ impl Fixture {
     /// one iteration, 1s sleeps, no daemon ensure, no site sync).
     fn run_one_pass(&self) {
         self.install_run_stubs();
-        let status = Command::new("bash")
-            .arg(self.path().join("loopd.sh"))
+        let mut cmd = Command::new("bash");
+        cmd.arg(self.path().join("loopd.sh"))
             .arg("run")
             .current_dir(self.path())
             .env(
@@ -362,7 +362,10 @@ impl Fixture {
             .env("GIT_COMMITTER_EMAIL", "t325@example.test")
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
             .env("GIT_CONFIG_SYSTEM", "/dev/null")
-            .stdout(Stdio::null())
+            .stdout(Stdio::null());
+        // T329: pin the T213/T330 loader files to empty fixture paths.
+        common::pin_loopd_env_files(&mut cmd, self.path());
+        let status = cmd
             .output()
             .expect("spawn loopd.sh run");
         assert!(
@@ -396,6 +399,10 @@ fn run_predicate(root: &Path, envs: &[(&str, &str)]) -> String {
     }
     cmd.env_remove("CHUG_DAEMON_SOCK").env_remove("CHUG_HOME");
     cmd.env("HOME", root);
+    // T329: pin the T213/T330 loader files to empty fixture paths — a host
+    // ~/.chug/profile.env must never re-export routing knobs into the probe
+    // (the T332 hermeticity contract).
+    common::pin_loopd_env_files(&mut cmd, root);
     let out = cmd.output().expect("spawn loopd.sh predicate");
     assert!(
         out.status.success(),
