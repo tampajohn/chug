@@ -352,6 +352,7 @@
 | T350 | STATS cycles counter on durable source (cycle-*.log count, not rotating loopd.log lines) — site says 1,042, loop is at ~3,172 | specs/t350-stats-cycles-durable.md | 3 | open | operator-filed 2026-11-09 — staleness audit follow-up to T349 |
 | T351 | README entry-path cleanup: install-first quickstart, chug loop leads continuous mode, generic model in public example | specs/t351-readme-entry-path.md | 3 | open | operator-filed 2026-11-09 — docs audit: quickstart needs Rust toolchain, continuous mode is clone-era, internal serving name in public example |
 | T352 | chug update: self-update with version-floor protection + source-build fallback (T347-era) + opt-in loop integration | specs/t352-auto-update.md | 2 | open | operator-filed 2026-11-09 — F94 was on 0.9.0 with a 5753-commit-stale repo; every box drifts alone |
+| T353 | profile contract: CHUG_LANGFUSE_PROJECT is a no-op (0 consumers) — remove + document per-lane visibility (key pairs vs trace filtering) + contract audit test | specs/t353-langfuse-project-dead-var.md | 2 | open | operator-filed 2026-11-09 — Fleet Primary T4 run proved the var does nothing; a documented no-op lies to adopters |
 
 ## Proposed
 
