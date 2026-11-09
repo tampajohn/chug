@@ -416,11 +416,17 @@ fn children_enumerate_impl_and_validate_worktrees() {
 /// (d) The response keys match docs/meta-harness.md exactly — the pinned
 /// fixture is the doc shape plus `contract_version`, and the live response
 /// carries exactly those keys.
+fn repo_root() -> std::path::PathBuf {
+    // Runtime cwd, never a compile-time env!() of CARGO_MANIFEST_DIR — the T48
+    // rule (cargo sets the test cwd to the package root).
+    std::env::current_dir().expect("cargo sets the test cwd to the package root")
+}
+
 #[test]
 fn status_loop_keys_match_the_doc_and_the_pinned_fixture() {
     // The docs' T340 example JSON block (the one carrying "children").
-    let docs = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/docs/meta-harness.md"))
-        .expect("read docs/meta-harness.md");
+    let docs =
+        std::fs::read_to_string(repo_root().join("docs/meta-harness.md")).expect("read docs/meta-harness.md");
     let block_start = docs
         .rfind("```json\n{\n  \"status\": \"working\"")
         .expect("the T340 example block in docs/meta-harness.md");
@@ -430,10 +436,9 @@ fn status_loop_keys_match_the_doc_and_the_pinned_fixture() {
         serde_json::from_str(&rest[..end]).expect("the docs example parses");
     let doc_keys: Vec<&String> = doc_example.as_object().expect("object").keys().collect();
 
-    let fixture_text = std::fs::read_to_string(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/tests/fixtures/daemon_status/status-loop-v1.json"
-    ))
+    let fixture_text = std::fs::read_to_string(
+        repo_root().join("tests/fixtures/daemon_status/status-loop-v1.json"),
+    )
     .expect("read the pinned fixture");
     let fixture: serde_json::Value = serde_json::from_str(&fixture_text).expect("fixture parses");
     let fixture_keys: Vec<&String> = fixture.as_object().expect("object").keys().collect();
