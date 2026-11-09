@@ -66,4 +66,4 @@ behavior by default anywhere.
 - Fleet-wide fan-out (boxes self-update; orchestrated rollout is a
   fleet item, not chug's).
 
-check: CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-impl-a cargo test --release --test update_cmd
+check: CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-validate-a cargo test --release --test update_cmd
