@@ -62,4 +62,4 @@ so this item is two targeted gaps, not a rewrite:
 
 ## check
 
-check: CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-impl-b cargo test --release --test install_sh
+check: CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-validate-b cargo test --release --test install_sh
