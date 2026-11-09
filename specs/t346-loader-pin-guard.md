@@ -40,4 +40,4 @@ noise is preferred (the T293 brittle-awk lesson applies to the detector's
 own false-positive surface: assert the scan's exception list stays short and
 named).
 
-check: CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared cargo test --release --test loader_pin_guard
+check: CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-validate-a cargo test --release --test loader_pin_guard
