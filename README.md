@@ -439,7 +439,10 @@ downgraded to a placeholder when the endpoint rejects image content),
 `edit_file` (+`replace_all`), `bash`, `grep`,
 `tgrep`, `glob`, `list_dir`, `update_ledger`, `todo_add`, `todo_update`,
 `todo_list`, `goal_complete`, `delegate`, `web_fetch`, `web_search`,
-`decision_log`.
+`decision_log`,
+`mcp_resource` (the MCP resource catalog/read surface for connected MCP
+servers — list and read — with the contract in the MCP-servers section
+below).
 All file-tool paths are sandboxed to `--cwd` — `..` traversal, absolute
 paths outside it, AND symlinks resolving outside it are refused (T134:
 `resolve_safe` resolves the real filesystem, so an in-tree link to
