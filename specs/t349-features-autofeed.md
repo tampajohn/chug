@@ -49,3 +49,7 @@ hand-maintained, so it drifts whenever the loop forgets (which is always).
 - Removing the curated FEATURES grid (it stays; the feed complements).
 - Editing the F1-F15 rows' content (backfill is append-only).
 - Retroactive release-notes generation (feed links specs, not releases).
+
+## check
+
+check: CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-impl-c cargo test --release --test site_sync
