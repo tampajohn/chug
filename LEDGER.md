@@ -1,22 +1,15 @@
 # Ledger
 
 ## Done
-- T342 arc LANDED + PUSHED (merge e19cfde6 + remedy 47406e10 + README 37c1e4e2 + flip 76cab715; kimi PASS d1794211960-4; harvest byte-verified; worktree removed)
-- T343 arc LANDED + PUSHED (merge 65ee407f + README + flip 010145fa; main == origin/main): impl glm 80/80 died uncommitted → T63 resume d1794213527-6 accepted 56; kimi PASS d1794215189-8 (7/7 mutants); gates 2046/2046 + clippy ZERO post-merge; harvest byte-verified (events-t343-impl runs:2 + events-t343-validate + verdict + LEDGER-t343-validate)
-
-## Wrap-state (T207 — crossed the stop-dispatch boundary)
-- Merged-but-unflipped rows: NONE (T342+T343 both flipped+pushed)
-- Unharvested worktrees: NONE (t342 removed; t343 harvest done, removal next)
-- Unpushed commits: 0 (main == origin/main 010145fa)
-- Missing decision records: NONE (8 landed: d1794207660-1, d1794209590-2, d1794211960-3, d1794212248-4, d1794212606-5, d1794213527-6, d1794215189-7, d1794216762-8 — outcome backfills batched at the wrap)
-- Release state: v0.20.0 tagged+pushed cycle-3156; this cycle 2 distinct flip-ids (T342+T343) < 3 → NO TAG expected
+- Cycle-3157 COMPLETE + PUSHED (main == origin/main 844377c2): T342 session-status mod (merge e19cfde6 + remedy 47406e10 + README 37c1e4e2 + flip 76cab715; kimi PASS d1794211960-4; 8 mutants; impl glm 80/80 died uncommitted → T63 resume d1794209590-2 accepted; post-merge cost-test host red → pairwise-delta statistic remedy d1794212606-5) + T343 usage-events emitter (merge 65ee407f + README 051dabf7 + flip 010145fa; kimi PASS d1794216762-8, 7/7 mutants; impl glm 80/80 died uncommitted → T63 resume d1794213527-6 accepted 56)
+- Phase 1: routine-skip (eval fresh 40843b41, same UTC day; queue 3 open rows) → glm-routed; d1794207660-1; T328 re-verified BLOCKED
+- Wrap corridor: prep 13847880 (Outcomes 3157 full + 3150 one-lined) + notes e6034b59 (T257 color 106/9,588.747, token-free) + fill 844377c2 (datum FINAL 113/9,686.158, ok:false SEVEN==7 with the compose-leg walk documented 4→5→6→7, T309/T310/T311/T323 legs GREEN, T321 inert-claim-free) — all pushed
+- T261 batch EIGHT (d1794217096-9..d1794217105-16, all landed-clean); audit REPORT-only (legacy counts carried); release recount NO TAG (TRUE 2 < 3, v0.20.0 ANCESTOR-OK); probe 60 0 machine==TRUE 0
+- LIVE_CTX compacted 435,011→121,143 bytes (shape-valid stubs: long string values truncated in place, structure preserved; turn 0 pinned verbatim; 2 rejection rounds — bare-string content + control-char — both shape-corrected forward)
 
 ## Next
-- Remove /tmp/chug-loop-t343 (zombie-exact pids 88630/90993/52982) + delete branch
-- Release recount (mechanical, v0.20.0 ancestry) → NO TAG
-- T261 batch (8 outcome records, ONE pass) + decisions-audit REPORT
-- Outcomes 3157 + compact 3150 one-line; eval-state rewrite (T311 FULL, validate_state GREEN)
-- token-free eval: notes + T257 color + post-commit sleep-ok probe; fill (T309/T310/T311/T317/T321/T323 asserts); push; goal_complete
+- T344 stays todo (spec ready; BLOCKED-adjacent on the chug-watch host harness) — the next cycle's input alongside any operator delta
+- T328 BLOCKED (parked, same root as T344)
 
 ## Blockers
-- T328 BLOCKED (parked); T344 UNBLOCKABLE (same root)
+- T328/T344: no chug-watch host-runnable test harness on this host (npm pointer stub, no testing export) — RED-proven unblock probe lives in specs/t344-chugwatch-host-test-harness.md
