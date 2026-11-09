@@ -83,6 +83,8 @@ chug run --auto-spec --validate     # force FULL adversarial validation on this 
 chug run --auto-spec --no-validate  # force the gates-only lane (operator override, recorded)
 chug chat            # interactive mode (TUI)
 chug ledger          # print current LEDGER.md
+chug capabilities    # print the capability contract — features + versions this build supports (T339)
+chug daemon --status # the judge daemon's lifecycle; T340 also serves GET /status/loop + /status/items on its socket (observation only)
 ```
 
 Put a `check: <shell command>` line in your spec — `goal_complete` is only
@@ -643,6 +645,18 @@ proxy is a normal verdict failure, never a constructor panic), and `auto`
 the configured proxy otherwise — with no proxy configured, `auto` IS the
 local daemon, byte-identical to pre-T332 behavior. `CHUG_JUDGE=proxy` forces
 the hosted endpoint at the risk gate explicitly; an unset `CHUG_JUDGE`
+
+T339 ships a machine-readable capability contract: `chug capabilities` prints
+`{contract_version, compat, features, versions}` — consumers must treat unknown
+features as false and ignore unknown keys. T340 extends the same daemon socket
+with two observation-only endpoints: `GET /status/loop` renders the loop
+surface (`status` working|blocked|idle|dormant, cycle/iteration, blocked-reason
++ detail naming the blocking path, children) and `GET /status/items` the open
+TODO queue — bounded read-only reads of the loopd state files, every response
+carrying `contract_version`, fields additive-only. `chug capabilities` flips
+`daemon_status: true` + `lifecycle_events: "1"` only when a live T340-era
+daemon answers the 2s-bounded probe; socket-absent degrades all-off, never
+hangs.
 consults this same provider layer. `chug daemon --status` names the
 resolved provider. See [docs/decision-providers.md](docs/decision-providers.md).
 
