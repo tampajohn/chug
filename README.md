@@ -742,6 +742,19 @@ unknown; session end leaves the file with `done`. The transcription is
 atomic (readers never observe a partial file) and adds <2 ms per hook
 event; `chug capabilities` reports `status_mod: true` when installed.
 
+**Usage-events pack** (opt-in, same `--with-meta-pack` install leg,
+`hooks/meta-usage/`): appends one JSONL line per turn to
+`<claude-dir>/meta-usage.jsonl` — `{ts, session_id, model_requested,
+model_served, input_tokens, output_tokens, cache_read_tokens,
+cache_creation_tokens, contract_version}` — fields present only when the
+event actually carries them (never fabricated zeros; the served slot is
+filled only by an explicit as-served value, never the requested name).
+Chug's own event stream gains the same truth additively: `model_served`
+stamped onto the iteration/abort lines and decision records from the
+response's served-model metadata, omitted when the provider is silent.
+`chug capabilities` reports `usage_events: true` when installed; the
+accumulated log survives uninstall (record, not state).
+
 ## Permissions (`.chug/permissions.json`)
 
 Declarative per-tool deny rules, evaluated in-process before every tool
