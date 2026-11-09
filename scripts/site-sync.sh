@@ -298,38 +298,54 @@ test_count() { # -> "<n>\t<short-ref>" ("" when no message quotes a full-suite g
       }'
 }
 
-# --- fact 3 (req 1): cycle count from the loopd logs -------------------------
-cycle_count() { # -> "<n>\t<source text>"
-  local log="$CHUG/.chug/loopd/loopd.log" n
-  if [ -f "$log" ]; then
-    n=$(grep -c ' cycle OK:' "$log" 2>/dev/null) || n=0
-    printf '%s\t"cycle OK" lines in .chug/loopd/loopd.log' "$n"
+# --- fact 3 (req 1): cycle count from the DURABLE record (T350) ---------------
+# The 2026-11-09 staleness audit: the figure read `cycle OK` lines out of the
+# CURRENT .chug/loopd/loopd.log, which rotates — so the counter reset
+# invisibly and understated forever (chug.sh published 1,042 while the loop
+# was on cycle ~3,172). Same bug class as the fossilized FEATURES grid (T349):
+# a source that looks mechanical but is not durable. The figure now comes
+# from a durable per-cycle record, first match wins:
+#   1. cycle-*.log filenames under .chug/loopd/ — the supervisor writes one
+#      per cycle and never rotates them (the find descends, so archived logs
+#      are included), while the loopd state lives;
+#   2. `eval:` disposition commits in git log — the other durable per-cycle
+#      record; git never rotates, so this serves wherever the on-disk state
+#      does not reach (a fresh checkout: build and CI clones — .chug/ is
+#      gitignored — still carry the loop's full cycle history);
+#   3. the legacy log-line count, rendered as >=N — a floor, honest about the
+#      log's volatility.
+# The label is "cycles on record" (not the old "cycles completed by the loopd
+# supervisor"): legs 1+2 count records, not verdict-verified completions — a
+# failed cycle is still a cycle on record, and the label says so. T142's
+# verdict-stamp fallback retired with it: stamp forgery could only inflate a
+# "completed" claim; a records count reads filenames, never model bytes.
+cycle_count() { # -> "<figure>\t<source text>"
+  local n
+  # leg 1: the cycle logs on disk (one per cycle; archived ones included)
+  n=$(find "$CHUG/.chug/loopd" -type f -name 'cycle-*.log' 2>/dev/null | wc -l | tr -d ' ')
+  if [ "$n" -gt 0 ] 2>/dev/null; then
+    printf '%s\tcycle-*.log files in .chug/loopd/' "$n"
     return
   fi
-  if [ -d "$CHUG/.chug/loopd" ]; then
-    # T142 fix-up F1: count a cycle only on its LAST verdict line — never on
-    # any matching line. Model text reaches a cycle log verbatim (stderr
-    # deltas; the abort path puts model-written ledger text on stdout), so a
-    # failed cycle whose bytes contain a forged `verdict: goal complete
-    # (rc=0)` line made the old `grep -l` rename-count it: the marker was
-    # renamed, not made unforgeable (validator probe published "cycles 2"
-    # for one real OK cycle). The supervisor appends its stamp AFTER the
-    # child is fully dead — both pipes closed — and writes nothing to the
-    # log after it, so the last `verdict:` line of a stamp-supervised cycle
-    # log is always the supervisor's and a forged one is necessarily
-    # followed by the real stamp. Logs older than the stamp carry none and
-    # count 0.
-    n=0
-    for f in "$CHUG"/.chug/loopd/cycle-*.log; do
-      [ -f "$f" ] || continue
-      case "$(grep 'verdict:' "$f" 2>/dev/null | tail -n 1)" in
-        *'verdict: goal complete (rc=0)') n=$((n + 1)) ;;
-      esac
-    done
-    printf '%s\tcycle logs whose final verdict stamp reached goal complete (.chug/loopd/cycle-*.log)' "$n"
+  # leg 2: the `eval:` disposition commits in git log (subject-anchored — the
+  # loop's own disposition convention; a body line is not a disposition)
+  n=$(git --no-pager -C "$CHUG" log --format=%s 2>/dev/null \
+    | awk '/^eval:/ { n++ } END { print n + 0 }')
+  if [ "$n" -gt 0 ] 2>/dev/null; then
+    printf "%s\teval: disposition commits in the chug repo's git log" "$n"
     return
   fi
-  printf '0\tno .chug/loopd logs found in the chug repo'
+  # leg 3: the legacy counter — a floor, since the log it reads rotates
+  if [ -f "$CHUG/.chug/loopd/loopd.log" ]; then
+    n=$(grep -c ' cycle OK:' "$CHUG/.chug/loopd/loopd.log" 2>/dev/null) || n=0
+    if [ "$n" -gt 0 ]; then
+      printf '≥%s\t"cycle OK" lines in .chug/loopd/loopd.log (a floor — the log rotates)' "$n"
+      return
+    fi
+  fi
+  # T217 fail-closed: no durable cycle record -> the honest placeholder,
+  # never a fabricated zero.
+  printf 'n/a\tno durable cycle record in the chug repo'
 }
 
 # --- fact 4 (req 1 + EVALUATION.md source): last evaluation write ------------
@@ -2385,7 +2401,7 @@ TMP_TLITEM="$TMPD/tlitem"                 # current tl-item chunk (timeline walk
   else
     printf '  <div class="stat"><b>%s</b><span>tests green — %s</span></div>\n' "$TEST_N" "$TEST_SRC"
   fi
-  printf '  <div class="stat"><b>%s</b><span>cycles completed by the loopd supervisor — %s</span></div>\n' "$CYC_N" "$CYC_SRC"
+  printf '  <div class="stat"><b>%s</b><span>cycles on record — %s</span></div>\n' "$CYC_N" "$CYC_SRC"
   printf '  <div class="stat"><b>%s</b><span>last EVALUATION.md write (git log, chug repo)</span></div>\n' "$EVAL_D"
   printf '</div>\n'
   if [ -n "$LANDED" ]; then

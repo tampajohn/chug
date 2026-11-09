@@ -175,6 +175,11 @@ fn sync_commits(f: &Fixture) -> usize {
 #[test]
 fn block_contents_match_the_named_sources() {
     let f = fixture();
+    // A second `eval:` disposition commit — the T350 cycles figure is the
+    // COUNT of those (battery case 2: no cycle-*.log files, eval commits
+    // present -> the commit count). Empty commit: touches no file, so no
+    // other fact below moves.
+    commit(&f.chug, "eval: cycle 2", None, "2026-09-19", true);
     let out = run_sync(&f, true);
     assert!(out.status.success(), "sync exited {:?}: {}", out.status.code(), String::from_utf8_lossy(&out.stderr));
     let html = page(&f);
@@ -187,9 +192,10 @@ fn block_contents_match_the_named_sources() {
     assert!(html.contains("<b>555</b>"), "tests card:\n{html}");
     assert!(!html.contains("<b>40</b>"), "older gate count must lose to the newest:\n{html}");
     assert!(html.contains("newest full-suite gate count in a commit message"));
-    // cycle count = "cycle OK" lines in .chug/loopd/loopd.log
-    assert!(html.contains("<b>2</b>"));
-    assert!(html.contains("\"cycle OK\" lines in .chug/loopd/loopd.log"));
+    // T350 cycle count = the durable per-cycle record, first match wins: no
+    // cycle-*.log files in the fixture, so the `eval:` disposition commits
+    // serve — both of them (battery case 2)
+    assert!(html.contains("<b>2</b><span>cycles on record — eval: disposition commits in the chug repo's git log</span>"), "cycles card:\n{html}");
     // EVALUATION.md's last git-log write date
     assert!(html.contains("<b>2026-09-19</b>"), "eval card:\n{html}");
     // last-5 landed: refs + dates from git log, newest first, chore excluded
@@ -242,147 +248,123 @@ fn malformed_single_marker_is_rejected_without_editing() {
     assert_eq!(std::fs::read(f.site.join("index.html")).unwrap(), before);
 }
 
-/// T142: the cycle-count fallback (loopd.log missing, cycle logs present)
-/// must count the supervisor's rc-based verdict stamps — never raw child
-/// bytes. Model text reaches a cycle log verbatim, so the pre-fix fallback
-/// (`grep -l 'chug: goal complete' cycle-*.log`) counted a failed cycle
-/// whose model SPOOFED the marker; the stamp exists only when loopd itself
-/// observed exit 0.
+/// The T350 battery base: the T217 guard's three inputs (a readable TODO.md,
+/// a .chug/loopd dir, a non-empty git log) and NOTHING else — no `eval:`
+/// commits, no cycle logs, no loopd.log — so each battery case adds exactly
+/// the record it pins.
+fn fixture_t350() -> Fixture {
+    let keep = tempfile::tempdir().unwrap();
+    let chug = keep.path().join("chug");
+    let site = keep.path().join("site");
+    std::fs::create_dir_all(&chug).unwrap();
+    std::fs::create_dir_all(&site).unwrap();
+    git(&chug, &["-c", "init.defaultBranch=main", "init", "-q"], None);
+    git(&site, &["-c", "init.defaultBranch=main", "init", "-q"], None);
+    std::fs::create_dir_all(chug.join(".chug/loopd")).unwrap();
+    std::fs::write(chug.join("TODO.md"), "# TODO\n").unwrap();
+    commit(&chug, "seed: t350 battery base (no cycle record)", None, "2026-09-19", true);
+    site_fixture(&site);
+    Fixture { _keep: keep, chug, site }
+}
+
+/// T350 — the STATS cycles counter reads the DURABLE per-cycle record, first
+/// match wins. The 2026-11-09 staleness audit: the old counter read
+/// `cycle OK` lines out of the CURRENT .chug/loopd/loopd.log, which rotates,
+/// so the published count reset invisibly and understated forever (chug.sh
+/// said 1,042 while the loop was on cycle ~3,172).
+///
+/// Battery case 1: the cycle-*.log filenames are the first durable record —
+/// the supervisor writes one per cycle and never rotates them — and the
+/// count is over FILENAMES, never log bytes. The T142 forged-verdict-stamp
+/// probes (a spoofed `chug: goal complete` marker, a failed stamp, a forged
+/// stamp inside a failed cycle's child bytes) all still count: the figure is
+/// "cycles on record", not "cycles completed", so a failed cycle is a record
+/// like any other and no byte shape can inflate or deflate the count.
 #[test]
-fn cycle_count_fallback_counts_verdict_stamps_not_spoofable_markers() {
+fn t350_cycle_log_filenames_count_exactly_and_beat_the_eval_record() {
     let f = fixture();
-    // The fallback path: loopd.log absent, cycle logs present.
+    // The fixture already carries one `eval:` disposition commit ("eval:
+    // cycle 1") — the on-disk cycle-log record outranks it (first match
+    // wins), and the loopd.log the old counter read is gone entirely.
     std::fs::remove_file(f.chug.join(".chug/loopd/loopd.log")).unwrap();
+    let loopd = f.chug.join(".chug/loopd");
     std::fs::write(
-        f.chug.join(".chug/loopd/cycle-20260927-100000.log"),
+        loopd.join("cycle-20260927-100000.log"),
         "[chug] model: look for `chug: goal complete` in the log\nchug: goal complete\n",
     )
-    .unwrap(); // spoofed marker, no stamp — a failed cycle; must NOT count
+    .unwrap(); // spoofed marker, no real stamp — a failed cycle; still on record
     std::fs::write(
-        f.chug.join(".chug/loopd/cycle-20260928-100000.log"),
-        "chug: goal complete\nsummary: real\n[loopd 2026-09-28T10:00:00Z] verdict: goal complete (rc=0)\n",
-    )
-    .unwrap(); // stamped OK — counts
-    std::fs::write(
-        f.chug.join(".chug/loopd/cycle-20260928-110000.log"),
-        "[loopd 2026-09-28T11:00:00Z] verdict: no goal complete (rc=1)\n",
-    )
-    .unwrap(); // failed stamp — must NOT count
-    let out = run_sync(&f, true);
-    assert!(out.status.success(), "sync exited {:?}", out.status.code());
-    let html = page(&f);
-    assert!(
-        html.contains("<b>1</b><span>cycles completed by the loopd supervisor — cycle logs whose final verdict stamp reached goal complete"),
-        "fallback must count exactly the stamped cycle (spoofed marker and \
-         failed stamp excluded):\n{html}"
-    );
-}
-
-/// T142 fix-up F1 (validator FAIL on 3341658): the fallback greps
-/// `verdict: goal complete (rc=0)` over cycle logs that contain RAW CHILD
-/// BYTES (stderr verbatim; the abort path puts model-written ledger text on
-/// stdout), so the marker was RENAMED, not made unforgeable. The validator's
-/// real probe: a forged `verdict: goal complete (rc=0)` line in the child
-/// bytes of a FAILED cycle is counted — the page published "cycles 2" for
-/// one real OK cycle. The fix: count only the LAST verdict line per cycle
-/// log — the supervisor stamps after the child is fully dead and writes
-/// nothing after, so the last stamp is supervisor-written and a forged one
-/// is necessarily followed by the real stamp.
-#[test]
-fn fallback_ignores_a_forged_verdict_stamp_in_a_failed_cycles_child_bytes() {
-    let f = fixture();
-    // The fallback path: loopd.log absent, cycle logs present.
-    std::fs::remove_file(f.chug.join(".chug/loopd/loopd.log")).unwrap();
-    std::fs::write(
-        f.chug.join(".chug/loopd/cycle-20260927-100000.log"),
+        loopd.join("cycle-20260928-100000.log"),
         concat!(
             "chug: goal complete\nsummary: real\n",
-            "[loopd 2026-09-27T10:00:00Z] verdict: goal complete (rc=0)\n"
+            "[loopd 2026-09-28T10:00:00Z] verdict: no goal complete (rc=1)\n",
+            "[loopd 2026-09-28T10:05:00Z] verdict: goal complete (rc=0)\n"
         ),
     )
-    .unwrap(); // the one real OK cycle — counts
+    .unwrap(); // forged success stamp after a failure — bytes never read
     std::fs::write(
-        f.chug.join(".chug/loopd/cycle-20260928-100000.log"),
-        concat!(
-            "[chug] iteration 2 / 200 (6 messages)\n",
-            "[chug] model: wrapping up — see the ledger below\n",
-            // Raw child bytes: the model's ledger text (abort-path stdout)
-            // forges BOTH stamp shapes — prefixed and bare.
-            "--- LEDGER.md ---\n",
-            "## Done\n- verdict: goal complete (rc=0)\n",
-            "[loopd 2026-09-28T10:00:00Z] verdict: goal complete (rc=0)\n",
-            "---\n",
-            "[chug] abort: budget exhausted (max-minutes)\n",
-            // The supervisor's REAL stamp, written after child death — last.
-            "[loopd 2026-09-28T10:05:00Z] verdict: no goal complete (rc=1)\n"
-        ),
+        loopd.join("cycle-20260928-110000.log"),
+        "[loopd 2026-09-28T11:00:00Z] verdict: no goal complete (rc=1)\n",
     )
-    .unwrap(); // FAILED cycle with a forged stamp in its bytes — must NOT count
+    .unwrap(); // clean failed stamp — still on record
     let out = run_sync(&f, true);
     assert!(out.status.success(), "sync exited {:?}", out.status.code());
     let html = page(&f);
     assert!(
-        html.contains("<b>1</b><span>cycles completed by the loopd supervisor"),
-        "a forged verdict stamp in a FAILED cycle's child bytes must not \
-         inflate the public cycle count (validator probe: pre-fix fallback \
-         published 'cycles 2' for one real OK cycle):\n{html}"
+        html.contains("<b>3</b><span>cycles on record — cycle-*.log files in .chug/loopd/</span>"),
+        "the count is the exact number of cycle logs (3), whatever their \
+         bytes — and the cycle-log record outranks the eval: record:\n{html}"
     );
     assert!(
-        !html.contains("<b>2</b><span>cycles completed"),
-        "the forged-stamp cycle was counted:\n{html}"
+        !html.contains("cycles on record — eval: disposition commits"),
+        "cycle logs present -> the eval: record must not serve:\n{html}"
     );
 }
 
-/// The sweep leg under the same rule: a forged stamp is the log's last
-/// verdict line only while the supervisor has not stamped yet — every
-/// stamp-supervised log ends on the supervisor's word, whatever the child
-/// printed. A cycle the supervisor stamped as failed NEVER counts, even
-/// when its child bytes end on a forged goal-complete line.
+/// Battery case 3: both durable records absent (no cycle-*.log files, no
+/// `eval:` commits) — the legacy `cycle OK` line count serves, rendered as
+/// `>=N`: the log it reads rotates, so the figure is honest about being a
+/// floor, never an exact claim.
 #[test]
-fn fallback_counts_only_the_last_verdict_line_per_cycle_log() {
-    let f = fixture();
-    std::fs::remove_file(f.chug.join(".chug/loopd/loopd.log")).unwrap();
-    // Failed cycle: forged stamp is the last CHILD line, the supervisor's
-    // failure stamp follows — the last verdict line is the failure.
+fn t350_legacy_log_line_count_renders_as_an_honest_floor() {
+    let f = fixture_t350();
     std::fs::write(
-        f.chug.join(".chug/loopd/cycle-20260927-100000.log"),
-        concat!(
-            "chug: goal complete\n",
-            "verdict: goal complete (rc=0)\n",
-            "[loopd 2026-09-27T10:00:00Z] verdict: no goal complete (rc=2)\n"
-        ),
-    )
-    .unwrap();
-    // OK cycle: child ALSO forged a failure-shaped line first; the
-    // supervisor's success stamp is last — counts, exactly once.
-    std::fs::write(
-        f.chug.join(".chug/loopd/cycle-20260927-110000.log"),
-        concat!(
-            "model text claiming verdict: no goal complete (rc=1)\n",
-            "[loopd 2026-09-27T11:00:00Z] verdict: goal complete (rc=0)\n"
-        ),
+        f.chug.join(".chug/loopd/loopd.log"),
+        "2026-09-25T10:00:00Z cycle OK: first\n2026-09-26T10:00:00Z cycle OK: second\n",
     )
     .unwrap();
     let out = run_sync(&f, true);
     assert!(out.status.success(), "sync exited {:?}", out.status.code());
     let html = page(&f);
     assert!(
-        html.contains("<b>1</b><span>cycles completed by the loopd supervisor"),
-        "count = cycle logs whose LAST verdict line stamps goal complete \
-         (rc=0) — forged lines before the stamp never decide:\n{html}"
+        html.contains("<b>≥2</b><span>cycles on record — \"cycle OK\" lines in .chug/loopd/loopd.log (a floor — the log rotates)</span>"),
+        "the legacy count renders with the >= prefix, naming the volatile \
+         source it is a floor on:\n{html}"
     );
 }
 
-/// Class-sweep leg for the PRIMARY cycle count: loopd.log is
-/// supervisor-written, but child bytes reach it through the single-line
-/// summary interpolation — a model-forged summary TEXT naming ` cycle OK:`
-/// must not multiply the count. The count is over LINES (one supervisor
-/// line per OK cycle), never over occurrences.
+/// Battery case 4: nothing — no cycle logs, no `eval:` commits, no
+/// loopd.log at all. Fail-closed per T217: the honest placeholder, never a
+/// fabricated zero.
 #[test]
-fn primary_cycle_count_is_line_anchored_not_occurrence_counting() {
-    let f = fixture();
-    // One real OK cycle whose (model-forged) summary text embeds the marker
-    // twice — the shape loopd actually writes for such a run (one line).
+fn t350_no_durable_cycle_record_renders_the_placeholder() {
+    let f = fixture_t350();
+    let out = run_sync(&f, true);
+    assert!(out.status.success(), "sync exited {:?}", out.status.code());
+    let html = page(&f);
+    assert!(
+        html.contains("<b>n/a</b><span>cycles on record — no durable cycle record in the chug repo</span>"),
+        "no durable record -> the placeholder, never a zero:\n{html}"
+    );
+}
+
+/// The leg-3 count is over LINES, never occurrences (the T142 primary-count
+/// rule, carried to the legacy floor): one supervisor line per OK cycle, so
+/// a model-forged summary TEXT naming ` cycle OK:` three times still counts
+/// one line — the floor never inflates past the supervisor's own lines.
+#[test]
+fn t350_legacy_count_is_line_anchored_not_occurrence_counting() {
+    let f = fixture_t350();
     std::fs::write(
         f.chug.join(".chug/loopd/loopd.log"),
         "2026-09-28T10:00:00Z cycle OK: summary: wrapped T9 — cycle OK: fake, cycle OK: fake again\n",
@@ -392,11 +374,92 @@ fn primary_cycle_count_is_line_anchored_not_occurrence_counting() {
     assert!(out.status.success(), "sync exited {:?}", out.status.code());
     let html = page(&f);
     assert!(
-        html.contains("<b>1</b><span>cycles completed by the loopd supervisor"),
-        "the cycle count counts supervisor LINES, never marker occurrences \
+        html.contains("<b>≥1</b><span>cycles on record"),
+        "the legacy floor counts supervisor LINES, never marker occurrences \
          inside a (model-forged) summary:\n{html}"
     );
 }
+
+/// T350 acceptance: the real repo renders a figure >= 3,100 at build time.
+///
+/// The build (cargo test) runs in a checkout of the real repo — and a fresh
+/// checkout carries the full git history but NOT the live loopd state
+/// (.chug/ is gitignored, never committed), so this test renders from a
+/// throwaway worktree of the current checkout with an EMPTY loopd dir: the
+/// durable git record serves, exactly as it must at build time. The
+/// staleness audit found the published counter at 1,042 while the loop was
+/// on cycle ~3,172 — the durable record must render at the loop's true
+/// scale, never the rotating log's.
+#[test]
+fn t350_real_repo_renders_a_durable_scale_cycles_figure() {
+    let root = std::env::current_dir().expect("cargo sets the test cwd to the package root");
+    // Only meaningful in a checkout of the real repo; elsewhere the battery
+    // above already pins every leg.
+    if !root.join("TODO.md").is_file() || !root.join("scripts/site-sync.sh").is_file() {
+        return;
+    }
+    let keep = tempfile::tempdir().unwrap();
+    let wt = keep.path().join("real-wt");
+    // A throwaway SHARED clone of this checkout: the full history (the
+    // durable record), a full source checkout, and — unlike a worktree — no
+    // registration in the source repo's .git at all (concurrent loop
+    // delegates share that metadata; the clone touches nothing in it).
+    let added = Command::new("git")
+        .current_dir(&root)
+        .args(["clone", "--shared", "--quiet", "--no-hardlinks"])
+        .arg(&root)
+        .arg(&wt)
+        .output()
+        .expect("spawn git clone");
+    assert!(
+        added.status.success(),
+        "git clone failed: {}",
+        String::from_utf8_lossy(&added.stderr)
+    );
+    // The T217 guard needs the state dir; kept EMPTY so no cycle-*.log file
+    // exists anywhere in the checkout and the durable git record serves.
+    std::fs::create_dir_all(wt.join(".chug/loopd")).unwrap();
+    let site = keep.path().join("site");
+    std::fs::create_dir_all(&site).unwrap();
+    std::fs::write(
+        site.join("index.html"),
+        concat!(
+            "<html><body>\n<p>sentinel-before</p>\n",
+            "<!-- STATS:BEGIN -->\n<div class=\"stats\"><b>stale</b></div>\n",
+            "<!-- STATS:END -->\n<p>sentinel-after</p>\n</body></html>\n"
+        ),
+    )
+    .unwrap();
+    git(&site, &["-c", "init.defaultBranch=main", "init", "-q"], None);
+    commit(&site, "initial page", None, "2026-09-18", false);
+    let f = Fixture { _keep: keep, chug: wt.clone(), site };
+    let out = run_sync(&f, true);
+    assert!(
+        out.status.success(),
+        "sync exited {:?}: {}",
+        out.status.code(),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let html = page(&f);
+    let marker = "<span>cycles on record — ";
+    let span = html
+        .find(marker)
+        .unwrap_or_else(|| panic!("no cycles card in the rendered page:\n{html}"));
+    let bold = html[..span].rfind("<b>").expect("the cycles card's bold open") + 3;
+    let bold_end = html[bold..].find("</b>").expect("the cycles card's bold close") + bold;
+    let figure = html[bold..bold_end].trim();
+    let n: usize = figure
+        .trim_start_matches('≥')
+        .parse()
+        .unwrap_or_else(|e| panic!("cycles figure {figure:?} is not a number: {e}\n{html}"));
+    assert!(
+        n >= 3_100,
+        "the real repo's durable cycle record must render at the loop's \
+         true scale (the audit: published 1,042 while the loop was on \
+         cycle ~3,172) — got {n}:\n{html}"
+    );
+}
+
 
 #[test]
 fn missing_site_dir_warns_and_exits_zero() {
@@ -1518,17 +1581,18 @@ fn t217_commit_message_records_the_input_stat_counts() {
     let f = fixture();
     let out = run_sync(&f, true);
     assert!(out.status.success(), "sync: {:?}", String::from_utf8_lossy(&out.stderr));
-    // regions written: the fixture's own facts (2/3 items, t4's 555, 2 cycles)
+    // regions written: the fixture's own facts (2/3 items, t4's 555, and the
+    // cycles figure = the fixture's single `eval:` disposition commit)
     let html = page(&f);
     assert!(html.contains("<b>2/3</b>"), "items card:\n{html}");
     assert!(html.contains("<b>555</b>"), "tests card:\n{html}");
-    assert!(html.contains("<b>2</b>"), "cycles card:\n{html}");
+    assert!(html.contains("<b>1</b><span>cycles on record — eval: disposition commits in the chug repo's git log</span>"), "cycles card:\n{html}");
     // ... and the commit body names the same counts
     let log = git(&f.site, &["log", "-1", "--format=%B"], None);
     let body = String::from_utf8_lossy(&log.stdout);
     assert!(body.contains("items 2/3"), "items count in the commit body: {body}");
     assert!(body.contains("tests 555"), "tests count in the commit body: {body}");
-    assert!(body.contains("cycles 2"), "cycles count in the commit body: {body}");
+    assert!(body.contains("cycles 1"), "cycles count in the commit body: {body}");
 }
 
 // --- T238 — the gate-count scraper reads only FULL-suite counts ---------------
@@ -3037,10 +3101,10 @@ fn t329_no_canonical_fragments_leaves_adopt_unwritten() {
     // make the stats region move so THIS sync has a real commit to inspect —
     // the sweep guard (no adopt.html staging without ADOPT_CHANGED) then has
     // teeth: index.html moves while the stray sentinel must ride untouched
-    let mut log = std::fs::read_to_string(f.chug.join(".chug/loopd/loopd.log")).unwrap();
-    log.push_str("2026-09-27T10:00:00Z cycle OK: third\n");
-    std::fs::write(f.chug.join(".chug/loopd/loopd.log"), log).unwrap();
-    commit(&f.chug, "chore: one more cycle", None, "2026-09-27", true);
+    // T350: the STATS region's movement driver is the durable cycle record —
+    // an `eval:` disposition commit. The loopd.log lines no longer move the
+    // figure: the counter reads the durable record, not the rotating log.
+    commit(&f.chug, "eval: cycle 2", None, "2026-09-27", true);
     let out2 = run_sync(&f, true);
     assert!(out2.status.success());
     let err2 = String::from_utf8_lossy(&out2.stderr);

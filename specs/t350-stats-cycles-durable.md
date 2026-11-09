@@ -42,3 +42,5 @@ placeholder, never a fabricated zero.
   item if it ever lies).
 - Backfilling historical cycle counts into the page (the counter goes
   truthful from the next sync; history is in git).
+
+check: CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-validate-b cargo test --release --test site_sync
