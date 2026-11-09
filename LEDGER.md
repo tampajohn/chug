@@ -1,14 +1,10 @@
 # Ledger
 
 ## Done
-- **Read-first recovery (T251) COMPLETE — the dirty working tree RECONSTRUCTED, nothing disposable**:
-  - HEAD 7300a0c7 == origin/main (the T338 flip pushed; the 740th eval ea1d1976 + T338 arc 630f7f67 landed in the 3152 kimi cycle, boot 00:06:28Z)
-  - The 3152 segment reached its WRAP phase and DIED pre-commit: the working tree holds (a) the composed Outcomes 3152 entry + the 3146 one-liner (EVALUATION.md +4/-1), (b) the staged release bump Cargo.toml/lock 0.19.0->0.19.1 (the TRUE 3 trigger: T336+T337+T338 >= 3 since v0.19.0, patch — docs item), (c) the bare-LEDGER reseed for the wrap-state note
-  - VERIFIED against disk: T261 batch FOUR already appended (decisions.jsonl 6,788 total / 2,727 outcomes; d1794185846-5/-6/-7/-8 name routing d1794183647-1 / triages d1794184621-2, d1794184625-3 / validation-routing d1794185771-4, all landed-clean) == the entry's claim; pins battery 213/213 GREEN v2 (/tmp/eval-3152-pins2.log Summary 15.557s BATTERY_EXIT=0, census EXACT) == the entry's claim; check-tag-version.sh v0.19.1 ok (pairing pre-verified)
-  - MISSING legs (this cycle completes them): FULL gates at the pre-corridor HEAD 7300a0c7 (T242 bg), the prep/release commits, the v0.19.1 tag, eval-state rewrite keyed to the prep, token-free notes + probe, fill with asserts, push (commits + tag), flips, goal_complete
+- **Cycle-3154 wrap-state (T207) — the routine-skip corridor's boundary note**: ZERO merged-but-unflipped rows (T328 stays open-blocked external BY DESIGN — ~/workspace/chug-watch absent rc=1 re-verified ~01:32Z; the flip waits for the tree, not the corridor); ZERO unharvested worktrees (git worktree list = main only, harvest NO-OP); ZERO unpushed at boot (1266f99a == origin/main — this corridor's prep/notes/fill commits push at the corridor tail per the established order); decision records COMPLETE (routing d1794188077-1 + batch ONE d1794188259-1 appended DISK-ONLY, audit zero-growth 63/92/83 standing baseline) — the corridor completes: eval-state splice keyed to the prep, token-free notes + probe, fill + asserts, push, flips, goal_complete. Books verified truthful: the gates GREEN at the pre-corridor HEAD 1266f99a (T242 bg pid 12911) + the pins battery 213/213 (bg pid 13121).
 
 ## Next
-- Complete the 3152 corridor: gates bg -> entry amended (gates leg + datum + T184) -> prep commit -> release commit v0.19.1 + tag -> state write -> notes -> probe -> fill -> push -> flips -> goal_complete
+- Complete the corridor: state write -> notes -> probe -> fill -> push -> flips -> goal_complete
 
 ## Blockers
 - none (T328 stays BLOCKED external — ~/workspace/chug-watch absent, rc=1, re-verified this cycle)
