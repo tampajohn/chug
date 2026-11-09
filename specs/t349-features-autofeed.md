@@ -52,4 +52,4 @@ hand-maintained, so it drifts whenever the loop forgets (which is always).
 
 ## check
 
-check: CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-impl-c cargo test --release --test site_sync
+check: CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-validate-a cargo test --release --test site_sync
