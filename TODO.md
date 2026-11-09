@@ -353,6 +353,7 @@
 | T351 | README entry-path cleanup: install-first quickstart, chug loop leads continuous mode, generic model in public example | specs/t351-readme-entry-path.md | 3 | open | operator-filed 2026-11-09 — docs audit: quickstart needs Rust toolchain, continuous mode is clone-era, internal serving name in public example |
 | T352 | chug update: self-update with version-floor protection + source-build fallback (T347-era) + opt-in loop integration | specs/t352-auto-update.md | 2 | open | operator-filed 2026-11-09 — F94 was on 0.9.0 with a 5753-commit-stale repo; every box drifts alone |
 | T353 | profile contract: CHUG_LANGFUSE_PROJECT is a no-op (0 consumers) — remove + document per-lane visibility (key pairs vs trace filtering) + contract audit test | specs/t353-langfuse-project-dead-var.md | 2 | open | operator-filed 2026-11-09 — Fleet Primary T4 run proved the var does nothing; a documented no-op lies to adopters |
+| T354 | loopd emits OSC 7501 status natively (TTY-gated, env-killable, blocked carries msg) — kills the per-harness shim | specs/t354-loopd-osc7501.md | 2 | open | operator-filed 2026-11-09 — FP live-verified loops are invisible to herdr without 7501; shim exists at herdr-fleet-mods 252a6f8 as the wire-format reference |
 
 ## Proposed
 
