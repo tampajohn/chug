@@ -461,6 +461,36 @@ fn t350_real_repo_renders_a_durable_scale_cycles_figure() {
 }
 
 
+/// T357 — the leg-2 anchor is SUBJECT-anchored (`--format=%s`), never the
+/// full message: a BODY line that merely opens `eval:` is not a disposition
+/// (the loop's convention puts the disposition in the subject). The T350
+/// validator's m8 (`%s` -> `%B`) survived the battery because no fixture
+/// carried an `eval:`-prefixed body line — this one does. Real-repo impact
+/// if it regressed: counting bodies widened "disposition COMMITS" by the
+/// eval:-prefixed prose in commit bodies (5,679 vs 5,652, +0.5%).
+#[test]
+fn t357_eval_prefixed_body_line_is_not_a_disposition_commit() {
+    let f = fixture_t350();
+    // One disposition commit (subject `eval: cycle 1`) whose BODY also
+    // carries an `eval:`-prefixed line. Empty commit: touches no file, and
+    // the body matches no gate-count pattern, so no other fact moves.
+    commit(
+        &f.chug,
+        "eval: cycle 1",
+        Some("eval: cycle 2 (body line only, not a subject)"),
+        "2026-09-19",
+        true,
+    );
+    let out = run_sync(&f, true);
+    assert!(out.status.success(), "sync exited {:?}", out.status.code());
+    let html = page(&f);
+    assert!(
+        html.contains("<b>1</b><span>cycles on record — eval: disposition commits in the chug repo's git log</span>"),
+        "the anchor reads subjects only: one disposition commit counts ONE, \
+         never its own eval:-prefixed body line (the %B mutant counts 2):\n{html}"
+    );
+}
+
 #[test]
 fn missing_site_dir_warns_and_exits_zero() {
     let f = fixture();
