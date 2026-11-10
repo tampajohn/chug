@@ -1132,6 +1132,20 @@ per transition so the two surfaces can never disagree:
   `./loopd.sh osc <state> [reason]` probes the emitter directly, and an
   optional fourth argument asks for the human line too
   (`./loopd.sh osc working "cycle start" "cycle 7 routing=eval"`).
+- **The verbosity dial (T359, for the curious)** — the heartbeat above is
+  the compact default; `CHUG_LOOP_VERBOSE=<n>` (or `chug loop run
+  --verbose[=<n>]`, which forwards the dial into the supervisor's
+  environment) widens it: **0** silent (a redirected context is always 0
+  — the TTY gate is the first leg of every level), **1** the compact
+  heartbeat (the default on a TTY), **2** turn detail — one line per
+  tool call with the command summary (80 chars, `...` past it) and each
+  model text block capped at ~3 lines with the same marker, errors in
+  full — and **3** the trace — every new cycle-log line teed to stdout
+  as it lands (≤2s, newline-latched so a half-written line waits for
+  its newline and is never split, repeated, or glued). The 7501 dot is
+  untouched at every level — the dot and the line stay in sync — and
+  the dial resolves once (`loopd_verbose_resolve`: TTY first, unset =
+  1, `0..3` the levels, anything else degrades to 0) for every consumer.
 
 Before any launch the supervisor decides whether the cycle needs an
 orchestrator at all — the T258/T259 gate runs first, so an empty day
