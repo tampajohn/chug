@@ -2,6 +2,8 @@
 
 estimate: ~80 changed lines (src/loop_cmd/loopd-pilot.sh + emission helper sharing + fixtures)
 
+check: CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared cargo test --release --test loopd_osc7501
+
 ## Why
 
 T354 landed its OSC 7501 emission in the repo's `loopd.sh` (K7's own
@@ -51,6 +53,29 @@ redirected. No change to non-harness operation.
 - herdr-side changes (the wrapper's 7501 leg retires on FP's schedule
   once this ships and verifies).
 - The next release cut (the loop's normal release cadence carries it).
+- The heartbeat's pilot port (T356's line surface stays loopd.sh-only;
+  the shared emitter keeps the 7501 bytes ONLY — loopd.sh's
+  `loopd_osc7501_emit` stays the T356 composition wrapper that calls the
+  shared emitter AND the heartbeat legs, so the pilot sourcing the shared
+  file emits dot-only. This shape is what makes parity provable by
+  construction: ONE function body produces the bytes in both supervisors).
+
+## Fixture home + helper shape (orchestrator note at dispatch)
+
+- Fixtures EXTEND `tests/loopd_osc7501.rs` (reuse the T354 pty/parse
+  harness — the parity leg needs both supervisors in one test anyway);
+  do not duplicate the harness into a new target.
+- The shared file is `scripts/osc7501.sh`, materialized beside the pilot
+  supervisor by `write_supervisor_assets` exactly like the T205/T330
+  loader fragments (`include_str!("../scripts/osc7501.sh")`, no copy to
+  drift); loopd.sh sources `$(dirname "$0")/scripts/osc7501.sh`.
+- The pilot gains the `osc` probe subcommand (the T354 pattern: fixtures
+  drive the real gate, never a reimplementation).
+- Blocked derivation = spec's option (a): on a failed cycle, scan the
+  NEWEST `cycle-*.log` for the failure patterns (the msg carries the last
+  matched line, headed by its T340 blocked-reason word); the
+  failure-marker-only-in-cycle-log fixture is RED-proven against a
+  supervisor-stream-only derivation.
 
 ## Field finding (Fleet Primary transition suite, 2026-11-10)
 
