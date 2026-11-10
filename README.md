@@ -1077,6 +1077,11 @@ per transition so the two surfaces can never disagree:
   that read the program-status channel see the loop without any shim.
   Emission is TTY-gated (piped/redirected contexts receive zero escape
   bytes) and killable with `CHUG_OSC7501=0`.
+  The generated pilot supervisor a spawned loop runs (`chug loop run`,
+  fleet/herdr dialogs) emits from the SAME shared emitter (T358), so a
+  bare spawned loop reports the identical working/idle/blocked transitions
+  to its own terminal — one function body in both supervisors, parity
+  pinned byte-identical by fixtures.
 - **The heartbeat line (T356, for humans)** — appended `[loop …]` lines in
   the same window: the cycle start (cycle number, routing, the routed
   model's short name, the queue's top open row), an iteration milestone
