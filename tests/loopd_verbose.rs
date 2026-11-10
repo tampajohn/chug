@@ -880,18 +880,31 @@ fn the_verbose_legs_tail_the_files_the_loop_already_writes() {
     let loopd = read("loopd.sh");
     let w = fn_body(&loopd, "loopd_hb_watch");
 
-    // Both tails are line-count-latched (awk's END NR counts only COMPLETE
-    // lines — and prints it unpadded, where `wc -l` pads on some platforms
-    // and the digit validation would zero a padded count into silence).
+    // Both tails are line-count-latched on `wc -l` — the COMPLETE-line
+    // count: a trailing newline-less record is NOT a line (the model
+    // stream's partial deltas land un-newlined and wait for their newline,
+    // consumed exactly once — never split, never glued, never repeated).
+    // The redirect form pads its number on some platforms (macOS), so the
+    // count is whitespace-stripped before the digit validation — a padded
+    // count must degrade to a number, never into permanent silence.
     need(
         &w,
-        "ev_total=$(awk 'END { print NR }' .chug/events.jsonl 2>/dev/null) || ev_total=0",
-        "the events tail latches on the line count",
+        "ev_total=$(wc -l 2>/dev/null < .chug/events.jsonl | tr -d '[:space:]') || ev_total=0",
+        "the events tail latches on the COMPLETE-line count (wc -l)",
     );
     need(
         &w,
-        "clog_total=$(awk 'END { print NR }' \"$clog\" 2>/dev/null) || clog_total=0",
-        "the cycle-log tail latches on the line count",
+        "clog_total=$(wc -l 2>/dev/null < \"$clog\" | tr -d '[:space:]') || clog_total=0",
+        "the cycle-log tail latches on the COMPLETE-line count (wc -l)",
+    );
+    // The events print is bounded by the SAME count it latches (`-v to=` —
+    // the cycle-log leg's shape): a tool_result landing between the count
+    // and the print is the NEXT poll's line, never this print's.
+    need(&w, "-v to=\"$ev_total\"", "the events print is bounded by the latched count");
+    need(
+        &w,
+        "NR >= from && NR <= to && index($0, \"\\\"type\\\":\\\"tool_result\\\"\")",
+        "the events print's upper bound is the latch itself",
     );
     // The tool-call tail reads the cycle's OWN events log (one line per
     // tool_result: the tool, the iteration, an 80-char summary; errors
@@ -1358,5 +1371,490 @@ fn the_blocked_msg_still_equals_the_blocked_line_at_level_3() {
         stream_lines(&capture).iter().any(|l| l == "chug: abort: iteration budget exceeded"),
         "the level-3 tee must stream the driver's abort marker verbatim \
          (errors in full):\n{capture:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// The fix-up round (validator findings F1-F4): the partial-line latch class
+// (one killing fixture per latched consumer), the events print's upper
+// bound, the model-block cross-poll state restore, and the spec's CLI knob
+// (`chug loop run --verbose[=<n>]`)
+// ---------------------------------------------------------------------------
+
+/// The partial-line arc (level 3, the TEE's consumer): a cycle-log line
+/// lands UN-NEWLINED and completes only after another watcher poll — the
+/// ConsoleSink's ModelTextDelta shape (raw un-newlined `write!`s,
+/// src/events.rs), the routine case for every streamed model turn. The tee
+/// must emit the line ONCE, COMPLETE: the latched count is the
+/// COMPLETE-line count, so the partial record waits for its newline — never
+/// split (a bare prefix emitted newline-less), never glued (the next line
+/// appended onto it on the pty), never lost (the remainder never streamed).
+const PARTIAL_TEE_CARGO: &str = r#"#!/bin/sh
+set -e
+[ -n "$CARGO_TARGET_DIR" ] || { echo 'stub cargo: CARGO_TARGET_DIR unset' >&2; exit 1; }
+mkdir -p "$CARGO_TARGET_DIR/release"
+cat > "$CARGO_TARGET_DIR/release/chug" <<'STUB'
+#!/bin/sh
+mkdir -p .chug
+echo "[chug] tee: before the partial delta" >&2
+printf 'T359-TEE-PARTIAL-delta' >&2
+sleep 3
+printf ' T359-TEE-PARTIAL-COMPLETE\n' >&2
+echo "tee: after the completed line" >&2
+sleep 3
+printf 'chug: goal complete\nsummary: the partial-tee stub ran this cycle\n'
+touch .chug/STOP-LOOP
+exit 0
+STUB
+chmod +x "$CARGO_TARGET_DIR/release/chug"
+echo "stub-build: green"
+exit 0
+"#;
+
+/// The partial-line arc (level 2, the cycle-log MODEL leg's consumer): the
+/// same un-newlined delta, but the consumed range is the model-block
+/// filter's — the partial line must not be emitted as a truncated model
+/// line (the awk `print` would append a newline, SPLITTING the stream
+/// line), and its remainder must complete it in the later poll (consumed
+/// exactly once, complete).
+const PARTIAL_MODEL_CARGO: &str = r#"#!/bin/sh
+set -e
+[ -n "$CARGO_TARGET_DIR" ] || { echo 'stub cargo: CARGO_TARGET_DIR unset' >&2; exit 1; }
+mkdir -p "$CARGO_TARGET_DIR/release"
+cat > "$CARGO_TARGET_DIR/release/chug" <<'STUB'
+#!/bin/sh
+mkdir -p .chug
+echo "[chug] model: T359-PM-FIRST-LINE" >&2
+printf 'T359-PM-DELTA-delta' >&2
+sleep 3
+printf ' T359-PM-COMPLETE\n' >&2
+sleep 3
+printf 'chug: goal complete\nsummary: the partial-model stub ran this cycle\n'
+touch .chug/STOP-LOOP
+exit 0
+STUB
+chmod +x "$CARGO_TARGET_DIR/release/chug"
+echo "stub-build: green"
+exit 0
+"#;
+
+/// The partial-line arc (level 2, the EVENTS/tool-call leg's consumer): an
+/// events line lands UN-NEWLINED (a torn tool_result write) and completes
+/// in a later poll — the tool-call line must carry the WHOLE preview, once.
+const PARTIAL_EVENTS_CARGO: &str = r#"#!/bin/sh
+set -e
+[ -n "$CARGO_TARGET_DIR" ] || { echo 'stub cargo: CARGO_TARGET_DIR unset' >&2; exit 1; }
+mkdir -p "$CARGO_TARGET_DIR/release"
+cat > "$CARGO_TARGET_DIR/release/chug" <<'STUB'
+#!/bin/sh
+mkdir -p .chug
+printf '%s\n' '{"type":"iteration","ts":"2026-11-10T00:00:00Z","n":1,"input_tokens":1,"output_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}' >> .chug/events.jsonl
+printf '%s' '{"type":"tool_result","ts":"2026-11-10T00:00:02Z","name":"bash","ok":true,"is_error":false,"duration_ms":5,"preview":"T359-PE-DELTA-delta' >> .chug/events.jsonl
+sleep 3
+printf '%s\n' ' T359-PE-COMPLETE"}' >> .chug/events.jsonl
+sleep 3
+printf 'chug: goal complete\nsummary: the partial-events stub ran this cycle\n'
+touch .chug/STOP-LOOP
+exit 0
+STUB
+chmod +x "$CARGO_TARGET_DIR/release/chug"
+echo "stub-build: green"
+exit 0
+"#;
+
+/// The state-restore arc (level 2, validator F4 — the M-NOSTATE survivor):
+/// ONE model block SPLIT across two polls — poll 1 latches the block's
+/// first two lines (and saves `in model block, 1 line counted`), poll 2
+/// latches the remaining three. Correct output depends on the saved state:
+/// the continuation count must RESUME (line three rides, line four becomes
+/// the `...` truncation marker, five-plus swallowed) — neutralize the
+/// restore leg and poll 2 starts from zero, misreads the continuations as
+/// non-model lines, and line three never appears.
+const MODEL_SPLIT_CARGO: &str = r#"#!/bin/sh
+set -e
+[ -n "$CARGO_TARGET_DIR" ] || { echo 'stub cargo: CARGO_TARGET_DIR unset' >&2; exit 1; }
+mkdir -p "$CARGO_TARGET_DIR/release"
+cat > "$CARGO_TARGET_DIR/release/chug" <<'STUB'
+#!/bin/sh
+mkdir -p .chug
+sleep 2
+echo "[chug] model: T359-SPLIT-one" >&2
+echo "T359-SPLIT-two" >&2
+sleep 3
+echo "T359-SPLIT-three" >&2
+echo "T359-SPLIT-four" >&2
+echo "T359-SPLIT-five" >&2
+sleep 3
+printf 'chug: goal complete\nsummary: the split-block stub ran this cycle\n'
+touch .chug/STOP-LOOP
+exit 0
+STUB
+chmod +x "$CARGO_TARGET_DIR/release/chug"
+echo "stub-build: green"
+exit 0
+"#;
+
+/// (FINDING 1, the TEE consumer) The level-3 trace streams the partial
+/// cycle-log line exactly once, COMPLETE, in its own right: never the bare
+/// prefix (split), never the prefix glued onto the next line (the sed
+/// range's missing trailing newline), and never the lost remainder.
+#[test]
+fn the_level_3_tee_streams_a_partial_line_complete_and_once() {
+    let _timing = testsupport::timing_guard();
+    let _t172_load = t172_load_lock::family_guard("loopd-verbose");
+    let sandbox = Sandbox::new(PARTIAL_TEE_CARGO);
+    let (mut child, rx) = sandbox.run_on_pty(
+        4,
+        &[("CHUG_LOOP_VERBOSE", "3"), ("LOOPD_HB_DRAIN", "4")],
+    );
+    let status = wait_bounded(&mut child, Duration::from_secs(90));
+    let status = status.expect("the partial-tee sandbox supervisor hung past the 90s cap");
+    assert!(status.success(), "the partial-tee sandbox must exit cleanly: {status:?}");
+    let capture = rx
+        .recv_timeout(Duration::from_secs(25))
+        .expect("the pty drain thread finished");
+    let log = sandbox.read_log();
+    assert!(log.contains("cycle OK:"), "the partial-tee arc must complete a cycle:\n{log}");
+    // The cycle log itself holds the completed line (the fixture's premise).
+    let cycle_log = fs::read_to_string(sandbox.cycle_log()).expect("read the cycle log");
+    let complete = "T359-TEE-PARTIAL-delta T359-TEE-PARTIAL-COMPLETE";
+    assert!(
+        cycle_log.contains(complete),
+        "the stub's completed line must be in the cycle log:\n{cycle_log:?}"
+    );
+
+    let stream = stream_lines(&capture);
+    let tee_lines: Vec<&String> = stream
+        .iter()
+        .filter(|l| l.contains("T359-TEE-PARTIAL"))
+        .collect();
+    assert_eq!(
+        tee_lines.len(),
+        1,
+        "the partial line streams EXACTLY ONCE, complete (a split or glued \
+         emission would add lines):\n{tee_lines:?}"
+    );
+    assert_eq!(
+        tee_lines[0].as_str(),
+        complete,
+        "the streamed line is the WHOLE line — never the bare prefix, never \
+         the next line glued onto it:\n{tee_lines:?}"
+    );
+    // And the line after it streams whole in its own right (the glue check
+    // from the other end: nothing of the partial rides on it).
+    let stream = stream_lines(&capture);
+    let after: Vec<&String> = stream
+        .iter()
+        .filter(|l| l.contains("tee: after the completed line"))
+        .collect();
+    assert_eq!(
+        after.len(),
+        1,
+        "the line after the completed partial streams exactly once:\n{:?}",
+        stream_lines(&capture)
+    );
+    assert!(
+        !after[0].contains("T359-TEE-PARTIAL"),
+        "the next streamed line must not carry the partial's text (the glue \
+         the newline-less emission caused):\n{after:?}"
+    );
+}
+
+/// (FINDING 1, the cycle-log MODEL leg's consumer) The level-2 model filter
+/// consumes the partial line only once COMPLETE: no truncated model line
+/// emitted early (the awk print's appended newline would SPLIT the stream
+/// line in two), and the remainder completes it in the later poll.
+#[test]
+fn the_level_2_model_leg_streams_a_partial_line_complete_and_once() {
+    let _timing = testsupport::timing_guard();
+    let _t172_load = t172_load_lock::family_guard("loopd-verbose");
+    let sandbox = Sandbox::new(PARTIAL_MODEL_CARGO);
+    init_git_with_seed_commit(&sandbox.root);
+    seed_todo_queue(&sandbox.root);
+    let mut envs: Vec<(&str, &str)> = vec![("CHUG_LOOP_VERBOSE", "2")];
+    envs.extend(GIT_IDENTITY);
+    let (mut child, rx) = sandbox.run_on_pty(4, &envs);
+    let status = wait_bounded(&mut child, Duration::from_secs(90));
+    let status = status.expect("the partial-model sandbox supervisor hung past the 90s cap");
+    assert!(status.success(), "the partial-model sandbox must exit cleanly: {status:?}");
+    let capture = rx
+        .recv_timeout(Duration::from_secs(25))
+        .expect("the pty drain thread finished");
+    let log = sandbox.read_log();
+    assert!(log.contains("cycle OK:"), "the partial-model arc must complete a cycle:\n{log}");
+
+    let beats = heartbeat_lines(&capture);
+    let model_lines: Vec<&String> = beats
+        .iter()
+        .filter(|l| l.contains(" model: "))
+        .collect();
+    let want_first = "[loop] T042 model: T359-PM-FIRST-LINE";
+    let want_complete = "[loop] T042 model: T359-PM-DELTA-delta T359-PM-COMPLETE";
+    assert_eq!(
+        model_lines.len(),
+        2,
+        "the model block is two lines, emitted once each — a split emission \
+         would add the bare prefix as its own line:\n{model_lines:?}"
+    );
+    assert_eq!(
+        model_lines[0].as_str(),
+        want_first,
+        "the block's complete first line rides:\n{model_lines:?}"
+    );
+    assert_eq!(
+        model_lines[1].as_str(),
+        want_complete,
+        "the partial delta streams COMPLETE (never the bare prefix with the \
+         remainder lost, never the remainder as a second line):\n{model_lines:?}"
+    );
+}
+
+/// (FINDING 1, the EVENTS/tool-call leg's consumer) A torn events line (an
+/// un-newlined tool_result) completes in a later poll and the tool-call
+/// line carries the WHOLE preview, exactly once — never the bare prefix.
+#[test]
+fn the_level_2_events_leg_streams_a_partial_line_complete_and_once() {
+    let _timing = testsupport::timing_guard();
+    let _t172_load = t172_load_lock::family_guard("loopd-verbose");
+    let sandbox = Sandbox::new(PARTIAL_EVENTS_CARGO);
+    init_git_with_seed_commit(&sandbox.root);
+    seed_todo_queue(&sandbox.root);
+    let mut envs: Vec<(&str, &str)> = vec![("CHUG_LOOP_VERBOSE", "2")];
+    envs.extend(GIT_IDENTITY);
+    let (mut child, rx) = sandbox.run_on_pty(4, &envs);
+    let status = wait_bounded(&mut child, Duration::from_secs(90));
+    let status = status.expect("the partial-events sandbox supervisor hung past the 90s cap");
+    assert!(status.success(), "the partial-events sandbox must exit cleanly: {status:?}");
+    let capture = rx
+        .recv_timeout(Duration::from_secs(25))
+        .expect("the pty drain thread finished");
+    let log = sandbox.read_log();
+    assert!(log.contains("cycle OK:"), "the partial-events arc must complete a cycle:\n{log}");
+
+    let want = "[loop] T042 iter 1 — tool bash: T359-PE-DELTA-delta T359-PE-COMPLETE";
+    let beats = heartbeat_lines(&capture);
+    let tool_lines: Vec<&String> = beats
+        .iter()
+        .filter(|l| l.contains("— tool bash: "))
+        .collect();
+    assert_eq!(
+        tool_lines.len(),
+        1,
+        "the torn events line yields exactly ONE tool-call line (a split \
+         emission would add the bare prefix):\n{tool_lines:?}"
+    );
+    assert_eq!(
+        tool_lines[0].as_str(),
+        want,
+        "the tool-call line carries the WHOLE preview (the events latch must \
+         wait for the line's newline, never consume the bare prefix):\n{tool_lines:?}"
+    );
+}
+
+/// (FINDING 2 — the duplicate-emission window) The events print must be
+/// bounded by the SAME count it latches. The race window (a tool_result
+/// landing between the count and the print) is sub-poll, so the fixture
+/// SIMULATES it deterministically: it extracts the watcher's own count and
+/// print commands from `loopd_hb_watch` (the same text, run the same way),
+/// runs the count, lands a tool_result — the line that arrives in the
+/// window — and runs the print. The landing line belongs to the NEXT
+/// poll's latch (the count is the bound); printing it here would emit it
+/// twice — once now, again next poll.
+#[test]
+fn the_events_print_is_bounded_by_its_latched_count() {
+    let loopd = read("loopd.sh");
+    let w = fn_body(&loopd, "loopd_hb_watch");
+    // The count: the watcher's one `ev_total=$(…)` line.
+    let count_line = w
+        .lines()
+        .map(str::trim)
+        .find(|l| l.starts_with("ev_total=$("))
+        .unwrap_or_else(|| panic!("the events count line is in the watcher"))
+        .to_string();
+    // The print: from its `awk -v from=` through the file it reads.
+    let at = need(&w, "awk -v from=\"$((ev_seen + 1))\"", "the events print command");
+    const TAIL: &str = ".chug/events.jsonl 2>/dev/null || true";
+    let end = at + w[at..]
+        .find(TAIL)
+        .unwrap_or_else(|| panic!("the events print command ends at its file"))
+        + TAIL.len();
+    let print_cmd = w[at..end].to_string();
+
+    let tmp = tempfile::tempdir().expect("the race tmpdir");
+    let dir = tmp.path();
+    fs::create_dir_all(dir.join(".chug")).expect("the .chug dir");
+    let seed = r#"{"type":"tool_result","ts":"2026-11-10T00:00:00Z","name":"bash","ok":true,"is_error":false,"duration_ms":5,"preview":"T359-RACE-LATCHED"}"#;
+    let landing = r#"{"type":"tool_result","ts":"2026-11-10T00:00:01Z","name":"read","ok":true,"is_error":false,"duration_ms":6,"preview":"T359-RACE-LANDING"}"#;
+    fs::write(dir.join(".chug/events.jsonl"), format!("{seed}\n")).expect("seed events");
+    let script = format!(
+        "set -u\ncd '{}'\nev_seen=0\nitem_id=T042\nn=1\n{}\nprintf '%s\\n' '{}' >> .chug/events.jsonl\n{}\n",
+        dir.display(),
+        count_line,
+        landing,
+        print_cmd
+    );
+    let out = Command::new("bash").arg("-c").arg(&script).output().expect("run the window");
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+
+    // The latched line still prints (the count covered it).
+    assert!(
+        stdout.contains("T359-RACE-LATCHED"),
+        "the latched line prints:\n{stdout:?}"
+    );
+    // The landing line does NOT: it is the NEXT poll's line (the count is
+    // the bound) — emitting it here would print it twice.
+    assert!(
+        !stdout.contains("T359-RACE-LANDING"),
+        "the events print must be bounded by the latched count — a \
+         tool_result landing between the count and the print is the NEXT \
+         poll's line, never this print's:\n{stdout:?}"
+    );
+}
+
+/// (FINDING 4 — the M-NOSTATE survivor) ONE model block split across two
+/// polls: poll 1 latches the block's first two lines, poll 2 the remaining
+/// three. Correct output depends on the cross-poll state restore — the
+/// continuation count must RESUME (line three rides, line four becomes the
+/// `...` truncation marker, the rest swallowed). Neutralize the restore leg
+/// (`if ((getline s < statefile) > 0)`) and poll 2 starts from zero: the
+/// continuations are misread as non-model lines and line three never
+/// appears — this fixture is the restore leg's killing test.
+#[test]
+fn the_model_block_split_across_polls_needs_the_state_restore() {
+    let _timing = testsupport::timing_guard();
+    let _t172_load = t172_load_lock::family_guard("loopd-verbose");
+    let sandbox = Sandbox::new(MODEL_SPLIT_CARGO);
+    init_git_with_seed_commit(&sandbox.root);
+    seed_todo_queue(&sandbox.root);
+    let mut envs: Vec<(&str, &str)> = vec![("CHUG_LOOP_VERBOSE", "2")];
+    envs.extend(GIT_IDENTITY);
+    let (mut child, rx) = sandbox.run_on_pty(4, &envs);
+    let status = wait_bounded(&mut child, Duration::from_secs(90));
+    let status = status.expect("the split-block sandbox supervisor hung past the 90s cap");
+    assert!(status.success(), "the split-block sandbox must exit cleanly: {status:?}");
+    let capture = rx
+        .recv_timeout(Duration::from_secs(25))
+        .expect("the pty drain thread finished");
+    let log = sandbox.read_log();
+    assert!(log.contains("cycle OK:"), "the split-block arc must complete a cycle:\n{log}");
+
+    // The block is 5 physical lines: 3 emitted + the truncation marker —
+    // and the count that produced that arithmetic RESUMED from poll 1's
+    // saved state (without it, poll 2's continuations are orphans: line
+    // three vanishes and the marker never fires).
+    let model_lines: Vec<String> = heartbeat_lines(&capture)
+        .into_iter()
+        .filter(|l| l.contains(" model: "))
+        .collect();
+    let want = [
+        "[loop] T042 model: T359-SPLIT-one".to_string(),
+        "[loop] T042 model: T359-SPLIT-two".to_string(),
+        "[loop] T042 model: T359-SPLIT-three".to_string(),
+        "[loop] T042 model: ...".to_string(),
+    ];
+    assert_eq!(
+        model_lines, want,
+        "the split block emits 3 lines + the marker across the two polls — \
+         the count must resume from the saved state, never restart:\n{model_lines:?}"
+    );
+    for leaked in ["T359-SPLIT-four", "T359-SPLIT-five"] {
+        assert!(
+            !model_lines.iter().any(|l| l.contains(leaked)),
+            "the over-long block's line {leaked} is swallowed (the resumed \
+             count already marked the truncation):\n{model_lines:?}"
+        );
+    }
+}
+
+/// (FINDING 3 — the spec surface) `chug loop run --verbose[=<n>]` forwards
+/// the dial into the spawned supervisor's environment as CHUG_LOOP_VERBOSE:
+/// `--verbose=3` resolves 3, bare `--verbose` resolves the verbose level
+/// (2 — the level the operator's "verbose details about the turns" names),
+/// `--verbose=0` is the explicit silent dial, and the flag ABSENT leaves
+/// the variable UNSET (today's byte-identical default — the supervisor is
+/// born with no dial at all). The supervisor is a stub via the
+/// CHUG_LOOPD_BIN seam (the tests/loop_subcommand.rs pattern), so the
+/// fixture observes exactly the env a real supervisor would be born with.
+/// A value outside the dial is refused at the CLI boundary (the env
+/// resolver's default-safe degrade never sees it).
+#[test]
+fn loop_run_forwards_the_verbose_dial_into_the_supervisor_env() {
+    let tmp = tempfile::tempdir().expect("the flag tmpdir");
+    let init = Command::new(env!("CARGO_BIN_EXE_chug"))
+        .arg("loop")
+        .arg("init")
+        .current_dir(tmp.path())
+        .env_remove("CHUG_LOOP_VERBOSE")
+        .output()
+        .expect("loop init");
+    assert!(
+        init.status.success(),
+        "loop init: {}",
+        String::from_utf8_lossy(&init.stderr)
+    );
+    let stub = tmp.path().join("stub-supervisor.sh");
+    fs::write(
+        &stub,
+        "#!/usr/bin/env bash\nprintf 'CHUG_LOOP_VERBOSE=%s\\n' \"${CHUG_LOOP_VERBOSE-UNSET}\"\n",
+    )
+    .expect("write stub");
+    fs::set_permissions(&stub, fs::Permissions::from_mode(0o755)).expect("chmod stub");
+
+    let run = |args: &[&str]| {
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_chug"));
+        cmd.arg("loop")
+            .arg("run")
+            .args(args)
+            .current_dir(tmp.path())
+            // The host export never flips the fixture (the T332 contract).
+            .env_remove("CHUG_LOOP_VERBOSE")
+            .env("CHUG_LOOPD_BIN", &stub);
+        cmd.output().expect("spawn chug loop run")
+    };
+
+    for (args, want) in [
+        (vec!["--verbose=3"], "CHUG_LOOP_VERBOSE=3"),
+        (vec!["--verbose"], "CHUG_LOOP_VERBOSE=2"),
+        (vec!["--verbose=0"], "CHUG_LOOP_VERBOSE=0"),
+    ] {
+        let out = run(&args);
+        assert!(
+            out.status.success(),
+            "run {args:?} must exec the supervisor: {:?}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+        assert!(
+            stdout.contains(&format!("{want}\n")),
+            "run {args:?} must forward {want} into the supervisor's env:\n{stdout:?}"
+        );
+    }
+
+    // The flag ABSENT: the variable is UNSET — not empty, not a default —
+    // the byte-identical default (a host export would pass through).
+    let out = run(&[]);
+    assert!(
+        out.status.success(),
+        "bare run must exec the supervisor: {:?}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(
+        stdout.contains("CHUG_LOOP_VERBOSE=UNSET\n"),
+        "the flag absent must leave the dial UNSET (today's default):\n{stdout:?}"
+    );
+
+    // Outside the dial: refused at the CLI boundary (exit 2, the clap
+    // error — never forwarded for the resolver to degrade).
+    let out = run(&["--verbose=9"]);
+    assert!(
+        !out.status.success(),
+        "--verbose=9 must be refused at the CLI: {:?}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("invalid value"),
+        "the refusal names the invalid value:\n{:?}",
+        String::from_utf8_lossy(&out.stderr)
     );
 }

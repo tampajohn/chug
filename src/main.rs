@@ -509,6 +509,16 @@ enum LoopAction {
         /// read — seed a live queue with `chug loop init --goal` instead.
         #[arg(long)]
         goal: Option<String>,
+        /// T359: the PTY verbosity dial, forwarded to the supervisor as
+        /// CHUG_LOOP_VERBOSE (the supervisor resolves it against ITS own
+        /// stdout — a redirected launch still lands level 0). Bare
+        /// `--verbose` is the verbose level (2: per-turn tool calls and
+        /// model text); `--verbose=<n>` sets the exact level 0..3; the
+        /// flag ABSENT passes nothing extra (the default dial: 1 on a
+        /// TTY, 0 redirected — byte-identical to pre-T359).
+        #[arg(long, value_name = "N", num_args = 0..=1, default_missing_value = "2",
+              value_parser = clap::value_parser!(u8).range(0..=3))]
+        verbose: Option<Option<u8>>,
     },
 }
 
@@ -1160,10 +1170,13 @@ fn cmd_loop(action: LoopAction) -> anyhow::Result<i32> {
             }
             Ok(0)
         }
-        LoopAction::Run { cwd, goal } => {
+        LoopAction::Run { cwd, goal, verbose } => {
             let cwd = resolve_cwd(cwd)?;
             let goal = loop_goal_text(goal.as_deref(), None)?;
-            loop_cmd::run(&cwd, goal.as_deref())
+            // The dial flattens here: outer None = the flag absent (nothing
+            // forwarded), inner None = bare `--verbose` (the missing-value
+            // default already filled it with 2 at the clap layer).
+            loop_cmd::run(&cwd, goal.as_deref(), verbose.flatten())
         }
     }
 }

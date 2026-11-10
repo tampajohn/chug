@@ -13,7 +13,10 @@
 # State lives in .chug/loopd/ (gitignored): loopd.pid, loopd.log,
 # cycle-<timestamp>.log per cycle, HALTED if it gave up.
 #
-# Terminal verbosity (T359) — CHUG_LOOP_VERBOSE is the PTY detail dial:
+# Terminal verbosity (T359) — CHUG_LOOP_VERBOSE is the PTY detail dial
+# (`chug loop run --verbose[=<n>]` forwards the same dial into this
+# supervisor's env; bare --verbose is level 2, the flag absent passes
+# nothing extra):
 # 0 silent, 1 compact heartbeat (the DEFAULT on a TTY — a redirected
 # stdout is always level 0 whatever the knob says, logs are never
 # polluted), 2 turn detail (tool calls, model text, errors) on top of
@@ -1329,7 +1332,7 @@ EOF
 loopd_hb_watch() { # <max_iters> <cycle_log> — runs until killed, orphaned, or the backstop
   local max="${1:-200}" clog="${2:-}" every poll n=0 shown=0 polls=0 first=1
   local sha="" last_sha="" subj="" act="" item="" item_id="" detail="" slept=0
-  local level=0 ev_seen=0 clog_seen=0 ev_total=0 clog_total=0 clog_new=""
+  local level=0 ev_seen=0 clog_seen=0 ev_total=0 clog_total=0
   case "${LOOPD_HB_EVERY:-}" in ''|0|*[!0-9]*) every=25 ;; *) every=$LOOPD_HB_EVERY ;; esac
   case "${LOOPD_HB_POLL:-}" in ''|0|*[!0-9]*) poll=20 ;; *) poll=$LOOPD_HB_POLL ;; esac
   # T359 — the dial resolves ONCE at birth (the watcher's stdout is the
@@ -1397,10 +1400,18 @@ loopd_hb_watch() { # <max_iters> <cycle_log> — runs until killed, orphaned, or
     fi
     # T359 — the verbose legs (level ≥2 only: levels 0/1 never read the
     # files here, the compat shape — the dial's TTY gate has already landed
-    # every redirected context at 0). Both tails are LINE-COUNT-latched:
-    # `wc -l` counts only COMPLETE lines, so a half-written line — the model
-    # stream's partial deltas land in the cycle log un-newlined — waits for
-    # its newline and is consumed exactly once.
+    # every redirected context at 0). Both tails are LINE-COUNT-latched on
+    # `wc -l` — the COMPLETE-line count (a trailing newline-less record is
+    # not a line): the model stream's partial deltas land in the cycle log
+    # un-newlined and wait for their newline, so each line is consumed
+    # exactly once — never split (no bare prefix emitted early), never
+    # glued (the next line never rides on a newline-less tail), never
+    # repeated (the latch advances past a line only when its whole text has
+    # been streamed), and never lost (the remainder belongs to the SAME
+    # line and completes it in the later poll). The count is stripped of
+    # the redirect form's platform padding (macOS) before the digit
+    # validation — a padded count must degrade to a number, never into
+    # permanent silence.
     if [ "$level" -ge 2 ]; then
       # -- the turn stream, events half (level 2): ONE line per tool_result
       #    — the tool, the current iteration (the milestone leg's count), an
@@ -1409,14 +1420,19 @@ loopd_hb_watch() { # <max_iters> <cycle_log> — runs until killed, orphaned, or
       #    the failing output's tail). The summary is the event's preview
       #    field, the only per-call text the loop's telemetry carries — the
       #    heartbeat's source-string rule holds: one source, no re-derivation.
-      #    (The count is awk's END NR, not `wc -l`: wc pads its number on
-      #    some platforms — macOS — and the digit validation would zero a
-      #    padded count into permanent silence.)
-      ev_total=$(awk 'END { print NR }' .chug/events.jsonl 2>/dev/null) || ev_total=0
+      #    (The count is `wc -l` — the COMPLETE-line count: a trailing
+      #    newline-less record is not a line, so a torn write waits for its
+      #    newline instead of being consumed half. The redirect form pads
+      #    its number on some platforms — macOS — so the whitespace is
+      #    stripped before the digit validation; a padded count must
+      #    degrade to a number, never into permanent silence. The `2>`
+      #    sits BEFORE the `<` so even a missing file's redirect error is
+      #    silence, never a line on the pty.)
+      ev_total=$(wc -l 2>/dev/null < .chug/events.jsonl | tr -d '[:space:]') || ev_total=0
       case "$ev_total" in ''|*[!0-9]*) ev_total=0 ;; esac
       if [ "$level" -eq 2 ] && [ -f .chug/events.jsonl ] && [ "$ev_total" -gt "$ev_seen" ]; then
-        awk -v from="$((ev_seen + 1))" -v item="$item_id" -v n="$n" '
-          NR >= from && index($0, "\"type\":\"tool_result\"") {
+        awk -v from="$((ev_seen + 1))" -v to="$ev_total" -v item="$item_id" -v n="$n" '
+          NR >= from && NR <= to && index($0, "\"type\":\"tool_result\"") {
             name = ""
             if (match($0, /"name":"[a-zA-Z_0-9]*"/)) {
               name = substr($0, RSTART + 8, RLENGTH - 9)
@@ -1450,7 +1466,7 @@ loopd_hb_watch() { # <max_iters> <cycle_log> — runs until killed, orphaned, or
       #    pass in full; at level 3 every new line is teed VERBATIM — no
       #    filter, no prefix: the stream IS the cycle log.
       if [ -n "$clog" ] && [ -f "$clog" ]; then
-        clog_total=$(awk 'END { print NR }' "$clog" 2>/dev/null) || clog_total=0
+        clog_total=$(wc -l 2>/dev/null < "$clog" | tr -d '[:space:]') || clog_total=0
         case "$clog_total" in ''|*[!0-9]*) clog_total=0 ;; esac
         if [ "$clog_total" -gt "$clog_seen" ]; then
           if [ "$level" -eq 2 ]; then

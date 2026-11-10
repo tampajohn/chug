@@ -417,7 +417,9 @@ The 7501 dot answers "is it alive"; the compact heartbeat (T356) answers
 "what transition just happened"; the operator's follow-up (2026-11-10)
 asks for "what is it actually doing" on the same PTY. One knob dials it —
 `CHUG_LOOP_VERBOSE=<n>` (the spawned pilot supervisor inherits it through
-the environment; `chug loop run` passes nothing extra):
+the environment; `chug loop run --verbose[=<n>]` forwards the same dial
+into that environment — bare `--verbose` is the verbose level 2, and the
+flag absent passes nothing extra, the byte-identical default):
 
 | level | surface | the terminal shows |
 | --- | --- | --- |
@@ -431,10 +433,16 @@ TTY** — a redirected context (nohup, launchd, a pipe, a log file) is level
 0 whatever the knob says, so log parsers never see a heartbeat line, a tee
 line, or an escape byte. On a TTY, unset/empty is level 1 (the T356
 default, byte-identical to pre-T359); any value outside `0..3` degrades to
-0 (default-safe — an unreadable knob must never turn detail on). The
-mechanism is a line-count-latched tail of the files the loop already
-writes (the cycle's `.chug/events.jsonl` for tool results, the cycle log
-for model text and the trace) — nothing new is logged and nothing is
+0 (default-safe — an unreadable knob must never turn detail on; at the CLI
+boundary a value outside `0..3` is refused outright — `--verbose=9` is a
+clap error, never a forwarded garbage dial). The mechanism is a
+COMPLETE-line-count-latched tail of the files the loop already writes
+(the cycle's `.chug/events.jsonl` for tool results, the cycle log for
+model text and the trace) — `wc -l` counts only complete lines, so a
+half-written stream line waits for its newline and is consumed exactly
+once: never split, never glued, never repeated (the model text's partial
+deltas land un-newlined and routinely straddle the 1s poll boundary).
+Nothing new is logged and nothing is
 double-written: the child's stdout is captured, its stderr goes to the
 cycle log, so the tee is the only thing these lines ever reach the TTY
 through. Level 2's summaries follow the T356 source-string rule: one

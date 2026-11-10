@@ -1407,14 +1407,18 @@ and the line can never disagree):
   stale milestone and latch the cycle silent (the fix-up round's F1
   finding; pinned by the stale-events fixtures).
 
-**The T359 dial extends the terminal surfaces** (`CHUG_LOOP_VERBOSE=<n>`):
-0 silent, 1 the compact heartbeat above (the default on a TTY), 2 turn
+**The T359 dial extends the terminal surfaces** (`CHUG_LOOP_VERBOSE=<n>`,
+or `chug loop run --verbose[=<n>]` forwarding the same dial into the
+supervisor's env — bare `--verbose` is level 2, the flag absent passes
+nothing extra): 0 silent, 1 the compact heartbeat above (the default on a
+TTY), 2 turn
 detail — one `[loop] <item> iter <n> — tool <name>: <summary, 80>` line per
 tool call (the event's own preview, a `...` truncation marker past 80,
 errors in full up to the driver's preview cap) plus each model text block
 capped at ~3 lines with the same marker, 3 the trace — every new cycle-log
-line teed to stdout as it lands (≤2s, line-count-latched so a half-written
-stream line waits for its newline and is never split or repeated). The
+line teed to stdout as it lands (≤2s, COMPLETE-line-count-latched —
+`wc -l`, so a half-written stream line waits for its newline and is never
+split or repeated). The
 gating contract extends with the levels: stdout must be a TTY — redirected
 contexts are level 0 whatever the knob says — and any value outside the
 dial degrades to 0. The tee's only source is the cycle log the supervisor
