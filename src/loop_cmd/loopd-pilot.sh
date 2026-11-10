@@ -109,8 +109,19 @@ open_rows() {
 # line). One name at every call site keeps the state map below symmetric
 # with chug's own loopd.sh; the TTY + CHUG_OSC7501 gates live inside the
 # shared emitter (the T354 compat contract, one enforcement point).
+# T360 — the blocked leg rides the SAME shared scan chug's own loopd.sh
+# runs (osc7501_cycle_block, sourced above): an idle transition is checked
+# against the newest cycle log's failure markers and a match rewrites it
+# idle->blocked with the marker line as the msg BEFORE the dot composes —
+# parity by construction with chug's own supervisor (the same helper, the
+# same composition point, the same bytes).
 loopd_osc7501_emit() { # <state> [one-line reason] — TTY-gated, env-killable
-  osc7501_emit "${1:-working}" "${2:-}"
+  local state="${1:-working}" msg="${2:-}" block
+  if [ "$state" = idle ] && block=$(osc7501_cycle_block); then
+    state=blocked
+    msg="$block"
+  fi
+  osc7501_emit "$state" "$msg"
 }
 
 # T358 — the blocked msg's failure line, derived from the CYCLE LOG. THE
