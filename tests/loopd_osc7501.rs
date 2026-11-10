@@ -1256,6 +1256,47 @@ echo "stub chug: dying without a marker" >&2
 exit 1
 "#;
 
+/// The pilot's forged-order stub: a model-echoed look-alike lands EARLY in
+/// the cycle log (a mid-run line on the same stderr stream the pilot
+/// redirects) and the driver's REAL death-time marker lands LAST — the T142
+/// anti-forgery shape (the sink writes the death marker after every model
+/// line, so a look-alike can never outlive it). The blocked msg must derive
+/// from the LAST marker, never the early one.
+const PILOT_FORGED_ORDER_CHUG: &str = r#"#!/bin/sh
+mkdir -p .chug && touch .chug/STOP-LOOP
+echo "model narrative: turning to the next item" >&2
+echo "chug: abort: forged look-alike" >&2
+echo "model narrative: still mid-run after the forgery" >&2
+echo "chug: abort: the real death reason" >&2
+exit 1
+"#;
+
+/// The pilot's panicking stub: dies rc=101 (a Rust unwind's exit code) with
+/// the `chug: panicked:` unwind line as the ONLY failure marker — no abort
+/// line anywhere (the thread-panic line above it matches neither pattern).
+/// The blocked msg must carry the panic's reason (the pattern is otherwise
+/// pinned only by static presence in the source text).
+const PILOT_PANICKED_CHUG: &str = r#"#!/bin/sh
+mkdir -p .chug && touch .chug/STOP-LOOP
+echo "thread 'main' panicked at driver: goal not accepted" >&2
+echo "chug: panicked: the loop driver panicked: assertion failed: goal accepted" >&2
+exit 101
+"#;
+
+/// The long death reason — past the 120-char cap the derivation applies to
+/// keep the msg channel one line. ONE source for the stub's marker and the
+/// fixture's expectation (the two cannot drift).
+const PILOT_LONG_DEATH_REASON: &str = "upstream 429: rate limited until 2026-11-10T12:00:00Z; request id req-9f8c1e2a-77d4-4b3e-9a51-cc0b1d2e3f4a; retry with backoff or rotate the key";
+
+/// The stub carrying that long marker: dies rc=1 (the budget/abort exit)
+/// after writing the over-cap marker to stderr.
+fn pilot_long_marker_stub() -> String {
+    format!(
+        "#!/bin/sh\nmkdir -p .chug && touch .chug/STOP-LOOP\necho \"chug: abort: {}\" >&2\nexit 1\n",
+        PILOT_LONG_DEATH_REASON
+    )
+}
+
 /// The full pilot-supervisor harness: the generated supervisor materialized
 /// where `chug loop run` writes it (copy_pilot_fixture), the hermetic ps
 /// stub first on PATH, HOME pinned inside the sandbox, the sleep seams at
@@ -1366,6 +1407,24 @@ impl PilotSandbox {
             }
         }
         files
+    }
+
+    /// The cycle logs only — the derivation's surface (the field finding:
+    /// the failure markers land here, never in the supervisor stream).
+    /// Sorted, so name order is the chronological order the names encode.
+    fn cycle_logs(&self) -> Vec<PathBuf> {
+        let state_dir = self.root.join(".chug/loopd");
+        let mut logs = Vec::new();
+        if let Ok(entries) = fs::read_dir(&state_dir) {
+            for entry in entries.flatten() {
+                let name = entry.file_name().to_string_lossy().to_string();
+                if name.starts_with("cycle-") && name.ends_with(".log") {
+                    logs.push(entry.path());
+                }
+            }
+        }
+        logs.sort();
+        logs
     }
 }
 
@@ -1552,6 +1611,204 @@ fn a_pilot_death_without_a_marker_falls_back_to_the_newest_marked_cycle_log() {
         ],
         "the markerless death must derive from the newest OTHER marked cycle \
          log, suffixed with its source:\n{capture:?}"
+    );
+}
+
+/// (M-D killing fixture — the ordering pin) The derivation is
+/// LAST-marker-wins: the sink writes the death marker after every model line
+/// (the T142 anti-forgery property), so an EARLY model-echoed look-alike
+/// must never win the msg channel over the driver's LATER death-time marker.
+/// Validator mutant M-D flipped the awk to first-wins and the whole target
+/// stayed green (43/43) — this is the behavioral pin it lacked: RED against
+/// the first-wins flip, where the emitted msg becomes the forged reason.
+#[test]
+fn a_pilot_blocked_msg_takes_the_last_death_marker_over_an_early_forged_look_alike() {
+    let _timing = testsupport::timing_guard();
+    let _t172_load = t172_load_lock::family_guard("loopd-osc7501");
+    let sandbox = PilotSandbox::new();
+    sandbox.install_chug_stub(PILOT_FORGED_ORDER_CHUG);
+    let (mut child, rx) = sandbox.run_on_pty();
+    let status = wait_bounded(&mut child, Duration::from_secs(90));
+    let status = status.expect("the forged-order pilot sandbox hung past the 90s cap");
+    assert!(
+        status.success(),
+        "one failed cycle must not halt the pilot (3 to halt): {status:?}"
+    );
+    let capture = rx
+        .recv_timeout(Duration::from_secs(10))
+        .expect("the pty drain thread finished");
+
+    // THE PRECONDITION: both markers sit in the ONE cycle log, the forged
+    // look-alike EARLY and the real death marker LAST in file order — the
+    // order the line-by-line derivation reads.
+    let logs = sandbox.cycle_logs();
+    assert_eq!(logs.len(), 1, "exactly one cycle log: {logs:?}");
+    let cycle_text = fs::read_to_string(&logs[0]).unwrap_or_default();
+    let at_forged = cycle_text
+        .find("chug: abort: forged look-alike")
+        .expect("the early forged look-alike is in the cycle log");
+    let at_real = cycle_text
+        .find("chug: abort: the real death reason")
+        .expect("the real death marker is in the cycle log");
+    assert!(
+        at_forged < at_real,
+        "the forged look-alike must PRECEDE the real death marker in file \
+         order — this fixture pins the LATER-marker-wins ordering:\n{cycle_text:?}"
+    );
+
+    let records = parse_osc7501(&capture);
+    assert_eq!(
+        records,
+        vec![
+            rec("working", Some("cycle start: 1 open row(s) on anthropic-system.ai.kimi-k3")),
+            rec("blocked", Some("budget: the real death reason")),
+        ],
+        "the blocked msg must derive from the LAST marker in the cycle log — \
+         the death-time sink line, never the early model-echoed look-alike \
+         (the T142 anti-forgery property on the 7501 msg channel):\n{capture:?}"
+    );
+    // The anti-forgery half, stated on its own so a first-wins mutant fails
+    // HERE with the property named.
+    let blocked = records
+        .iter()
+        .find(|r| r.state == "blocked")
+        .expect("the death emitted a blocked record");
+    let msg = blocked.msg.as_deref().unwrap_or_default();
+    assert!(
+        !msg.contains("forged"),
+        "THE ANTI-FORGERY PROPERTY: an early model-echoed look-alike must \
+         never win the msg channel over the driver's death-time marker: {msg:?}"
+    );
+
+    for file in sandbox.redirected_files() {
+        let bytes = fs::read(&file).unwrap_or_default();
+        assert_eq!(
+            esc_count(&bytes),
+            0,
+            "{} (a redirected context) carries an escape byte",
+            file.display()
+        );
+    }
+}
+
+/// (the dead-pattern killing fixture) `chug: panicked: ` is otherwise pinned
+/// only by static presence — the source-text pin asserts the needle exists
+/// in the awk, never that a panic line DRIVES anything. A cycle log whose
+/// ONLY failure marker is the panic unwind line must still produce
+/// blocked+msg carrying that reason. RED against the pattern drop (the awk's
+/// panicked leg deleted): no marker matches, the derivation falls to the
+/// canned rc line, and the msg loses the reason.
+#[test]
+fn a_pilot_panicked_marker_alone_carries_the_panic_reason_on_the_msg_channel() {
+    let _timing = testsupport::timing_guard();
+    let _t172_load = t172_load_lock::family_guard("loopd-osc7501");
+    let sandbox = PilotSandbox::new();
+    sandbox.install_chug_stub(PILOT_PANICKED_CHUG);
+    let (mut child, rx) = sandbox.run_on_pty();
+    let status = wait_bounded(&mut child, Duration::from_secs(90));
+    let status = status.expect("the panicking pilot sandbox hung past the 90s cap");
+    assert!(
+        status.success(),
+        "one failed cycle must not halt the pilot (3 to halt): {status:?}"
+    );
+    let capture = rx
+        .recv_timeout(Duration::from_secs(10))
+        .expect("the pty drain thread finished");
+
+    // THE PRECONDITION: the panic unwind line is the death log's ONLY
+    // failure marker — no abort line anywhere, so a wrong-pattern
+    // derivation has nothing else to grab.
+    let logs = sandbox.cycle_logs();
+    assert_eq!(logs.len(), 1, "exactly one cycle log: {logs:?}");
+    let cycle_text = fs::read_to_string(&logs[0]).unwrap_or_default();
+    assert!(
+        cycle_text.contains("chug: panicked: the loop driver panicked: assertion failed: goal accepted"),
+        "the stub must have written the panic unwind marker into the cycle log:\n{cycle_text:?}"
+    );
+    assert!(
+        !cycle_text.contains("chug: abort: "),
+        "the precondition: NO abort marker — the panicked line is the only one:\n{cycle_text:?}"
+    );
+
+    let records = parse_osc7501(&capture);
+    assert_eq!(
+        records,
+        vec![
+            rec("working", Some("cycle start: 1 open row(s) on anthropic-system.ai.kimi-k3")),
+            rec(
+                "blocked",
+                Some("error: the loop driver panicked: assertion failed: goal accepted")
+            ),
+        ],
+        "the panicked marker alone must drive the msg channel (rc=101 → the \
+         error word), the panic's reason carried verbatim:\n{capture:?}"
+    );
+}
+
+/// (the cap fixture) The derivation caps the reason at 120 chars — a
+/// provider error string can be long and the msg channel stays one line —
+/// unpinned until now (no fixture drove an over-cap marker). RED against
+/// the cap lift (substr's 120 dropped): the msg carries the FULL reason and
+/// the equality below fails on the tail.
+#[test]
+fn a_pilot_death_reason_over_120_chars_is_capped_on_the_msg_channel() {
+    // The fixture's own precondition: an over-cap ASCII reason (so [..120]
+    // is a char boundary), ONE source shared by the stub and the
+    // expectation.
+    assert!(
+        PILOT_LONG_DEATH_REASON.len() > 120 && PILOT_LONG_DEATH_REASON.is_ascii(),
+        "the fixture's reason must be an over-cap ASCII line (len {})",
+        PILOT_LONG_DEATH_REASON.len()
+    );
+    let _timing = testsupport::timing_guard();
+    let _t172_load = t172_load_lock::family_guard("loopd-osc7501");
+    let sandbox = PilotSandbox::new();
+    sandbox.install_chug_stub(&pilot_long_marker_stub());
+    let (mut child, rx) = sandbox.run_on_pty();
+    let status = wait_bounded(&mut child, Duration::from_secs(90));
+    let status = status.expect("the over-cap pilot sandbox hung past the 90s cap");
+    assert!(
+        status.success(),
+        "one failed cycle must not halt the pilot (3 to halt): {status:?}"
+    );
+    let capture = rx
+        .recv_timeout(Duration::from_secs(10))
+        .expect("the pty drain thread finished");
+
+    // THE PRECONDITION: the FULL marker is in the cycle log — any loss is
+    // the derivation's cap, never the log's.
+    let logs = sandbox.cycle_logs();
+    assert_eq!(logs.len(), 1, "exactly one cycle log: {logs:?}");
+    let cycle_text = fs::read_to_string(&logs[0]).unwrap_or_default();
+    let full_marker = format!("chug: abort: {PILOT_LONG_DEATH_REASON}");
+    assert!(
+        cycle_text.contains(&full_marker),
+        "the stub must have written the FULL over-cap marker into the cycle log:\n{cycle_text:?}"
+    );
+
+    let expected = format!("budget: {}", &PILOT_LONG_DEATH_REASON[..120]);
+    let records = parse_osc7501(&capture);
+    assert_eq!(
+        records,
+        vec![
+            rec("working", Some("cycle start: 1 open row(s) on anthropic-system.ai.kimi-k3")),
+            rec("blocked", Some(&expected)),
+        ],
+        "the over-cap reason must ride the msg channel truncated to 120 chars \
+         (the derivation's cap): head intact, tail gone, nothing more:\n{capture:?}"
+    );
+    // The cap half, stated on its own so a lifted cap fails HERE with the
+    // property named.
+    let blocked = records
+        .iter()
+        .find(|r| r.state == "blocked")
+        .expect("the death emitted a blocked record");
+    let msg = blocked.msg.as_deref().unwrap_or_default();
+    assert!(
+        !msg.contains(&PILOT_LONG_DEATH_REASON[120..]),
+        "THE CAP: nothing past 120 chars of the reason may survive the msg \
+         channel (msg len {}): {msg:?}",
+        msg.len()
     );
 }
 
@@ -2201,10 +2458,10 @@ fn the_real_supervisor_fixtures_join_the_t151_timing_domain() {
     }
     assert_eq!(
         guarded.len(),
-        9,
-        "the real-supervisor family is 9 fixtures (loopd.sh: green, piped, \
-         dying, gate-red, dormant; pilot: green, piped, dying, markerless) — \
-         a new real-supervisor fixture must join the domain or this pin's \
-         count is lying about coverage"
+        12,
+        "the real-supervisor family is 12 fixtures (loopd.sh: green, piped, \
+         dying, gate-red, dormant; pilot: green, piped, dying, markerless, \
+         forged-order, panicked, over-cap) — a new real-supervisor fixture \
+         must join the domain or this pin's count is lying about coverage"
     );
 }
