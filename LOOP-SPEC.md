@@ -1367,3 +1367,27 @@ alike) has been harvested.
   the nearest section. If the structure fights the addition, that's a docs
   finding for the next evaluation (META-META-SPEC §6), not a reason to
   force-fit it.
+
+## Terminal surfaces (T354, T356)
+
+The supervisor talks to two audiences on stdout, from ONE composition point
+(`loopd_osc7501_emit` — one call per transition, both surfaces, so the dot
+and the line can never disagree):
+
+- **The status dot (T354)** — the OSC 7501 sequence for machine readers
+  (herdr): `CHUG_OSC7501` unset-or-1 emits, any other value silences.
+- **The heartbeat line (T356)** — the appended `[loop …]` line for the human
+  watching the terminal: the cycle start (cycle number, routing, the routed
+  model's short name, the queue's top open row), iteration milestones (one
+  per 25 iterations, read live from the cycle's `.chug/events.jsonl`, with
+  the last tool name; the `loopd_hb_watch` helper rides the launch and is
+  killed the moment the capture returns), merge flips (one line per observed
+  merge commit — the queue's serial delivery), the dormant line (naming the
+  next probe), and `BLOCKED: <reason>` lines whose reason text matches the 7501
+  msg channel text exactly, by construction. `CHUG_LOOP_VERBOSE` unset-or-1 emits,
+  any other value silences even on a TTY; the knobs are independent.
+
+**Redirected contexts get neither surface** (the TTY gate is the first leg
+of both): nohup, launchd, pipes, and log files receive zero lines and zero
+escape bytes — log parsers must never see either. Lines are appended, never
+carriage-return redraws; a full 200-iteration cycle stays within 15 lines.
