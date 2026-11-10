@@ -408,41 +408,42 @@ fn chug_loop_verbose_0_kills_even_on_a_tty() {
 }
 
 /// (gating req) TTY + CHUG_LOOP_VERBOSE=1 → the line is emitted (the
-/// explicit enable leg).
+/// explicit enable leg). The line is the detail VERBATIM — the `[loop
+/// HH:MM:SS]` clock is the run loop's cycle-start composition (the spec
+/// shows it there only), never the emitter's addition.
 #[test]
 fn chug_loop_verbose_1_explicitly_enables_on_a_tty() {
     let root = probe_fixture_root();
     let capture = probe_pty(
         root.path(),
-        &["working", "cycle start: eval cycle on X", "cycle 7 routing=eval (kimi-k3)"],
+        &["working", "cycle start: eval cycle on X", "[loop 14:32:05] cycle 7 routing=eval (kimi-k3)"],
         &[("CHUG_LOOP_VERBOSE", "1")],
     );
     let lines = heartbeat_lines(&capture);
     assert_eq!(lines.len(), 1, "exactly one heartbeat line: {capture:?}");
-    assert!(
-        lines[0].starts_with("[loop ") && lines[0].contains("] cycle 7 routing=eval (kimi-k3)"),
-        "the line must carry the [loop <utc-clock>] prefix and the detail verbatim: {lines:?}"
+    assert_eq!(
+        lines[0], "[loop 14:32:05] cycle 7 routing=eval (kimi-k3)",
+        "the line is the detail verbatim — no emitter-added decoration: {lines:?}"
     );
 }
 
 /// (single-call req) A TTY + unset → the line AND the dot from the ONE
-/// emitter call: the appended line with the detail verbatim (the
-/// `[loop <utc-clock>]` prefix, one physical line, no redraw) plus exactly
-/// one parsed 7501 record.
+/// emitter call: the appended line with the detail verbatim (one physical
+/// line, no redraw) plus exactly one parsed 7501 record.
 #[test]
 fn a_transition_line_and_its_dot_come_from_one_call() {
     let root = probe_fixture_root();
     let capture = probe_pty(
         root.path(),
-        &["working", "cycle start: eval cycle on X", "cycle 7 routing=eval (kimi-k3)"],
+        &["working", "cycle start: eval cycle on X", "[loop 14:32:05] cycle 7 routing=eval (kimi-k3)"],
         &[],
     );
     let lines = heartbeat_lines(&capture);
     assert_eq!(lines.len(), 1, "exactly one heartbeat line: {capture:?}");
     assert_eq!(
-        lines[0],
-        format!("[loop {}] cycle 7 routing=eval (kimi-k3)", &lines[0][6..14]),
-        "the line is the detail verbatim under the [loop HH:MM:SS] prefix"
+        lines[0], "[loop 14:32:05] cycle 7 routing=eval (kimi-k3)",
+        "the line is the detail verbatim (the run loop's cycle-start site \
+         owns the clock prefix, per the spec's shapes)"
     );
     // Appended, never redrawn: the raw stream's only \r are the tty's own
     // CRLF translations at line ends — never a bare CR redraw inside a line.
@@ -516,39 +517,48 @@ echo "stub cargo: build FAILED" >&2
 exit 1
 "#;
 
-/// A green build whose stub BINARY plays a real cycle's event stream: ~60
-/// merged iteration lines in six batches (the watcher's 1s poll seam
-/// interleaves), one tool_result per batch (the milestone's action name), a
-/// merge commit mid-run (the flip line), then the accepted verdict. The
+/// The milestone stub's generator: a green build whose stub BINARY plays a
+/// real cycle's event stream — `batches` batches of 10 merged iteration
+/// lines (the watcher's 1s poll seam interleaves), one tool_result per batch
+/// (the milestone's action name), a merge commit at the midpoint (the flip
+/// line), then the accepted verdict. `initial_delay` holds the FIRST batch
+/// back that many seconds — the stale-events fixtures widen the driver's
+/// rotate-after-watcher-birth window (production ≈100ms) so the RED shape
+/// is deterministic under any scheduler. `batch_sleep` paces the batches
+/// (the 200-iteration volume arc runs 1s to keep the fixture bounded). The
 /// sandbox is a git repo with a TODO.md carrying the open T042 row, so the
 /// lines carry the item field too.
-const MILESTONE_CARGO: &str = r#"#!/bin/sh
+fn milestone_cargo_stub(batches: u32, initial_delay: u32, batch_sleep: u32) -> String {
+    let merge_batch = batches / 2;
+    format!(
+        r#"#!/bin/sh
 set -e
-[ -n "$CARGO_TARGET_DIR" ] || { echo 'stub cargo: CARGO_TARGET_DIR unset' >&2; exit 1; }
+[ -n "$CARGO_TARGET_DIR" ] || {{ echo 'stub cargo: CARGO_TARGET_DIR unset' >&2; exit 1; }}
 mkdir -p "$CARGO_TARGET_DIR/release"
 cat > "$CARGO_TARGET_DIR/release/chug" <<'STUB'
 #!/bin/sh
 mkdir -p .chug
+sleep {initial_delay}
 iter=0
 batch=0
-while [ "$batch" -lt 6 ]; do
+while [ "$batch" -lt {batches} ]; do
   batch=$((batch + 1))
   i=0
   while [ "$i" -lt 10 ]; do
     iter=$((iter + 1))
-    printf '{"type":"iteration","ts":"2026-11-09T00:00:00Z","n":%d,"input_tokens":1,"output_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}\n' "$iter" >> .chug/events.jsonl
+    printf '{{"type":"iteration","ts":"2026-11-09T00:00:00Z","n":%d,"input_tokens":1,"output_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}\n' "$iter" >> .chug/events.jsonl
     i=$((i + 1))
   done
-  printf '{"type":"tool_result","ts":"2026-11-09T00:00:00Z","name":"bash","ok":true,"is_error":false,"duration_ms":5,"preview":"stub batch"}\n' >> .chug/events.jsonl
-  if [ "$batch" -eq 3 ]; then
+  printf '{{"type":"tool_result","ts":"2026-11-09T00:00:00Z","name":"bash","ok":true,"is_error":false,"duration_ms":5,"preview":"stub batch"}}\n' >> .chug/events.jsonl
+  if [ "$batch" -eq {merge_batch} ]; then
     echo "fixture item body" > fixture-item.md
     git add fixture-item.md
     git commit -q -m "merge: t356 fixture item landed (validator PASS)"
   fi
-  sleep 2
+  sleep {batch_sleep}
 done
 # A 3s tail after the last write: the watcher's 1s polls must SEE the final
-# iteration count (the 50-threshold milestone) before the cycle's kill —
+# iteration count (the 200-threshold milestone) before the cycle's kill —
 # under suite load a tight write-to-kill window loses the sighting (the
 # mechanism-not-timeouts doctrine: widen the window, never the bound).
 sleep 3
@@ -559,7 +569,9 @@ STUB
 chmod +x "$CARGO_TARGET_DIR/release/chug"
 echo "stub-build: green"
 exit 0
-"#;
+"#
+    )
+}
 
 fn stub(path: &Path, body: &str) {
     fs::write(path, body).expect("write stub");
@@ -588,8 +600,9 @@ struct Sandbox {
 impl Sandbox {
     /// `cargo_stub` picks the arc: GREEN_CARGO (installs a stub chug that
     /// completes), FAILING_CHUG_CARGO (a stub chug that dies rc=1),
-    /// RED_BUILD_CARGO (the build gate itself fails), MILESTONE_CARGO (a
-    /// stub that plays a real cycle's event stream and lands a merge).
+    /// RED_BUILD_CARGO (the build gate itself fails), milestone_cargo_stub()
+    /// (a stub that plays a real cycle's event stream and lands a merge —
+    /// parameterized: batches, first-batch delay, batch pacing).
     fn new(cargo_stub: &str) -> Sandbox {
         let keep = tempfile::tempdir().expect("sandbox tempdir");
         let root = keep.path().to_path_buf();
@@ -679,7 +692,10 @@ impl Sandbox {
 
     /// Spawn the supervisor the redirected way — stdout PIPED (the nohup /
     /// launchd shape the compat contract is written for).
-    fn run_piped(&self, max_loops: u32) -> Output {
+    /// Run the real supervisor with stdout PIPED (the redirected context) and
+    /// return the output. `extra_envs` rides the launch (the same shape as
+    /// `run_on_pty`) — the piped-milestone fixture needs the 1s poll seam.
+    fn run_piped(&self, max_loops: u32, extra_envs: &[(&str, &str)]) -> Output {
         let mut cmd = Command::new("bash");
         cmd.arg("loopd.sh")
             .arg("run")
@@ -719,6 +735,9 @@ impl Sandbox {
             cmd.env_remove(var);
         }
         common::pin_loopd_env_files(&mut cmd, &self.root);
+        for (k, v) in extra_envs {
+            cmd.env(k, v);
+        }
         cmd.output().expect("run the piped supervisor fixture")
     }
 
@@ -850,10 +869,12 @@ fn a_green_cycle_emits_the_cycle_start_and_done_lines() {
         2,
         "the green arc emits exactly the cycle-start and cycle-done lines:\n{capture:?}"
     );
+    // The spec's cycle-start shape carries the UTC clock — the ONLY line
+    // that does (the other heartbeat lines are bare `[loop] …`).
     assert!(
-        lines[0].contains("] cycle 1 routing=eval (kimi-k3)"),
-        "the cycle-start line names the launch number, the routing, and the \
-         routed model's short name: {lines:?}"
+        lines[0].starts_with("[loop ") && lines[0].contains("] cycle 1 routing=eval (kimi-k3)"),
+        "the cycle-start line carries the [loop HH:MM:SS] clock, the launch \
+         number, the routing, and the routed model's short name: {lines:?}"
     );
     // No TODO.md in this sandbox → no open row → the item field is omitted
     // (an empty hint degrades away; it never prints a bare `item=`).
@@ -862,8 +883,9 @@ fn a_green_cycle_emits_the_cycle_start_and_done_lines() {
         "with no open row the line must omit the item field: {lines:?}"
     );
     assert!(
-        lines[1].starts_with("[loop ") && lines[1].contains("cycle done — goal complete"),
-        "the cycle-done line names the verdict: {lines:?}"
+        lines[1].starts_with("[loop]") && lines[1].contains("cycle done — goal complete"),
+        "the cycle-done line names the verdict (bare [loop] — the clock is \
+         the cycle-start's alone): {lines:?}"
     );
     assert!(
         lines[1].contains("the stub binary ran this cycle"),
@@ -902,7 +924,7 @@ fn a_piped_supervisor_run_stays_byte_silent() {
     let _timing = testsupport::timing_guard();
     let _t172_load = t172_load_lock::family_guard("loopd-heartbeat");
     let sandbox = Sandbox::new(GREEN_CARGO);
-    let out = sandbox.run_piped(4);
+    let out = sandbox.run_piped(4, &[]);
     assert!(out.status.success(), "the piped green sandbox must exit cleanly: {:?}", out.status);
     assert!(
         out.stdout.is_empty(),
@@ -974,9 +996,10 @@ fn the_dormant_skip_emits_its_line_naming_the_next_probe() {
     );
     for line in &lines {
         assert!(
-            line.contains("queue empty — dormant, next probe 1s"),
+            line.starts_with("[loop]") && line.contains("queue empty — dormant, next probe 1s"),
             "every dormant line names the dormancy and the NEXT PROBE (the \
-             LOOPD_SLEEP_OK seam pins it at 1s here):\n{lines:?}"
+             LOOPD_SLEEP_OK seam pins it at 1s here), under the bare [loop] \
+             prefix — the spec's dormant shape carries no clock:\n{lines:?}"
         );
         assert!(
             !line.contains("working"),
@@ -1092,19 +1115,20 @@ fn a_red_build_gate_emits_the_blocked_line_and_never_a_start() {
     );
 }
 
-/// (transition req, milestone + flip arc, and the VOLUME GUARD) A cycle
-/// whose stub plays a real event stream (60 iterations in six batches, one
-/// tool_result per batch, a merge commit mid-run, the queue's open T042 row
-/// seeded) emits: the cycle-start line WITH the item field, a milestone line
-/// at iteration 25 and at 50 (each naming the item and the last tool), a
-/// flip line naming the landed merge — and NOTHING beyond the volume bound
-/// (≤ 15 lines for the whole cycle; no `iter 75` — the stub stopped at 60;
-/// exactly one line per crossed threshold, never per poll).
+/// (transition req, milestone + flip arc, and the VOLUME GUARD — at the
+/// spec's own 200-iteration shape) A cycle whose stub plays a real event
+/// stream (200 iterations in twenty 10-iteration batches, one tool_result
+/// per batch, a merge commit mid-run, the queue's open T042 row seeded)
+/// emits: the cycle-start line WITH the item field, a milestone line at
+/// EVERY crossed threshold 25..200 (eight — each naming the item and the
+/// last tool), one flip line for the merge — and NOTHING beyond the volume
+/// bound (≤ 15 lines for the whole cycle; no `iter 225` — the stub stopped
+/// at 200; exactly one line per crossed threshold, never per poll).
 #[test]
 fn milestones_and_flips_stay_within_the_volume_bound() {
     let _timing = testsupport::timing_guard();
     let _t172_load = t172_load_lock::family_guard("loopd-heartbeat");
-    let sandbox = Sandbox::new(MILESTONE_CARGO);
+    let sandbox = Sandbox::new(&milestone_cargo_stub(20, 0, 1));
     init_git_with_seed_commit(&sandbox.root);
     seed_todo_queue(&sandbox.root);
     let mut envs = vec![("LOOPD_HB_POLL", "1")];
@@ -1129,40 +1153,55 @@ fn milestones_and_flips_stay_within_the_volume_bound() {
         "the cycle-start line names the queue's open row: {lines:?}"
     );
 
-    // Milestones: one line per CROSSED threshold (25, 50) — the stub ran 60
-    // iterations, so `iter 75` must never appear, and each line names the
-    // item and the last tool from the cycle's own events log.
+    // Milestones: one line per CROSSED threshold, 25 through 200 — the stub
+    // ran the spec's full 200-iteration shape, so all eight thresholds are
+    // reported exactly once each (the one-line-per-crossed-threshold latch
+    // at 200 INCLUDED — the volume fixture runs the same budget the launch
+    // pins, not a shrunk stand-in). No shape is beyond the real count:
+    // `iter 225/200` never appears.
     let milestones: Vec<&String> =
         lines.iter().filter(|l| l.contains(" iter ") && l.contains("/200")).collect();
     assert_eq!(
         milestones.len(),
-        2,
-        "60 iterations at the 25 cadence cross exactly two thresholds:\n{joined}"
+        8,
+        "200 iterations at the 25 cadence cross exactly eight thresholds:\n{joined}"
     );
+    for k in 1..=8u32 {
+        let threshold = k * 25;
+        let expected = format!("[loop] T042 iter {threshold}/200 — bash");
+        assert_eq!(
+            milestones[(k - 1) as usize].as_str(),
+            expected.as_str(),
+            "milestone {threshold} is the spec's exact shape (bare item ID, \
+             the last tool): {milestones:?}"
+        );
+    }
     assert!(
-        milestones[0].contains("T042") && milestones[0].contains(" — bash"),
-        "the first milestone names the item and the last tool: {milestones:?}"
-    );
-    assert!(
-        joined.contains("iter 25/200") && joined.contains("iter 50/200"),
-        "both crossed thresholds are reported: {joined}"
-    );
-    assert!(
-        !joined.contains("iter 75/200"),
+        !joined.contains("iter 225/200"),
         "no milestone beyond the real iteration count: {joined}"
     );
+    assert_eq!(
+        lines.iter().filter(|l| l.contains("iter 200/200")).count(),
+        1,
+        "the at-budget threshold is latched to ONE line, never per poll:\n{joined}"
+    );
 
-    // The flip: the stub's merge commit is observed as ONE landed line.
-    let flips: Vec<&String> = lines.iter().filter(|l| l.contains("landed ")).collect();
+    // The flip: the stub's merge commit is observed as ONE line, the spec's
+    // shape — `[loop] T042 done (merge <sha>) — <merge subject, 60>` (the
+    // `merge:` subject prefix is stripped; it is redundant beside the sha).
+    let flips: Vec<&String> = lines.iter().filter(|l| l.contains("done (merge ")).collect();
     assert_eq!(flips.len(), 1, "exactly one flip line for the one merge:\n{joined}");
     assert!(
-        flips[0].contains(" — merge: t356 fixture item landed (validator PASS)"),
-        "the flip line names the merge and its subject (capped at 60): {flips:?}"
+        flips[0].starts_with("[loop]")
+            && flips[0].contains("T042 done (merge ")
+            && flips[0].contains(" — t356 fixture item landed (validator PASS)"),
+        "the flip line names the item, the merge sha, and the subject \
+         (capped at 60): {flips:?}"
     );
     let sha = flips[0]
-        .split("landed ")
+        .split("done (merge ")
         .nth(1)
-        .and_then(|rest| rest.split_whitespace().next())
+        .and_then(|rest| rest.split(')').next())
         .expect("the flip line carries the sha")
         .to_string();
     assert_eq!(sha.len(), 7, "the flip names the SHORT sha (git rev-parse --short): {sha}");
@@ -1179,6 +1218,162 @@ fn milestones_and_flips_stay_within_the_volume_bound() {
         let bytes = fs::read(&file).unwrap_or_default();
         assert!(find(&bytes, b"[loop").is_none(), "{} carries a heartbeat line", file.display());
     }
+}
+
+// ---------------------------------------------------------------------------
+// The stale-events fixtures (the F1 fix-up round, validator-blocking): a
+// previous cycle's events log is on the watcher's read surface at birth —
+// `loopd_hb_watch 200 &` starts microseconds before the chug launch, and
+// the driver rotates .chug/events.jsonl only at its own launch — so the
+// milestone leg's FIRST poll read the predecessor's file and LATCHED its
+// iteration count. RED (captured on the pre-fix tree, both shapes):
+//
+//   stale n=173 → `[loop] T042 — fixture item title for the heartbeat line
+//   iter 150/200 — bash` emitted at cycle start (the stale (173/25)*25
+//   threshold), then the `shown` latch suppressed every real milestone
+//   below 175 — the fresh cycle's 25 and 50 lines never appeared;
+//
+//   stale n=200 → `iter 200/200` emitted, then ZERO milestones for the
+//   entire cycle (the latch sat at the max).
+//
+// Every production cycle ≥2 whose predecessor reached ≥25 iterations
+// misreported. The prior fixtures never saw it because every sandbox
+// starts in a fresh tempdir with no pre-existing .chug/events.jsonl —
+// these two plant the predecessor's file (both the n<max and the n≥max
+// shapes) and demand ZERO false lines and FULL real-milestone delivery.
+// ---------------------------------------------------------------------------
+
+/// A previous cycle's stale events log — the shape a real predecessor
+/// leaves: one `run_start` head, one merged iteration line per turn, a
+/// tool_result every 25 (the watcher's milestone read takes the LAST
+/// iteration's `n` and the last tool_result's `name`).
+fn stale_events_log(last_n: u32) -> String {
+    let mut s = String::from(
+        "{\"type\":\"run_start\",\"ts\":\"2026-11-08T23:00:00Z\",\"mode\":\"run\",\"model\":\"anthropic-system.ai.kimi-k3\",\"spec\":\"LOOP-SPEC.md\",\"cwd\":\"/fixture\",\"version\":\"0.0.0\",\"commit\":\"stale\",\"head_branch\":\"main\",\"head_commit\":\"stale000\",\"max_iters\":200,\"max_minutes\":360,\"max_tokens\":null,\"max_tokens_per_request\":32768,\"goal_sha256\":\"stale\",\"goal_pack\":null,\"approve\":null,\"plan_sha256\":null}\n",
+    );
+    for n in 1..=last_n {
+        s.push_str(&format!(
+            "{{\"type\":\"iteration\",\"ts\":\"2026-11-08T23:00:00Z\",\"n\":{n},\"input_tokens\":1,\"output_tokens\":1,\"cache_read_input_tokens\":0,\"cache_creation_input_tokens\":0}}\n"
+        ));
+        if n % 25 == 0 {
+            s.push_str(
+                "{\"type\":\"tool_result\",\"ts\":\"2026-11-08T23:00:00Z\",\"name\":\"bash\",\"ok\":true,\"is_error\":false,\"duration_ms\":5,\"preview\":\"stale predecessor batch\"}\n",
+            );
+        }
+    }
+    s
+}
+
+/// Plant a previous cycle's events log in the sandbox — the shape every
+/// production cycle ≥2 starts with (the predecessor's own `.chug/
+/// events.jsonl`, still sitting there when the watcher is born). The
+/// fresh-tempdir doctrine hid this from every prior fixture.
+fn plant_stale_events(root: &Path, last_n: u32) {
+    let dir = root.join(".chug");
+    fs::create_dir_all(&dir).expect("sandbox .chug dir");
+    fs::write(dir.join("events.jsonl"), stale_events_log(last_n))
+        .expect("plant the stale predecessor events log");
+}
+
+/// The shared stale-arc assertions: the cycle completed, the predecessor's
+/// thresholds (150 off a stale 173, 200 off a stale 200) never surfaced,
+/// the fresh cycle's own 25/50 milestones arrived, and every redirected
+/// file stayed clean.
+fn assert_stale_arc_clean(sandbox: &Sandbox, capture: &[u8]) {
+    let log = sandbox.read_log();
+    assert!(
+        log.contains("cycle OK:"),
+        "the stale-events arc must still complete its cycle:\n{log}"
+    );
+    let lines = heartbeat_lines(capture);
+    let joined = lines.join("\n");
+    assert!(
+        !joined.contains("iter 150/200"),
+        "a FALSE milestone line was emitted off the PREVIOUS cycle's events \
+         log (the F1 first-poll staleness):\n{joined}"
+    );
+    assert!(
+        !joined.contains("iter 200/200"),
+        "a FALSE at-budget milestone line was emitted off the PREVIOUS \
+         cycle's events log:\n{joined}"
+    );
+    assert!(
+        joined.contains("iter 25/200") && joined.contains("iter 50/200"),
+        "the fresh cycle's real milestones must be delivered — a stale \
+         latch suppresses everything below it:\n{joined}"
+    );
+    let milestones: Vec<&String> = lines
+        .iter()
+        .filter(|l| l.contains(" iter ") && l.contains("/200"))
+        .collect();
+    assert_eq!(
+        milestones.len(),
+        2,
+        "the fresh cycle ran 60 iterations — exactly two crossed thresholds:\n{joined}"
+    );
+    for m in &milestones {
+        assert!(
+            m.contains("T042") && m.contains(" — bash"),
+            "the milestone names the item and the last tool from the cycle's \
+             OWN events log: {milestones:?}"
+        );
+    }
+    for file in sandbox.redirected_files() {
+        let bytes = fs::read(&file).unwrap_or_default();
+        assert!(find(&bytes, b"[loop").is_none(), "{} carries a heartbeat line", file.display());
+    }
+}
+
+/// (F1, stale n<max shape) A predecessor log ending at iteration 173 must
+/// yield ZERO false lines and full real-milestone delivery for the fresh
+/// cycle (the RED shape is quoted in the section comment above). The stub
+/// holds its first batch back 2s — the widened rotate-after-birth window —
+/// so the pre-fix watcher's first polls ALWAYS see the planted file and the
+/// post-fix watcher's pre-rotation is exercised against a real gap.
+#[test]
+fn stale_events_below_the_budget_never_misreport_the_cycle() {
+    let _timing = testsupport::timing_guard();
+    let _t172_load = t172_load_lock::family_guard("loopd-heartbeat");
+    let sandbox = Sandbox::new(&milestone_cargo_stub(6, 2, 2));
+    init_git_with_seed_commit(&sandbox.root);
+    seed_todo_queue(&sandbox.root);
+    plant_stale_events(&sandbox.root, 173);
+    let mut envs = vec![("LOOPD_HB_POLL", "1")];
+    envs.extend(GIT_IDENTITY);
+    let envs: Vec<(&str, &str)> = envs.into_iter().collect();
+    let (mut child, rx) = sandbox.run_on_pty(4, &envs);
+    let status = wait_bounded(&mut child, Duration::from_secs(90));
+    let status = status.expect("the stale-below sandbox supervisor hung past the 90s cap");
+    assert!(status.success(), "the stale-below sandbox must exit cleanly: {status:?}");
+    let capture = rx
+        .recv_timeout(Duration::from_secs(25))
+        .expect("the pty drain thread finished");
+    assert_stale_arc_clean(&sandbox, &capture);
+}
+
+/// (F1, stale n≥max shape) A predecessor log ending at iteration 200 — the
+/// ceiling — must yield ZERO false lines (the pre-fix watcher emitted
+/// `iter 200/200` at birth and then went milestone-silent for the whole
+/// cycle) and full real-milestone delivery.
+#[test]
+fn stale_events_at_the_budget_never_misreport_the_cycle() {
+    let _timing = testsupport::timing_guard();
+    let _t172_load = t172_load_lock::family_guard("loopd-heartbeat");
+    let sandbox = Sandbox::new(&milestone_cargo_stub(6, 2, 2));
+    init_git_with_seed_commit(&sandbox.root);
+    seed_todo_queue(&sandbox.root);
+    plant_stale_events(&sandbox.root, 200);
+    let mut envs = vec![("LOOPD_HB_POLL", "1")];
+    envs.extend(GIT_IDENTITY);
+    let envs: Vec<(&str, &str)> = envs.into_iter().collect();
+    let (mut child, rx) = sandbox.run_on_pty(4, &envs);
+    let status = wait_bounded(&mut child, Duration::from_secs(90));
+    let status = status.expect("the stale-at sandbox supervisor hung past the 90s cap");
+    assert!(status.success(), "the stale-at sandbox must exit cleanly: {status:?}");
+    let capture = rx
+        .recv_timeout(Duration::from_secs(25))
+        .expect("the pty drain thread finished");
+    assert_stale_arc_clean(&sandbox, &capture);
 }
 
 // ---------------------------------------------------------------------------
@@ -1239,8 +1434,10 @@ fn the_emitter_composes_both_surfaces_from_one_call() {
     // identical on both surfaces BY CONSTRUCTION (the consistency fixtures'
     // assertion), never by a duplicated string at a call site.
     need(&body, "[loop] BLOCKED: $msg", "the blocked line composes from the msg");
-    // The line's clock prefix is the UTC wall clock (the loop's stance).
-    need(&body, "[loop $(date -u +%H:%M:%S)] $hb", "the clock prefix on detail lines");
+    // The detail line is the detail VERBATIM (the F2 shapes: the `[loop
+    // HH:MM:SS]` clock is the run loop's cycle-start composition — the spec
+    // shows it there ONLY — never an emitter-added prefix).
+    need(&body, "loopd_hb_emit \"$hb\"", "the human line is the detail verbatim");
 
     // The writer: the TTY gate, the env case, the guarded printf — the same
     // contract shape as the dot's, with ITS OWN env knob.
@@ -1281,7 +1478,11 @@ fn every_transition_wires_the_line_beside_its_dot() {
         "cycle start -> $cycle_log ($mode cycle, orchestrator $orch_model)",
         "the cycle-start log line",
     );
-    let at_compose = need(&loopd, "hb_detail=\"cycle $cycles routing=$mode", "the line composition");
+    let at_compose = need(
+        &loopd,
+        "hb_detail=\"[loop $(date -u +%H:%M:%S)] cycle $cycles routing=$mode",
+        "the line composition (the spec's clocked cycle-start shape)",
+    );
     let at_emit = need(
         &loopd,
         "loopd_osc7501_emit working \"cycle start: $mode cycle on $orch_model\"",
@@ -1295,31 +1496,38 @@ fn every_transition_wires_the_line_beside_its_dot() {
     // The item hint rides only when the queue has an open row.
     need(&loopd, "if [ -n \"$hb_item\" ]; then", "the item field is conditional");
 
-    // The watcher rides the launch: started before, killed after.
-    let at_watch = need(&loopd, "loopd_hb_watch 200 &", "the watcher start");
+    // The watcher rides the launch: started before, killed after. The
+    // predecessor's events log is rotated aside BEFORE the watcher is
+    // backgrounded (the F1 fix — its first poll must never read a stale
+    // iteration count; see the stale-events fixtures above). The needles
+    // are line-precise (own line, two-space indent) so the helpers' doc
+    // comments that MENTION the calls can never satisfy them.
+    let at_prerot = need(&loopd, "\n  loopd_hb_prerotate\n", "the events-log pre-rotation call");
+    let at_watch = need(&loopd, "\n  loopd_hb_watch 200 &\n", "the watcher start");
     let at_launch = need(&loopd, "chug_out=\"$(CARGO_TARGET_DIR=", "the chug launch");
     let at_kill = need(&loopd, "kill \"$hb_watch_pid\" 2>/dev/null || true", "the watcher kill");
     let at_wait = need(&loopd, "wait \"$hb_watch_pid\" 2>/dev/null || true", "the watcher reap");
     assert!(
-        at_watch < at_launch && at_launch < at_kill && at_kill < at_wait,
-        "the watcher spans exactly the launch capture — never a skip path, \
-         never a verdict leg"
+        at_prerot < at_watch && at_watch < at_launch && at_launch < at_kill && at_kill < at_wait,
+        "the pre-rotation, then the watcher, span exactly the launch capture — \
+         never a skip path, never a verdict leg"
     );
-    // The tandem: the same 200 literal on both sides of the launch.
+    // The tandem: the same 200 literal on both sides of the launch (the
+    // line-precise needle — the prerotate comment MENTIONs the watcher).
     count_eq(&loopd, "--max-iters 200", 1, "the launch's iteration budget (T121/T198)");
-    count_eq(&loopd, "loopd_hb_watch 200 &", 1, "the watcher's max is the same budget");
+    count_eq(&loopd, "\n  loopd_hb_watch 200 &\n", 1, "the watcher's max is the same budget");
 
     // The held skips: the dormant line names the next probe, the plain skip
     // names the skip — both between the pacing log and the sleep.
     let at_pacing = need(&loopd, "cheap-exit pacing: sleeping ${skip_secs}s", "the pacing log");
     let at_dormant = need(
         &loopd,
-        "loopd_osc7501_emit idle \"dormant: queue empty\" \"queue empty — dormant, next probe ${skip_secs}s\"",
+        "loopd_osc7501_emit idle \"dormant: queue empty\" \"[loop] queue empty — dormant, next probe ${skip_secs}s\"",
         "the dormant line",
     );
     let at_skip = need(
         &loopd,
-        "loopd_osc7501_emit idle \"cycle skipped: no evaluation needed now\" \"no evaluation needed — skipped, next probe ${skip_secs}s\"",
+        "loopd_osc7501_emit idle \"cycle skipped: no evaluation needed now\" \"[loop] no evaluation needed — skipped, next probe ${skip_secs}s\"",
         "the plain-skip line",
     );
     let at_sleep = need(&loopd, "sleep \"$skip_secs\"", "the pacing sleep");
@@ -1332,7 +1540,7 @@ fn every_transition_wires_the_line_beside_its_dot() {
     let at_ok = need(&loopd, "cycle OK: $summary", "the cycle-OK log line");
     let at_ok_emit = need(
         &loopd,
-        "loopd_osc7501_emit idle \"cycle ok\" \"cycle done — goal complete$hb_tail\"",
+        "loopd_osc7501_emit idle \"cycle ok\" \"[loop] cycle done — goal complete$hb_tail\"",
         "the cycle-done line",
     );
     let at_sync = need(&loopd, "scripts/site-sync.sh >> \"$LOG\"", "the site-sync call");
@@ -1447,11 +1655,51 @@ fn the_watcher_defaults_safely_and_cannot_outlive_its_supervisor() {
     count_eq(&body, "[ \"$slept\" -lt \"$poll\" ]", 1, "the slice loop bounds at the poll knob");
 }
 
+/// (F1 fix-up req, static) The pre-rotation is the milestone leg's primer at
+/// the read surface: the predecessor's events log is rotated aside (under
+/// the driver's OWN cycle-stream archive name, so the wrap's streak
+/// derivation sees the identical corpus) before the watcher exists. The
+/// stale-events fixtures prove the behavior; this pin makes the mechanism
+/// itself mutation-resistant (drop the call, or the guard, or the name
+/// shape, and the static gate goes RED even if a fixture never runs).
+#[test]
+fn the_watcher_never_reads_a_predecessor_events_log() {
+    let loopd = read("loopd.sh");
+    count_eq(&loopd, "loopd_hb_prerotate() {", 1, "the pre-rotation is defined exactly once");
+    let body = fn_body(&loopd, "loopd_hb_prerotate");
+    // The guard is the driver's own rotate rule: a MISSING or EMPTY log is a
+    // no-op ([ -s ] ⟺ rotate_fresh's len > 0), everything else moves.
+    need(&body, "[ -s .chug/events.jsonl ] || return 0", "an absent/empty log is a no-op");
+    // The archive name is the cycle-stream shape (`events-<YYYYmmdd>-<HHMMSS>
+    // .jsonl`, collisions -2..-10 like src/archive.rs) — the wrap's
+    // cycle-stream enumeration keys on that exact name shape.
+    need(&body, "date -u +%Y%m%d-%H%M%S", "the UTC cycle-stream timestamp");
+    need(&body, "events-$ts$n.jsonl", "the driver's archive-name shape");
+    count_eq(&body, "|| true", 1, "the mv is best-effort (a failed move defers to the driver)");
+    assert!(
+        body.trim_end().ends_with("return 0"),
+        "the pre-rotation must end in an unconditional return 0 (a bare \
+         statement under set -euo pipefail in the run loop)"
+    );
+    // The call site: inside the run loop, after the cycle-start emission,
+    // BEFORE the watcher is backgrounded (the ordering pin above asserts the
+    // watcher/launch pair; this one anchors the call to the watcher — both
+    // needles are line-precise so doc-comment mentions never satisfy them).
+    let at_call = need(&loopd, "\n  loopd_hb_prerotate\n", "the run-loop call site");
+    let at_watch = need(&loopd, "\n  loopd_hb_watch 200 &\n", "the watcher start");
+    assert!(
+        at_call < at_watch,
+        "the pre-rotation must precede the watcher's birth — the whole point \
+         is that no watcher poll ever sees the predecessor's file"
+    );
+}
+
 /// (volume req, static) The cadence arithmetic the behavioral volume guard
 /// rides: the default 25-iteration cadence against the launch's 200-iteration
 /// budget bounds a cycle at 8 milestone lines, + the cycle-start and
 /// cycle-done lines = 10 ≤ 15; merge flips ride LOOP-SPEC's serial
-/// one-merge-per-row delivery and the behavioral fixture measures the total.
+/// one-merge-per-row delivery and the behavioral fixture measures the total
+/// at the spec's own 200-iteration shape.
 #[test]
 fn the_volume_arithmetic_holds() {
     let loopd = read("loopd.sh");
@@ -1556,10 +1804,52 @@ fn the_real_supervisor_fixtures_join_the_t151_timing_domain() {
     }
     assert_eq!(
         guarded.len(),
-        7,
-        "the through-loopd family is 7 fixtures (green, piped, silenced, \
-         dormant, dying, gate-red, milestone) — a new real-supervisor \
-         fixture must join the domain or this pin's count is lying about \
-         coverage"
+        10,
+        "the through-loopd family is 10 fixtures (green, piped, silenced, \
+         dormant, dying, gate-red, milestone, stale-below, stale-at, \
+         piped-milestone) — a new real-supervisor fixture must join the \
+         domain or this pin's count is lying about coverage"
     );
+}
+
+/// (F4 fix-up, gating req behavioral tooth) The TTY gate, piped, on the
+/// milestone arc: the watcher RUNS the same 60-iteration event stream (the
+/// same stub + the 1s poll seam the pty milestone fixture uses, so the
+/// emit calls certainly HAPPEN — the pty twin proves the arc fires), but
+/// stdout is a pipe: the byte-assert is ZERO bytes on stdout. A dropped
+/// `[ -t 1 ]` gate in `loopd_hb_emit` leaks the milestone and flip lines
+/// straight into the redirected stream — this fixture kills it
+/// behaviorally (M2's static pin keeps the regression guard, this gives
+/// it the tooth).
+#[test]
+fn a_piped_milestone_arc_leaks_no_lines_into_the_redirect() {
+    let _timing = testsupport::timing_guard();
+    let _t172_load = t172_load_lock::family_guard("loopd-heartbeat");
+    let sandbox = Sandbox::new(&milestone_cargo_stub(6, 0, 2));
+    init_git_with_seed_commit(&sandbox.root);
+    seed_todo_queue(&sandbox.root);
+    let mut envs = vec![("LOOPD_HB_POLL", "1")];
+    envs.extend(GIT_IDENTITY);
+    let out = sandbox.run_piped(4, &envs);
+    assert!(
+        out.status.success(),
+        "the piped milestone arc must exit cleanly: {:?}",
+        out.status
+    );
+    let log = sandbox.read_log();
+    assert!(
+        log.contains("cycle OK:"),
+        "the piped milestone arc must complete its cycle:\n{log}"
+    );
+    assert!(
+        out.stdout.is_empty(),
+        "piped stdout must receive ZERO bytes even on an arc whose watcher \
+         emitted lines on the pty twin (the TTY gate is the \
+         whole contract): {:?}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    for file in sandbox.redirected_files() {
+        let bytes = fs::read(&file).unwrap_or_default();
+        assert!(find(&bytes, b"[loop").is_none(), "{} carries a heartbeat line", file.display());
+    }
 }
