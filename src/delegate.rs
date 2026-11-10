@@ -217,11 +217,19 @@ fn delegate_spec(input: &Value) -> anyhow::Result<PathBuf> {
 /// pre-T39 argv byte-for-byte (no flag), so children keep their current
 /// no-token-ceiling behavior unless the orchestrator opts in.
 ///
-/// T58: `resume == true` appends the bare `--resume` flag as the new tail
-/// (after any `--max-tokens` pair), purely additive to the argv — the abort
+/// T58: `resume == true` appends the bare `--resume` flag (after any
+/// `--max-tokens` pair), purely additive to the argv — the abort
 /// output's own resume line shows spec/goal/model (and any budgets) are all
 /// still passed on a resume. Absent/false produces the pre-T58 argv
 /// byte-for-byte (whole-list pinned).
+///
+/// Fleet-session-env: `mcp_config == Some(path)` appends the
+/// `--mcp-config <path>` pair as the very tail (after `--resume`), the
+/// child CLI's own flag for "use THIS MCP config JSON instead of the cwd's
+/// config discovery" — so a per-run config file (e.g. a 0600 file under the
+/// target's `.chug/`) can carry MCP server identity without editing a
+/// project-checked-in config or putting a token in the repo. `None`
+/// produces the pre-change argv byte-for-byte (whole-list pinned).
 fn delegate_child_argv(
     spec: &Path,
     goal: &str,
@@ -230,6 +238,7 @@ fn delegate_child_argv(
     max_minutes: u64,
     max_tokens: Option<u64>,
     resume: bool,
+    mcp_config: Option<&Path>,
 ) -> Vec<OsString> {
     let mut argv = vec![
         OsString::from("run"),
@@ -250,6 +259,10 @@ fn delegate_child_argv(
     }
     if resume {
         argv.push(OsString::from("--resume"));
+    }
+    if let Some(config) = mcp_config {
+        argv.push(OsString::from("--mcp-config"));
+        argv.push(config.as_os_str().to_os_string());
     }
     argv
 }
@@ -290,6 +303,37 @@ fn delegate_resume(input: &Value) -> anyhow::Result<bool> {
     }
 }
 
+/// Fleet-session-env: parse the optional launch-only `mcp_config` — an
+/// absolute path to an existing readable MCP config JSON file, passed to
+/// the child as `--mcp-config <path>` (the child CLI's own override of its
+/// cwd's MCP config discovery). Absent (or null) → `None`: the child's own
+/// discovery, and the argv is byte-identical to the pre-change launch. A
+/// present path is probed the same shape as the `spec` leg (absolute, is a
+/// file, opens) so a typo'd or unreadable path is a tool error at launch
+/// time, never a silently mis-configured child half a run later.
+fn delegate_mcp_config(input: &Value) -> anyhow::Result<Option<PathBuf>> {
+    let Some(value) = input.get("mcp_config") else {
+        return Ok(None);
+    };
+    if value.is_null() {
+        return Ok(None);
+    }
+    let Some(raw) = value.as_str() else {
+        bail!("delegate: `mcp_config` must be a string path to an MCP config JSON file, got {value}");
+    };
+    let path = PathBuf::from(raw);
+    if !path.is_absolute() {
+        bail!("delegate: `mcp_config` must be an absolute path, got {raw:?}");
+    }
+    if !(path.is_file() && fs::File::open(&path).is_ok()) {
+        bail!(
+            "delegate: `mcp_config` does not exist or is not a readable file: {}",
+            path.display()
+        );
+    }
+    Ok(Some(path))
+}
+
 /// T183: parse the optional launch-only `env` map — a string→string map of
 /// environment variables passed to the CHILD process at spawn. Absent (or
 /// null) → an empty vec, byte-identical to the pre-T183 spawn; present →
@@ -299,11 +343,14 @@ fn delegate_resume(input: &Value) -> anyhow::Result<bool> {
 /// Fail-closed validation, a tool error naming the offending key:
 /// - the value must be a JSON object;
 /// - ≤ [`DELEGATE_ENV_MAX_ENTRIES`] entries;
-/// - keys must match `^(CARGO_|CHUG_|RUST)[A-Z0-9_]*$` — the allowlist
-///   exists so a model-influenced goal cannot rewrite PATH/HOME/DYLD_* on
-///   the child. Hand-rolled as the exact equivalent (three fixed prefixes,
-///   then an `[A-Z0-9_]*` remainder) because the crate carries no regex
-///   dependency for one pattern;
+/// - keys must match `^(CARGO_|CHUG_|RUST)[A-Z0-9_]*$`, plus the two EXACT
+///   identity keys `BRIDGE_SESSION_ID` and `BRIDGE_ADMIN_TOKEN` (per-session
+///   remote-bridge injection — exact equality, NOT a `BRIDGE_` prefix:
+///   arbitrary `BRIDGE_*` keys and suffixed spellings stay refused) — the
+///   allowlist exists so a model-influenced goal cannot rewrite
+///   PATH/HOME/DYLD_* on the child. Hand-rolled as the exact equivalent
+///   (three fixed prefixes, then an `[A-Z0-9_]*` remainder) because the
+///   crate carries no regex dependency for one pattern;
 /// - values are strings, ≤ [`DELEGATE_ENV_VALUE_MAX_BYTES`] bytes, with no
 ///   NUL bytes (a NUL cannot survive exec(3) and would make the spawn fail
 ///   confusingly instead of the call fail legibly).
@@ -328,7 +375,8 @@ fn delegate_env_map(input: &Value) -> anyhow::Result<Vec<(String, String)>> {
         if !env_key_allowlisted(key) {
             bail!(
                 "delegate: `env` key {key:?} is not allowlisted — keys must match \
-                 ^(CARGO_|CHUG_|RUST)[A-Z0-9_]*$ (so a goal cannot rewrite PATH/HOME/DYLD_* on the child)"
+                 ^(CARGO_|CHUG_|RUST)[A-Z0-9_]*$ (so a goal cannot rewrite PATH/HOME/DYLD_* on the child), \
+                 plus exactly BRIDGE_SESSION_ID or BRIDGE_ADMIN_TOKEN"
             );
         }
         let Some(text) = value.as_str() else {
@@ -355,7 +403,20 @@ fn delegate_env_map(input: &Value) -> anyhow::Result<Vec<(String, String)>> {
 /// underscores (possibly empty; `CARGO_` and bare `RUST` both match, as
 /// under the regex). Everything else — `PATH`, lowercase, empty — is
 /// refused.
-fn env_key_allowlisted(key: &str) -> bool {
+///
+/// Fleet-session-env: the two EXACT identity keys `BRIDGE_SESSION_ID` and
+/// `BRIDGE_ADMIN_TOKEN` are accepted verbatim so remote-bridge can inject
+/// per-session identity into a launched child. EXACT equality, not a
+/// `BRIDGE_` prefix: arbitrary `BRIDGE_*` keys and any suffixed spelling
+/// (`BRIDGE_SESSION_ID_X`, `BRIDGE_ADMIN_TOKENS`) stay refused, as do
+/// `PATH`, `HOME`, `DYLD_*`, lowercase, and empty.
+///
+/// `pub(crate)` because the `chug mcp-serve` `chug_launch` validation
+/// re-serves the SAME predicate (one allowlist, both surfaces, no drift).
+pub(crate) fn env_key_allowlisted(key: &str) -> bool {
+    if key == "BRIDGE_SESSION_ID" || key == "BRIDGE_ADMIN_TOKEN" {
+        return true;
+    }
     let rest = key
         .strip_prefix("CARGO_")
         .or_else(|| key.strip_prefix("CHUG_"))
@@ -509,6 +570,7 @@ pub(crate) fn delegate_launch(input: &Value) -> anyhow::Result<ToolResult> {
     let max_tokens = delegate_max_tokens(input)?;
     let resume = delegate_resume(input)?;
     let env_map = delegate_env_map(input)?;
+    let mcp_config = delegate_mcp_config(input)?;
 
     // Binary resolution: the test seam wins, else the running chug itself —
     // children run the same binary, exactly like today's template line does.
@@ -531,6 +593,7 @@ pub(crate) fn delegate_launch(input: &Value) -> anyhow::Result<ToolResult> {
         max_minutes,
         max_tokens,
         resume,
+        mcp_config.as_deref(),
     ))
     .current_dir(&cwd)
     .stdin(Stdio::null())

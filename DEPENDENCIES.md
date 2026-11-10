@@ -118,9 +118,11 @@ Every variable read via `std::env::var`/`var_os` in `src/` (+ `build.rs`):
 Adjacent, not chug-owned knobs: mcp.json header values expand `${VAR}` from
 the process env at load time (`REMOTE_TOKEN` in tests is an example of a
 user-chosen secret var, not a chug knob); delegate `env` keys must match
-`^(CARGO_|CHUG_|RUST)[A-Z0-9_]*$` (T183 — a goal cannot rewrite
-PATH/HOME/DYLD_* on a child); `loopd.sh` owns `LOOP_ORCH_MODEL`,
-`LOOP_ROUTINE_MODEL`, `LOOP_REAPER`.
+`^(CARGO_|CHUG_|RUST)[A-Z0-9_]*$` plus exactly `BRIDGE_SESSION_ID` /
+`BRIDGE_ADMIN_TOKEN` (T183 + fleet-session-env — a goal cannot rewrite
+PATH/HOME/DYLD_* on a child; the two exact identity keys carry per-session
+remote-bridge injection, no broad `BRIDGE_` prefix); `loopd.sh` owns
+`LOOP_ORCH_MODEL`, `LOOP_ROUTINE_MODEL`, `LOOP_REAPER`.
 
 ## Failure semantics — the spine
 

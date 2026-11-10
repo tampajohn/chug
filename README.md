@@ -522,12 +522,21 @@ a git worktree). Three actions:
   required; `--max-iters`/`--max-minutes` optional, defaults 40/35;
   `--max-tokens` optional — the child's cumulative input+output token
   ceiling, omitted = no token ceiling; `resume: true` optional to continue
-  the child's aborted run instead of starting fresh; `env` optional — an
+  the child's aborted run instead of starting fresh; `mcp_config` optional —
+  an absolute path to an existing readable MCP config JSON file, passed to
+  the child as `--mcp-config <path>` so a per-run config (e.g. a 0600 file
+  under the target's `.chug/`) overrides the cwd's own MCP config discovery
+  without editing a project-checked-in config; absent = the child's default
+  discovery and a byte-identical argv; `env` optional — an
   allowlisted string→string map passed to the child's environment: keys must
-  match `^(CARGO_|CHUG_|RUST)[A-Z0-9_]*$`, ≤16 entries, values ≤4 KiB with
-  no NUL bytes, anything else a tool error naming the key; applied AFTER the
-  inherited-env target-dir scrub, so an explicit `CARGO_TARGET_DIR` in `env`
-  WINS over the scrub — the scrub guards the absent case, `env` is the
+  match `^(CARGO_|CHUG_|RUST)[A-Z0-9_]*$` plus exactly
+  `BRIDGE_SESSION_ID` or `BRIDGE_ADMIN_TOKEN` (per-session remote-bridge
+  identity — exact equality, NOT a broad `BRIDGE_` prefix: arbitrary
+  `BRIDGE_*` keys and suffixed spellings stay refused), ≤16 entries, values
+  ≤4 KiB with no NUL bytes, anything else a tool error naming the key;
+  applied AFTER the inherited-env target-dir scrub, so an explicit
+  `CARGO_TARGET_DIR` in `env` WINS over the scrub — the scrub guards the
+  absent case, `env` is the
   explicit case; when `env` is absent the goal-carried `export` remains the
   fallback and the spawn is byte-identical, and the launch payload names the
   applied keys, never the values; the payload also gains a
@@ -939,7 +948,15 @@ file), `goal` (required — non-empty after trim), `model` (required —
 passed through; the spawned child's own auth/settings chain validates
 it), plus optional `max_iters` (1..=200) and `max_minutes` (1..=240) — a
 value above a ceiling is rejected, not clamped; budgets absent fall back
-to the delegate defaults (40 iterations / 35 minutes).
+to the delegate defaults (40 iterations / 35 minutes). Three more optional
+pass-throughs ride the same one delegate path: `env` (the allowlisted
+child-env map — the delegate allowlist plus exactly `BRIDGE_SESSION_ID` /
+`BRIDGE_ADMIN_TOKEN`; validated here first, then re-served by the seam as
+a no-op — the launch payload names the applied KEYS only, never values),
+`resume` (boolean, appends `--resume`), and `mcp_config` (absolute path to
+an existing readable MCP config JSON file, appended as `--mcp-config
+<path>` so a per-run config overrides the cwd's own discovery); all three
+are omitted when absent — byte-identical child argv.
 
 The second write leg `chug_cancel` (T153) lives behind the SAME
 `--allow-launch` boundary — advertised ⇔ callable beside `chug_launch`,

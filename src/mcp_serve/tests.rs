@@ -786,7 +786,11 @@
         // The required list is EXACT: cwd, spec, goal, model.
         assert_eq!(schema["required"], json!(["cwd", "spec", "goal", "model"]));
         let props = schema["properties"].as_object().expect("properties object");
-        assert_eq!(props.len(), 6, "cwd + spec + goal + model + two budgets: {props:?}");
+        assert_eq!(
+            props.len(),
+            9,
+            "cwd + spec + goal + model + two budgets + env + resume + mcp_config: {props:?}"
+        );
         for key in ["cwd", "spec", "goal", "model"] {
             assert_eq!(props[key]["type"], "string", "{props:?}");
         }
@@ -797,6 +801,24 @@
         assert_eq!(props["max_minutes"]["type"], "integer", "{props:?}");
         assert_eq!(props["max_minutes"]["minimum"], 1, "{props:?}");
         assert_eq!(props["max_minutes"]["maximum"], 240, "{props:?}");
+        // Fleet-session-env: the three optional pass-throughs, in the schema.
+        assert_eq!(props["env"]["type"], "object", "{props:?}");
+        assert_eq!(
+            props["env"]["additionalProperties"]["type"],
+            "string",
+            "{props:?}"
+        );
+        let env_desc = props["env"]["description"].as_str().expect("env desc");
+        assert!(
+            env_desc.contains("^(CARGO_|CHUG_|RUST)[A-Z0-9_]*$"),
+            "the allowlist regex is in the schema: {env_desc}"
+        );
+        assert!(
+            env_desc.contains("BRIDGE_SESSION_ID") && env_desc.contains("BRIDGE_ADMIN_TOKEN"),
+            "the exact identity keys are in the schema: {env_desc}"
+        );
+        assert_eq!(props["resume"]["type"], "boolean", "{props:?}");
+        assert_eq!(props["mcp_config"]["type"], "string", "{props:?}");
     }
 
     #[test]
@@ -1223,6 +1245,305 @@
         std::thread::sleep(Duration::from_millis(50));
         // SAFETY: serialized by the delegate env lock.
         unsafe { std::env::remove_var("CHUG_DELEGATE_BIN") };
+    }
+
+    /// Fleet-session-env end-to-end: `chug_launch` with `env`, `resume`, and
+    /// `mcp_config` → all three reach the ONE delegate launch path: the child
+    /// argv carries `--resume` and the `--mcp-config <path>` pair (the very
+    /// tail), the child process env carries the exact BRIDGE identity keys
+    /// and a classic allowlisted key, and the return text names the applied
+    /// env KEYS ONLY — never a value — plus `resume: true`. NON-VACUOUSNESS:
+    /// dropping the chug_launch validation/passthrough fails the payload
+    /// assert (no `env_keys`/`resume: true` in the text); dropping the argv
+    /// append fails the dump assert; dropping the env application fails the
+    /// env.txt assert.
+    #[cfg(unix)]
+    #[test]
+    fn chug_launch_env_resume_mcp_config_reach_the_delegate_launch_seam() {
+        use std::os::unix::fs::PermissionsExt;
+        use std::time::Duration;
+        // T172: FIRST acquisition — the cross-binary load lock for the mcp
+        // stub-spawn family, taken BEFORE the process-global env lock (the
+        // T151 lock-order doctrine). Held across the full spawn → poll →
+        // kill → cleanup body.
+        let _t172_load = t172_load_lock::family_guard("mcp-serve-launch");
+        // The env var is process-global and the delegate tests mutate it too
+        // (same test binary) — one env, one lock.
+        let _guard = crate::delegate::tests::DELEGATE_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let target = tempfile::tempdir().unwrap();
+        let scratch = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(target.path().join(".chug")).unwrap();
+        let spec = write_launch_spec(scratch.path());
+        // The per-run config file — the same shape remote-bridge keeps under
+        // the target's .chug/ (a 0600 identity-bearing config, never a
+        // project-checked-in mcp.json).
+        let mcp_config = scratch.path().join("mcp-config.json");
+        std::fs::write(&mcp_config, "{\"mcpServers\":{}}").unwrap();
+        let stub = scratch.path().join("chug-launch-seam-stub.sh");
+        std::fs::write(
+            &stub,
+            concat!(
+                "#!/bin/sh\n",
+                "pwd -P > cwd.txt\n",
+                "printf '%s\\n' \"$@\" > argv.tmp && mv argv.tmp argv.txt\n",
+                "printf 'sid=%s\\ntok=%s\\ncargo=%s\\n' \"$BRIDGE_SESSION_ID\" \"$BRIDGE_ADMIN_TOKEN\" \"$CARGO_FLEET_PROBE\" > env.tmp && mv env.tmp env.txt\n",
+                ": > .chug/events.jsonl\n",
+                "sleep 60\n",
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&stub, fs::Permissions::from_mode(0o755)).unwrap();
+        // SAFETY: serialized by the delegate env lock; removed before return.
+        unsafe { std::env::set_var("CHUG_DELEGATE_BIN", &stub) };
+        let (text, is_error) = launch_call(
+            true,
+            &json!({
+                "cwd": target.path().display().to_string(),
+                "spec": spec.display().to_string(),
+                "goal": "fleet-session-env seam goal",
+                "model": "stub-model",
+                "resume": true,
+                "mcp_config": mcp_config.display().to_string(),
+                "env": {
+                    "BRIDGE_SESSION_ID": "sess-42",
+                    "BRIDGE_ADMIN_TOKEN": "tok-secret",
+                    "CARGO_FLEET_PROBE": "cargo-value"
+                },
+            }),
+        );
+        assert_eq!(is_error, Some(false), "{text}");
+        // The launch payload names the applied env KEYS ONLY, in the map's
+        // sorted order — and NEVER any of the three values.
+        assert!(
+            text.contains("env_keys: BRIDGE_ADMIN_TOKEN,BRIDGE_SESSION_ID,CARGO_FLEET_PROBE"),
+            "keys-only echo: {text}"
+        );
+        assert!(!text.contains("sess-42"), "value must never leak: {text}");
+        assert!(!text.contains("tok-secret"), "value must never leak: {text}");
+        assert!(!text.contains("cargo-value"), "value must never leak: {text}");
+        // The resume leg is echoed alongside the budgets.
+        assert!(text.contains("resume: true"), "{text}");
+        // argv: `--resume` present, and the `--mcp-config <path>` pair is the
+        // very tail.
+        let argv = wait_for_stub_dump(&target.path().join("argv.txt"), &text, is_error);
+        let config_text = mcp_config.display().to_string();
+        let pos = argv
+            .iter()
+            .position(|a| a == "--mcp-config")
+            .expect("--mcp-config in the child argv");
+        assert_eq!(
+            argv[pos + 1], config_text,
+            "--mcp-config carries the config path verbatim: {}",
+            argv.join(" | ")
+        );
+        assert_eq!(
+            argv.last().map(String::as_str),
+            Some(config_text.as_str()),
+            "--mcp-config <path> must be the child argv's very tail: {}",
+            argv.join(" | ")
+        );
+        assert!(
+            argv.contains(&"--resume".to_string()),
+            "--resume in the child argv: {}",
+            argv.join(" | ")
+        );
+        // The child process env carries the three values (the stub's env.txt
+        // is written AFTER argv.txt, so it gets its OWN per-file poll — the
+        // T243 discipline).
+        let env_dump_path = target.path().join("env.txt");
+        wait_for_stub_file(&env_dump_path, &text, is_error);
+        let env_dump = fs::read_to_string(&env_dump_path).expect("env.txt");
+        assert_eq!(
+            env_dump, "sid=sess-42\ntok=tok-secret\ncargo=cargo-value\n",
+            "the child env carries the identity + allowlisted values verbatim"
+        );
+        // Reap/kill the stub at leg end (its own process group), then
+        // restore the seam.
+        let pid: u32 = text
+            .lines()
+            .find_map(|l| l.strip_prefix("launched: pid "))
+            .expect("pid line in launch result")
+            .trim()
+            .parse()
+            .expect("pid parses");
+        crate::tools::kill_pid_group(pid);
+        std::thread::sleep(Duration::from_millis(50));
+        // SAFETY: serialized by the delegate env lock.
+        unsafe { std::env::remove_var("CHUG_DELEGATE_BIN") };
+    }
+
+    /// Fleet-session-env: `chug_launch` env validation — the same allowlist
+    /// the delegate seam serves, enforced HERE first in this tool's voice.
+    /// Refusals: PATH, DYLD_*, arbitrary BRIDGE_*, suffixed identity-key
+    /// spellings, a non-string value, a NUL byte, and a 17th entry — each an
+    /// isError naming the RECEIVED value; the two EXACT identity keys plus a
+    /// classic prefix validate clean (accepted at this layer; the full-path
+    /// stub leg proves they reach the child). No spawn on any refusal: the
+    /// delegate log is never created.
+    #[test]
+    fn chug_launch_env_validation_refuses_non_allowlisted_keys_and_bad_values() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join(".chug")).unwrap();
+        let spec = write_launch_spec(tmp.path());
+        for (label, env, needle) in [
+            ("PATH", json!({"PATH": "/evil"}), "PATH"),
+            (
+                "DYLD",
+                json!({"DYLD_LIBRARY_PATH": "/evil"}),
+                "DYLD_LIBRARY_PATH",
+            ),
+            ("arbitrary bridge", json!({"BRIDGE_FOO": "v"}), "BRIDGE_FOO"),
+            (
+                "suffixed identity key",
+                json!({"BRIDGE_SESSION_ID_X": "v"}),
+                "BRIDGE_SESSION_ID_X",
+            ),
+            ("prefix-only", json!({"BRIDGE_": "v"}), "BRIDGE_"),
+            (
+                "non-string value",
+                json!({"BRIDGE_SESSION_ID": 3}),
+                "must be a string",
+            ),
+            ("NUL byte", json!({"CARGO_X": "a\u{0000}b"}), "NUL"),
+        ] {
+            let (text, is_error) = launch_call(
+                true,
+                &json!({
+                    "cwd": tmp.path().display().to_string(),
+                    "spec": spec.display().to_string(),
+                    "goal": "g",
+                    "model": "m",
+                    "env": env,
+                }),
+            );
+            assert_eq!(is_error, Some(true), "{label}: {text}");
+            assert!(text.starts_with("chug_launch:"), "{label}: {text}");
+            assert!(text.contains(needle), "{label}: {text}");
+        }
+        // 17 entries → refused naming the cap (the delegate limit, not a
+        // chug_launch-local number).
+        let mut big = serde_json::Map::new();
+        for i in 0..17 {
+            big.insert(format!("CARGO_K{i}"), json!("v"));
+        }
+        let (text, is_error) = launch_call(
+            true,
+            &json!({
+                "cwd": tmp.path().display().to_string(),
+                "spec": spec.display().to_string(),
+                "goal": "g",
+                "model": "m",
+                "env": big,
+            }),
+        );
+        assert_eq!(is_error, Some(true), "{text}");
+        assert!(text.contains("at most 16 entries"), "{text}");
+        // A non-object env → refused naming the received value.
+        let (text, is_error) = launch_call(
+            true,
+            &json!({
+                "cwd": tmp.path().display().to_string(),
+                "spec": spec.display().to_string(),
+                "goal": "g",
+                "model": "m",
+                "env": "CARGO_X=1",
+            }),
+        );
+        assert_eq!(is_error, Some(true), "{text}");
+        assert!(text.contains("must be an object"), "{text}");
+        // No spawn on any refusal: the delegate log is never created.
+        assert!(
+            !tmp.path().join(".chug/delegate.log").exists(),
+            "a refused launch must not spawn"
+        );
+        // The two EXACT identity keys + a classic prefix validate clean at
+        // this layer (parsed through to the seam input) — the full-path
+        // arrival is the stub leg's business, not this no-spawn leg's.
+        let env_ok = crate::mcp_serve::parse_launch_env(&json!({
+            "env": {
+                "BRIDGE_SESSION_ID": "s",
+                "BRIDGE_ADMIN_TOKEN": "t",
+                "CARGO_TARGET_DIR": "/shared"
+            }
+        }))
+        .unwrap();
+        assert!(env_ok.is_some(), "the exact identity keys validate clean");
+    }
+
+    /// Fleet-session-env: `chug_launch` resume and mcp_config validation —
+    /// the delegate parse rules re-served in this tool's voice. Refusals: a
+    /// non-boolean resume, a relative mcp_config, a missing-file mcp_config,
+    /// a non-string mcp_config — each an isError naming the RECEIVED value;
+    /// no spawn on any refusal. Absent (or null) resume/mcp_config validate
+    /// clean and are OMITTED from the delegate input (byte-identical argv).
+    #[test]
+    fn chug_launch_resume_and_mcp_config_validation_refusals() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join(".chug")).unwrap();
+        let spec = write_launch_spec(tmp.path());
+        let base = json!({
+            "cwd": tmp.path().display().to_string(),
+            "spec": spec.display().to_string(),
+            "goal": "g",
+            "model": "m",
+        });
+        for (label, extra, needle) in [
+            ("resume string", json!({"resume": "yes"}), "`resume` must be a boolean"),
+            ("resume number", json!({"resume": 1}), "`resume` must be a boolean"),
+            (
+                "mcp_config relative",
+                json!({"mcp_config": "relative/mcp.json"}),
+                "mcp_config must be an absolute path",
+            ),
+            (
+                "mcp_config missing",
+                json!({"mcp_config": "/tmp/chug-no-such-mcp-config.json"}),
+                "does not exist or is not a readable file",
+            ),
+            (
+                "mcp_config non-string",
+                json!({"mcp_config": 3}),
+                "`mcp_config` must be a string",
+            ),
+        ] {
+            let mut args = base.clone();
+            let obj = args.as_object_mut().unwrap();
+            for (k, v) in extra.as_object().unwrap() {
+                obj.insert(k.clone(), v.clone());
+            }
+            let (text, is_error) = launch_call(true, &args);
+            assert_eq!(is_error, Some(true), "{label}: {text}");
+            assert!(text.starts_with("chug_launch:"), "{label}: {text}");
+            assert!(text.contains(needle), "{label}: {text}");
+        }
+        // The relative-path refusal names the RECEIVED string (quoted).
+        let mut args = base.clone();
+        args.as_object_mut()
+            .unwrap()
+            .insert("mcp_config".to_string(), json!("relative/mcp.json"));
+        let (text, is_error) = launch_call(true, &args);
+        assert_eq!(is_error, Some(true), "{text}");
+        assert!(text.contains("\"relative/mcp.json\""), "{text}");
+        // No spawn on any refusal.
+        assert!(
+            !tmp.path().join(".chug/delegate.log").exists(),
+            "a refused launch must not spawn"
+        );
+        // Absent → omitted; explicit null → same omitted shape (the
+        // resume/budget precedent) — byte-identical argv seam-side.
+        assert_eq!(crate::mcp_serve::parse_launch_resume(&json!({})).unwrap(), false);
+        assert_eq!(
+            crate::mcp_serve::parse_launch_resume(&json!({"resume": null})).unwrap(),
+            false
+        );
+        assert_eq!(crate::mcp_serve::parse_launch_resume(&json!({"resume": true})).unwrap(), true);
+        assert_eq!(crate::mcp_serve::parse_launch_mcp_config(&json!({})).unwrap(), None);
+        assert_eq!(
+            crate::mcp_serve::parse_launch_mcp_config(&json!({"mcp_config": null})).unwrap(),
+            None
+        );
     }
 
     /// The launch-FAILURE leg (T165 — M8 pin, the T129 validator's

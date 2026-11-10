@@ -4,7 +4,7 @@
 // T109 req 4 count-pin anchor (see mod.rs's pin): this family's
 // #[test] fn count — a dropped `mod parse;` line fails the pin's
 // reference to this const to compile.
-pub(super) const TEST_COUNT: usize = 3;
+pub(super) const TEST_COUNT: usize = 5;
     use super::*; // the shared harness (delegate::tests) + delegate's own imports
 
     /// T58: the parse — absent → `false`; `false` → `false`; `true` → `true`;
@@ -132,5 +132,104 @@ pub(super) const TEST_COUNT: usize = 3;
             .unwrap_err()
             .to_string();
         assert!(err.contains("CARGO_X") && err.contains("NUL"), "{err}");
+    }
+
+    /// Fleet-session-env: the two EXACT identity keys are allowlisted (the
+    /// per-session remote-bridge injection), and everything around them stays
+    /// refused — arbitrary `BRIDGE_*` keys, suffixed spellings of the
+    /// accepted keys (`BRIDGE_SESSION_ID_X`, `BRIDGE_ADMIN_TOKENS`),
+    /// prefix-only shapes, PATH/HOME/DYLD_*. The error names the offending
+    /// key AND the exact identity keys (so a caller can self-correct), while
+    /// still carrying the allowlist regex substring (the parse pin).
+    #[test]
+    fn delegate_env_allowlist_accepts_exactly_the_two_bridge_identity_keys() {
+        for key in ["BRIDGE_SESSION_ID", "BRIDGE_ADMIN_TOKEN"] {
+            assert!(
+                delegate_env_map(&json!({"env": {(key): "v"}})).is_ok(),
+                "{key} must be allowlisted (exact identity key)"
+            );
+            assert!(
+                env_key_allowlisted(key),
+                "{key} must pass the shared predicate (chug_launch re-serves it)"
+            );
+        }
+        for bad in [
+            "BRIDGE",
+            "BRIDGE_",
+            "BRIDGE_FOO",
+            "BRIDGE_SESSION",
+            "BRIDGE_SESSION_ID_X",
+            "BRIDGE_ADMIN",
+            "BRIDGE_ADMIN_TOKENS",
+            "bridge_session_id",
+            "PATH",
+            "HOME",
+            "DYLD_LIBRARY_PATH",
+        ] {
+            let err = delegate_env_map(&json!({"env": {(bad): "v"}}))
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains(bad), "{bad} must be named: {err}");
+            assert!(
+                err.contains("BRIDGE_SESSION_ID") && err.contains("BRIDGE_ADMIN_TOKEN"),
+                "{bad}: the error must name the exact identity keys: {err}"
+            );
+            assert!(
+                !env_key_allowlisted(bad),
+                "{bad} must fail the shared predicate"
+            );
+        }
+    }
+
+    /// Fleet-session-env: the `mcp_config` parse — absent (or null) → `None`
+    /// (byte-identical argv, the child's own MCP config discovery); an
+    /// absolute path to an existing readable file → `Some(path)`; a relative
+    /// path, a missing file, a directory, and a non-string value are tool
+    /// errors naming the RECEIVED value, never a silent fallback to
+    /// discovery.
+    #[test]
+    fn delegate_mcp_config_parse_absent_valid_and_rejects() {
+        assert_eq!(delegate_mcp_config(&json!({})).unwrap(), None, "absent");
+        assert_eq!(
+            delegate_mcp_config(&json!({"mcp_config": null})).unwrap(),
+            None,
+            "explicit null is the absent shape (the resume precedent)"
+        );
+        let tmp = tempfile::tempdir().unwrap();
+        let config = tmp.path().join("mcp.json");
+        fs::write(&config, "{\"mcpServers\":{}}").unwrap();
+        assert_eq!(
+            delegate_mcp_config(&json!({"mcp_config": config.display().to_string()})).unwrap(),
+            Some(config),
+            "an absolute readable file parses to its path"
+        );
+        // Relative → error naming the received string.
+        let err = delegate_mcp_config(&json!({"mcp_config": "relative/mcp.json"}))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("absolute"), "{err}");
+        assert!(err.contains("\"relative/mcp.json\""), "{err}");
+        // Missing file → error naming the path.
+        let missing = tmp.path().join("no-such-mcp.json");
+        let err = delegate_mcp_config(&json!({"mcp_config": missing.display().to_string()}))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("does not exist or is not a readable file"),
+            "{err}"
+        );
+        // A directory is not a readable config file.
+        let err = delegate_mcp_config(&json!({"mcp_config": tmp.path().display().to_string()}))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("does not exist or is not a readable file"),
+            "{err}"
+        );
+        // Non-string → error naming the received value.
+        let err = delegate_mcp_config(&json!({"mcp_config": 3}))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("must be a string"), "{err}");
     }
 
