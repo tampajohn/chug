@@ -1,15 +1,12 @@
 # Ledger
 
 ## Done
-- Phase 1: routine-skip disposition (eval-routing d1794318209-1; predicate held both halves, STATE-HIT keyed to prep be1299c8)
-- Phase 2: T328 re-verified BLOCKED (shasum e9512f49, chug-watch 13eca32) + P-rows parked -> zero dispatch [work-routing d1794318216-2]
-- Wrap prep 05cc0d1f: T261 batch TWO + gates GREEN docs-only (guard 21/21 + battery 225/225, T242 bg pid 77674) + Outcomes 3191 + 3185 one-lined + recount TRUE 1 -> NO TAG
-- State rewrite: T311/T312 GREEN FIRST attempt (facade + on-disk self-probe, ring prepend-4/carry-8/shed-4)
-- Corridor closed: notes 2f84a14c (probe 60 0, machine==TRUE 0) + fill 1b44f661 (all 7 assert legs GREEN first attempt, datum FINAL 35/399.970 @ 13:49:18Z) pushed; main == origin/main
-- LIVE_CTX remedy landed post-fill-push (amend no-op on the message-only fill -> follow-up): turns 10..44 dropped (41 turns, 618,784 -> 20,326 bytes, the post-census pre-amend state), turn 3 guard fire -> re-add, turn 10 boundary accepted; pinned-prefix advances per rejection — 1, 2, 3 revealed in sequence; 3178 continuation intact
+- Phase 1 routing d1794319393-1: routine-skip glm (loopd 14:01:43Z todo_rows=1 eval_fresh=yes; predicate HELD both halves — T328 open-BLOCKED + eval 05cc0d1f same-UTC-day STATE-HIT evals-behind 0); single-driver verified (no other chug run; LEDGER reseed = driver T3 fresh-start, archived .chug/LEDGER-20261110-140144.md)
+- Phase 2 disposition d1794319395-2: T328 re-verified BLOCKED (chug-watch HEAD still 13eca32, row shasum e9512f49 byte-unchanged since the 3180 flip), P001/P003/P004 parked operator lanes, P006/P007 internal artifacts → zero dispatch
+- T261 batch TWO: d1794319399-3 <- d1794319393-1 + d1794319402-4 <- d1794319395-2 (both landed-clean FIRST attempt, ids recorded before the prep text)
 
 ## Next
-- goal_complete (cycle-3191 books closed; cold next cycle: predicate re-check — T328 open, eval fresh same-UTC-day 05cc0d1f)
+- Wrap: prep commit (Outcomes 3192 + 3186 one-lined) → gates (docs-only guard floor + battery 225/225, T242 bg) → eval-state rewrite keyed to prep (T311/T312 GREEN) → token-free notes + probe → fill (datum + 7 assert legs) → push → close-out → flips → goal_complete
 
 ## Blockers
-- T328 BLOCKED (operator decision pending, menu A/B/C unanswered; re-verified this cycle)
+- T328 BLOCKED (operator decision pending, menu A/B/C unanswered; re-verified this cycle at chug-watch 13eca32)
