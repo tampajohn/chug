@@ -7,7 +7,8 @@
 - Prep (this cycle): Outcomes 3193 quiet no-work + 3187 one-lined (6-full set 3193/3192/3191/3190/3189/3188) + gates GREEN docs-only (battery 225/225 = 198 wrap_assert 19.693s + 27 todo_flip 0.683s + guard floor 21/21 0.33s, T242 bg pid 7443) + recount TRUE 1 (T357) → NO TAG, describe v0.24.0-58-g64a2c7c4
 
 ## Next
-- eval-state rewrite (T311/T312 GREEN keyed to the prep) → token-free wrap notes → probe → fill → push → goal_complete
+- fill (datum FINAL re-derived at the fill stamp + the 7 assert legs) → push → close-out → goal_complete
 
 ## Blockers
 - T328 BLOCKED (operator decision pending, menu A/B/C unanswered; re-verified this cycle at chug-watch 13eca32)
+- Notes (this cycle): state T311/T312 REAL GREEN keyed to the prep deae9170 (facade + on-disk re-gate + untracked 0) + token-free wrap-notes commit next + probe + fill + push
