@@ -2,6 +2,19 @@
 
 estimate: ~80 changed lines (README.md only + a docs link-check fixture)
 
+check: CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared cargo test --release --test readme_entry_path
+
+## Orchestrator dispatch note (2026-11-10)
+
+- The fixture target is `tests/readme_entry_path.rs` (the check: line's
+  target — name it exactly that). Out-of-scope note stands: if the
+  link-check fixture cannot pass without a docs/adopt/quickstart.md edit,
+  prefer matching README's quickstart to the commands quickstart.md
+  ALREADY carries (the audit found docs/ current) over editing docs/ —
+  a minimal docs edit is acceptable only if quickstart.md itself
+  contradicts the install-first story, and it must be named in the
+  commit message.
+
 ## Why
 
 Docs audit 2026-11-09 (same lens as the site staleness audit, T349/T350):
