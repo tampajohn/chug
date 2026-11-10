@@ -56,8 +56,8 @@ macOS blocks the first run, right-click → Open once, or System Settings →
 Privacy & Security → Allow Anyway, or
 `xattr -d com.apple.quarantine ~/.local/bin/chug`.
 
-From source instead (any platform with a Rust toolchain) — see Quickstart
-and Development below:
+From source instead (any platform with a Rust toolchain) — see
+Development below:
 
 ```bash
 git clone https://github.com/tampajohn/chug && cd chug
@@ -66,16 +66,38 @@ cargo install --path .   # puts the chug binary on PATH (~/.cargo/bin)
 
 ## Quickstart
 
-```bash
-cargo build
-cargo install --path .   # puts the chug binary on PATH (~/.cargo/bin)
-# Zero setup if you have Claude Code configured: chug reads
-# ANTHROPIC_BASE_URL / ANTHROPIC_AUTH_TOKEN / ANTHROPIC_API_KEY from
-# ~/.claude/settings.json when the process env doesn't have them.
-# (Process env always wins; default base URL is api.anthropic.com.)
+One command installs the binary — platform detected, sha256 verified, no
+Rust toolchain, no sudo:
 
+```bash
+curl -fsSL https://chug.sh/install.sh | sh
+```
+
+Then, in a repo of yours (no clone of chug needed), start the continuous
+loop:
+
+```bash
+cd <your-repo>
+chug loop init      # scaffold LOOP-SPEC.md + TODO.md + .chug/ (idempotent; --force backs up)
+chug loop run       # exec the loop supervisor against THIS repo
+```
+
+Wire up a model provider with `--profile <name>` at install time — the
+profile exports the provider contract (base URL, key, per-phase models);
+see [docs/install-profiles.md](docs/install-profiles.md). Zero setup also
+works if you have Claude Code configured: chug reads `ANTHROPIC_BASE_URL`
+/ `ANTHROPIC_AUTH_TOKEN` / `ANTHROPIC_API_KEY` from
+`~/.claude/settings.json` when the process env doesn't have them (process
+env always wins; default base URL is api.anthropic.com).
+
+Single runs need no scaffolding: `chug run` takes a spec file with a
+`check:` line plus a goal and drives a fixed loop until the check exits 0.
+
+```bash
 chug run --spec SPEC.md --goal "Build X and make the check pass" \
-  --model anthropic-system.ai.kimi-k3 --max-iters 40 --max-minutes 120
+  --model claude-sonnet-4-6 --max-iters 40 --max-minutes 120
+# --model takes any name your provider resolves; provider-specific ids
+# belong in a profile — see docs/install-profiles.md
 
 chug run --tui ...   # same, with the live dashboard
 chug run --resume    # continue an aborted run from .chug/transcript.jsonl
@@ -1055,11 +1077,27 @@ otherwise. Config: `LANGFUSE_HOST` + `LANGFUSE_PUBLIC_KEY` +
   with), **`specs/` is work** (anything a TODO row or feature round points
   at)
 
-## Continuous mode (`loopd.sh`)
+## Continuous mode (`chug loop`)
 
-The self-improvement loop runs *continuously* — cycles back-to-back, no
-human per-phase prompting. Each cycle's wrap (TODO.md, EVALUATION.md,
-specs/) is the next cycle's input; phases chain through files.
+The loop runs *continuously* — cycles back-to-back, no human per-phase
+prompting. Each cycle's wrap (TODO.md, EVALUATION.md, specs/) is the next
+cycle's input; phases chain through files. In any repo of yours — a
+pilot's project, not a chug checkout — the installed binary scaffolds the
+repo's own generic loop contract and works ITS queue (never chug's
+backlog), with an empty queue idling instead of inventing work; no clone
+of chug is ever required:
+
+```bash
+cd <your-repo>
+chug loop init      # scaffold LOOP-SPEC.md + TODO.md + .chug/ (idempotent; --force backs up)
+chug loop run       # exec the loop supervisor against THIS repo
+```
+
+### Supervisor internals (running your own loopd)
+
+The chug checkout's own self-improvement loop runs under `./loopd.sh`,
+the supervisor wrapper that predates the `chug loop` subcommand — kept
+here as the reference for running your own loopd:
 
 ```bash
 nohup ./loopd.sh > /dev/null 2>&1 &   # start (detached)
@@ -1094,18 +1132,6 @@ per transition so the two surfaces can never disagree:
   `./loopd.sh osc <state> [reason]` probes the emitter directly, and an
   optional fourth argument asks for the human line too
   (`./loopd.sh osc working "cycle start" "cycle 7 routing=eval"`).
-
-In any OTHER repo — a pilot's project, not this checkout — the same loop
-is a subcommand, and no clone of chug is ever required: the installed
-binary scaffolds the repo's own generic loop contract and works ITS queue
-(never chug's backlog), with an empty queue idling instead of inventing
-work:
-
-```bash
-cd <your-repo>
-chug loop init      # scaffold LOOP-SPEC.md + TODO.md + .chug/ (idempotent; --force backs up)
-chug loop run       # exec the loop supervisor against THIS repo
-```
 
 Before any launch the supervisor decides whether the cycle needs an
 orchestrator at all — the T258/T259 gate runs first, so an empty day
@@ -1286,6 +1312,10 @@ re-execs itself when the file has changed, so loopd edits merged to main
 activate without an operator restart — a pending `stop` still wins.
 
 ## Development
+
+Building and hacking on chug from source (any platform with a Rust
+toolchain; `cargo install --path .` puts the binary on `PATH` at
+`~/.cargo/bin`):
 
 ```bash
 cargo build && cargo clippy --all-targets -- -D warnings && cargo test
