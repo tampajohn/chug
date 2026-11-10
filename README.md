@@ -1067,6 +1067,15 @@ nohup ./loopd.sh > /dev/null 2>&1 &   # start (detached)
 ./loopd.sh stop                       # exits after the current cycle
 ```
 
+On a real terminal (TTY stdout, no `nohup` redirect), the supervisor also
+reports its own state the terminal-native way — OSC 7501 program status
+(`working` on a cycle/item start, `idle` on a cheap-exit/dormant rest,
+`blocked` with a one-line reason on a red build gate, cycle death, or
+`HALT`), so harnesses that read the program-status channel see the loop
+without any shim. Emission is TTY-gated (piped/redirected contexts receive
+zero escape bytes) and killable with `CHUG_OSC7501=0`;
+`./loopd.sh osc <state> [reason]` probes the emitter directly.
+
 In any OTHER repo — a pilot's project, not this checkout — the same loop
 is a subcommand, and no clone of chug is ever required: the installed
 binary scaffolds the repo's own generic loop contract and works ITS queue
