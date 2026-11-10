@@ -2,6 +2,30 @@
 
 estimate: ~70 changed lines (install.sh profile template + docs/install-profiles.md + loader comment + a contract-audit test)
 
+check: CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared cargo test --release --test profile_contract_audit
+
+## Orchestrator dispatch note (2026-11-10, read-first finding)
+
+The REMOVAL premise is already satisfied: all-history grep shows
+CHUG_LANGFUSE_PROJECT appears ONLY in this item's own filing commit
+(29918fb0's TODO row + spec text) — it was NEVER present in install.sh,
+docs/install-profiles.md, or the loader. Do NOT manufacture tombstone
+comments for a var that never shipped, and do not edit install.sh for
+removal's sake. What REMAINS real in this item:
+
+1. The docs' per-lane VISIBILITY honesty (What-item 2): the contract
+   table's Langfuse row says only "all three or none; see SPEC-8" — add
+   the two real mechanisms (dedicated project + OWN pk/sk key pair per
+   lane for isolation; single-project default with per-automation reads
+   via trace name / tags / sessionId).
+2. The CONTRACT-AUDIT test (What-item 3), the durable piece: parse the
+   contract table in docs/install-profiles.md, and for EVERY documented
+   CHUG_* key assert a consumer exists — either the literal key in src/
+   or scripts/, or the loader's generic CHUG_LANGFUSE_* translation arm
+   plus the translated LANGFUSE_* name consumed in src/. Allowlist only
+   intentionally-reserved keys. RED-proof: plant a dead key row in the
+   docs table, the test must fail; remove it, the test must pass.
+
 ## Why
 
 Fleet Primary live-verified 2026-11-09 (T4 clean-delivery run): grep
