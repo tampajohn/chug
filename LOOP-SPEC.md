@@ -1368,7 +1368,7 @@ alike) has been harvested.
   finding for the next evaluation (META-META-SPEC §6), not a reason to
   force-fit it.
 
-## Terminal surfaces (T354, T356)
+## Terminal surfaces (T354, T356, T359)
 
 The supervisor talks to two audiences on stdout, from ONE composition point
 (`loopd_osc7501_emit` — one call per transition, both surfaces, so the dot
@@ -1406,6 +1406,22 @@ and the line can never disagree):
   lands ~100ms into the launch, and an unlatched first poll would report a
   stale milestone and latch the cycle silent (the fix-up round's F1
   finding; pinned by the stale-events fixtures).
+
+**The T359 dial extends the terminal surfaces** (`CHUG_LOOP_VERBOSE=<n>`):
+0 silent, 1 the compact heartbeat above (the default on a TTY), 2 turn
+detail — one `[loop] <item> iter <n> — tool <name>: <summary, 80>` line per
+tool call (the event's own preview, a `...` truncation marker past 80,
+errors in full up to the driver's preview cap) plus each model text block
+capped at ~3 lines with the same marker, 3 the trace — every new cycle-log
+line teed to stdout as it lands (≤2s, line-count-latched so a half-written
+stream line waits for its newline and is never split or repeated). The
+gating contract extends with the levels: stdout must be a TTY — redirected
+contexts are level 0 whatever the knob says — and any value outside the
+dial degrades to 0. The tee's only source is the cycle log the supervisor
+already writes (the child's stdout is captured, its stderr is redirected),
+so nothing is logged twice, and the T354 7501 emission is untouched — the
+dot and the line stay in sync at every level, and the heartbeat's
+source-string rule extends to level 2's summaries.
 
 **Redirected contexts get neither surface** (the TTY gate is the first leg
 of both): nohup, launchd, pipes, and log files receive zero lines and zero
