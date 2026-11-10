@@ -1,17 +1,13 @@
 # Ledger
 
 ## Done
-- Cycle-3179 Phase 1: routine-skip glm (predicate holds; eval fresh 899eae9a 2026-11-10T09:27; d1794287559-1) → T358, T353, T351 arcs worked solo-serial.
-- T358 arc: merge 4c62e1ef, flip 11b78bd9; kimi PASS 5/5 (d1794291547-5). OSC 7501 stage/heartbeat + dot in loopd_osc7501_emit.
-- T353 arc: merge 88ff8d3f, flip b5d74ba5; kimi PASS 6/6 (d1794297778-7). T261/T262 remediated in one loopd.sh dispatch-time gate.
-- T351 arc: merge a7151a4f, flip f358569d; kimi PASS 6/6 (d1794300667-10). README install-first + generic example.
-- Release v0.24.0 cut: notes v0.22.0..v0.23.0+ since v0.23.0 (5 items TRUE ≥ 3), commit 66a7cb05, tag annotated, pairing ok. Pushes pending.
+- Phase 1: routine-skip glm (loopd routing 09:39:53Z todo_rows=2 eval_fresh=yes; eval 309b4945 fresh same-UTC-day; d1794303648-1). T328 re-verified BLOCKED (menu unanswered, chug-watch 13eca32); P001/P003/P004 parked.
+- T357 arc COMPLETE (pri 4 tests-only): impl 9a656dc2 glm 26/80 goal-accepted → merge c15a6e17 → flip 6dc7a428 pushed. Fixture t357_eval_prefixed_body_line_is_not_a_disposition_commit pins the site-sync leg-2 anchor subjects-only (an eval:-prefixed BODY line counts 0 — the T350 m8 %B mutant class). T189 gates-only d1794304332-2 (+30 lines, tests-only); orchestrator RED-proof: %s→%B worktree mutation failed the fixture, reverted byte-identical. Worktree gates nextest 2226/2226 + clippy ZERO; post-merge gates GREEN (target-shared-main, pid 83712, 175.078s). Harvested (events-t357-impl + LEDGER-t357-impl disk-only), worktree removed, branch deleted.
 
 ## Next
-- Wrap: Outcomes cycle-3179 entry + compact oldest; decisions-audit + T261 batch (9 records this cycle); eval-state rewrite; token-free notes + T257 color; probe; fill; push (releases + v0.24.0 tag + corridor); flips; goal_complete.
-- Remove worktrees /tmp/chug-loop-t358, t353, t351 after final harvest verify (t353+judge events already harvested).
-- Next eval weighs: T359-era LIVE_CTX remirror staleness (re-surfaced live this cycle), T349 features.md telemetry, T328 BLOCKED re-verify.
+- Phase 3 wrap: Outcomes 3180 full + one-line 3172 (6-full set) → prep commit → eval-state rewrite (T311 leg) → token-free notes + T257 color → probe → fill (T309/T310/T311/T317/T321/T323 asserts) → push → flips → goal_complete.
+- Next eval weighs: T359-era LIVE_CTX write-path staleness (watch rides); T328 operator menu (A/B/C) still pending.
 
 ## Blockers
-- T328 BLOCKED (operator decision pending, A/B/C menu unanswered) — re-verified BLOCKED in 3175, re-verify next cycle.
-- ctx-edit compaction was REJECTED twice this cycle then landed on the 3rd edit after the T359 remirror restored stale turns (watch: LIVE_CTX write-path).
+- T328 BLOCKED (operator decision pending, A/B/C menu unanswered — re-verified this cycle at 13eca32).
+- ctx-edit watch: LIVE_CTX write-path staleness (T359-era) rides from cycle-3179.
