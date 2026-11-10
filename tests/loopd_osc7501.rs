@@ -861,6 +861,11 @@ fn a_piped_supervisor_run_stays_byte_silent() {
 /// (emission req, failure arc) A cycle that dies with the budget/abort exit
 /// emits working then blocked, and the blocked msg channel carries the T340
 /// budget word with the rc — the one source of truth for both surfaces.
+/// This sandbox's stub dies WITHOUT the driver's failure marker (no
+/// `chug: abort:` line reaches the cycle log), so the msg here is the
+/// CANNED rc line — the guaranteed no-marker fallback of the T356 round-3
+/// derivation (the marker-derived shapes live in tests/loopd_heartbeat.rs's
+/// dying and plant-only fixtures).
 #[test]
 fn a_dying_cycle_emits_working_then_blocked_with_the_reason() {
     let _timing = testsupport::timing_guard();
@@ -877,6 +882,25 @@ fn a_dying_cycle_emits_working_then_blocked_with_the_reason() {
     assert!(
         log.contains("cycle ended WITHOUT goal complete"),
         "the failure arc must run its failure branch:\n{log}"
+    );
+    // The no-marker shape, deliberate: this stub wrote no `chug: abort:`
+    // line, so the derivation finds nothing and the canned rc line stands.
+    let cycle_log = fs::read_dir(sandbox.root.join(".chug/loopd"))
+        .expect("the loopd state dir")
+        .flatten()
+        .map(|e| e.path())
+        .find(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .map(|n| n.starts_with("cycle-") && n.ends_with(".log"))
+                .unwrap_or(false)
+        })
+        .map(|p| fs::read_to_string(p).unwrap_or_default())
+        .unwrap_or_default();
+    assert!(
+        !cycle_log.contains("chug: abort:"),
+        "this arc's cycle log must carry no driver marker (the canned \
+         fallback's precondition): {cycle_log:?}"
     );
 
     let records = parse_osc7501(&capture);
@@ -1131,6 +1155,11 @@ fn every_emission_leg_is_wired_to_its_transition() {
 
     // blocked — the cycle death, with the T340 vocabulary word mapped from
     // the child's exit code (rc 1 is the budget/abort exit per driver.rs).
+    // T356 fix-up round 3: the reason is DERIVED from the cycle log's driver
+    // marker and composed once into $fail_msg — this sandbox's stub dies
+    // WITHOUT a marker (no `chug: abort:` line anywhere), so the msg here is
+    // the canned rc line, the guaranteed no-marker fallback (the
+    // loopd_heartbeat.rs fixtures carry the marker-derived shapes).
     let at_death = need(
         &loopd,
         "cycle ended WITHOUT goal complete (consecutive failures: $fails)",
@@ -1139,7 +1168,7 @@ fn every_emission_leg_is_wired_to_its_transition() {
     let at_word = need(&loopd, "1) osc_word=budget ;;", "the budget word mapping");
     let at_death_emit = need(
         &loopd,
-        "loopd_osc7501_emit blocked \"$osc_word: cycle ended without goal complete (rc=$chug_rc)\"",
+        "loopd_osc7501_emit blocked \"$fail_msg\"",
         "the cycle-death blocked emission",
     );
     assert!(

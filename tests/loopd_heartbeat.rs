@@ -489,10 +489,18 @@ echo "stub-build: green"
 exit 0
 "#;
 
-/// A green build whose stub BINARY dies with the budget/abort exit (rc=1):
-/// the supervisor's failure branch fires once with the T340 budget word, the
-/// stub plants the STOP file, the loop exits cleanly — one full
-/// working→blocked span to capture.
+/// A green build whose stub BINARY dies with the budget/abort exit (rc=1)
+/// after writing the driver's OWN failure marker to stderr — the exact shape
+/// src/events.rs's ConsoleSink produces on Event::Aborted (`chug: abort:
+/// <reason>`, reason strings from src/driver.rs: "iteration budget
+/// exceeded", "time budget exceeded", "token budget exceeded", "operator
+/// abort") — and the launch leg's stderr redirect (2>> "$cycle_log") is what
+/// plants that marker in the PER-CYCLE log. The supervisor's failure branch
+/// fires once; the stub plants the STOP file, the loop exits cleanly — one
+/// full working→blocked span to capture. The blocked msg must carry the
+/// MARKER's reason (the field finding 2026-11-10: the failure marker lives
+/// in the cycle log, not the supervisor stream — the supervisor's rc knows
+/// only "1", never WHY).
 const FAILING_CHUG_CARGO: &str = r#"#!/bin/sh
 set -e
 [ -n "$CARGO_TARGET_DIR" ] || { echo 'stub cargo: CARGO_TARGET_DIR unset' >&2; exit 1; }
@@ -500,7 +508,29 @@ mkdir -p "$CARGO_TARGET_DIR/release"
 cat > "$CARGO_TARGET_DIR/release/chug" <<'STUB'
 #!/bin/sh
 mkdir -p .chug && touch .chug/STOP-LOOP
+echo "chug: abort: iteration budget exceeded" >&2
 echo "stub chug: dying with the budget exit" >&2
+exit 1
+STUB
+chmod +x "$CARGO_TARGET_DIR/release/chug"
+echo "stub-build: green"
+exit 0
+"#;
+
+/// A green build whose stub BINARY dies rc=1 SILENTLY — no stdout, no
+/// stderr, no driver marker anywhere: the supervisor's failure branch fires
+/// with a bare rc and NOTHING else. This is the other half of the field
+/// finding's cycle-log-only shape: the ONLY failure signal in the sandbox is
+/// a PREVIOUS cycle's log the fixture plants (a silent SIGKILL/panic death
+/// wrote no marker of its own), so the blocked msg can carry a reason only
+/// if the derivation scans the newest cycle log that carries one.
+const SILENT_FAILING_CHUG_CARGO: &str = r#"#!/bin/sh
+set -e
+[ -n "$CARGO_TARGET_DIR" ] || { echo 'stub cargo: CARGO_TARGET_DIR unset' >&2; exit 1; }
+mkdir -p "$CARGO_TARGET_DIR/release"
+cat > "$CARGO_TARGET_DIR/release/chug" <<'STUB'
+#!/bin/sh
+mkdir -p .chug && touch .chug/STOP-LOOP
 exit 1
 STUB
 chmod +x "$CARGO_TARGET_DIR/release/chug"
@@ -1008,11 +1038,23 @@ fn the_dormant_skip_emits_its_line_naming_the_next_probe() {
     }
 }
 
-/// (consistency req, failure arc) A cycle that dies with the budget/abort
-/// exit emits the BLOCKED line whose reason text is the T354 msg channel
-/// text BYTE-IDENTICALLY — one source string, two destinations, on the real
-/// supervisor path. The blocked line carries no clock prefix: the reason IS
-/// the payload (the spec's shape).
+/// (consistency req, failure arc — EXTENDED to the field finding's
+/// cycle-log-sourced shape) A cycle that dies with the budget/abort exit
+/// emits the BLOCKED line whose reason text is the T354 msg channel text
+/// BYTE-IDENTICALLY — one source string, two destinations, on the real
+/// supervisor path — and that reason is the DRIVER'S failure marker from the
+/// per-cycle log, not the supervisor's canned rc line. The marker
+/// (`chug: abort: iteration budget exceeded`, the ConsoleSink shape) lands
+/// ONLY in the cycle log (the launch leg's stderr redirect); loopd.log and
+/// the supervisor's rc carry no reason. The blocked line has no clock
+/// prefix: the reason IS the payload (the spec's shape).
+///
+/// RED (captured on the pre-fix tree, the canned composition the finding
+/// names): the dying arc emitted
+///   `budget: cycle ended without goal complete (rc=1)`
+/// on BOTH surfaces while the cycle log held `chug: abort: iteration budget
+/// exceeded` — the supervisor invented the reason from its bare rc and the
+/// operator-visible line never named the real failure.
 #[test]
 fn a_dying_cycle_emits_the_blocked_line_matching_the_dot() {
     let _timing = testsupport::timing_guard();
@@ -1037,9 +1079,40 @@ fn a_dying_cycle_emits_the_blocked_line_matching_the_dot() {
         .find(|r| r.state == "blocked")
         .expect("the failure arc must emit a blocked dot");
     let msg = blocked.msg.as_deref().expect("the blocked dot carries the msg");
+    // THE FIELD FINDING (2026-11-10): the reason is the cycle log's failure
+    // marker — the driver's `chug: abort: <reason>` line — never the canned
+    // rc composition. The stub wrote the marker to stderr exactly where the
+    // ConsoleSink writes it; the launch leg redirected it into the cycle log.
     assert_eq!(
-        msg, "budget: cycle ended without goal complete (rc=1)",
-        "the T340 budget word rides the msg channel"
+        msg, "budget: iteration budget exceeded",
+        "the blocked msg must carry the driver's marker reason from the \
+         cycle log (headed by the T340 budget word), not the canned rc text"
+    );
+    // Sanity: the marker reached the cycle log and NOWHERE supervisor-side —
+    // the cycle-log-only shape the finding names.
+    let cycle_logs: Vec<PathBuf> = fs::read_dir(sandbox.root.join(".chug/loopd"))
+        .expect("the loopd state dir")
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .map(|n| n.starts_with("cycle-") && n.ends_with(".log"))
+                .unwrap_or(false)
+        })
+        .collect();
+    assert_eq!(cycle_logs.len(), 1, "one cycle log on the dying arc");
+    let cycle_log = fs::read_to_string(&cycle_logs[0]).expect("read the cycle log");
+    assert!(
+        cycle_log.contains("chug: abort: iteration budget exceeded"),
+        "the failure marker must be in the per-cycle log (the launch leg's \
+         stderr redirect): {}",
+        cycle_logs[0].display()
+    );
+    assert!(
+        !sandbox.read_log().contains("iteration budget exceeded"),
+        "the marker must NOT be in the supervisor stream — the failure \
+         reason lives only in the cycle log (the field finding's mechanism)"
     );
 
     let lines = heartbeat_lines(&capture);
@@ -1070,6 +1143,189 @@ fn a_dying_cycle_emits_the_blocked_line_matching_the_dot() {
         let bytes = fs::read(&file).unwrap_or_default();
         assert!(find(&bytes, b"[loop").is_none(), "{} carries a heartbeat line", file.display());
     }
+}
+
+/// The predecessor cycle log the plant-only fixture writes: the shape a real
+/// dead cycle leaves — the launch header, the driver's failure marker (the
+/// ConsoleSink `chug: abort: <reason>` stderr line, reason strings from
+/// src/driver.rs), the abort stdout tail, the supervisor's verdict line. The
+/// name is a clock-ordered predecessor of any run in this repo's timeline;
+/// the fixture's mtime (planted before the run) is what actually orders it
+/// behind the current cycle's log.
+fn predecessor_cycle_log() -> String {
+    format!(
+        "[loopd 2026-11-01T00:00:00Z] T81 routing: eval cycle — orchestrator model {}\n\
+         chug: abort: iteration budget exceeded\n\
+         --- LEDGER.md ---\n\
+         (fixture ledger)\n\
+         ---\n\
+         model: {}\n\
+         budget: iterations\n\
+         [loopd 2026-11-01T00:00:01Z] verdict: no goal complete (rc=1)\n",
+        "anthropic-system.ai.kimi-k3", "anthropic-system.ai.kimi-k3"
+    )
+}
+
+/// (field finding 2026-11-10, the cycle-log-ONLY shape — RED-proven) The
+/// sandbox holds a failure marker in exactly ONE place: a PREVIOUS cycle's
+/// log the fixture plants. The current cycle dies rc=1 SILENTLY (the
+/// SILENT_FAILING stub: no stdout, no stderr, no driver marker of its own —
+/// the SIGKILL/panic shape), so the supervisor's failure state is a bare rc
+/// with no reason anywhere on its side: loopd.log names no reason, the
+/// current cycle log carries no marker. The blocked heartbeat must STILL
+/// fire, carrying the planted marker's text — derived by scanning the newest
+/// cycle log that carries a failure marker, with the source log named so the
+/// operator can open it.
+///
+/// RED (captured on the pre-fix tree): the blocked msg was the canned
+/// `budget: cycle ended without goal complete (rc=1)` — the planted marker
+/// `chug: abort: iteration budget exceeded` sat unread in the cycle log and
+/// the operator's line never carried it.
+#[test]
+fn a_cycle_log_only_failure_marker_fires_the_blocked_line() {
+    let _timing = testsupport::timing_guard();
+    let _t172_load = t172_load_lock::family_guard("loopd-heartbeat");
+    let sandbox = Sandbox::new(SILENT_FAILING_CHUG_CARGO);
+    // THE PLANT: the predecessor's cycle log, with the failure marker — the
+    // only failure signal the sandbox will contain.
+    let state_dir = sandbox.root.join(".chug/loopd");
+    fs::create_dir_all(&state_dir).expect("the loopd state dir");
+    let planted = state_dir.join("cycle-20261101-000000.log");
+    fs::write(&planted, predecessor_cycle_log()).expect("plant the predecessor cycle log");
+    let (mut child, rx) = sandbox.run_on_pty(4, &[]);
+    let status = wait_bounded(&mut child, Duration::from_secs(90));
+    let status = status.expect("the plant-only sandbox supervisor hung past the 90s cap");
+    assert!(status.success(), "the plant-only sandbox must still exit cleanly: {status:?}");
+    let capture = rx
+        .recv_timeout(Duration::from_secs(25))
+        .expect("the pty drain thread finished");
+    let log = sandbox.read_log();
+    assert!(
+        log.contains("cycle ended WITHOUT goal complete"),
+        "the plant-only arc must run its failure branch:\n{log}"
+    );
+
+    // The cycle-log-only shape, verified: the marker exists ONLY in the
+    // planted predecessor log — never in the supervisor stream, never in the
+    // current cycle's log (the silent death wrote none).
+    assert!(
+        !log.contains("iteration budget exceeded"),
+        "the supervisor stream must carry no failure reason — the marker \
+             lives only in the planted cycle log (the field finding's shape)"
+    );
+    let current_log: String = fs::read_dir(&state_dir)
+        .expect("the loopd state dir")
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .map(|n| n.starts_with("cycle-") && n != "cycle-20261101-000000.log")
+                .unwrap_or(false)
+        })
+        .map(|p| fs::read_to_string(p).unwrap_or_default())
+        .collect::<String>();
+    assert!(
+        !current_log.contains("chug: abort:"),
+        "the silent death's own cycle log must carry no marker: {current_log:?}"
+    );
+
+    let expected = "budget: iteration budget exceeded [cycle-20261101-000000.log]";
+    let records = parse_osc7501(&capture);
+    let blocked = records
+        .iter()
+        .find(|r| r.state == "blocked")
+        .expect("the plant-only arc must emit a blocked dot");
+    assert_eq!(
+        blocked.msg.as_deref(),
+        Some(expected),
+        "the blocked msg must carry the PLANTED marker's reason, with the \
+         source log named (the derivation scanned the newest cycle log \
+         carrying a marker):\n{capture:?}"
+    );
+
+    // The heartbeat line matches the dot byte for byte (the consistency
+    // contract rides the same single composition).
+    let lines = heartbeat_lines(&capture);
+    let blocked_lines: Vec<&String> = lines.iter().filter(|l| l.contains("BLOCKED:")).collect();
+    assert_eq!(
+        blocked_lines.len(),
+        1,
+        "exactly one BLOCKED line on the plant-only path:\n{capture:?}"
+    );
+    let reason = blocked_lines[0]
+        .split_once("BLOCKED: ")
+        .map(|(_, rest)| rest.to_string())
+        .expect("the BLOCKED: prefix");
+    assert_eq!(
+        reason, expected,
+        "THE CONSISTENCY CONTRACT on the planted-marker arc: the heartbeat's \
+         reason and the 7501 msg are the same derived string"
+    );
+
+    for file in sandbox.redirected_files() {
+        let bytes = fs::read(&file).unwrap_or_default();
+        assert!(find(&bytes, b"[loop").is_none(), "{} carries a heartbeat line", file.display());
+    }
+}
+
+/// (field finding 2026-11-10, static) The blocked msg's reason is DERIVED
+/// from the per-cycle log, not invented from the rc: the death site reads
+/// the cycle log through the ONE helper pair, the helper scans the driver's
+/// actual marker (`chug: abort: <reason>` — src/events.rs ConsoleSink on
+/// Event::Aborted, reason strings from src/driver.rs), the canned rc line
+/// survives as the guaranteed no-marker fallback, and the derivation runs
+/// BEFORE the emission on the death path. Behavioral teeth: the dying and
+/// plant-only fixtures above; this pin makes the mechanism itself
+/// mutation-resistant.
+#[test]
+fn the_blocked_line_derives_its_reason_from_the_cycle_log() {
+    let loopd = read("loopd.sh");
+    // The helper pair is defined exactly once.
+    count_eq(&loopd, "loopd_log_abort_reason() {", 1, "the marker scanner is defined once");
+    count_eq(&loopd, "loopd_cycle_fail_reason() {", 1, "the derivation is defined once");
+    let scan = fn_body(&loopd, "loopd_log_abort_reason");
+    // THE marker the driver actually writes (verified against src/events.rs:
+    // `writeln!(self.err, "chug: abort: {reason}")` on Event::Aborted) — the
+    // scanner's match literal is line-precise (doc-comment mentions of the
+    // marker must never satisfy it).
+    count_eq(
+        &scan,
+        "index($0, \"chug: abort: \")",
+        1,
+        "the scanner matches the driver's marker, exactly once",
+    );
+    need(&scan, "substr($0, i + 13, 120)", "the reason is capped at 120 chars");
+    // The derivation: the death's own log first, then the newest cycle log
+    // carrying a marker (the silent-death fallback), provenance named.
+    let derive = fn_body(&loopd, "loopd_cycle_fail_reason");
+    need(&derive, "loopd_log_abort_reason \"$primary\"", "the death's own log is scanned first");
+    need(&derive, "ls -t \"$STATE\"/cycle-*.log", "the fallback walks the cycle logs");
+    need(&derive, "printf '%s [%s]\\n'", "the fallback names its source log");
+    // The death site: the derivation is rc-latched, runs after the T340 word
+    // mapping, composes the msg ONCE, and the canned line survives as the
+    // fallback — the blocked emission is never silenced.
+    let at_word = need(&loopd, "1) osc_word=budget ;;", "the T340 word mapping");
+    let at_derive = need(
+        &loopd,
+        "fail_reason=$(loopd_cycle_fail_reason \"$cycle_log\") || fail_reason=\"\"",
+        "the death site's derivation call (rc-latched, T142)",
+    );
+    let at_canned = need(
+        &loopd,
+        "fail_msg=\"$osc_word: cycle ended without goal complete (rc=$chug_rc)\"",
+        "the canned fallback composition",
+    );
+    let at_override = need(
+        &loopd,
+        "fail_msg=\"$osc_word: $fail_reason\"",
+        "the marker-derived override",
+    );
+    let at_emit = need(&loopd, "loopd_osc7501_emit blocked \"$fail_msg\"", "the death emission");
+    assert!(
+        at_word < at_derive && at_derive < at_canned && at_canned < at_override && at_override < at_emit,
+        "the death path is word → derivation → canned base → override → emit"
+    );
 }
 
 /// (consistency req, gate-red arc) A red build blocks WITHOUT any working
@@ -1556,7 +1812,11 @@ fn every_transition_wires_the_line_beside_its_dot() {
 
 /// (blocked req) The five blocked transitions pass NO detail — their lines
 /// compose from the msg inside the emitter (the single-source property), so
-/// there is exactly one blocked-line composition in the file.
+/// there is exactly one blocked-line composition in the file. The
+/// cycle-death site composes its msg ONCE into `$fail_msg` (the derivation
+/// below may override the canned half with the cycle log's marker reason)
+/// and emits THAT — still one two-arg call, so the composition stays the
+/// emitter's alone.
 #[test]
 fn the_blocked_lines_compose_inside_the_emitter_only() {
     let loopd = read("loopd.sh");
@@ -1565,9 +1825,9 @@ fn the_blocked_lines_compose_inside_the_emitter_only() {
     // msg-sourced composition and fork the reason text).
     count_eq(
         &loopd,
-        "loopd_osc7501_emit blocked \"$osc_word: cycle ended without goal complete (rc=$chug_rc)\"",
+        "loopd_osc7501_emit blocked \"$fail_msg\"",
         1,
-        "the cycle-death site is two-arg",
+        "the cycle-death site is two-arg (the derived-or-canned msg)",
     );
     count_eq(
         &loopd,
@@ -1804,11 +2064,11 @@ fn the_real_supervisor_fixtures_join_the_t151_timing_domain() {
     }
     assert_eq!(
         guarded.len(),
-        10,
-        "the through-loopd family is 10 fixtures (green, piped, silenced, \
-         dormant, dying, gate-red, milestone, stale-below, stale-at, \
-         piped-milestone) — a new real-supervisor fixture must join the \
-         domain or this pin's count is lying about coverage"
+        11,
+        "the through-loopd family is 11 fixtures (green, piped, silenced, \
+         dormant, dying, plant-only, gate-red, milestone, stale-below, \
+         stale-at, piped-milestone) — a new real-supervisor fixture must \
+         join the domain or this pin's count is lying about coverage"
     );
 }
 
