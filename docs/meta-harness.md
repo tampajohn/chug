@@ -387,10 +387,24 @@ A `blocked` msg is one line headed by its T340 blocked-reason word —
 else) — so the terminal surface and the daemon surface (T340's
 `blocked_reason`) read the same vocabulary from the same writer. The wire
 is the **id-less root record**:
-`ESC ] 7501 ; state=<s>[:msg=<base64>] ESC \` — `msg` is one base64 line,
-the whole sequence ≤4096 bytes. Records carry no `id`, `app`, or
+`ESC ] 7501 ; state=<s>[:app=chug][:msg=<base64>] ESC \` — `msg` is one
+base64 line, the whole sequence ≤4096 bytes. Records carry no `id` or
 `progress` keys: the loop's state is one root record, and optional keys
-staying absent is exactly the additivity this contract promises.
+staying absent is exactly the additivity this contract promises. One
+constant label rides every record since T360 — `app=chug` (herdr
+Agents-list grouping parity: the wrapper's bytes carry it, so the native
+bytes must too).
+
+T360 — the blocked leg (the 2535e8af field finding): an idle transition is
+not trusted on its face. Before the surfaces compose, the shared scan
+(`osc7501_cycle_block` in `scripts/osc7501.sh` — one body for both
+supervisors) reads the newest `.chug/loopd/cycle-*.log` for the failure
+patterns the supervisor stream never sees — `observability delivery
+failing` and `gate red` as substrings, `error` and `panic` as whole words
+— and a match rewrites the transition idle→blocked with the marker line
+itself as the msg (bounded to 200 chars; no T340 word — the marker IS the
+reason). A fresh clean cycle start clears the block naturally: the scan
+always reads the newest cycle log, and a new cycle creates a new one.
 
 **The gating contract (compat-critical).** The emission happens ONLY when
 (a) stdout is a TTY *and* (b) `CHUG_OSC7501` is unset or `=1`. Every

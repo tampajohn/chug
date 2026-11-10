@@ -1111,7 +1111,12 @@ per transition so the two surfaces can never disagree:
 
 - **OSC 7501 program status (T354, for machines)** — `working` on a
   cycle/item start, `idle` on a cheap-exit/dormant rest, `blocked` with a
-  one-line reason on a red build gate, cycle death, or `HALT` — so harnesses
+  one-line reason on a red build gate, cycle death, or `HALT` — and, since
+  T360, an idle rest surfaces `blocked` too when the newest cycle log
+  carries a failure marker (the delivery failure, an error, a panic, or a
+  gate red — the markers land in the cycle log, never the supervisor
+  stream; a fresh clean cycle start clears it). Every record carries
+  `app=chug`. All of this rides one shared emitter, so harnesses
   that read the program-status channel see the loop without any shim.
   Emission is TTY-gated (piped/redirected contexts receive zero escape
   bytes) and killable with `CHUG_OSC7501=0`.

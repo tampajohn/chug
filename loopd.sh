@@ -1126,9 +1126,30 @@ LAYA_TRIAGE_QUIET=""
 # pilot supervisor calls it dot-only, so its parity is parity by
 # construction. This function stays the T356 COMPOSITION wrapper: the same
 # call carries the heartbeat legs AND the shared emitter's dot.
+# T360 — the blocked leg (the 2535e8af field finding): an idle transition is
+# no longer trusted on its face. The shared scan (osc7501_cycle_block,
+# scripts/osc7501.sh — ONE body, both supervisors) reads the newest
+# .chug/loopd/cycle-*.log for the failure patterns the supervisor stream
+# never sees (the observability delivery failure, an error, a panic, a red
+# gate) and a match rewrites THIS transition idle->blocked with the marker
+# line as the msg BEFORE the surfaces compose — the dot and the heartbeat
+# line stay one composition (the stale OK-transition detail is dropped, so
+# the line composes from the msg per the T356 one-source rule), and a fresh
+# clean cycle start clears the block naturally (the scan always reads the
+# newest log; a new cycle creates a new one).
 loopd_osc7501_emit() { # <state> [one-line reason] [hb-detail] — TTY-gated, env-killable
-  local state="${1:-working}" msg="${2:-}" hb="${3:-}"
+  local state="${1:-working}" msg="${2:-}" hb="${3:-}" block
   [ -t 1 ] || return 0 # (a) a TTY stdout or nothing — the whole contract
+  # T360 — the blocked leg: only an IDLE transition consults the cycle-log
+  # scan (working/blocked are the supervisor's own words; a completing
+  # cycle's failure is the one this rewrite exists to surface). The scan is
+  # best-effort end to end — any failure degrades to the plain idle
+  # emission (rc-guarded inside the helper, the T142 house style).
+  if [ "$state" = idle ] && block=$(osc7501_cycle_block); then
+    state=blocked
+    msg="$block"
+    hb="" # the detail describes the OK transition — the line composes from the msg
+  fi
   # T356 — the human leg of the same transition, BEFORE the dot's env gate:
   # the line's knob (CHUG_LOOP_VERBOSE) is the line's own; the dot's knob
   # (in the shared emitter, called below) never silences it and vice versa.

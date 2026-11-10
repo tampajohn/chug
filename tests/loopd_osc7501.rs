@@ -17,8 +17,10 @@
 //!   T340 blocked-reason word (`budget` for the rc-1 budget/abort exit,
 //!   `error` otherwise) — one source of truth for both surfaces.
 //! * **Wire**: the id-less ROOT record —
-//!   `ESC ] 7501 ; state=<s>[:msg=<base64>] ESC \` — msg is one base64
-//!   line, the whole sequence ≤4096 bytes, no `id`/`app`/`progress` keys.
+//!   `ESC ] 7501 ; state=<s>[:app=chug][:msg=<base64>] ESC \` — msg is one base64
+//!   line, the whole sequence ≤4096 bytes, no `id`/`progress` keys (T360
+//!   adds the constant `app=chug` label — herdr Agents-list grouping parity
+//!   with the wrapper's bytes).
 //! * **Gating (the compat contract)**: emit ONLY when stdout is a TTY AND
 //!   `CHUG_OSC7501` is unset or `=1`; every redirected context (nohup,
 //!   launchd, pipes, log files) receives ZERO escape bytes; `CHUG_OSC7501=0`
@@ -134,7 +136,7 @@ fn b64_decode(s: &str) -> Option<Vec<u8>> {
 
 /// One parsed OSC 7501 record (the id-less root record in loopd's emission —
 /// `id` stays `None`; the field is modeled so the parser stays spec-faithful).
-#[derive(Debug, PartialEq, Eq, Clone)]
+#[derive(Debug, PartialEq, Eq, Clone, Default)]
 struct Record7501 {
     state: String,
     id: Option<String>,
@@ -145,13 +147,25 @@ struct Record7501 {
     msg: Option<String>,
 }
 
+/// The EXPECTATION-side record constructor — the claim under test, never the
+/// parser's seed. Every field's value here is an assertion about the WIRE:
+/// `app: Some("chug")` asserts the emitted sequence carries the T360 app
+/// label, `id: None` asserts it stays the id-less root. (The round-1
+/// validator's vacuous-pin class: parse_osc7501() used to seed through THIS
+/// constructor, so a wire record MISSING the app key parsed AS IF app=chug
+/// had arrived — every app assertion was blind to omission, and the
+/// app-stripped-on-done mutant m6 survived all 124 gated tests. The parser
+/// now seeds neutral `Record7501::default()`; only the wire can fill the
+/// fields, so a `rec(...)` expectation is a real test again.)
 fn rec(state: &str, msg: Option<&str>) -> Record7501 {
     Record7501 {
         state: state.to_string(),
         id: None,
         kind: None,
         progress: None,
-        app: None,
+        // T360 — the app label rides EVERY record (app=chug, herdr
+        // Agents-list grouping parity with the wrapper's bytes).
+        app: Some("chug".to_string()),
         title: None,
         msg: msg.map(str::to_string),
     }
@@ -186,6 +200,14 @@ fn find_terminator(bytes: &[u8], from: usize, cap: usize) -> Option<(&[u8], usiz
 /// is skipped; unknown keys are ignored; `msg` is base64(UTF-8); the whole
 /// sequence must terminate (BEL or ST) within 4096 bytes or it is dropped.
 /// Returns the records in stream order.
+///
+/// The seed is the NEUTRAL `Record7501::default()` — every field starts
+/// `None`/empty and ONLY the wire's own key=value pairs fill them (the
+/// vacuous-pin fix-up: seeding through `rec()` used to fabricate
+/// `app=Some("chug")` for a record whose bytes carried no app key at all,
+/// blinding every app assertion to omission — the app-stripped-on-done
+/// mutant m6 survived all 124 gated tests). An expected value is asserted
+/// with `rec()`, never granted by the parser.
 fn parse_osc7501(bytes: &[u8]) -> Vec<Record7501> {
     const INTRO: &[u8] = b"\x1b]7501;";
     const MAX: usize = 4096;
@@ -208,7 +230,10 @@ fn parse_osc7501(bytes: &[u8]) -> Vec<Record7501> {
             let value = String::from_utf8_lossy(&pair[eq + 1..]).to_string();
             if key == "state" {
                 if STATES.contains(&value.as_str()) {
-                    current = Some(rec(&value, None));
+                    // The NEUTRAL seed: nothing on the wire is taken on faith
+                    // — every field stays None until a key=value pair fills
+                    // it (the rec() fabrication fix-up).
+                    current = Some(Record7501 { state: value, ..Default::default() });
                 } else {
                     current = None; // an invalid state DROPS the entire sequence
                     break;
@@ -239,6 +264,33 @@ fn esc_count(bytes: &[u8]) -> usize {
 
 fn contains_osc(bytes: &[u8]) -> bool {
     find(bytes, b"\x1b]7501;").is_some()
+}
+
+/// The heartbeat lines in a captured pty stream, in order (the
+/// tests/loopd_heartbeat.rs helper, mirrored): the 7501 sequences carry NO
+/// newline (the wire rule), so they can sit mid-line in the raw capture —
+/// strip every sequence FIRST, then split; a tty's ONLCR turns each appended
+/// `\n` into `\r\n`, so the trailing `\r` goes too. The result is exactly
+/// what a terminal's scrollback shows as `[loop …]` lines.
+fn heartbeat_lines(capture: &[u8]) -> Vec<String> {
+    let mut scrubbed = Vec::with_capacity(capture.len());
+    let mut i = 0usize;
+    while i < capture.len() {
+        if capture[i] == ESC
+            && find(&capture[i..], b"\x1b]7501;") == Some(0)
+            && find_terminator(capture, i + 7, 4096).is_some()
+        {
+            i = find_terminator(capture, i + 7, 4096).map(|(_, next)| next).expect("checked above");
+            continue;
+        }
+        scrubbed.push(capture[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&scrubbed)
+        .split('\n')
+        .map(|l| l.trim_end_matches('\r').to_string())
+        .filter(|l| l.starts_with("[loop"))
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -542,15 +594,29 @@ fn probe_piped(root: &Path, state: &str, reason: &str, envs: &[(&str, &str)]) ->
 }
 
 /// Run `loopd.sh osc <state> <reason>` with stdout on a REAL pty and return
-/// the captured byte stream.
+/// the captured byte stream. Delegates to the full-argument probe.
 fn probe_pty(root: &Path, state: &str, reason: &str, envs: &[(&str, &str)]) -> Vec<u8> {
+    probe_pty_args(root, &[state, reason], envs)
+}
+
+/// Run `loopd.sh osc <args…>` with stdout on a REAL pty and return the
+/// captured byte stream — the FULL-argument form. The heartbeat-surface
+/// fixtures need the 4-argument shape (`osc <state> <reason> <hb-detail>`):
+/// the 3-argument dot-only form reaches the composition wrapper with an
+/// empty detail, so the wrapper's `if [ -n "$hb" ]` heartbeat leg is dead
+/// code under it and a fixture driving it can only ever pin the dot (the
+/// round-1 vacuous-pin class — the m5 `hb=""` reset had no behavioral pin).
+/// Both knobs are removed from the ambient env (the heartbeat file's probe
+/// doctrine): the line's CHUG_LOOP_VERBOSE and the dot's CHUG_OSC7501 are
+/// each set explicitly by the fixtures that need them.
+fn probe_pty_args(root: &Path, args: &[&str], envs: &[(&str, &str)]) -> Vec<u8> {
     let mut cmd = Command::new("bash");
     cmd.arg(root.join("loopd.sh"))
         .arg("osc")
-        .arg(state)
-        .arg(reason)
+        .args(args)
         .current_dir(root)
         .env_remove("CHUG_OSC7501")
+        .env_remove("CHUG_LOOP_VERBOSE")
         .stdin(Stdio::null())
         .stderr(Stdio::null());
     common::pin_loopd_env_files(&mut cmd, root);
@@ -621,12 +687,12 @@ fn chug_osc7501_0_kills_even_on_a_tty() {
 }
 
 /// (gating req) TTY + unset → emitted, and the emission is EXACTLY the
-/// id-less root working record (state only — no msg, no id, no app).
+/// id-less root working record (state + the T360 app label — no msg, no id).
 #[test]
 fn tty_and_unset_emits_the_working_record() {
     let root = probe_fixture_root();
     let capture = probe_pty(root.path(), "working", "", &[]);
-    let expected = "\x1b]7501;state=working\x1b\\";
+    let expected = "\x1b]7501;state=working:app=chug\x1b\\";
     assert_eq!(
         capture,
         expected.as_bytes(),
@@ -642,7 +708,7 @@ fn chug_osc7501_1_explicitly_enables_on_a_tty() {
     let root = probe_fixture_root();
     let capture = probe_pty(root.path(), "idle", "cycle ok", &[("CHUG_OSC7501", "1")]);
     let expected = format!(
-        "\x1b]7501;state=idle:msg={}\x1b\\",
+        "\x1b]7501;state=idle:app=chug:msg={}\x1b\\",
         b64_encode(b"cycle ok")
     );
     assert_eq!(capture, expected.into_bytes(), "the explicit-enable emission is wrong");
@@ -657,7 +723,7 @@ fn the_msg_channel_carries_the_blocked_reason() {
     let reason = "budget: cycle ended without goal complete (rc=1)";
     let capture = probe_pty(root.path(), "blocked", reason, &[]);
     let expected = format!(
-        "\x1b]7501;state=blocked:msg={}\x1b\\",
+        "\x1b]7501;state=blocked:app=chug:msg={}\x1b\\",
         b64_encode(reason.as_bytes())
     );
     assert_eq!(capture, expected.into_bytes(), "the blocked emission is wrong");
@@ -710,6 +776,290 @@ fn emitted_bytes_parse_under_the_spec_reference_parser() {
         );
         assert!(records[0].id.is_none(), "the record must be the id-less root");
     }
+}
+
+// ---------------------------------------------------------------------------
+// The T360 blocked leg (the 2535e8af field finding) + the app= label — the
+// cycle-log scan, driven through the `osc` probe (the cheap pattern)
+// ---------------------------------------------------------------------------
+
+/// The FP acceptance's dead-langfuse marker, in kind verbatim: the delivery
+/// failure line a completing cycle leaves in its cycle log (the 2535e8af
+/// field finding — failure markers live in cycle-*.log, NEVER in the
+/// supervisor stream). Under the scan's 200-char cap.
+const DELIVERY_MARKER: &str =
+    "observability delivery failing (run continues): langfuse: dial tcp 127.0.0.1:3000: connect: connection refused";
+
+/// Write a cycle log into a probe fixture root's `.chug/loopd/` — the
+/// derivation surface the field finding names. The probe's own reason
+/// argument stays the clean `cycle ok`, so any blocked+msg the fixtures
+/// below see can ONLY have come from the log.
+fn write_cycle_log(root: &Path, name: &str, body: &str) {
+    let state = root.join(".chug/loopd");
+    fs::create_dir_all(&state).expect("the loopd state dir");
+    fs::write(state.join(name), body).expect("write the cycle log");
+}
+
+/// (T360 — the cycle-log fixture) A failure marker existing ONLY in the
+/// newest cycle-*.log turns the idle transition into `blocked` with the
+/// marker line as the msg. RED against a supervisor-stream-only derivation
+/// by construction: the probe's reason argument is the clean `cycle ok`,
+/// so no supervisor-stream line carries the marker — the acceptance FP's
+/// RED leg (cycle completes "cycle OK", goes dormant, native emission says
+/// idle while the log carries the delivery failure verbatim).
+#[test]
+fn a_cycle_log_marker_alone_blocks_the_idle_transition() {
+    let root = probe_fixture_root();
+    write_cycle_log(
+        root.path(),
+        "cycle-20261110-120000.log",
+        &format!(
+            "[loopd 2026-11-10T12:00:00Z] T81 routing: eval cycle\n\
+             {DELIVERY_MARKER}\n\
+             [loopd 2026-11-10T12:05:00Z] verdict: goal complete (rc=0)\n"
+        ),
+    );
+    let capture = probe_pty(root.path(), "idle", "cycle ok", &[]);
+    let records = parse_osc7501(&capture);
+    assert_eq!(
+        records,
+        vec![rec("blocked", Some(DELIVERY_MARKER))],
+        "the marker lives ONLY in the cycle log, so only a cycle-log-scanning \
+         derivation can put it on the msg channel — the idle transition must \
+         surface blocked, not idle:\n{capture:?}"
+    );
+}
+
+/// (T360 — the clear fixture) A fresh, clean cycle start clears the block
+/// naturally: the scan always reads the NEWEST cycle-*.log, and a new cycle
+/// creates a new (clean) log — the docs/osc-7501.md contract.
+#[test]
+fn a_fresh_clean_cycle_log_clears_the_block() {
+    let root = probe_fixture_root();
+    write_cycle_log(
+        root.path(),
+        "cycle-20261110-120000.log",
+        &format!(
+            "[loopd 2026-11-10T12:00:00Z] T81 routing: eval cycle\n\
+             {DELIVERY_MARKER}\n\
+             [loopd 2026-11-10T12:05:00Z] verdict: goal complete (rc=0)\n"
+        ),
+    );
+    let blocked = probe_pty(root.path(), "idle", "cycle ok", &[]);
+    assert_eq!(
+        parse_osc7501(&blocked),
+        vec![rec("blocked", Some(DELIVERY_MARKER))],
+        "precondition: the poisoned log blocks the idle transition:\n{blocked:?}"
+    );
+    // The next cycle start created a NEWER, clean log (the poisoned one is
+    // the previous cycle's forensic record). The scan reads the newest and
+    // finds nothing — the idle transition is idle again.
+    write_cycle_log(
+        root.path(),
+        "cycle-20261110-130000.log",
+        "[loopd 2026-11-10T13:00:00Z] T81 routing: eval cycle\n\
+         [loopd 2026-11-10T13:05:00Z] verdict: goal complete (rc=0)\n",
+    );
+    let capture = probe_pty(root.path(), "idle", "cycle ok", &[]);
+    assert_eq!(
+        parse_osc7501(&capture),
+        vec![rec("idle", Some("cycle ok"))],
+        "a fresh clean cycle start clears the block — the newest log is \
+         clean, so the idle transition stays idle:\n{capture:?}"
+    );
+}
+
+/// (T360 — the parity fixture) The same poisoned-log probe through BOTH
+/// supervisors' `osc` probes on real ptys emits byte-identical blocked
+/// bytes — the scan is a SHARED helper in scripts/osc7501.sh (the T358
+/// doctrine: one body, both supervisors, parity by construction).
+#[test]
+fn the_cycle_log_blocked_leg_is_byte_identical_through_both_supervisors() {
+    let loopd_root = probe_fixture_root();
+    let pilot_root = tempfile::tempdir().expect("pilot probe fixture tempdir");
+    copy_pilot_fixture(pilot_root.path());
+    let poisoned = format!(
+        "[loopd 2026-11-10T12:00:00Z] T81 routing: eval cycle\n\
+         {DELIVERY_MARKER}\n\
+         [loopd 2026-11-10T12:05:00Z] verdict: goal complete (rc=0)\n"
+    );
+    write_cycle_log(loopd_root.path(), "cycle-20261110-120000.log", &poisoned);
+    write_cycle_log(pilot_root.path(), "cycle-20261110-120000.log", &poisoned);
+    let from_loopd = probe_pty(loopd_root.path(), "idle", "cycle ok", &[]);
+    let from_pilot = pilot_probe_pty(pilot_root.path(), "idle", "cycle ok", &[]);
+    assert_eq!(
+        from_loopd, from_pilot,
+        "the two supervisors' blocked bytes diverged on the same cycle-log \
+         content — the T360 scan must be ONE shared body (T358 parity)"
+    );
+    assert_eq!(
+        parse_osc7501(&from_pilot),
+        vec![rec("blocked", Some(DELIVERY_MARKER))],
+        "the shared bytes must carry the marker on the msg channel:\n{from_pilot:?}"
+    );
+}
+
+/// (T360 — the app= fixture) The native bytes carry `app=chug` on EVERY
+/// state (herdr Agents-list grouping parity with the wrapper's bytes —
+/// the operator finding: herdr showed `app: None` for the native dot).
+/// BOTH surfaces of the assertion: the RAW wire (the `state=<s>:app=chug`
+/// needle, so an emitter that omits the key cannot hide) AND the parsed
+/// record (app == Some("chug") — real since the parser's neutral-seed
+/// fix-up: a record missing the app key now parses as app None and fails
+/// here, so the strip-app-on-done mutant the round-1 validator used dies).
+#[test]
+fn every_native_record_carries_the_app_chug_label() {
+    let root = probe_fixture_root();
+    for (state, reason) in [
+        ("working", ""),
+        ("idle", "cycle ok"),
+        ("done", "goal complete"),
+        ("blocked", "error: HALTED after 3 consecutive build failures"),
+    ] {
+        let capture = probe_pty(root.path(), state, reason, &[]);
+        let needle = format!("state={state}:app=chug");
+        assert!(
+            find(&capture, needle.as_bytes()).is_some(),
+            "state={state}: the raw bytes must carry the {needle} needle on \
+             the wire (Agents-list grouping parity with the wrapper), \
+             got {capture:?}"
+        );
+        let records = parse_osc7501(&capture);
+        assert_eq!(records.len(), 1, "one record for state={state}: {capture:?}");
+        assert_eq!(
+            records[0].app.as_deref(),
+            Some("chug"),
+            "state={state}: the parsed record must carry app=chug — the \
+             parser seeds None, so this only holds when the WIRE carries \
+             the key, got {capture:?}"
+        );
+    }
+}
+
+/// (T360 — the pattern fixture) The scan's four failure patterns, exactly
+/// as specified: `observability delivery failing` and `gate red` as
+/// substrings, `error` and `panic` as WHOLE words (bounded regex — the
+/// inflections `errors`/`panicked` do not match, so a clean cycle's
+/// summary lines can never trip the block). Plus the 200-char msg bound.
+#[test]
+fn the_cycle_log_scan_matches_the_four_failure_patterns() {
+    let root = probe_fixture_root();
+    let log = root.path().join(".chug/loopd/cycle-20261110-120000.log");
+    fs::create_dir_all(log.parent().unwrap()).expect("the loopd state dir");
+    // Positive: each pattern ALONE drives the block, its line riding the
+    // msg channel verbatim.
+    let positives: [(&str, &str); 4] = [
+        (
+            "observability delivery failing (run continues): langfuse: connection refused",
+            "the delivery phrase (substring)",
+        ),
+        ("gate red: specs/t360 check failed", "the gate-red phrase (substring)"),
+        ("wrap failed with an error: gate rc=1", "error as a whole word"),
+        ("panic: the driver unwind reached the sink", "panic as a whole word"),
+    ];
+    for (line, what) in positives {
+        fs::write(
+            &log,
+            format!("[loopd 2026-11-10T12:00:00Z] T81 routing: eval cycle\n{line}\n"),
+        )
+        .expect("write the pattern log");
+        let capture = probe_pty(root.path(), "idle", "cycle ok", &[]);
+        assert_eq!(
+            parse_osc7501(&capture),
+            vec![rec("blocked", Some(line))],
+            "{what} must drive the blocked emission with the marker line as \
+             the msg:\n{capture:?}"
+        );
+    }
+    // Negative: the whole-word rule's look-alikes — a clean cycle's
+    // summaries must never trip the block (the fixture-noise guard).
+    for (line, what) in [
+        ("errors: 0 warnings: 0 — the wrap finished clean", "the plural `errors`"),
+        ("thread 'main' panicked at driver.rs:921", "the inflection `panicked`"),
+    ] {
+        fs::write(
+            &log,
+            format!("[loopd 2026-11-10T12:00:00Z] T81 routing: eval cycle\n{line}\n"),
+        )
+        .expect("write the look-alike log");
+        let capture = probe_pty(root.path(), "idle", "cycle ok", &[]);
+        assert_eq!(
+            parse_osc7501(&capture),
+            vec![rec("idle", Some("cycle ok"))],
+            "{what} is not a whole-word match — the idle transition must \
+             stay idle:\n{capture:?}"
+        );
+    }
+    // The 200-char bound: an over-cap marker line rides the msg channel
+    // bounded (head intact, tail gone) — ONE short line on the wire.
+    let long_line = format!("error: {}", "x".repeat(220));
+    fs::write(
+        &log,
+        format!("[loopd 2026-11-10T12:00:00Z] T81 routing: eval cycle\n{long_line}\n"),
+    )
+    .expect("write the over-cap log");
+    let capture = probe_pty(root.path(), "idle", "cycle ok", &[]);
+    let records = parse_osc7501(&capture);
+    assert_eq!(
+        records,
+        vec![rec("blocked", Some(&format!("error: {}", "x".repeat(193))))],
+        "the marker must ride the msg channel capped at 200 chars \
+         (`error: ` + 193 x's):\n{capture:?}"
+    );
+}
+
+/// (T360 — the blocked rewrite's HEARTBEAT surface) The idle→blocked rewrite
+/// composes BOTH surfaces from the ONE marker string: the dot's msg channel
+/// AND the heartbeat line — and the line's stale OK-transition detail MUST
+/// be dropped (the `hb=""` reset inside loopd_osc7501_emit; the T356
+/// one-source rule: the line composes from the msg). This fixture drives the
+/// 4-argument `osc` probe (`osc idle "cycle ok" "[loop] cycle done — goal
+/// complete"`) with CHUG_LOOP_VERBOSE=1 on a real pty, so the wrapper's
+/// `if [ -n "$hb" ]` heartbeat leg is actually reached — the round-1
+/// fixtures drove the 3-argument dot-only form, the detail never arrived,
+/// and the reset had no behavioral pin (the m5 mutant survived all 124
+/// gated tests). RED against the reset-dropped mutant: the stale
+/// `[loop] cycle done — goal complete` line survives the scanned block and
+/// the `BLOCKED: <marker>` line never composes. GREEN clean: exactly one
+/// line, `BLOCKED: <marker>`, the stale OK detail absent.
+#[test]
+fn the_scanned_block_drops_the_stale_ok_detail_on_the_heartbeat_line() {
+    let root = probe_fixture_root();
+    write_cycle_log(
+        root.path(),
+        "cycle-20261110-120000.log",
+        &format!(
+            "[loopd 2026-11-10T12:00:00Z] T81 routing: eval cycle\n\
+             {DELIVERY_MARKER}\n\
+             [loopd 2026-11-10T12:05:00Z] verdict: goal complete (rc=0)\n"
+        ),
+    );
+    let ok_detail = "[loop] cycle done — goal complete";
+    let capture = probe_pty_args(
+        root.path(),
+        &["idle", "cycle ok", ok_detail],
+        &[("CHUG_LOOP_VERBOSE", "1")],
+    );
+    // Surface 1 — the dot: the scan rewrote the idle transition to blocked,
+    // the marker riding the msg channel.
+    assert_eq!(
+        parse_osc7501(&capture),
+        vec![rec("blocked", Some(DELIVERY_MARKER))],
+        "the scanned block must rewrite the idle transition's dot:\n{capture:?}"
+    );
+    // Surface 2 — the line: the detail describes the OK transition the scan
+    // just overturned, so it is DROPPED — the line composes from the msg.
+    let lines = heartbeat_lines(&capture);
+    assert_eq!(
+        lines,
+        vec![format!("[loop] BLOCKED: {DELIVERY_MARKER}")],
+        "the heartbeat line must compose from the marker — the stale \
+         OK-transition detail dropped (the hb=\"\" reset):\n{capture:?}"
+    );
+    assert!(
+        !lines.iter().any(|l| l.contains("cycle done")),
+        "the stale cycle-done detail must NOT survive a scanned block: {lines:?}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -1907,10 +2257,11 @@ fn both_supervisors_source_the_shared_emitter_and_never_redefine_it() {
     );
     count_eq(
         &pilot,
-        "osc7501_emit \"${1:-working}\" \"${2:-}\"",
+        "osc7501_emit \"$state\" \"$msg\"",
         1,
-        "the pilot's name delegates dot-only to the shared emitter (the T356 \
-         heartbeat line surface stays loopd-only)",
+        "the pilot's name delegates the (scan-rewritten) transition dot-only \
+         to the shared emitter (the T356 heartbeat line surface stays \
+         loopd-only; the T360 scan rewrites state/msg before the dot)",
     );
 }
 
@@ -1972,9 +2323,15 @@ fn the_shared_emitter_carries_the_gating_contract_inline() {
     // The terminator is ST (ESC \) — never the BEL variant.
     count_eq(&body, "\\007", 0, "no octal BEL terminator in the emitter");
     count_eq(&body, "\\a", 0, "no BEL escape in the emitter");
-    // The wire is the ID-LESS root record: the sequence is assembled from
-    // the state key alone (plus the optional msg) — no id/app/progress key.
-    count_eq(&body, "seq=\"state=$state\"", 1, "the record opens on the state key");
+    // The wire is the ID-LESS root record: the sequence opens on the state
+    // key and carries the T360 constant app=chug label on EVERY record (herdr
+    // Agents-list grouping parity with the wrapper) — no id/progress key.
+    count_eq(
+        &body,
+        "seq=\"state=$state:app=chug\"",
+        1,
+        "the record opens on the state key and carries the app=chug label",
+    );
     count_eq(&body, "id=", 0, "the emitter never assembles an id key (the id-less root)");
 }
 
