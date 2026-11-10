@@ -1,15 +1,11 @@
 # Ledger
 
 ## Done
-- Routing + batch landed: Phase-1 routine-skip glm d1794315571-1 (predicate held both halves — T328 open + eval 39d217d0 same-UTC-day STATE-HIT, evals-behind 0; loopd 12:58:10Z) + queue disposition d1794315574-2 (T328 BLOCKED re-verified: chug-watch HEAD 13eca32 unchanged, row shasum e9512f49 byte-unchanged since 6dc7a428; P-rows parked, zero dispatch) + T261 batch TWO d1794315577-3/-4 (both landed-clean, first attempt, no malformed fire).
+- Cycle-3189 CLOSED (books closed, main == origin/main b7da6ca8): Phase-1 SKIPPED per T81 (glm never evaluates; predicate HELD both halves — T328 open-BLOCKED + eval 0447a292 same-UTC-day STATE-HIT evals-behind 0; loopd 12:58:10Z routine glm; routing d1794315571-1). Phase 2: T328 re-verified BLOCKED (chug-watch 13eca32, row shasum e9512f49 byte-identical since the 3180 flip 6dc7a428), P-rows parked, ZERO items [d1794315574-2].
+- Corridor: T261 batch TWO d1794315577-3/-4 (both landed-clean FIRST attempt, no malformed fire) -> prep 0447a292 (Outcomes 3189 quiet no-work + 3183 one-lined, 6-full set 3189/3188/3187/3186/3185/3184, 16 needles verified pre-write) + notes 24c0e112 (token-free — a routine-skip wrap, NOT a disposition; T257 color 34/347.291 @ 13:04:15Z; ok:false 3==3 the state-compose fires; probe 60 0 machine==TRUE 0; amended pre-push message-only — the fire-order mis-name corrected, ZERO mutation) + state T311/T312 REAL GREEN keyed to the prep (validate_state GREEN on the 4th attempt after 3 self-caught pre-write fires: KeyError 'wall' dict-key / leading-blank ring line 13v12 / double-dash re-prefix 4v12 on the carried lines; assert_state_on_disk GREEN self-probe; order-heal re-gated) + fill b7da6ca8 (datum FINAL 46/462.434 @ 13:06:03Z; ok:false 4==4 FOUR legs all self-caught; all 7 assert legs GREEN) + gates GREEN docs-only per T80 (guard 21/21 0.35s + battery 225/225 198+27, T242 bg pid 47546) + NO TAG (TRUE 1 = T357 since v0.24.0, 1 < 3, ANCESTOR-OK, describe v0.24.0-46-gb7da6ca8, FEATURES.md 0 unchecked).
 
-## Next (T207 wrap-state note — cycle-3189, written BEFORE wrap duties)
-- Merged-but-unflipped rows: NONE (zero items this cycle; TODO.md unchanged — T328 stays open BLOCKED).
-- Unharvested worktrees: NONE (zero children dispatched; no /tmp/chug-loop-* created).
-- Unpushed commits: corridor pending (prep + notes + fill to come).
-- Missing decision records: NONE — routing 2 + outcomes 2 all recorded (ids d1794315571-1/-2 + -3/-4).
-- Wrap duties: Outcomes 3189 entry + compact 3183 -> prep 0447a292 COMMITTED -> state rewrite T311/T312 REAL GREEN keyed to the prep (validate_state GREEN on the 4th attempt after 3 self-caught pre-write fires: leading-blank ring line 13v12 / _datum_figures key set / double-dash re-prefix on the 8 carried lines; assert_state_on_disk GREEN self-probe) -> notes commit (token-free) -> probe -> fill (assert legs) -> push -> release recount (expect NO TAG, TRUE 1 = T357) -> close-out -> goal_complete.
-- Gates: GREEN docs-only per T80 — guard floor todo_consistency 21/21 0.35s + battery 225/225 (198+27, 18.948s+1.257s), T242 bg window pid 47546, target-shared-main, log /tmp/wrap-gates-3189-080112.log.
+## Next
+- Cold next cycle: loopd routes per T81. Open set: T328 BLOCKED (operator A/B/C pending — chug-watch 13eca32) + P001/P003/P004 parked + P006/P007 proposed. Zero fresh rows expected otherwise.
 
 ## Blockers
 - T328 BLOCKED (operator decision pending, A/B/C menu unanswered — chug-watch HEAD 13eca32 unchanged; re-verified THIS cycle).
