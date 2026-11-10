@@ -1665,9 +1665,14 @@ fn fn_body(src: &str, name: &str) -> String {
 }
 
 /// (single-source req) The ONE dual-surface emitter: the TTY gate first, the
-/// heartbeat leg BEFORE the dot's env gate (independent knobs), the blocked
-/// composition FROM the msg (the consistency contract true by construction),
-/// and the gated `loopd_hb_emit` writer carrying the line's own contract.
+/// heartbeat leg BEFORE the dot (the dot's env gate lives in the SHARED
+/// emitter, T358 — read after the line is written, so CHUG_OSC7501=0 must
+/// never silence the line, and CHUG_LOOP_VERBOSE=0 never the dot), the
+/// blocked composition FROM the msg (the consistency contract true by
+/// construction), and the gated `loopd_hb_emit` writer carrying the line's
+/// own contract. The DOT's bytes are the shared emitter's (T358): its own
+/// TTY → env → guarded-writer contract is pinned on the shared file, the
+/// ONE function body both supervisors emit from.
 #[test]
 fn the_emitter_composes_both_surfaces_from_one_call() {
     let loopd = read("loopd.sh");
@@ -1676,15 +1681,15 @@ fn the_emitter_composes_both_surfaces_from_one_call() {
     // The TTY gate is the FIRST leg — both surfaces are TTY-only, and the
     // gate must be able to silence everything before either env is read.
     let at_tty = need(&body, "[ -t 1 ] || return 0", "the TTY gate is the first leg");
-    // The heartbeat leg sits BEFORE the dot's env gate: CHUG_OSC7501=0 must
-    // never silence the line, and CHUG_LOOP_VERBOSE=0 never the dot.
+    // The heartbeat leg sits BEFORE the dot: CHUG_OSC7501=0 must never
+    // silence the line, and CHUG_LOOP_VERBOSE=0 never the dot (the dot's env
+    // gate is inside the shared emitter, called below the line's legs).
     let at_hb = need(&body, "loopd_hb_emit", "the heartbeat leg");
-    let at_env = need(&body, "case \"${CHUG_OSC7501-}\" in", "the dot's env gate");
-    let at_write = need(&body, "printf '\\033]7501;%s\\033\\\\'", "the wire writer");
+    let at_dot = need(&body, "osc7501_emit \"$state\" \"$msg\"", "the shared emitter call");
     assert!(
-        at_tty < at_hb && at_hb < at_env && at_env < at_write,
-        "the order is TTY → line → dot-env → dot-wire; anything else lets one \
-         channel's knob silence the other"
+        at_tty < at_hb && at_hb < at_dot,
+        "the order is TTY → line → dot; anything else lets one channel's knob \
+         silence the other"
     );
     // The blocked composition reads the MSG — the reason text is byte-
     // identical on both surfaces BY CONSTRUCTION (the consistency fixtures'
@@ -1695,8 +1700,36 @@ fn the_emitter_composes_both_surfaces_from_one_call() {
     // shows it there ONLY — never an emitter-added prefix).
     need(&body, "loopd_hb_emit \"$hb\"", "the human line is the detail verbatim");
 
-    // The writer: the TTY gate, the env case, the guarded printf — the same
-    // contract shape as the dot's, with ITS OWN env knob.
+    // The DOT's own contract lives in the SHARED emitter (T358): TTY gate,
+    // env case, guarded printf — the ONE wire both supervisors emit.
+    let shared = read("scripts/osc7501.sh");
+    let dot = fn_body(&shared, "osc7501_emit");
+    let at_dot_tty = need(&dot, "[ -t 1 ] || return 0", "the dot's TTY gate is the first leg");
+    let at_dot_env = need(&dot, "case \"${CHUG_OSC7501-}\" in", "the dot's env gate");
+    let at_dot_write = need(&dot, "printf '\\033]7501;%s\\033\\\\'", "the wire writer");
+    assert!(
+        at_dot_tty < at_dot_env && at_dot_env < at_dot_write,
+        "gate order: TTY → env → write"
+    );
+    count_eq(&dot, "''|1) ;;", 1, "the emit arm accepts unset/empty and exactly 1");
+    count_eq(&dot, "*) return 0 ;;", 1, "every other value kills (default-safe)");
+    assert!(
+        dot.trim_end().ends_with("return 0"),
+        "the writer must end in an unconditional return 0 (it is called as a \
+         bare statement under set -euo pipefail in the run loop)"
+    );
+    // THE COMPAT CONTRACT, statically: the writer emits ONLY to stdout —
+    // never to a file, never through a redirect. Log parsers must never see
+    // a heartbeat line because the writer is physically incapable of writing
+    // one into a log.
+    assert!(
+        !dot.contains(">>") && !dot.contains("$LOG"),
+        "the writer body must not redirect anywhere — stdout is the only \
+         channel and the gate owns the silence"
+    );
+
+    // The heartbeat writer: its own TTY gate, env case, guarded printf —
+    // with ITS OWN env knob.
     let hb = fn_body(&loopd, "loopd_hb_emit");
     let at_hb_tty = need(&hb, "[ -t 1 ] || return 0", "the line's TTY gate is the first leg");
     let at_hb_env = need(&hb, "case \"${CHUG_LOOP_VERBOSE-}\" in", "the line's env gate");

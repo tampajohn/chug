@@ -20,6 +20,16 @@
 # env wins everywhere, and an absent file is a silent no-op. The file
 # CONTENTS are never logged (the T205 hygiene gate) — only paths and
 # skipped-line counts.
+#
+# T358 — OSC 7501 program-status emission: the SAME shared emitter
+# (scripts/osc7501.sh) chug's own loopd.sh sources is written beside this
+# script and sourced here, so a bare `chug loop run` reports working/idle/
+# blocked to its terminal harness (herdr, orca, a fleet dialog) exactly as
+# chug's own supervisor does — ONE function body produces the bytes in both
+# supervisors (the parity fixture pins it byte-identical). Dot-only: the
+# T356 heartbeat line surface stays chug-repo-only. Gating is the T354
+# compat contract, enforced inside the shared emitter: TTY-only,
+# CHUG_OSC7501-killable, zero bytes when redirected.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -43,6 +53,13 @@ PROFILE_ENV_FILE="${CHUG_PROFILE_ENV:-$HOME/.chug/profile.env}"
 . "$(dirname "$0")/scripts/loopd_profile_loader.sh"
 loopd_load_profile
 
+# T358 — the SHARED OSC 7501 emitter, written beside this script by
+# `chug loop run` (write_supervisor_assets) from the LIVE checkout file —
+# no copy to drift: the SAME function body chug's own loopd.sh sources
+# produces the 7501 bytes in both supervisors. Resolved relative to THIS
+# script's own path, never the cwd.
+. "$(dirname "$0")/scripts/osc7501.sh"
+
 # The cycle's model. The profile (loaded above) lands CHUG_MODEL_CODING on
 # LOOP_ROUTINE_MODEL — the pilot loop's workhorse lane (queue work is
 # coding work) — and CHUG_MODEL_REASONING on LOOP_ORCH_MODEL. Precedence:
@@ -51,19 +68,6 @@ loopd_load_profile
 # bare shorthand. ROLLBACK: one env var pins the model —
 #   LOOP_ROUTINE_MODEL=<full id> ./run
 CHUG_LOOP_MODEL="${LOOP_ROUTINE_MODEL:-${LOOP_ORCH_MODEL:-anthropic-system.ai.kimi-k3}}"
-
-# The chug binary the cycles launch: `chug loop run` exports
-# CHUG_LOOP_BIN=<its own executable> at exec time (the installed binary —
-# no clone of chug is ever built or required); a bare `chug` on PATH is
-# the fallback when the supervisor is started by hand.
-CHUG_BIN="${CHUG_LOOP_BIN:-}"
-if [ -z "$CHUG_BIN" ]; then
-  CHUG_BIN="$(command -v chug || true)"
-fi
-if [ -z "$CHUG_BIN" ]; then
-  echo "chug binary not found (set CHUG_LOOP_BIN or put chug on PATH)" >&2
-  exit 1
-fi
 
 # Cycle budgets (the `chug run` defaults; env-overridable) and pacing.
 MAX_ITERS="${LOOPD_MAX_ITERS:-40}"
@@ -99,6 +103,70 @@ open_rows() {
   } END { print n + 0 }' TODO.md
 }
 
+# T358 — the pilot's ONE emission name: the shared emitter, DOT-ONLY (the
+# T356 heartbeat line surface stays chug's own loopd-only — the shared file
+# carries the 7501 bytes ONLY, so the pilot sourcing it can never emit a
+# line). One name at every call site keeps the state map below symmetric
+# with chug's own loopd.sh; the TTY + CHUG_OSC7501 gates live inside the
+# shared emitter (the T354 compat contract, one enforcement point).
+loopd_osc7501_emit() { # <state> [one-line reason] — TTY-gated, env-killable
+  osc7501_emit "${1:-working}" "${2:-}"
+}
+
+# T358 — the blocked msg's failure line, derived from the CYCLE LOG. THE
+# FIELD FINDING (Fleet Primary transition suite, 2026-11-10): failure
+# markers — the driver's `chug: abort:` death line, the `chug: panicked:`
+# unwind line — land in the PER-CYCLE log (the launch's 2>> redirect),
+# NEVER in loopd.log; a derivation that reads only the supervisor stream
+# silently never fires. The LAST marker in a log wins (the sink writes it
+# at death, after every model line a run produced — a model-echoed
+# look-alike can never outlive it); capped at 120 chars (a provider error
+# string can be long; the msg channel stays one line). rc 1 when the log
+# carries no marker — the caller latches (T142) and degrades to the canned
+# rc line, so the blocked emission itself is never silenced.
+pilot_log_fail_line() { # <log> — the LAST failure line's reason text
+  [ -f "$1" ] || return 1
+  awk '{
+    if ((i = index($0, "chug: abort: ")) > 0) r = substr($0, i + 13, 120)
+    else if ((i = index($0, "chug: panicked: ")) > 0) r = substr($0, i + 16, 120)
+  }
+  END { if (r != "") { print r; exit 0 } exit 1 }' "$1"
+}
+
+pilot_cycle_fail_reason() { # [<the death's cycle log>] — the blocked msg's
+  # reason text. The death's OWN log first (precise provenance — the marker
+  # is the reason this cycle died); then, when it wrote no marker (the
+  # SIGKILL shape: a death with no dying words), the newest OTHER cycle log
+  # that carries one — the loop's last RECORDED failure reason, suffixed
+  # with its source log so the operator opens the right file. The walk is
+  # bounded (the 5 newest logs) and rc-latched end to end; rc 1 when NO
+  # cycle log carries a marker.
+  local primary=${1:-} candidates log reason
+  if [ -n "$primary" ] && [ -f "$primary" ]; then
+    reason=$(pilot_log_fail_line "$primary") || reason=""
+    if [ -n "$reason" ]; then
+      printf '%s\n' "$reason"
+      return 0
+    fi
+  fi
+  # The rc-masked capture (the T137 status-arm pattern): head has already
+  # read its 5 lines before any writer can die, and a no-glob/ls failure
+  # yields an empty walk — the canned line takes over either way.
+  candidates=$(ls -t "$STATE"/cycle-*.log 2>/dev/null | head -5 || true)
+  while IFS= read -r log; do
+    [ -n "$log" ] || continue
+    if [ "$log" = "$primary" ]; then continue; fi
+    reason=$(pilot_log_fail_line "$log") || reason=""
+    if [ -n "$reason" ]; then
+      printf '%s [%s]\n' "$reason" "${log##*/}"
+      return 0
+    fi
+  done <<EOF
+$candidates
+EOF
+  return 1
+}
+
 case "${1:-run}" in
   stop)
     touch "$STOP"
@@ -118,9 +186,34 @@ case "${1:-run}" in
     tail -5 "$LOG" 2>/dev/null || true
     exit 0
     ;;
+  osc)
+    # T358: emit ONE status through the real gated emitter — the T354
+    # probe pattern (loopd.sh osc): the operator's and the tests'
+    # behavioral surface for the OSC 7501 legs. stdout IS the channel,
+    # the gate decides (piped stdout stays byte-silent), nothing
+    # launches, nothing is logged.
+    #   <this script> osc <state> [one-line reason]
+    loopd_osc7501_emit "${2:-working}" "${3:-}"
+    exit 0
+    ;;
   run) ;;
-  *) echo "usage: loopd.sh [run|stop|status]" >&2; exit 2 ;;
+  *) echo "usage: loopd.sh [run|stop|status] [osc]" >&2; exit 2 ;;
 esac
+
+# The chug binary the cycles launch (the RUN path only — T358: the
+# stop/status/osc arms must work on a host without the binary; inspecting
+# or probing a supervisor never needed it): `chug loop run` exports
+# CHUG_LOOP_BIN=<its own executable> at exec time (the installed binary —
+# no clone of chug is ever built or required); a bare `chug` on PATH is
+# the fallback when the supervisor is started by hand.
+CHUG_BIN="${CHUG_LOOP_BIN:-}"
+if [ -z "$CHUG_BIN" ]; then
+  CHUG_BIN="$(command -v chug || true)"
+fi
+if [ -z "$CHUG_BIN" ]; then
+  echo "chug binary not found (set CHUG_LOOP_BIN or put chug on PATH)" >&2
+  exit 1
+fi
 
 # Single instance (the loopd.sh T50 shape): refuse a LIVE foreign
 # supervisor; a stale (dead) pid keeps the fall-through.
@@ -159,12 +252,18 @@ while [ ! -f "$STOP" ]; do
   rows=$(open_rows)
   if [ "$rows" -eq 0 ]; then
     echo "$(ts) queue empty (0 open rows) — dormant, re-probing in ${SLEEP_EMPTY}s" >> "$LOG"
+    # T358 — dormant = the loop at rest: idle naming the dormancy, never
+    # working (the same msg chug's own loopd.sh emits for its dormant skip).
+    loopd_osc7501_emit idle "dormant: queue empty"
     sleep "$SLEEP_EMPTY"
     continue
   fi
   cycle_log="$STATE/cycle-$(date -u +%Y%m%d-%H%M%S).log"
   echo "$(ts) cycle start -> $cycle_log ($rows open row(s), orchestrator $CHUG_LOOP_MODEL)" >> "$LOG"
   echo "[loopd $(ts)] $rows open row(s), orchestrator $CHUG_LOOP_MODEL" > "$cycle_log"
+  # T358 — item start: the cycle launch is the supervisor's one "working"
+  # span (the orchestrator owns per-item turns inside it).
+  loopd_osc7501_emit working "cycle start: $rows open row(s) on $CHUG_LOOP_MODEL"
   # T142: the verdict is the child's EXIT STATUS, never a log grep. The
   # stdout capture is kept apart from the mixed stderr log and appended
   # back, the rc latched (the T142 house style) — a model-forged
@@ -186,13 +285,34 @@ while [ ! -f "$STOP" ]; do
   if [ "$chug_rc" -eq 0 ]; then
     fails=0
     echo "$(ts) cycle OK" >> "$LOG"
+    # T358 — cycle OK = goal complete: the loop is at rest between cycles.
+    loopd_osc7501_emit idle "cycle ok"
     sleep "$SLEEP_OK"
   else
     fails=$((fails + 1))
     echo "$(ts) cycle ended WITHOUT goal complete (consecutive failures: $fails)" >> "$LOG"
+    # T358 — a cycle death is a blocked state: the msg channel carries the
+    # ONE-line reason headed by its T340 blocked-reason word — rc 1 is the
+    # budget/abort exit (driver.rs, the T142 verdict mapping), everything
+    # else reads error. The REASON is derived from the CYCLE LOG (the field
+    # finding — failure markers never reach the supervisor stream), the
+    # canned rc line kept only as the guaranteed no-marker fallback. ONE
+    # composition into $fail_msg, one two-arg emission.
+    case "$chug_rc" in
+      1) osc_word=budget ;;
+      *) osc_word=error ;;
+    esac
+    fail_reason=$(pilot_cycle_fail_reason "$cycle_log") || fail_reason=""
+    fail_msg="$osc_word: cycle ended without goal complete (rc=$chug_rc)"
+    if [ -n "$fail_reason" ]; then
+      fail_msg="$osc_word: $fail_reason"
+    fi
+    loopd_osc7501_emit blocked "$fail_msg"
     if [ "$fails" -ge 3 ]; then
       echo "3 consecutive cycles without goal_complete — last: $cycle_log" > "$STATE/HALTED"
       echo "$(ts) HALTED after 3 consecutive failures" >> "$LOG"
+      # T358 — the supervisor is stopping wedged: the last word is blocked.
+      loopd_osc7501_emit blocked "error: HALTED after 3 consecutive cycles without goal complete"
       exit 1
     fi
     sleep "$SLEEP_FAIL"

@@ -89,6 +89,14 @@ loopd_load_profile
 # path, never the cwd.
 . "$(dirname "$0")/scripts/loopd_auto_update.sh"
 
+# T358 — the SHARED OSC 7501 emitter (scripts/osc7501.sh): ONE function body
+# produces the 7501 bytes in BOTH supervisors — the composition wrapper
+# below calls it, and the generated pilot supervisor (`chug loop run`, the
+# script every fleet/herdr spawn actually runs) sources the same file
+# materialized beside it. Resolved relative to THIS script's own path,
+# never the cwd.
+. "$(dirname "$0")/scripts/osc7501.sh"
+
 # T81 — per-phase model routing (operator-approved 2026-09-26). The
 # ORCHESTRATOR's model is per-cycle and the switch is the freshness rule —
 # never model judgment: when the queue holds `todo` rows AND EVALUATION.md
@@ -1091,49 +1099,40 @@ LAYA_TRIAGE_QUIET=""
 #   * Best-effort end to end, and it can never trip set -e/pipefail: every
 #     leg is rc-guarded (the T142 house style), a closed stdout (EPIPE)
 #     degrades to silence.
-# Wire (one sequence): ESC ] 7501 ; state=<s>[:msg=<base64>] ESC \
-#   msg is ONE human-readable line, base64'd (the tr strips GNU wrapping);
-#   the decoded msg stays <=2048 bytes and the whole sequence <=4096 (the
-#   protocol's limits — loopd's one-line reasons sit far under both).
-#   base64 absent -> the msg channel degrades away, the state rides alone.
 # Probe surface: `./loopd.sh osc <state> [one-line reason]` (the
 # routing/sleep-ok/predicate pattern) — the operator's and the tests'
 # behavioral leg, driven through THIS function so the fixtures exercise the
 # real gate, never a reimplementation.
 # T356 — the function is the ONE composition point for BOTH surfaces of a
-# transition: the 7501 dot (msg channel, below) and the human heartbeat line
+# transition: the 7501 dot (msg channel) and the human heartbeat line
 # (loopd_hb_emit, CHUG_LOOP_VERBOSE-gated). One call, one state, one reason —
 # the dot and the line can never disagree. An optional 3rd argument carries
 # the line's extra detail (cycle number, routing, item, pacing seconds); a
 # blocked transition with no detail composes its line FROM the msg, so the
 # reason text is byte-identical on both surfaces by construction.
+# T358 — the DOT's bytes are no longer written here: the wire (the TTY+env
+# gates and the printf) moved into the shared scripts/osc7501.sh (sourced
+# above), the ONE function body both supervisors emit from — the generated
+# pilot supervisor calls it dot-only, so its parity is parity by
+# construction. This function stays the T356 COMPOSITION wrapper: the same
+# call carries the heartbeat legs AND the shared emitter's dot.
 loopd_osc7501_emit() { # <state> [one-line reason] [hb-detail] — TTY-gated, env-killable
-  local state="${1:-working}" msg="${2:-}" hb="${3:-}" b64 seq rc=0
+  local state="${1:-working}" msg="${2:-}" hb="${3:-}"
   [ -t 1 ] || return 0 # (a) a TTY stdout or nothing — the whole contract
   # T356 — the human leg of the same transition, BEFORE the dot's env gate:
   # the line's knob (CHUG_LOOP_VERBOSE) is the line's own; the dot's knob
-  # below never silences it and vice versa. The detail is the line VERBATIM
-  # (the T356 fix-up's F2 shapes: the `[loop HH:MM:SS]` clock is the
-  # cycle-start line's own composition — the spec shows it there ONLY; every
-  # other line is a bare `[loop] …`).
+  # (in the shared emitter, called below) never silences it and vice versa.
+  # The detail is the line VERBATIM (the T356 fix-up's F2 shapes: the
+  # `[loop HH:MM:SS]` clock is the cycle-start line's own composition — the
+  # spec shows it there ONLY; every other line is a bare `[loop] …`).
   if [ -n "$hb" ]; then
     loopd_hb_emit "$hb"
   elif [ "$state" = blocked ]; then
     loopd_hb_emit "[loop] BLOCKED: $msg" # the msg IS the line's reason — one source
   fi
-  case "${CHUG_OSC7501-}" in # (b) unset (or empty) and exactly 1 emit
-    ''|1) ;;
-    *) return 0 ;;
-  esac
-  msg=${msg//$'\n'/ } # msg is ONE human-readable line, never a multiline
-  seq="state=$state"
-  if [ -n "$msg" ]; then
-    b64=$(printf '%s' "$msg" | base64 | tr -d '\n') || rc=$? # rc latched (T142)
-    if [ "$rc" -eq 0 ] && [ -n "$b64" ]; then
-      seq="$seq:msg=$b64"
-    fi
-  fi
-  printf '\033]7501;%s\033\\' "$seq" || true # a closed stdout is silence, never a set -e death
+  # T358 — the dot: the shared emitter owns the env gate (CHUG_OSC7501) and
+  # the wire writer, so both supervisors emit byte-identical sequences.
+  osc7501_emit "$state" "$msg"
   return 0
 }
 
