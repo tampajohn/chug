@@ -136,7 +136,7 @@ fn b64_decode(s: &str) -> Option<Vec<u8>> {
 
 /// One parsed OSC 7501 record (the id-less root record in loopd's emission —
 /// `id` stays `None`; the field is modeled so the parser stays spec-faithful).
-#[derive(Debug, PartialEq, Eq, Clone)]
+#[derive(Debug, PartialEq, Eq, Clone, Default)]
 struct Record7501 {
     state: String,
     id: Option<String>,
@@ -147,6 +147,16 @@ struct Record7501 {
     msg: Option<String>,
 }
 
+/// The EXPECTATION-side record constructor — the claim under test, never the
+/// parser's seed. Every field's value here is an assertion about the WIRE:
+/// `app: Some("chug")` asserts the emitted sequence carries the T360 app
+/// label, `id: None` asserts it stays the id-less root. (The round-1
+/// validator's vacuous-pin class: parse_osc7501() used to seed through THIS
+/// constructor, so a wire record MISSING the app key parsed AS IF app=chug
+/// had arrived — every app assertion was blind to omission, and the
+/// app-stripped-on-done mutant m6 survived all 124 gated tests. The parser
+/// now seeds neutral `Record7501::default()`; only the wire can fill the
+/// fields, so a `rec(...)` expectation is a real test again.)
 fn rec(state: &str, msg: Option<&str>) -> Record7501 {
     Record7501 {
         state: state.to_string(),
@@ -190,6 +200,14 @@ fn find_terminator(bytes: &[u8], from: usize, cap: usize) -> Option<(&[u8], usiz
 /// is skipped; unknown keys are ignored; `msg` is base64(UTF-8); the whole
 /// sequence must terminate (BEL or ST) within 4096 bytes or it is dropped.
 /// Returns the records in stream order.
+///
+/// The seed is the NEUTRAL `Record7501::default()` — every field starts
+/// `None`/empty and ONLY the wire's own key=value pairs fill them (the
+/// vacuous-pin fix-up: seeding through `rec()` used to fabricate
+/// `app=Some("chug")` for a record whose bytes carried no app key at all,
+/// blinding every app assertion to omission — the app-stripped-on-done
+/// mutant m6 survived all 124 gated tests). An expected value is asserted
+/// with `rec()`, never granted by the parser.
 fn parse_osc7501(bytes: &[u8]) -> Vec<Record7501> {
     const INTRO: &[u8] = b"\x1b]7501;";
     const MAX: usize = 4096;
@@ -212,7 +230,10 @@ fn parse_osc7501(bytes: &[u8]) -> Vec<Record7501> {
             let value = String::from_utf8_lossy(&pair[eq + 1..]).to_string();
             if key == "state" {
                 if STATES.contains(&value.as_str()) {
-                    current = Some(rec(&value, None));
+                    // The NEUTRAL seed: nothing on the wire is taken on faith
+                    // — every field stays None until a key=value pair fills
+                    // it (the rec() fabrication fix-up).
+                    current = Some(Record7501 { state: value, ..Default::default() });
                 } else {
                     current = None; // an invalid state DROPS the entire sequence
                     break;
@@ -243,6 +264,33 @@ fn esc_count(bytes: &[u8]) -> usize {
 
 fn contains_osc(bytes: &[u8]) -> bool {
     find(bytes, b"\x1b]7501;").is_some()
+}
+
+/// The heartbeat lines in a captured pty stream, in order (the
+/// tests/loopd_heartbeat.rs helper, mirrored): the 7501 sequences carry NO
+/// newline (the wire rule), so they can sit mid-line in the raw capture —
+/// strip every sequence FIRST, then split; a tty's ONLCR turns each appended
+/// `\n` into `\r\n`, so the trailing `\r` goes too. The result is exactly
+/// what a terminal's scrollback shows as `[loop …]` lines.
+fn heartbeat_lines(capture: &[u8]) -> Vec<String> {
+    let mut scrubbed = Vec::with_capacity(capture.len());
+    let mut i = 0usize;
+    while i < capture.len() {
+        if capture[i] == ESC
+            && find(&capture[i..], b"\x1b]7501;") == Some(0)
+            && find_terminator(capture, i + 7, 4096).is_some()
+        {
+            i = find_terminator(capture, i + 7, 4096).map(|(_, next)| next).expect("checked above");
+            continue;
+        }
+        scrubbed.push(capture[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&scrubbed)
+        .split('\n')
+        .map(|l| l.trim_end_matches('\r').to_string())
+        .filter(|l| l.starts_with("[loop"))
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -546,15 +594,29 @@ fn probe_piped(root: &Path, state: &str, reason: &str, envs: &[(&str, &str)]) ->
 }
 
 /// Run `loopd.sh osc <state> <reason>` with stdout on a REAL pty and return
-/// the captured byte stream.
+/// the captured byte stream. Delegates to the full-argument probe.
 fn probe_pty(root: &Path, state: &str, reason: &str, envs: &[(&str, &str)]) -> Vec<u8> {
+    probe_pty_args(root, &[state, reason], envs)
+}
+
+/// Run `loopd.sh osc <args…>` with stdout on a REAL pty and return the
+/// captured byte stream — the FULL-argument form. The heartbeat-surface
+/// fixtures need the 4-argument shape (`osc <state> <reason> <hb-detail>`):
+/// the 3-argument dot-only form reaches the composition wrapper with an
+/// empty detail, so the wrapper's `if [ -n "$hb" ]` heartbeat leg is dead
+/// code under it and a fixture driving it can only ever pin the dot (the
+/// round-1 vacuous-pin class — the m5 `hb=""` reset had no behavioral pin).
+/// Both knobs are removed from the ambient env (the heartbeat file's probe
+/// doctrine): the line's CHUG_LOOP_VERBOSE and the dot's CHUG_OSC7501 are
+/// each set explicitly by the fixtures that need them.
+fn probe_pty_args(root: &Path, args: &[&str], envs: &[(&str, &str)]) -> Vec<u8> {
     let mut cmd = Command::new("bash");
     cmd.arg(root.join("loopd.sh"))
         .arg("osc")
-        .arg(state)
-        .arg(reason)
+        .args(args)
         .current_dir(root)
         .env_remove("CHUG_OSC7501")
+        .env_remove("CHUG_LOOP_VERBOSE")
         .stdin(Stdio::null())
         .stderr(Stdio::null());
     common::pin_loopd_env_files(&mut cmd, root);
@@ -840,6 +902,11 @@ fn the_cycle_log_blocked_leg_is_byte_identical_through_both_supervisors() {
 /// (T360 — the app= fixture) The native bytes carry `app=chug` on EVERY
 /// state (herdr Agents-list grouping parity with the wrapper's bytes —
 /// the operator finding: herdr showed `app: None` for the native dot).
+/// BOTH surfaces of the assertion: the RAW wire (the `state=<s>:app=chug`
+/// needle, so an emitter that omits the key cannot hide) AND the parsed
+/// record (app == Some("chug") — real since the parser's neutral-seed
+/// fix-up: a record missing the app key now parses as app None and fails
+/// here, so the strip-app-on-done mutant the round-1 validator used dies).
 #[test]
 fn every_native_record_carries_the_app_chug_label() {
     let root = probe_fixture_root();
@@ -850,13 +917,21 @@ fn every_native_record_carries_the_app_chug_label() {
         ("blocked", "error: HALTED after 3 consecutive build failures"),
     ] {
         let capture = probe_pty(root.path(), state, reason, &[]);
+        let needle = format!("state={state}:app=chug");
+        assert!(
+            find(&capture, needle.as_bytes()).is_some(),
+            "state={state}: the raw bytes must carry the {needle} needle on \
+             the wire (Agents-list grouping parity with the wrapper), \
+             got {capture:?}"
+        );
         let records = parse_osc7501(&capture);
         assert_eq!(records.len(), 1, "one record for state={state}: {capture:?}");
         assert_eq!(
             records[0].app.as_deref(),
             Some("chug"),
-            "state={state}: the native emission must carry app=chug on the \
-             wire (Agents-list grouping parity with the wrapper), got {capture:?}"
+            "state={state}: the parsed record must carry app=chug — the \
+             parser seeds None, so this only holds when the WIRE carries \
+             the key, got {capture:?}"
         );
     }
 }
@@ -930,6 +1005,60 @@ fn the_cycle_log_scan_matches_the_four_failure_patterns() {
         vec![rec("blocked", Some(&format!("error: {}", "x".repeat(193))))],
         "the marker must ride the msg channel capped at 200 chars \
          (`error: ` + 193 x's):\n{capture:?}"
+    );
+}
+
+/// (T360 — the blocked rewrite's HEARTBEAT surface) The idle→blocked rewrite
+/// composes BOTH surfaces from the ONE marker string: the dot's msg channel
+/// AND the heartbeat line — and the line's stale OK-transition detail MUST
+/// be dropped (the `hb=""` reset inside loopd_osc7501_emit; the T356
+/// one-source rule: the line composes from the msg). This fixture drives the
+/// 4-argument `osc` probe (`osc idle "cycle ok" "[loop] cycle done — goal
+/// complete"`) with CHUG_LOOP_VERBOSE=1 on a real pty, so the wrapper's
+/// `if [ -n "$hb" ]` heartbeat leg is actually reached — the round-1
+/// fixtures drove the 3-argument dot-only form, the detail never arrived,
+/// and the reset had no behavioral pin (the m5 mutant survived all 124
+/// gated tests). RED against the reset-dropped mutant: the stale
+/// `[loop] cycle done — goal complete` line survives the scanned block and
+/// the `BLOCKED: <marker>` line never composes. GREEN clean: exactly one
+/// line, `BLOCKED: <marker>`, the stale OK detail absent.
+#[test]
+fn the_scanned_block_drops_the_stale_ok_detail_on_the_heartbeat_line() {
+    let root = probe_fixture_root();
+    write_cycle_log(
+        root.path(),
+        "cycle-20261110-120000.log",
+        &format!(
+            "[loopd 2026-11-10T12:00:00Z] T81 routing: eval cycle\n\
+             {DELIVERY_MARKER}\n\
+             [loopd 2026-11-10T12:05:00Z] verdict: goal complete (rc=0)\n"
+        ),
+    );
+    let ok_detail = "[loop] cycle done — goal complete";
+    let capture = probe_pty_args(
+        root.path(),
+        &["idle", "cycle ok", ok_detail],
+        &[("CHUG_LOOP_VERBOSE", "1")],
+    );
+    // Surface 1 — the dot: the scan rewrote the idle transition to blocked,
+    // the marker riding the msg channel.
+    assert_eq!(
+        parse_osc7501(&capture),
+        vec![rec("blocked", Some(DELIVERY_MARKER))],
+        "the scanned block must rewrite the idle transition's dot:\n{capture:?}"
+    );
+    // Surface 2 — the line: the detail describes the OK transition the scan
+    // just overturned, so it is DROPPED — the line composes from the msg.
+    let lines = heartbeat_lines(&capture);
+    assert_eq!(
+        lines,
+        vec![format!("[loop] BLOCKED: {DELIVERY_MARKER}")],
+        "the heartbeat line must compose from the marker — the stale \
+         OK-transition detail dropped (the hb=\"\" reset):\n{capture:?}"
+    );
+    assert!(
+        !lines.iter().any(|l| l.contains("cycle done")),
+        "the stale cycle-done detail must NOT survive a scanned block: {lines:?}"
     );
 }
 
