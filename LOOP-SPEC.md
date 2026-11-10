@@ -1387,7 +1387,17 @@ and the line can never disagree):
   per observed merge commit, the queue's serial delivery), the dormant line
   (`[loop] queue empty — dormant, next probe 300s`), and
   `BLOCKED: <reason>` lines whose reason text matches the 7501 msg channel
-  text exactly, by construction. `CHUG_LOOP_VERBOSE` unset-or-1 emits, any
+  text exactly, by construction. The blocked REASON is derived from the
+  per-cycle log, never invented from the rc (the 2026-11-10 field finding:
+  failure markers land in the cycle log, not the supervisor stream): the
+  driver's abort line (`chug: abort: <reason>`) reaches only a cycle log
+  (the launch leg's stderr redirect), so the death site derives the reason
+  from the death's own log first and, when a silent death wrote no marker,
+  from the newest cycle log that carries one (its source log named in
+  brackets) — the canned rc line stays as the guaranteed no-marker fallback,
+  and one composition feeds both surfaces.
+
+  `CHUG_LOOP_VERBOSE` unset-or-1 emits, any
   other value silences even on a TTY; the knobs are independent. The
   watcher's first poll must never read the PREVIOUS cycle's events log:
   `loopd_hb_prerotate` rotates a predecessor `.chug/events.jsonl` aside

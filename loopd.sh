@@ -1193,6 +1193,65 @@ loopd_hb_prerotate() { # rotate a predecessor events log aside, best-effort
   return 0
 }
 
+# T356 fix-up round 3 (operator field finding, 2026-11-10 — the Fleet
+# Primary transition suite's finding, carried in the spec): FAILURE MARKERS
+# LAND IN THE PER-CYCLE LOG, NOT THE SUPERVISOR STREAM. The driver's abort
+# line (`chug: abort: <reason>` — src/events.rs ConsoleSink on Event::Aborted;
+# reason strings from src/driver.rs: iteration/time/token budget exceeded,
+# operator abort, stuck: repeated error) reaches a cycle log through the
+# launch leg's stderr redirect (2>> "$cycle_log"), while loopd.log records
+# only the bare rc and the supervisor's canned text invents a reason from it.
+# The blocked msg is therefore DERIVED from the cycle log, not canned alone —
+# ONE composition still feeds both surfaces (the 7501 msg and the heartbeat
+# BLOCKED line, the emitter's blocked leg).
+loopd_log_abort_reason() { # <log> — the LAST `chug: abort: <reason>` reason
+  # The sink writes the abort line at DEATH, after every model line a run
+  # produced (raw stderr deltas included — the F7 raw-bytes doctrine), so the
+  # last occurrence in a cycle log is the real exit marker, and an in-stream
+  # model-echoed look-alike can never outlive it. Capped at 120 chars (a
+  # provider error string can be long; the msg channel and the heartbeat
+  # line both stay one line). rc 1 when the log carries no marker — the
+  # caller latches (T142) and degrades.
+  [ -f "$1" ] || return 1
+  awk 'i = index($0, "chug: abort: ") { r = substr($0, i + 13, 120) }
+       END { if (r != "") { print r; exit 0 } exit 1 }' "$1"
+}
+
+loopd_cycle_fail_reason() { # [<the death's cycle log>] — the blocked msg's
+  # reason text. The death's OWN log first (precise provenance — the marker
+  # is the reason this cycle died; no suffix); then, when it wrote no marker
+  # (the SIGKILL/panic shape: a death with no dying words), the newest OTHER
+  # cycle log that carries one — the loop's last RECORDED failure reason,
+  # suffixed with its source log so the operator opens the right file. The
+  # walk is bounded (the 5 newest logs) and rc-latched end to end; rc 1 when
+  # NO cycle log carries a marker — the caller keeps the canned rc line, so
+  # the blocked emission itself is never silenced.
+  local primary=${1:-} candidates log reason
+  if [ -n "$primary" ] && [ -f "$primary" ]; then
+    reason=$(loopd_log_abort_reason "$primary") || reason=""
+    if [ -n "$reason" ]; then
+      printf '%s\n' "$reason"
+      return 0
+    fi
+  fi
+  # The rc-masked capture (the T137 status-arm pattern): head has already
+  # read its 5 lines before any writer can die, and a no-glob/ls failure
+  # yields an empty walk — the canned line takes over either way.
+  candidates=$(ls -t "$STATE"/cycle-*.log 2>/dev/null | head -5 || true)
+  while IFS= read -r log; do
+    [ -n "$log" ] || continue
+    if [ "$log" = "$primary" ]; then continue; fi
+    reason=$(loopd_log_abort_reason "$log") || reason=""
+    if [ -n "$reason" ]; then
+      printf '%s [%s]\n' "$reason" "${log##*/}"
+      return 0
+    fi
+  done <<EOF
+$candidates
+EOF
+  return 1
+}
+
 # T356 — the cycle watcher: while the orchestrator runs, emit ONE milestone
 # line every LOOPD_HB_EVERY iterations (default 25 — against the launch's
 # 200-iteration budget that bounds a cycle at 8 milestone lines; the volume
@@ -2122,11 +2181,22 @@ ideation_cycle() { # the ONE launch the ideation timer schedules: while
     # ONE-line reason headed by its T340 blocked-reason word — rc 1 is the
     # budget/abort exit (driver.rs, the T142 verdict mapping), everything
     # else reads error.
+    # T356 fix-up round 3 (the field finding): the REASON is not the
+    # supervisor's to invent — it is DERIVED from the cycle log (the driver's
+    # `chug: abort: <reason>` marker; see loopd_cycle_fail_reason above), the
+    # canned rc line kept only as the guaranteed no-marker fallback. ONE
+    # composition into $fail_msg, one two-arg emission — the 7501 msg and the
+    # heartbeat BLOCKED line carry the same derived string.
     case "$chug_rc" in
       1) osc_word=budget ;;
       *) osc_word=error ;;
     esac
-    loopd_osc7501_emit blocked "$osc_word: cycle ended without goal complete (rc=$chug_rc)"
+    fail_reason=$(loopd_cycle_fail_reason "$cycle_log") || fail_reason=""
+    fail_msg="$osc_word: cycle ended without goal complete (rc=$chug_rc)"
+    if [ -n "$fail_reason" ]; then
+      fail_msg="$osc_word: $fail_reason"
+    fi
+    loopd_osc7501_emit blocked "$fail_msg"
     if [ "$fails" -ge 3 ]; then
       echo "3 consecutive cycles without goal_complete — last: $cycle_log" > "$STATE/HALTED"
       echo "$(ts) HALTED after 3 consecutive failures" >> "$LOG"
