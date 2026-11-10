@@ -59,3 +59,5 @@ therefore source from the newest cycle-*.log (or loopd must mirror the
 failure line — in which case the heartbeat carries the mirrored line).
 Same RED-proven fixture required: cycle-log-only failure marker → the
 blocked heartbeat fires.
+
+check: CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared cargo test --release --test loopd_heartbeat

@@ -1367,3 +1367,37 @@ alike) has been harvested.
   the nearest section. If the structure fights the addition, that's a docs
   finding for the next evaluation (META-META-SPEC §6), not a reason to
   force-fit it.
+
+## Terminal surfaces (T354, T356)
+
+The supervisor talks to two audiences on stdout, from ONE composition point
+(`loopd_osc7501_emit` — one call per transition, both surfaces, so the dot
+and the line can never disagree):
+
+- **The status dot (T354)** — the OSC 7501 sequence for machine readers
+  (herdr): `CHUG_OSC7501` unset-or-1 emits, any other value silences.
+- **The heartbeat line (T356)** — the appended `[loop …]` line for the human
+  watching the terminal, in the spec's shapes: the cycle start
+  (`[loop HH:MM:SS] cycle N routing=<mode> (<model>) item=T042 — <title,60>`
+  — the ONLY line carrying the clock), iteration milestones
+  (`[loop] T042 iter 50/200 — <last tool,60>`, one per 25 iterations, read
+  live from the cycle's `.chug/events.jsonl`; the `loopd_hb_watch` helper
+  rides the launch and is killed the moment the capture returns), merge
+  flips (`[loop] T042 done (merge abc1234) — <merge subject,60>` — one line
+  per observed merge commit, the queue's serial delivery), the dormant line
+  (`[loop] queue empty — dormant, next probe 300s`), and
+  `BLOCKED: <reason>` lines whose reason text matches the 7501 msg channel
+  text exactly, by construction. `CHUG_LOOP_VERBOSE` unset-or-1 emits, any
+  other value silences even on a TTY; the knobs are independent. The
+  watcher's first poll must never read the PREVIOUS cycle's events log:
+  `loopd_hb_prerotate` rotates a predecessor `.chug/events.jsonl` aside
+  (under the driver's own `events-<YYYYmmdd>-<HHMMSS>.jsonl` cycle-stream
+  name) BEFORE the watcher is backgrounded — the driver's rotation only
+  lands ~100ms into the launch, and an unlatched first poll would report a
+  stale milestone and latch the cycle silent (the fix-up round's F1
+  finding; pinned by the stale-events fixtures).
+
+**Redirected contexts get neither surface** (the TTY gate is the first leg
+of both): nohup, launchd, pipes, and log files receive zero lines and zero
+escape bytes — log parsers must never see either. Lines are appended, never
+carriage-return redraws; a full 200-iteration cycle stays within 15 lines.

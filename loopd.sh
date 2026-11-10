@@ -129,6 +129,25 @@ todo_rows() { # count of TODO.md data rows whose status cell is `todo` or
     if (id ~ /^T[0-9]+$/) { s=$6; gsub(/[ \t]/, "", s); if (s == "todo" || s == "open") n++ }
   } END { print n + 0 }' "$1"
 }
+top_open_item() { # the queue's top open row as "Txxx — <title, 60 chars>";
+  # empty when there is none (or TODO.md is missing/unreadable). The T356
+  # heartbeat's item hint: LOOP-SPEC works the queue strictly serially in
+  # file order (merges serial in queue order), so the FIRST open row is the
+  # item a starting cycle will work. Best-effort like todo_rows above.
+  [ -f "${1:-TODO.md}" ] || return 0
+  awk -F'|' '/^[|]/ {
+    id=$2; gsub(/[ \t]/, "", id)
+    if (id ~ /^T[0-9]+$/) {
+      s=$6; gsub(/[ \t]/, "", s)
+      if (s == "todo" || s == "open") {
+        t=$3; gsub(/^[ \t]+/, "", t); gsub(/[ \t]+$/, "", t)
+        print id " — " substr(t, 1, 60)
+        exit
+      }
+    }
+  }' "${1:-TODO.md}"
+  return 0
+}
 eval_fresh() { # EVALUATION.md was written today (same UTC day)
   [ -f "$1" ] || return 1
   today="${CHUG_ROUTINE_TODAY:-$(date -u +%Y-%m-%d)}"
@@ -1081,9 +1100,27 @@ LAYA_TRIAGE_QUIET=""
 # routing/sleep-ok/predicate pattern) — the operator's and the tests'
 # behavioral leg, driven through THIS function so the fixtures exercise the
 # real gate, never a reimplementation.
-loopd_osc7501_emit() { # <state> [one-line reason] — TTY-gated, env-killable
-  local state="${1:-working}" msg="${2:-}" b64 seq rc=0
+# T356 — the function is the ONE composition point for BOTH surfaces of a
+# transition: the 7501 dot (msg channel, below) and the human heartbeat line
+# (loopd_hb_emit, CHUG_LOOP_VERBOSE-gated). One call, one state, one reason —
+# the dot and the line can never disagree. An optional 3rd argument carries
+# the line's extra detail (cycle number, routing, item, pacing seconds); a
+# blocked transition with no detail composes its line FROM the msg, so the
+# reason text is byte-identical on both surfaces by construction.
+loopd_osc7501_emit() { # <state> [one-line reason] [hb-detail] — TTY-gated, env-killable
+  local state="${1:-working}" msg="${2:-}" hb="${3:-}" b64 seq rc=0
   [ -t 1 ] || return 0 # (a) a TTY stdout or nothing — the whole contract
+  # T356 — the human leg of the same transition, BEFORE the dot's env gate:
+  # the line's knob (CHUG_LOOP_VERBOSE) is the line's own; the dot's knob
+  # below never silences it and vice versa. The detail is the line VERBATIM
+  # (the T356 fix-up's F2 shapes: the `[loop HH:MM:SS]` clock is the
+  # cycle-start line's own composition — the spec shows it there ONLY; every
+  # other line is a bare `[loop] …`).
+  if [ -n "$hb" ]; then
+    loopd_hb_emit "$hb"
+  elif [ "$state" = blocked ]; then
+    loopd_hb_emit "[loop] BLOCKED: $msg" # the msg IS the line's reason — one source
+  fi
   case "${CHUG_OSC7501-}" in # (b) unset (or empty) and exactly 1 emit
     ''|1) ;;
     *) return 0 ;;
@@ -1098,6 +1135,151 @@ loopd_osc7501_emit() { # <state> [one-line reason] — TTY-gated, env-killable
   fi
   printf '\033]7501;%s\033\\' "$seq" || true # a closed stdout is silence, never a set -e death
   return 0
+}
+
+# T356 — the terminal heartbeat: ONE appended line per supervisor transition
+# on stdout, the human-readable sibling of the 7501 dot above (the operator
+# report 2026-11-09: the terminal view of a running loop showed nothing —
+# every surface wrote files). Same TTY gate as the dot — a redirected
+# context (nohup, launchd, a pipe, a log file) receives ZERO lines, log
+# parsers must never see one — but its OWN env knob: CHUG_LOOP_VERBOSE
+# unset-or-1 emits, any other value silences even on a TTY. Lines are
+# appended, never carriage-return redraws (herdr keeps scrollback).
+# Best-effort end to end: a closed stdout (EPIPE) degrades to silence, and
+# nothing here can trip set -e/pipefail (the T142 house style).
+loopd_hb_emit() { # <one line, no trailing newline> — TTY-gated, env-killable
+  [ -t 1 ] || return 0 # a TTY stdout or nothing — the whole contract
+  case "${CHUG_LOOP_VERBOSE-}" in # unset (or empty) and exactly 1 emit
+    ''|1) ;;
+    *) return 0 ;;
+  esac
+  printf '%s\n' "$1" || true # a closed stdout is silence, never a set -e death
+  return 0
+}
+
+# T356 fix-up (validator F1, blocking) — the predecessor cycle's events log
+# must be OFF the watcher's read surface before the watcher exists. The
+# mechanism (reproduced by tests/loopd_heartbeat.rs's stale-events fixtures
+# on the pre-fix tree): `loopd_hb_watch 200 &` is backgrounded microseconds
+# before the chug launch, and the driver rotates .chug/events.jsonl only at
+# its own launch (src/driver.rs, ~100ms+ in) — so the milestone leg's
+# check-then-sleep FIRST poll read the predecessor's file and LATCHED its
+# iteration count: a stale n=173 emitted a false `iter 150/200` line and
+# suppressed every real milestone below 175; a stale n=200 emitted
+# `iter 200/200` and went milestone-silent for the whole cycle. The flip
+# leg primes its git read (first=1); this is the milestone leg's equivalent,
+# taken at the READ SURFACE so no polling window remains at all: the stale
+# file is rotated aside HERE, before `loopd_hb_watch` is born, and the
+# driver's own rotate_fresh then finds nothing to do. The archive name is
+# the driver's cycle-stream shape (`events-<YYYYmmdd>-<HHMMSS>.jsonl`,
+# same-second collisions -2..-10 like src/archive.rs) so the wrap's
+# cycle-stream enumeration (scripts/wrap_assert.py's streak derivation)
+# sees the identical corpus it would have seen had the driver rotated
+# ~100ms later. An absent or empty log is a no-op ([ -s ], the same
+# len>0 rule as rotate_fresh); a failed move leaves the file for the
+# driver's own rotation; every leg is rc-guarded — nothing here can trip
+# set -e/pipefail (the T142 house style).
+loopd_hb_prerotate() { # rotate a predecessor events log aside, best-effort
+  [ -s .chug/events.jsonl ] || return 0
+  local ts n dst
+  ts=$(date -u +%Y%m%d-%H%M%S) || return 0
+  for n in '' -2 -3 -4 -5 -6 -7 -8 -9 -10; do
+    dst=".chug/events-$ts$n.jsonl"
+    if [ ! -e "$dst" ]; then
+      mv .chug/events.jsonl "$dst" 2>/dev/null || true
+      return 0
+    fi
+  done
+  return 0
+}
+
+# T356 — the cycle watcher: while the orchestrator runs, emit ONE milestone
+# line every LOOPD_HB_EVERY iterations (default 25 — against the launch's
+# 200-iteration budget that bounds a cycle at 8 milestone lines; the volume
+# guard is pinned in tests/loopd_heartbeat.rs) read from the cycle's OWN
+# events log (.chug/events.jsonl — the predecessor's log is rotated aside by
+# loopd_hb_prerotate before this watcher is born, so the first poll can only
+# ever read THIS cycle's stream, and the child appends one merged iteration
+# line per turn), plus ONE line per observed merge commit (the item flip;
+# merges are the queue's serial delivery per LOOP-SPEC). The shapes are the
+# spec's: `[loop] <item-id> iter K/max — <last tool, 60>` and
+# `[loop] <item-id> done (merge <sha>) — <merge subject, 60>`; the item is
+# the queue's top open row's ID — LOOP-SPEC works the queue strictly serially
+# in file order. Best-effort end to end: a
+# missing events file, a non-git cwd, or an unreadable TODO.md degrades to
+# silence; every leg is rc-latched (T142) so neither set -e nor pipefail can
+# kill the watcher mid-cycle; the parent kills it the moment the cycle
+# capture returns, a dead supervisor (kill -0 $PPID) ends the loop, and the
+# poll-count backstop below caps any leak that survives both.
+loopd_hb_watch() { # <max_iters> — runs until killed, orphaned, or the backstop
+  local max="${1:-200}" every poll n=0 shown=0 polls=0 first=1
+  local sha="" last_sha="" subj="" act="" item="" item_id="" detail="" slept=0
+  case "${LOOPD_HB_EVERY:-}" in ''|0|*[!0-9]*) every=25 ;; *) every=$LOOPD_HB_EVERY ;; esac
+  case "${LOOPD_HB_POLL:-}" in ''|0|*[!0-9]*) poll=20 ;; *) poll=$LOOPD_HB_POLL ;; esac
+  while :; do
+    kill -0 "$PPID" 2>/dev/null || return 0 # the supervisor died: never outlive it
+    polls=$((polls + 1))
+    if [ "$polls" -ge 1440 ]; then return 0; fi # backstop: 1440 polls ≈ 8h at the 20s default
+    n=$(sed -n 's/.*"type":"iteration".*"n":\([0-9][0-9]*\).*/\1/p' .chug/events.jsonl 2>/dev/null | tail -1) || n=""
+    case "$n" in ''|*[!0-9]*) n=0 ;; esac
+    # The item hint, read once per poll: the queue's top open row as
+    # "T042 — <title>", whose ID half feeds BOTH watcher lines (the
+    # milestone's `T042 iter K/max` and the flip's `T042 done (merge …)` —
+    # the spec's shapes name the bare ID there; the full title rides only
+    # the cycle-start line).
+    item=$(top_open_item) || item=""
+    item_id=${item%% — *}
+    if [ "$n" -ge $((shown + every)) ] && [ "$shown" -lt "$max" ]; then
+      shown=$(((n / every) * every))
+      if [ "$shown" -gt "$max" ]; then shown=$max; fi
+      act=$(grep '"type":"tool_result"' .chug/events.jsonl 2>/dev/null | tail -1 | sed -n 's/.*"name":"\([a-z_0-9]*\)".*/\1/p' | cut -c1-60) || act=""
+      if [ -n "$item_id" ]; then
+        loopd_hb_emit "[loop] $item_id iter $shown/$max — $act"
+      else
+        loopd_hb_emit "[loop] iter $shown/$max — $act"
+      fi
+    fi
+    sha=$(git rev-parse --short HEAD 2>/dev/null) || sha=""
+    if [ -n "$sha" ] && [ "$sha" != "$last_sha" ]; then
+      if [ "$first" -eq 1 ]; then
+        first=0 # prime: the pre-cycle HEAD is context, never a flip
+      else
+        subj=$(git log -1 --format=%s "$sha" 2>/dev/null) || subj=""
+        case "$subj" in
+          merge:*)
+            # The spec's flip shape: `[loop] T042 done (merge abc1234) —
+            # <merge subject, 60>` — the `merge:` prefix is redundant beside
+            # `(merge $sha)` and is stripped (best-effort: an empty tail
+            # omits the ` — `).
+            detail=$(printf '%s' "$subj" | sed -n 's/^merge:[[:space:]]*//p' | cut -c1-60) || detail=""
+            if [ -n "$detail" ]; then
+              if [ -n "$item_id" ]; then
+                loopd_hb_emit "[loop] $item_id done (merge $sha) — $detail"
+              else
+                loopd_hb_emit "[loop] done (merge $sha) — $detail"
+              fi
+            else
+              if [ -n "$item_id" ]; then
+                loopd_hb_emit "[loop] $item_id done (merge $sha)"
+              else
+                loopd_hb_emit "[loop] done (merge $sha)"
+              fi
+            fi
+            ;;
+        esac
+      fi
+      last_sha=$sha
+    fi
+    # The poll wait, sliced to 1s: a killed watcher must never leave a
+    # long-sleeping orphan holding the pty stdout (the T354 fixtures' drain
+    # bounds assume ≤1s stragglers), and a sliced wait stays responsive to
+    # the parent's kill at every slice boundary.
+    slept=0
+    while [ "$slept" -lt "$poll" ]; do
+      sleep 1 || return 0
+      slept=$((slept + 1))
+    done
+  done
 }
 
 case "${1:-run}" in
@@ -1154,7 +1336,15 @@ case "${1:-run}" in
     # channel, the gate decides (piped stdout stays byte-silent), nothing
     # launches, nothing is logged.
     #   loopd.sh osc <state> [one-line reason]
-    loopd_osc7501_emit "${2:-working}" "${3:-}"
+    # T356: the emitter is now the ONE composition point for BOTH surfaces
+    # of a transition, so this probe drives both. No 4th argument → the
+    # line is silenced (the T354 wire fixtures' exact dot-only captures);
+    # a 4th argument asks for the human line too, composed in the same call.
+    #   loopd.sh osc <state> [one-line reason] [hb-detail]
+    case "${4:-}" in
+      '') CHUG_LOOP_VERBOSE=0 ;;
+    esac
+    loopd_osc7501_emit "${2:-working}" "${3:-}" "${4:-}"
     exit 0
     ;;
   status)
@@ -1337,6 +1527,7 @@ case "${LOOPD_MAX_LOOPS:-}" in
   *) LOOPD_MAX_LOOPS_N=$LOOPD_MAX_LOOPS ;; # a positive integer arms the bound
 esac
 loops=0
+cycles=0 # T356 — the heartbeat's cycle number: LAUNCHES this supervisor run
 while [ ! -f "$STOP" ]; do
   # T50: re-exec self when this script changed on disk. FIRST statement in
   # the body, so a re-exec only ever happens BETWEEN cycles, never
@@ -1635,7 +1826,8 @@ ideation_cycle() { # the ONE launch the ideation timer schedules: while
   echo "$(ts) ideation cycle (T326): timer due — launching $IDEATION_SPEC on $LOOP_IDEATION_MODEL (log $ilog)" >> "$LOG"
   # T354 — item start: the ideation child is real work the supervisor owns;
   # the watching terminal sees working for its whole (bounded) run.
-  loopd_osc7501_emit working "ideation cycle: proposing outward-facing features"
+  # T356 — the ideation heartbeat rides the same call.
+  loopd_osc7501_emit working "ideation cycle: proposing outward-facing features" "ideation cycle — proposing outward-facing features (T326)"
   CARGO_TARGET_DIR="$ROOT/target-shared" ./target/release/chug run \
     --spec "$IDEATION_SPEC" --goal "$IDEATION_GOAL" \
     --model "$LOOP_IDEATION_MODEL" --max-iters 16 --max-minutes 15 \
@@ -1707,13 +1899,13 @@ ideation_cycle() { # the ONE launch the ideation timer schedules: while
         fails=0
         skip_secs=$(ok_sleep_seconds)
         echo "$(ts) cheap-exit pacing: sleeping ${skip_secs}s (empty streak $(empty_wrap_streak))" >> "$LOG"
-        # T354 — a held skip is the loop at rest: idle for the pacing sleep
-        # (dormant names WHY — the queue is empty and the audit timer owns
-        # the cadence).
+        # T354/T356 — a held skip is the loop at rest: idle for the pacing
+        # sleep, and the same call carries the human line (the dormant one
+        # names the next probe — the pacing the operator watches).
         if [ "$gate_dormant" = "suspended-valve" ]; then
-          loopd_osc7501_emit idle "dormant: queue empty"
+          loopd_osc7501_emit idle "dormant: queue empty" "[loop] queue empty — dormant, next probe ${skip_secs}s"
         else
-          loopd_osc7501_emit idle "cycle skipped: no evaluation needed now"
+          loopd_osc7501_emit idle "cycle skipped: no evaluation needed now" "[loop] no evaluation needed — skipped, next probe ${skip_secs}s"
         fi
         sleep "$skip_secs"
         continue
@@ -1764,7 +1956,20 @@ ideation_cycle() { # the ONE launch the ideation timer schedules: while
   echo "$(ts) cycle start -> $cycle_log ($mode cycle, orchestrator $orch_model)" >> "$LOG"
   # T354 — item start: the cycle launch is the supervisor's one "working"
   # span (the orchestrator owns per-item turns inside it).
-  loopd_osc7501_emit working "cycle start: $mode cycle on $orch_model"
+  # T356 — the cycle-start heartbeat: the ONE line the watching terminal
+  # reads when a cycle opens — the UTC clock (the spec's cycle-start shape
+  # carries it; every OTHER heartbeat line is a bare `[loop] …`), the cycle
+  # number (launches this supervisor run), routing, the routed model's short
+  # name, and the queue's top open row (the item a fresh cycle works, per
+  # LOOP-SPEC's serial queue order). Composed BESIDE the dot in the same
+  # call — one transition, both surfaces.
+  cycles=$((cycles + 1))
+  hb_item=$(top_open_item) || hb_item=""
+  hb_detail="[loop $(date -u +%H:%M:%S)] cycle $cycles routing=$mode (${orch_model##*.})"
+  if [ -n "$hb_item" ]; then
+    hb_detail="$hb_detail item=$hb_item"
+  fi
+  loopd_osc7501_emit working "cycle start: $mode cycle on $orch_model" "$hb_detail"
   echo "[loopd $(ts)] T81 routing: $mode cycle — orchestrator model $orch_model" > "$cycle_log"
   # cycle budget: eval ≈45–55 + items ≈28–35 each + wrap ≈10 ⇒ a 5-item eval
   # cycle wants ≈195–240 — 200 fits it with a slim margin (T121). Cycle-61
@@ -1827,11 +2032,29 @@ ideation_cycle() { # the ONE launch the ideation timer schedules: while
   # launch only — delegate children keep their own launch (their context
   # curves and free-turn economics differ; extending is verdict-dependent,
   # not this row).
+  # T356 — the cycle watcher rides the launch: milestone lines (every
+  # LOOPD_HB_EVERY iterations, read from the child's own events log) and
+  # merge-flip lines while the child runs, killed the moment the capture
+  # returns. The watcher's max is the launch's iteration budget — the same
+  # 200 literal the T81/T230 pins hold byte-stable; the tandem (bump one,
+  # bump both) is pinned in tests/loopd_heartbeat.rs.
+  # T356 fix-up (validator F1) — the predecessor cycle's events log is
+  # rotated aside BEFORE the watcher is backgrounded: the watcher's first
+  # poll must never read the previous cycle's iteration count (the driver
+  # rotates at its own launch, ~100ms after the watcher's birth — the
+  # stale-events fixtures reproduce the false line the first poll used to
+  # emit). See loopd_hb_prerotate above.
+  loopd_hb_prerotate
+  loopd_hb_watch 200 &
+  hb_watch_pid=$!
   chug_rc=0
   chug_out="$(CARGO_TARGET_DIR="$ROOT/target-shared" ./target/release/chug run --spec LOOP-SPEC.md \
     --goal "Run the full self-improvement cycle per LOOP-SPEC: evaluate or skip per the freshness rule, work the queue (features are first-class per the amended doctrine — close capability gaps, not only harden), adversarial validation for core-logic items, you own all bookkeeping, push after each item lands green + remainder at wrap. Your wrap IS the next cycle's input — leave TODO.md, EVALUATION.md and specs/ such that a cold next cycle needs zero human words." \
     --model "$orch_model" --max-iters 200 --max-minutes 360 --ctx-warn-at-tokens 100000 \
     2>> "$cycle_log")" || chug_rc=$?
+  kill "$hb_watch_pid" 2>/dev/null || true
+  wait "$hb_watch_pid" 2>/dev/null || true
+  kill -9 "$hb_watch_pid" 2>/dev/null || true # backstop: the watcher can never outlive the capture
   printf '%s\n' "$chug_out" >> "$cycle_log"
   # T325-F1 — the audit's record re-arm, AFTER the child returns: the
   # restart is the anchor the audit itself moved, so the record re-derives
@@ -1868,7 +2091,14 @@ ideation_cycle() { # the ONE launch the ideation timer schedules: while
     summary=$(printf '%s\n' "$chug_out" | grep "^summary:" | head -1 | cut -c1-200 || true)
     echo "$(ts) cycle OK: $summary" >> "$LOG"
     # T354 — cycle OK = goal complete: the loop is at rest between cycles.
-    loopd_osc7501_emit idle "cycle ok"
+    # T356 — the same call carries the human line, with the accepted goal's
+    # own summary (capped) as the detail — the real info the operator asked
+    # for, on the same line as the dot's state.
+    hb_tail=""
+    if [ -n "$summary" ]; then
+      hb_tail=" — $(printf '%s' "${summary#summary: }" | cut -c1-80)"
+    fi
+    loopd_osc7501_emit idle "cycle ok" "[loop] cycle done — goal complete$hb_tail"
     # T98: best-effort site stats sync — one line, failure-tolerant. The
     # script itself never fails a cycle (missing clone / rejected push /
     # marker-less page all warn and exit 0; a nonzero exit here is logged

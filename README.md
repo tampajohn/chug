@@ -1068,13 +1068,27 @@ nohup ./loopd.sh > /dev/null 2>&1 &   # start (detached)
 ```
 
 On a real terminal (TTY stdout, no `nohup` redirect), the supervisor also
-reports its own state the terminal-native way — OSC 7501 program status
-(`working` on a cycle/item start, `idle` on a cheap-exit/dormant rest,
-`blocked` with a one-line reason on a red build gate, cycle death, or
-`HALT`), so harnesses that read the program-status channel see the loop
-without any shim. Emission is TTY-gated (piped/redirected contexts receive
-zero escape bytes) and killable with `CHUG_OSC7501=0`;
-`./loopd.sh osc <state> [reason]` probes the emitter directly.
+reports its own state the terminal-native way, from one composition point
+per transition so the two surfaces can never disagree:
+
+- **OSC 7501 program status (T354, for machines)** — `working` on a
+  cycle/item start, `idle` on a cheap-exit/dormant rest, `blocked` with a
+  one-line reason on a red build gate, cycle death, or `HALT` — so harnesses
+  that read the program-status channel see the loop without any shim.
+  Emission is TTY-gated (piped/redirected contexts receive zero escape
+  bytes) and killable with `CHUG_OSC7501=0`.
+- **The heartbeat line (T356, for humans)** — appended `[loop …]` lines in
+  the same window: the cycle start (cycle number, routing, the routed
+  model's short name, the queue's top open row), an iteration milestone
+  every 25 iterations (read live from the cycle's own events log, with the
+  last tool name), one line per landed merge, the dormant rest (naming the
+  next probe), and `BLOCKED: <reason>` lines whose reason text is the same
+  string the dot carries. A 200-iteration cycle stays within ~15 lines.
+  Emission is TTY-gated the same way and killable with
+  `CHUG_LOOP_VERBOSE=0` (the two knobs are independent);
+  `./loopd.sh osc <state> [reason]` probes the emitter directly, and an
+  optional fourth argument asks for the human line too
+  (`./loopd.sh osc working "cycle start" "cycle 7 routing=eval"`).
 
 In any OTHER repo — a pilot's project, not this checkout — the same loop
 is a subcommand, and no clone of chug is ever required: the installed
