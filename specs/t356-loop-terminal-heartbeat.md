@@ -51,4 +51,4 @@ opt-out on TTY via env. No other behavior change.
   separate, much larger item).
 - Remote/streamed viewing (the T340 socket already serves machines).
 
-check: CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-validate-a cargo test --release --test loopd_heartbeat
+check: CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared cargo test --release --test loopd_heartbeat
