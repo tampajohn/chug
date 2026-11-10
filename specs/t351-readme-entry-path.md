@@ -2,7 +2,7 @@
 
 estimate: ~80 changed lines (README.md only + a docs link-check fixture)
 
-check: CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared cargo test --release --test readme_entry_path
+check: CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-validate-a cargo test --release --test readme_entry_path
 
 ## Orchestrator dispatch note (2026-11-10)
 
