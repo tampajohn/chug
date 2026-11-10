@@ -8,8 +8,8 @@
 - Unharvested worktrees: NONE (zero children dispatched; no /tmp/chug-loop-* created).
 - Unpushed commits: corridor pending (prep + notes + fill to come).
 - Missing decision records: NONE — routing 2 + outcomes 2 all recorded (ids d1794315571-1/-2 + -3/-4).
-- Wrap duties: Outcomes 3189 entry + compact 3183 → prep commit → state rewrite keyed to prep (T311/T312) → token-free notes → probe → fill (assert legs) → push → release recount (expect NO TAG, TRUE 1 = T357) → close-out → goal_complete.
-- Gates: T242 bg window pid 47546 (guard floor todo_consistency + battery 225, target-shared-main, log /tmp/wrap-gates-3189-080112.log).
+- Wrap duties: Outcomes 3189 entry + compact 3183 -> prep 0447a292 COMMITTED -> state rewrite T311/T312 REAL GREEN keyed to the prep (validate_state GREEN on the 4th attempt after 3 self-caught pre-write fires: leading-blank ring line 13v12 / _datum_figures key set / double-dash re-prefix on the 8 carried lines; assert_state_on_disk GREEN self-probe) -> notes commit (token-free) -> probe -> fill (assert legs) -> push -> release recount (expect NO TAG, TRUE 1 = T357) -> close-out -> goal_complete.
+- Gates: GREEN docs-only per T80 — guard floor todo_consistency 21/21 0.35s + battery 225/225 (198+27, 18.948s+1.257s), T242 bg window pid 47546, target-shared-main, log /tmp/wrap-gates-3189-080112.log.
 
 ## Blockers
 - T328 BLOCKED (operator decision pending, A/B/C menu unanswered — chug-watch HEAD 13eca32 unchanged; re-verified THIS cycle).
