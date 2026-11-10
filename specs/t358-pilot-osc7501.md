@@ -1,4 +1,4 @@
-# T357 — OSC 7501 emission in loopd-pilot.sh (the supervisor spawned loops actually run)
+# T358 — OSC 7501 emission in loopd-pilot.sh (the supervisor spawned loops actually run)
 
 estimate: ~80 changed lines (src/loop_cmd/loopd-pilot.sh + emission helper sharing + fixtures)
 
