@@ -61,4 +61,4 @@ failure occurs).
   scan proves costly).
 - Wrapper retirement (FP's schedule, on 3/3 green).
 
-check: CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-validate-a cargo test --release --test loopd_osc7501 --test loopd_heartbeat --test loopd_verbose
+check: CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared cargo test --release --test loopd_osc7501 --test loopd_heartbeat --test loopd_verbose
