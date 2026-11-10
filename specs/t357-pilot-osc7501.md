@@ -51,3 +51,19 @@ redirected. No change to non-harness operation.
 - herdr-side changes (the wrapper's 7501 leg retires on FP's schedule
   once this ships and verifies).
 - The next release cut (the loop's normal release cadence carries it).
+
+## Field finding (Fleet Primary transition suite, 2026-11-10)
+
+**Failure markers do NOT reach the supervisor stream.** 'observability
+delivery failing', errors, and panics land in the per-cycle log
+(`.chug/loopd/cycle-*.log`), NOT in `loopd.log` — FP's wrapper only
+fired blocked+msg after scanning the NEWEST cycle log (3a802e4). A
+blocked-state derivation that reads only loopd.log will silently never
+fire. REQUIRED in this item (pick one, test either way):
+  (a) the emission scans the newest cycle-*.log for the failure
+      patterns in addition to the supervisor stream, OR
+  (b) loopd mirrors failure lines into loopd.log (rides T356's
+      heartbeat — one mirrored line per failure, source string shared).
+Fixture REQUIRED either way: a failure marker that exists ONLY in a
+cycle-*.log produces blocked+msg (RED-proven against a
+supervisor-only derivation).

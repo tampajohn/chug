@@ -50,3 +50,12 @@ opt-out on TTY via env. No other behavior change.
 - A full TUI (the heartbeat is lines, not a dashboard; a TUI is a
   separate, much larger item).
 - Remote/streamed viewing (the T340 socket already serves machines).
+
+## Field finding (Fleet Primary transition suite, 2026-11-10)
+
+Failure markers land in the per-cycle log, not the supervisor stream
+(see T357's identical finding). The heartbeat's BLOCKED line must
+therefore source from the newest cycle-*.log (or loopd must mirror the
+failure line — in which case the heartbeat carries the mirrored line).
+Same RED-proven fixture required: cycle-log-only failure marker → the
+blocked heartbeat fires.
