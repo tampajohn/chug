@@ -2,7 +2,7 @@
 
 estimate: ~80 changed lines (src/loop_cmd/loopd-pilot.sh + emission helper sharing + fixtures)
 
-check: CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared cargo test --release --test loopd_osc7501
+check: CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-validate-a cargo test --release --test loopd_osc7501
 
 ## Why
 
