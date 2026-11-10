@@ -65,4 +65,4 @@ redirected); the flag/env is the only way in. No change to cycle logs,
 
 ## Check
 
-check: CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared cargo test --release --test loopd_verbose --test loopd_heartbeat --test loopd_osc7501
+check: CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-validate-a cargo test --release --test loopd_verbose --test loopd_heartbeat --test loopd_osc7501
