@@ -23,6 +23,30 @@ exports EXACTLY these keys — nothing else is profile-owned:
 | `CHUG_LANGFUSE_HOST`<br>`CHUG_LANGFUSE_PUBLIC_KEY`<br>`CHUG_LANGFUSE_SECRET_KEY` | optional | `LANGFUSE_HOST` / `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` — Langfuse tracing (all three or none; see SPEC-8) |
 | `CHUG_AUTO_UPDATE` | optional | the opt-in self-update flag (T352): `1` makes loopd run `chug update --check` once per day BETWEEN cycles and apply an available update there (never mid-cycle); unset/`0` keeps today's no-auto-update behavior |
 
+**Per-lane Langfuse visibility** — one invariant first: the loop writes to
+exactly ONE Langfuse project, the one the `pk:sk` key pair scopes to
+(`src/observ.rs` authenticates every ingestion batch with Basic auth
+`pk:sk`; there is no chug-side project selector). Two real mechanisms,
+depending on what a lane needs:
+
+- **Per-lane isolation** — a dedicated Langfuse project with its OWN
+  `pk`/`sk` key pair per lane (one lane = one worktree, fleet member, or
+  model pairing), wired via the profile keys above: the loopd profile
+  loader's generic `CHUG_LANGFUSE_*` translation arm maps them to
+  `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY`, which `src/observ.rs`
+  consumes. Isolation lives on the Langfuse side — a key pair only ingests
+  into its own project — so each lane's spend and outcomes read straight
+  off its project's dashboard. Provisioning those projects and key pairs is
+  Langfuse-admin work, not chug code.
+- **Single-project filtering** (the default) — one Langfuse project for
+  every chug automation, and per-automation reads use the trace identity
+  the loop writes on every trace (`src/observ.rs trace_body`): trace
+  **name** = the run's goal (first 80 chars), **tags** =
+  `["chug", model]`, **sessionId** = the trace id (`chug-{shortid}` — one
+  per run/chat session, shared by the session's traces, generations,
+  events and scores). Filter the project view by any of the three to read
+  one automation's spend and outcomes.
+
 Model values are FULL provider-routed ids exactly as `--model` takes them
 (there is no alias layer — whatever you write goes verbatim into the API
 request body).
