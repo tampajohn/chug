@@ -10,7 +10,12 @@
 - Prep: Outcomes 3194 quiet no-work + 3188 one-lined (6-full set 3194/3193/3192/3191/3190/3189; 18 needles verified pre-write — 2 zero-mutation pre-write refusals: the 'TRUE 1 = T357' needle-miss + an inverted assert, both recomposed)
 
 ## Next
-- State rewrite keyed to the prep hash (T311/T312 REAL) -> notes commit (token-free) -> probe -> fill (T309/T310/.../T311 legs) -> push -> close-out + flips -> goal_complete
+- Probe (expect 60 0, machine==TRUE 0) -> fill (T309/T310/.../T311 legs, datum FINAL at the fill stamp) -> push -> close-out + flips -> goal_complete
 
 ## Blockers
 - T328 BLOCKED (operator decision pending, menu A/B/C unanswered; re-verified this cycle at chug-watch 13eca32)
+
+## Wrap corridor (cycle 3194)
+- Prep e7c9b7a5 committed (Outcomes 3194 + 3188 one-lined); gates GREEN docs-only; recount NO TAG
+- State rewrite T311/T312 REAL GREEN keyed to the prep (validate_state GREEN FIRST attempt after the blank-filtered ring-extraction retry — the 3192 class; assert_state_on_disk GREEN self-probe; stamp 14:55:26.000Z, datum 31 iters / 641.080s, ok:false 1 == 1)
+- Notes: T257 color 32/653.230 @ 14:55:38Z; ok:false 1==1 at the notes stamp (the 14:55:12.137Z state-compose first-attempt assert fire, zero-mutation); trim 0 == 0; token-free — a routine-skip wrap, NOT a disposition
