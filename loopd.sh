@@ -12,6 +12,16 @@
 #
 # State lives in .chug/loopd/ (gitignored): loopd.pid, loopd.log,
 # cycle-<timestamp>.log per cycle, HALTED if it gave up.
+#
+# Terminal verbosity (T359) — CHUG_LOOP_VERBOSE is the PTY detail dial
+# (`chug loop run --verbose[=<n>]` forwards the same dial into this
+# supervisor's env; bare --verbose is level 2, the flag absent passes
+# nothing extra):
+# 0 silent, 1 compact heartbeat (the DEFAULT on a TTY — a redirected
+# stdout is always level 0 whatever the knob says, logs are never
+# polluted), 2 turn detail (tool calls, model text, errors) on top of
+# level 1, 3 the full cycle-log trace teed to stdout as it lands (≤2s).
+# The 7501 status dot is a separate knob (CHUG_OSC7501).
 set -euo pipefail
 # T137 — the -e/pipefail half of "failed builds do not prevent running an old
 # binary": no command's failure may silently sail past the launch of
@@ -1146,13 +1156,48 @@ loopd_osc7501_emit() { # <state> [one-line reason] [hb-detail] — TTY-gated, en
 # appended, never carriage-return redraws (herdr keeps scrollback).
 # Best-effort end to end: a closed stdout (EPIPE) degrades to silence, and
 # nothing here can trip set -e/pipefail (the T142 house style).
-loopd_hb_emit() { # <one line, no trailing newline> — TTY-gated, env-killable
+# T359 — the knob grew into the LEVEL DIAL (loopd_verbose_level below) and
+# this writer is the level-≥1 arm of it: unset (empty) is the T356 default
+# (1, byte-identical to pre-T359) and every level above 1 carries the
+# compact lines too; 0 and any value outside the dial still silence even on
+# a TTY. The turn-detail (level 2) and trace (level 3) surfaces do not ride
+# THIS writer — they are the watcher's latched tails (loopd_hb_watch), which
+# resolve the dial once at birth.
+loopd_hb_emit() { # <one line, no trailing newline> — TTY-gated, level-gated (≥1)
   [ -t 1 ] || return 0 # a TTY stdout or nothing — the whole contract
-  case "${CHUG_LOOP_VERBOSE-}" in # unset (or empty) and exactly 1 emit
-    ''|1) ;;
-    *) return 0 ;;
+  case "${CHUG_LOOP_VERBOSE-}" in # T359 — the compact lines are levels ≥1:
+    ''|1|2|3) ;;                  # unset (=1, the T356 default) and every level above 1
+    *) return 0 ;;                # 0 and any unreadable value kill (default-safe)
   esac
   printf '%s\n' "$1" || true # a closed stdout is silence, never a set -e death
+  return 0
+}
+
+# T359 — the verbosity dial's resolver: sets VERBOSE_LEVEL (0..3) for the
+# CALLER'S OWN stdout — a plain statement, deliberately NOT a command
+# substitution: inside $(…) the substituted command's stdout is the capture
+# pipe, so a `[ -t 1 ]` leg there could only ever see the pipe and the dial
+# would resolve to 0 everywhere (the resolver's first draft did exactly
+# that; the level-2 fixtures caught it). The standing contract first (the
+# T354/T356 gate): a redirected stdout is level 0 whatever the knob says —
+# logs are never polluted — and only a TTY can carry any level above it. On
+# a TTY: unset/empty is 1 (the T356 default, byte-identical to pre-T359),
+# 0..3 are the levels themselves, and ANY other value — a garbage string, a
+# bare flag word, a number outside the dial — degrades to 0 (the T356
+# default-safe rule: an unreadable knob must never turn detail on). The
+# watcher resolves ONCE at birth; the run loop's drain window resolves once
+# per cycle; loopd_hb_emit keeps its own inline gate (the same contract
+# without a fork per line). rc-stable: sets one level, always returns 0.
+loopd_verbose_resolve() { # sets VERBOSE_LEVEL (0..3) from the caller's stdout
+  VERBOSE_LEVEL=0
+  [ -t 1 ] || return 0
+  case "${CHUG_LOOP_VERBOSE-}" in
+    ''|1) VERBOSE_LEVEL=1 ;;
+    0) VERBOSE_LEVEL=0 ;;
+    2) VERBOSE_LEVEL=2 ;;
+    3) VERBOSE_LEVEL=3 ;;
+    *) VERBOSE_LEVEL=0 ;;
+  esac
   return 0
 }
 
@@ -1269,11 +1314,36 @@ EOF
 # kill the watcher mid-cycle; the parent kills it the moment the cycle
 # capture returns, a dead supervisor (kill -0 $PPID) ends the loop, and the
 # poll-count backstop below caps any leak that survives both.
-loopd_hb_watch() { # <max_iters> — runs until killed, orphaned, or the backstop
-  local max="${1:-200}" every poll n=0 shown=0 polls=0 first=1
+# T359 — the watcher also carries the verbose surfaces, gated on the dial
+# (resolved ONCE at birth): at level 2 each NEW tool_result in the cycle's
+# events log becomes one turn line (`[loop] <item> iter <n> — tool <name>:
+# <summary, 80>` — the `...` truncation marker past 80, errors in full up
+# to the driver's own preview cap) and each new `[chug] model: ` block in
+# the cycle log is capped at ~3 lines with the same marker; at level 3 every
+# new cycle-log line is teed to stdout VERBATIM (the trace — the stream IS
+# the cycle log). Both tails are LINE-COUNT-latched: `wc -l` counts only
+# COMPLETE lines, so a half-written stream line (the model text's partial
+# deltas land un-newlined) waits for its newline and is consumed exactly
+# once — never split, never repeated, never double-written (the child's
+# stdout is captured and its stderr goes to the cycle log, so the tee is the
+# only thing these lines ever reach the TTY through). At level ≥2 the poll
+# pins to the 1s slice — the spec's ≤2s latency budget IS the cadence; the
+# 1s slicing already keeps the watcher killable at any boundary (T354).
+loopd_hb_watch() { # <max_iters> <cycle_log> — runs until killed, orphaned, or the backstop
+  local max="${1:-200}" clog="${2:-}" every poll n=0 shown=0 polls=0 first=1
   local sha="" last_sha="" subj="" act="" item="" item_id="" detail="" slept=0
+  local level=0 ev_seen=0 clog_seen=0 ev_total=0 clog_total=0
   case "${LOOPD_HB_EVERY:-}" in ''|0|*[!0-9]*) every=25 ;; *) every=$LOOPD_HB_EVERY ;; esac
   case "${LOOPD_HB_POLL:-}" in ''|0|*[!0-9]*) poll=20 ;; *) poll=$LOOPD_HB_POLL ;; esac
+  # T359 — the dial resolves ONCE at birth (the watcher's stdout is the
+  # supervisor's: the pty on the emission path, a pipe on the redirected
+  # path — the resolver's TTY gate lands every redirected context at 0,
+  # whatever the knob says). Level ≥2 also pins the poll at the 1s slice:
+  # the turn-detail/trace latency budget (≤2s) is the poll cadence, and
+  # LOOPD_HB_POLL stays the level-1 milestone pacing seam.
+  loopd_verbose_resolve
+  level=$VERBOSE_LEVEL
+  case "$level" in 2|3) poll=1 ;; esac
   while :; do
     kill -0 "$PPID" 2>/dev/null || return 0 # the supervisor died: never outlive it
     polls=$((polls + 1))
@@ -1327,6 +1397,124 @@ loopd_hb_watch() { # <max_iters> — runs until killed, orphaned, or the backsto
         esac
       fi
       last_sha=$sha
+    fi
+    # T359 — the verbose legs (level ≥2 only: levels 0/1 never read the
+    # files here, the compat shape — the dial's TTY gate has already landed
+    # every redirected context at 0). Both tails are LINE-COUNT-latched on
+    # `wc -l` — the COMPLETE-line count (a trailing newline-less record is
+    # not a line): the model stream's partial deltas land in the cycle log
+    # un-newlined and wait for their newline, so each line is consumed
+    # exactly once — never split (no bare prefix emitted early), never
+    # glued (the next line never rides on a newline-less tail), never
+    # repeated (the latch advances past a line only when its whole text has
+    # been streamed), and never lost (the remainder belongs to the SAME
+    # line and completes it in the later poll). The count is stripped of
+    # the redirect form's platform padding (macOS) before the digit
+    # validation — a padded count must degrade to a number, never into
+    # permanent silence.
+    if [ "$level" -ge 2 ]; then
+      # -- the turn stream, events half (level 2): ONE line per tool_result
+      #    — the tool, the current iteration (the milestone leg's count), an
+      #    80-char summary (the `...` truncation marker); errors pass IN
+      #    FULL (up to the driver's own preview cap — src/eventlog.rs keeps
+      #    the failing output's tail). The summary is the event's preview
+      #    field, the only per-call text the loop's telemetry carries — the
+      #    heartbeat's source-string rule holds: one source, no re-derivation.
+      #    (The count is `wc -l` — the COMPLETE-line count: a trailing
+      #    newline-less record is not a line, so a torn write waits for its
+      #    newline instead of being consumed half. The redirect form pads
+      #    its number on some platforms — macOS — so the whitespace is
+      #    stripped before the digit validation; a padded count must
+      #    degrade to a number, never into permanent silence. The `2>`
+      #    sits BEFORE the `<` so even a missing file's redirect error is
+      #    silence, never a line on the pty.)
+      ev_total=$(wc -l 2>/dev/null < .chug/events.jsonl | tr -d '[:space:]') || ev_total=0
+      case "$ev_total" in ''|*[!0-9]*) ev_total=0 ;; esac
+      if [ "$level" -eq 2 ] && [ -f .chug/events.jsonl ] && [ "$ev_total" -gt "$ev_seen" ]; then
+        awk -v from="$((ev_seen + 1))" -v to="$ev_total" -v item="$item_id" -v n="$n" '
+          NR >= from && NR <= to && index($0, "\"type\":\"tool_result\"") {
+            name = ""
+            if (match($0, /"name":"[a-zA-Z_0-9]*"/)) {
+              name = substr($0, RSTART + 8, RLENGTH - 9)
+            }
+            prev = $0
+            sub(/^.*"preview":"/, "", prev)
+            sub(/"\}[[:space:]]*$/, "", prev)
+            gsub(/\\n|\\r|\\t/, " ", prev)
+            gsub(/\\"/, "\"", prev)
+            gsub(/\\\\/, "\\", prev)
+            gsub(/[[:space:]]+/, " ", prev)
+            sub(/^ /, "", prev)
+            sub(/ $/, "", prev)
+            pre = (item == "" ? "" : item " ")
+            if (index($0, "\"is_error\":true")) {
+              print "[loop] " pre "iter " n " — tool " name " ERROR: " prev
+            } else if (prev == "") {
+              print "[loop] " pre "iter " n " — tool " name
+            } else {
+              if (length(prev) > 80) prev = substr(prev, 1, 80) "..."
+              print "[loop] " pre "iter " n " — tool " name ": " prev
+            }
+          }' .chug/events.jsonl 2>/dev/null || true
+      fi
+      ev_seen=$ev_total
+      # -- the turn stream, cycle-log half (level 2), or the trace (level 3):
+      #    at level 2 each new `[chug] model: ` line is one model text block
+      #    — capped at ~3 physical lines with a `...` truncation marker (the
+      #    block state persists across polls in $STATE/hb-tail.state so a
+      #    block split over two polls still caps once) and abort markers
+      #    pass in full; at level 3 every new line is teed VERBATIM — no
+      #    filter, no prefix: the stream IS the cycle log.
+      if [ -n "$clog" ] && [ -f "$clog" ]; then
+        clog_total=$(wc -l 2>/dev/null < "$clog" | tr -d '[:space:]') || clog_total=0
+        case "$clog_total" in ''|*[!0-9]*) clog_total=0 ;; esac
+        if [ "$clog_total" -gt "$clog_seen" ]; then
+          if [ "$level" -eq 2 ]; then
+            awk -v from="$((clog_seen + 1))" -v to="$clog_total" -v item="$item_id" \
+              -v statefile="$STATE/hb-tail.state" '
+              NR < from { next }
+              NR > to { exit }
+              BEGIN {
+                inmodel = 0; counted = 0
+                pre = (item == "" ? "" : item " ")
+                if ((getline s < statefile) > 0) {
+                  split(s, a, /[[:space:]]+/)
+                  inmodel = a[1] + 0
+                  counted = a[2] + 0
+                }
+                close(statefile)
+                wrote = 0
+              }
+              {
+                wrote = 1
+                if ($0 ~ /^\[chug\] model: /) {
+                  inmodel = 1; counted = 1
+                  line = $0
+                  sub(/^\[chug\] model: /, "", line)
+                  print "[loop] " pre "model: " line
+                } else if (inmodel && $0 !~ /^\[chug\]/ && $0 !~ /^chug:/ && $0 !~ /^\[loopd/) {
+                  counted++
+                  if (counted <= 3) print "[loop] " pre "model: " $0
+                  else if (counted == 4) print "[loop] " pre "model: ..."
+                  # counted > 4: the rest of an over-long block is swallowed
+                } else {
+                  inmodel = 0
+                  if ($0 ~ /^chug: abort: /) {
+                    line = $0
+                    sub(/^chug: abort: /, "", line)
+                    print "[loop] ERROR: " line
+                  }
+                }
+              }
+              END { if (wrote) printf "%d %d\n", inmodel, counted > statefile }' "$clog" 2>/dev/null || true
+          else
+            # The trace (level 3): every new cycle-log line VERBATIM — the
+            # tee. No filter, no prefix: the stream IS the cycle log.
+            sed -n "$((clog_seen + 1)),${clog_total}p" "$clog" 2>/dev/null || true
+          fi
+          clog_seen=$clog_total
+        fi
+      fi
     fi
     # The poll wait, sliced to 1s: a killed watcher must never leave a
     # long-sleeping orphan holding the pty stdout (the T354 fixtures' drain
@@ -2102,17 +2290,23 @@ ideation_cycle() { # the ONE launch the ideation timer schedules: while
   # rotates at its own launch, ~100ms after the watcher's birth — the
   # stale-events fixtures reproduce the false line the first poll used to
   # emit). See loopd_hb_prerotate above.
+  # T359 — the watcher rides the launch with the cycle log (the verbose
+  # tails' source — see loopd_hb_watch), and the level-2 model-block state
+  # never survives a cycle: a stale `in model block, 3 lines shown` from the
+  # previous cycle's log would miscount the fresh log's first block.
   loopd_hb_prerotate
-  loopd_hb_watch 200 &
+  rm -f "$STATE/hb-tail.state" 2>/dev/null || true
+  loopd_hb_watch 200 "$cycle_log" &
   hb_watch_pid=$!
   chug_rc=0
   chug_out="$(CARGO_TARGET_DIR="$ROOT/target-shared" ./target/release/chug run --spec LOOP-SPEC.md \
     --goal "Run the full self-improvement cycle per LOOP-SPEC: evaluate or skip per the freshness rule, work the queue (features are first-class per the amended doctrine — close capability gaps, not only harden), adversarial validation for core-logic items, you own all bookkeeping, push after each item lands green + remainder at wrap. Your wrap IS the next cycle's input — leave TODO.md, EVALUATION.md and specs/ such that a cold next cycle needs zero human words." \
     --model "$orch_model" --max-iters 200 --max-minutes 360 --ctx-warn-at-tokens 100000 \
     2>> "$cycle_log")" || chug_rc=$?
-  kill "$hb_watch_pid" 2>/dev/null || true
-  wait "$hb_watch_pid" 2>/dev/null || true
-  kill -9 "$hb_watch_pid" 2>/dev/null || true # backstop: the watcher can never outlive the capture
+  # T359 — the kill trio lives AFTER the verdict stamps + the drain window
+  # below (the tee's source must be complete and streamed before the tail
+  # is cut); the watcher's own kill -0 $PPID leg and this kill cover every
+  # path between.
   printf '%s\n' "$chug_out" >> "$cycle_log"
   # T325-F1 — the audit's record re-arm, AFTER the child returns: the
   # restart is the anchor the audit itself moved, so the record re-derives
@@ -2131,6 +2325,27 @@ ideation_cycle() { # the ONE launch the ideation timer schedules: while
   else
     echo "[loopd $(ts)] verdict: no goal complete (rc=$chug_rc)" >> "$cycle_log"
   fi
+  # T359 — the tee's drain window: the cycle log's final lines (the captured
+  # stdout block, the verdict stamp) are written in the same breath the
+  # watcher is killed in — at level ≥2 the watcher's 1s polls get ONE
+  # bounded drain (the LOOPD_HB_DRAIN seam, default 2s — the spec's own ≤2s
+  # latency budget) to stream them before the kill. The window sits AFTER
+  # the verdict stamps (the tee's source must be complete before the tail
+  # is cut) and BEFORE the kill trio below. Levels 0/1 skip the window
+  # entirely (byte-identical to pre-T359; the piped path resolves level 0
+  # and never sleeps). Every value is validated — a garbage seam degrades
+  # to the default, never a set -e death.
+  loopd_verbose_resolve
+  case "$VERBOSE_LEVEL" in
+    2|3)
+      drain="${LOOPD_HB_DRAIN:-2}"
+      case "$drain" in ''|0|*[!0-9]*) drain=2 ;; esac
+      sleep "$drain"
+      ;;
+  esac
+  kill "$hb_watch_pid" 2>/dev/null || true
+  wait "$hb_watch_pid" 2>/dev/null || true
+  kill -9 "$hb_watch_pid" 2>/dev/null || true # backstop: the watcher can never outlive the capture
   # T137 pipefail sweep: the marker is grepped from the captured stdout
   # DIRECTLY, not through a `printf | grep -q` pipeline — under pipefail a
   # writer SIGPIPE (large stdout, grep -q exits at the match) would flip a

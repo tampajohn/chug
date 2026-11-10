@@ -568,7 +568,13 @@ fn write_supervisor_assets(cwd: &Path) -> anyhow::Result<PathBuf> {
 /// starts work instead of going dormant. A non-empty queue refuses the
 /// goal (exit 2, before any write) — never silently append to a queue
 /// nobody read; seeding onto a live queue is `init --goal`'s explicit job.
-pub fn run(cwd: &Path, goal: Option<&str>) -> anyhow::Result<i32> {
+///
+/// T359: with `verbose`, the dial rides into the supervisor's environment
+/// as CHUG_LOOP_VERBOSE (the loopd.sh resolver applies the standing TTY
+/// gate to it — a redirected launch still lands level 0). `None` passes
+/// nothing extra: the supervisor is born with no dial at all, the
+/// byte-identical pre-T359 default.
+pub fn run(cwd: &Path, goal: Option<&str>, verbose: Option<u8>) -> anyhow::Result<i32> {
     // 1. Verify the scaffold BEFORE any write (no half-starts).
     let mut missing = Vec::new();
     if !cwd.join("LOOP-SPEC.md").is_file() {
@@ -665,6 +671,11 @@ pub fn run(cwd: &Path, goal: Option<&str>) -> anyhow::Result<i32> {
         .arg("run")
         .current_dir(cwd)
         .env("CHUG_LOOP_BIN", &exe);
+    // T359 — the dial forwards ONLY when asked: the flag absent leaves the
+    // supervisor's env untouched (a host export still passes through).
+    if let Some(level) = verbose {
+        command.env("CHUG_LOOP_VERBOSE", level.to_string());
+    }
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;

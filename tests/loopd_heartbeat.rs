@@ -19,10 +19,15 @@
 //!   string, two destinations — composed inside the ONE dual-surface
 //!   emitter, so the dot and the line can never disagree).
 //! * **Gating (the same contract as T354, own knob)**: emit ONLY when stdout
-//!   is a TTY AND `CHUG_LOOP_VERBOSE` is unset or `=1`; every redirected
-//!   context (nohup, launchd, pipes, log files) receives ZERO lines;
-//!   `CHUG_LOOP_VERBOSE=0` kills even on a TTY. The knobs are independent:
-//!   `CHUG_OSC7501=0` silences the dot, never the line, and vice versa.
+//!   is a TTY AND the `CHUG_LOOP_VERBOSE` dial is ≥1 — unset or empty is the
+//!   T356 default (1, byte-identical to pre-T359) and T359's levels 2/3
+//!   carry the compact lines too; every redirected context (nohup, launchd,
+//!   pipes, log files) receives ZERO lines whatever the knob says (T359:
+//!   the dial's TTY gate lands them at level 0); `CHUG_LOOP_VERBOSE=0` (or
+//!   any value outside the dial) kills even on a TTY. The knobs are
+//!   independent: `CHUG_OSC7501=0` silences the dot, never the line, and
+//!   vice versa. The T359 gating extension pins live at the bottom of this
+//!   file; the per-level fixtures live in tests/loopd_verbose.rs.
 //! * **Volume**: a 200-iteration cycle emits ≤ 15 lines (8 milestones at
 //!   the 25-iteration cadence + the cycle-start and cycle-done lines, with
 //!   merge flips bounded by LOOP-SPEC's serial one-merge-per-row delivery).
@@ -1479,7 +1484,8 @@ fn milestones_and_flips_stay_within_the_volume_bound() {
 // ---------------------------------------------------------------------------
 // The stale-events fixtures (the F1 fix-up round, validator-blocking): a
 // previous cycle's events log is on the watcher's read surface at birth —
-// `loopd_hb_watch 200 &` starts microseconds before the chug launch, and
+// the watcher is backgrounded microseconds before the chug launch (it now
+// rides the launch with the cycle log, the T359 tails' source), and
 // the driver rotates .chug/events.jsonl only at its own launch — so the
 // milestone leg's FIRST poll read the predecessor's file and LATCHED its
 // iteration count. RED (captured on the pre-fix tree, both shapes):
@@ -1735,7 +1741,7 @@ fn the_emitter_composes_both_surfaces_from_one_call() {
     let at_hb_env = need(&hb, "case \"${CHUG_LOOP_VERBOSE-}\" in", "the line's env gate");
     let at_hb_write = need(&hb, "printf '%s\\n' \"$1\" || true", "the guarded line writer");
     assert!(at_hb_tty < at_hb_env && at_hb_env < at_hb_write, "gate order: TTY → env → write");
-    count_eq(&hb, "''|1) ;;", 1, "the emit arm accepts unset/empty and exactly 1");
+    count_eq(&hb, "''|1|2|3) ;;", 1, "the emit arm accepts unset/empty (=1) and every T359 level");
     count_eq(&hb, "*) return 0 ;;", 1, "every other value kills (default-safe)");
     assert!(
         hb.trim_end().ends_with("return 0"),
@@ -1792,7 +1798,7 @@ fn every_transition_wires_the_line_beside_its_dot() {
     // are line-precise (own line, two-space indent) so the helpers' doc
     // comments that MENTION the calls can never satisfy them.
     let at_prerot = need(&loopd, "\n  loopd_hb_prerotate\n", "the events-log pre-rotation call");
-    let at_watch = need(&loopd, "\n  loopd_hb_watch 200 &\n", "the watcher start");
+    let at_watch = need(&loopd, "\n  loopd_hb_watch 200 \"$cycle_log\" &\n", "the watcher start");
     let at_launch = need(&loopd, "chug_out=\"$(CARGO_TARGET_DIR=", "the chug launch");
     let at_kill = need(&loopd, "kill \"$hb_watch_pid\" 2>/dev/null || true", "the watcher kill");
     let at_wait = need(&loopd, "wait \"$hb_watch_pid\" 2>/dev/null || true", "the watcher reap");
@@ -1804,7 +1810,7 @@ fn every_transition_wires_the_line_beside_its_dot() {
     // The tandem: the same 200 literal on both sides of the launch (the
     // line-precise needle — the prerotate comment MENTIONs the watcher).
     count_eq(&loopd, "--max-iters 200", 1, "the launch's iteration budget (T121/T198)");
-    count_eq(&loopd, "\n  loopd_hb_watch 200 &\n", 1, "the watcher's max is the same budget");
+    count_eq(&loopd, "\n  loopd_hb_watch 200 \"$cycle_log\" &\n", 1, "the watcher's max is the same budget");
 
     // The held skips: the dormant line names the next probe, the plain skip
     // names the skip — both between the pacing log and the sleep.
@@ -1979,7 +1985,7 @@ fn the_watcher_never_reads_a_predecessor_events_log() {
     // watcher/launch pair; this one anchors the call to the watcher — both
     // needles are line-precise so doc-comment mentions never satisfy them).
     let at_call = need(&loopd, "\n  loopd_hb_prerotate\n", "the run-loop call site");
-    let at_watch = need(&loopd, "\n  loopd_hb_watch 200 &\n", "the watcher start");
+    let at_watch = need(&loopd, "\n  loopd_hb_watch 200 \"$cycle_log\" &\n", "the watcher start");
     assert!(
         at_call < at_watch,
         "the pre-rotation must precede the watcher's birth — the whole point \
@@ -2144,5 +2150,98 @@ fn a_piped_milestone_arc_leaks_no_lines_into_the_redirect() {
     for file in sandbox.redirected_files() {
         let bytes = fs::read(&file).unwrap_or_default();
         assert!(find(&bytes, b"[loop").is_none(), "{} carries a heartbeat line", file.display());
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The T359 gating extensions: the knob became the LEVEL dial (0 silent,
+// 1 compact heartbeat, 2 turn detail, 3 full cycle-log tee — the per-level
+// fixtures live in tests/loopd_verbose.rs), and the standing contract is
+// that the TTY gate outranks it: a redirected context is level 0 whatever
+// the knob says. These pin the dial's edges on the CHEAP probe surface (the
+// `osc` probe — the real dual-surface emitter, no sandbox); the compact
+// lines' gate is the emitter's own, so the probe exercises it exactly.
+// ---------------------------------------------------------------------------
+
+/// (T359 gating req) Piped stdout at EVERY level — 0, 1, 2, 3, and a value
+/// outside the dial — receives ZERO bytes: the TTY gate is conjunctive with
+/// the whole dial, not just the default arm. The DOT still rides (its own
+/// knob is untouched — the same independence the T356 fixtures pin).
+#[test]
+fn the_dial_never_leaks_lines_onto_a_pipe_at_any_level() {
+    for level in ["0", "1", "2", "3", "9"] {
+        let root = probe_fixture_root();
+        let out = probe_piped(
+            root.path(),
+            &["blocked", "budget: cycle ended without goal complete (rc=1)"],
+            &[("CHUG_LOOP_VERBOSE", level)],
+        );
+        assert!(
+            out.status.success(),
+            "the probe must exit 0 even when silent (level {level})"
+        );
+        assert!(
+            out.stdout.is_empty(),
+            "piped stdout carried bytes at CHUG_LOOP_VERBOSE={level} — the \
+             T359 dial's TTY gate is broken (log parsers must never see a \
+             heartbeat line): {:?}",
+            String::from_utf8_lossy(&out.stdout)
+        );
+        assert_eq!(esc_count(&out.stdout), 0, "piped stdout carried an escape byte at level {level}");
+        let records = parse_osc7501(&out.stdout);
+        assert!(
+            records.is_empty(),
+            "piped stdout carried a 7501 sequence at level {level}"
+        );
+    }
+}
+
+/// (T359 req) The compact line's gate is the LEVEL-≥1 contract: on a pty,
+/// levels 1, 2, and 3 all carry the line (level 2/3 ADD surfaces on top of
+/// level 1 — they never silence it), level 0 and a value outside the dial
+/// kill even on a TTY, and unset is the level-1 default. The DOT rides in
+/// every arm (the knobs are independent).
+#[test]
+fn the_compact_lines_gate_is_the_level_ge_1_contract() {
+    let cases: &[(&str, bool)] = &[
+        ("", true),   // unset — the T356 default, byte-identical
+        ("1", true),  // the explicit compact arm
+        ("2", true),  // turn detail ADDS to level 1, never silences it
+        ("3", true),  // the trace ADDS to level 1, never silences it
+        ("0", false), // the silent arm kills even on a TTY
+        ("9", false), // a value outside the dial kills (default-safe)
+    ];
+    for (level, want_line) in cases {
+        let root = probe_fixture_root();
+        let mut envs: Vec<(&str, &str)> = Vec::new();
+        if !level.is_empty() {
+            envs.push(("CHUG_LOOP_VERBOSE", level));
+        }
+        let capture = probe_pty(
+            root.path(),
+            &["working", "cycle start: eval cycle on X", "[loop 14:32:05] cycle 7 routing=eval (kimi-k3)"],
+            &envs,
+        );
+        let lines = heartbeat_lines(&capture);
+        if *want_line {
+            assert_eq!(
+                lines.len(),
+                1,
+                "level {level:?} must carry the compact line (the higher \
+                 levels ADD surfaces on top of level 1): {capture:?}"
+            );
+            assert_eq!(
+                lines[0], "[loop 14:32:05] cycle 7 routing=eval (kimi-k3)",
+                "the line is the detail verbatim at every emitting level"
+            );
+        } else {
+            assert!(
+                lines.is_empty(),
+                "level {level:?} must silence the compact line even on a tty: {capture:?}"
+            );
+        }
+        let records = parse_osc7501(&capture);
+        assert_eq!(records.len(), 1, "the dot must ride at every level");
+        assert_eq!(records[0].state, "working");
     }
 }
