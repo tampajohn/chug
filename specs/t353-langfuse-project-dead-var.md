@@ -2,7 +2,7 @@
 
 estimate: ~70 changed lines (install.sh profile template + docs/install-profiles.md + loader comment + a contract-audit test)
 
-check: CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared cargo test --release --test profile_contract_audit
+check: CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-validate-a cargo test --release --test profile_contract_audit
 
 ## Orchestrator dispatch note (2026-11-10, read-first finding)
 
