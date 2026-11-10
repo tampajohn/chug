@@ -81,6 +81,13 @@ const ENV_LOADER: &str = include_str!("../scripts/loopd_env_loader.sh");
 /// way at pilot-supervisor startup.
 const PROFILE_LOADER: &str = include_str!("../scripts/loopd_profile_loader.sh");
 
+/// T358 — the SHARED OSC 7501 emitter, embedded from the LIVE checkout file
+/// (no copy to drift): the ONE function body (`osc7501_emit`) that produces
+/// the 7501 bytes in BOTH supervisors — chug's own loopd.sh sources the same
+/// file, and the generated pilot supervisor sources this materialized copy
+/// beside it. Parity between the two supervisors is parity by construction.
+const OSC7501_EMITTER: &str = include_str!("../scripts/osc7501.sh");
+
 /// The supervisor-override env var (the `CHUG_DAEMON_BIN` precedent): an
 /// executable file set in the env wins over the generated script. The
 /// loop_subcommand tests use it as the stubbed-exec seam.
@@ -536,6 +543,10 @@ fn write_supervisor_assets(cwd: &Path) -> anyhow::Result<PathBuf> {
     for (name, body) in [
         ("loopd_env_loader.sh", ENV_LOADER),
         ("loopd_profile_loader.sh", PROFILE_LOADER),
+        // T358 — the shared OSC 7501 emitter rides beside the pilot exactly
+        // like the loader fragments: sourced via `$(dirname "$0")/scripts/`,
+        // embedded from the live checkout (no copy to drift).
+        ("osc7501.sh", OSC7501_EMITTER),
     ] {
         let path = scripts.join(name);
         std::fs::write(&path, body)
