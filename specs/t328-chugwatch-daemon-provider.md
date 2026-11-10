@@ -43,3 +43,13 @@ triage route decisions?). Finish the half T219 deferred.
 - Cross-box daemon federation (K7's daemon stays host-scoped; the mod on
   F94 keeps using SSH for K7 state — that is correct, not a gap).
 - The mod's SSH probe removal (SSH remains the fallback forever).
+
+## Check (composed at dispatch — the decision-B sanctioned landing gate; landed with the item)
+
+The chug-watch npm test battery stays RED by design on this host (no claude-code/testing module anywhere resolvable — the T344 probe chain; the shim fails closed loudly, which IS the sanctioned state). The landing gate verifies the sanctioned shape instead — both must exit 0:
+
+check: node scripts/t328-failclosed-check.mjs && node scripts/t328-provider-smoke.mjs
+
+Legs: (1) shim without CLAUDE_CODE_TESTING_PATH exits nonzero with a diagnostic naming the probe chain; (2) with the env var set it re-exports the pointed module verbatim (identity, not a copy); (3) the npm test script routes the TS battery through the shim — and fails with the diagnostic while the real module is absent. Provider smoke: temp unix socket serving the recorded /healthz + /sessions + /status/loop fixtures — local wins, SSH fallback on absent/unresponsive (2s stale budget), malformed body degrades without throwing, parse render covers ok/off/stale.
+
+LANDED 2026-11-10: chug-watch sibling merge 79031bc (impl c09ade8 + review nit 09be3cf), kimi PASS d1794334192-7.
