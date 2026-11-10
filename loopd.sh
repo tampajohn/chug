@@ -1048,6 +1048,58 @@ loopd_write_disposition() { # T258 — the supervisor writes the one-line
 LAYA_SEQ=0
 LAYA_TRIAGE_QUIET=""
 
+# T354 — the OSC 7501 program-status emitter (the terminal-harness channel).
+# loopd reports its own state to the terminal it runs on the terminal-native
+# way: one OSC 7501 record on STDOUT — Mitchell Hashimoto's Program Status
+# Protocol, the id-less ROOT record the fleet shim re-emits (state + msg, no
+# id key — the harness's terminal IS the record's address). The legs map the
+# shim's proven semantics onto loopd's own transitions:
+#     cycle start / ideation (item) start    -> working
+#     cycle OK (= goal complete) / dormant   -> idle
+#     build-gate red / delivery (disposition commit) failing / cycle death /
+#     HALT                                   -> blocked, with the ONE-line
+#                                               reason on the msg channel,
+#                                               headed by its T340
+#                                               blocked-reason word
+#                                               (budget|error — the same
+#                                               vocabulary the T340 socket
+#                                               surface reports)
+# THE COMPAT CONTRACT — read before touching (T354):
+#   * emit ONLY when (a) stdout is a TTY *and* (b) CHUG_OSC7501 is unset or
+#     =1. Any redirected context — nohup, launchd, a pipe, a log file —
+#     receives ZERO escape bytes: log parsers must never see one.
+#   * CHUG_OSC7501=0 (or any non-1 value) disables even on a TTY.
+#   * Best-effort end to end, and it can never trip set -e/pipefail: every
+#     leg is rc-guarded (the T142 house style), a closed stdout (EPIPE)
+#     degrades to silence.
+# Wire (one sequence): ESC ] 7501 ; state=<s>[:msg=<base64>] ESC \
+#   msg is ONE human-readable line, base64'd (the tr strips GNU wrapping);
+#   the decoded msg stays <=2048 bytes and the whole sequence <=4096 (the
+#   protocol's limits — loopd's one-line reasons sit far under both).
+#   base64 absent -> the msg channel degrades away, the state rides alone.
+# Probe surface: `./loopd.sh osc <state> [one-line reason]` (the
+# routing/sleep-ok/predicate pattern) — the operator's and the tests'
+# behavioral leg, driven through THIS function so the fixtures exercise the
+# real gate, never a reimplementation.
+loopd_osc7501_emit() { # <state> [one-line reason] — TTY-gated, env-killable
+  local state="${1:-working}" msg="${2:-}" b64 seq rc=0
+  [ -t 1 ] || return 0 # (a) a TTY stdout or nothing — the whole contract
+  case "${CHUG_OSC7501-}" in # (b) unset (or empty) and exactly 1 emit
+    ''|1) ;;
+    *) return 0 ;;
+  esac
+  msg=${msg//$'\n'/ } # msg is ONE human-readable line, never a multiline
+  seq="state=$state"
+  if [ -n "$msg" ]; then
+    b64=$(printf '%s' "$msg" | base64 | tr -d '\n') || rc=$? # rc latched (T142)
+    if [ "$rc" -eq 0 ] && [ -n "$b64" ]; then
+      seq="$seq:msg=$b64"
+    fi
+  fi
+  printf '\033]7501;%s\033\\' "$seq" || true # a closed stdout is silence, never a set -e death
+  return 0
+}
+
 case "${1:-run}" in
   stop)
     touch "$STOP"
@@ -1095,6 +1147,16 @@ case "${1:-run}" in
     eval_gate
     exit 0
     ;;
+  osc)
+    # T354: emit ONE status through the real gated emitter — the
+    # routing/sleep-ok/predicate/update-check probe pattern: the operator's
+    # and the tests' behavioral surface for the OSC 7501 legs. stdout IS the
+    # channel, the gate decides (piped stdout stays byte-silent), nothing
+    # launches, nothing is logged.
+    #   loopd.sh osc <state> [one-line reason]
+    loopd_osc7501_emit "${2:-working}" "${3:-}"
+    exit 0
+    ;;
   status)
     if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
       echo "loopd RUNNING (pid $(cat "$PIDFILE"))"
@@ -1122,7 +1184,7 @@ case "${1:-run}" in
     exit 0
     ;;
   run) ;;
-  *) echo "usage: loopd.sh [run|stop|status|routing] [sleep-ok] [predicate]" >&2; exit 2 ;;
+  *) echo "usage: loopd.sh [run|stop|status|routing] [sleep-ok] [predicate] [osc]" >&2; exit 2 ;;
 esac
 
 # T50: same-pid pass. `exec` preserves the pid, so a re-exec'd self finds its
@@ -1380,10 +1442,15 @@ while [ ! -f "$STOP" ]; do
   CARGO_TARGET_DIR="$ROOT/target" cargo build --release >> "$LOG" 2>&1 || build_rc=$?
   if [ "$build_rc" -ne 0 ]; then
     echo "$(ts) build FAILED (rc=$build_rc) — refusing to launch: ./target/release/chug is the stale previous release; not starting a cycle on it" >> "$LOG"
+    # T354 — the build gate went red: blocked until a green build (the
+    # launch is refused, so no "working" ever follows on this iteration).
+    loopd_osc7501_emit blocked "error: build failed (rc=$build_rc) — refusing to launch a stale binary"
     fails=$((fails + 1))
     if [ "$fails" -ge 3 ]; then
       echo "3 consecutive build failures — refusing to launch a stale binary; fix the tree or stop the loop (last build rc=$build_rc)" > "$STATE/HALTED"
       echo "$(ts) HALTED after 3 consecutive build failures" >> "$LOG"
+      # T354 — the supervisor is stopping wedged: the last word is blocked.
+      loopd_osc7501_emit blocked "error: HALTED after 3 consecutive build failures"
       exit 1
     fi
     echo "$(ts) build failure counts toward the consecutive-failure guard ($fails/3); will retry" >> "$LOG"
@@ -1566,6 +1633,9 @@ ideation_cycle() { # the ONE launch the ideation timer schedules: while
   ideation_due || return 0
   local ilog="$STATE/ideation-$(date -u +%Y%m%d-%H%M%S).log" rc=0
   echo "$(ts) ideation cycle (T326): timer due — launching $IDEATION_SPEC on $LOOP_IDEATION_MODEL (log $ilog)" >> "$LOG"
+  # T354 — item start: the ideation child is real work the supervisor owns;
+  # the watching terminal sees working for its whole (bounded) run.
+  loopd_osc7501_emit working "ideation cycle: proposing outward-facing features"
   CARGO_TARGET_DIR="$ROOT/target-shared" ./target/release/chug run \
     --spec "$IDEATION_SPEC" --goal "$IDEATION_GOAL" \
     --model "$LOOP_IDEATION_MODEL" --max-iters 16 --max-minutes 15 \
@@ -1637,6 +1707,14 @@ ideation_cycle() { # the ONE launch the ideation timer schedules: while
         fails=0
         skip_secs=$(ok_sleep_seconds)
         echo "$(ts) cheap-exit pacing: sleeping ${skip_secs}s (empty streak $(empty_wrap_streak))" >> "$LOG"
+        # T354 — a held skip is the loop at rest: idle for the pacing sleep
+        # (dormant names WHY — the queue is empty and the audit timer owns
+        # the cadence).
+        if [ "$gate_dormant" = "suspended-valve" ]; then
+          loopd_osc7501_emit idle "dormant: queue empty"
+        else
+          loopd_osc7501_emit idle "cycle skipped: no evaluation needed now"
+        fi
         sleep "$skip_secs"
         continue
       fi
@@ -1645,6 +1723,10 @@ ideation_cycle() { # the ONE launch the ideation timer schedules: while
       # be invisible to the T237 streak walk and the T247 valve, and the
       # chain would cheap-exit forever unpaced.
       echo "$(ts) cheap-exit disposition commit FAILED — falling through to a real $LOOP_ORCH_MODEL eval" >> "$LOG"
+      # T354 — delivery failing: the git record the whole bookkeeping reads
+      # (the T237 streak walk, the T247 valve) could not be written. The
+      # blocked word is momentary — the launch that follows reports working.
+      loopd_osc7501_emit blocked "error: disposition commit failed — falling through to a real eval"
       orch_model=$LOOP_ORCH_MODEL
     elif [ "$gate_model" != "$LOOP_ORCH_MODEL" ]; then
       # the borderline re-route (req 2): the gate resolved $LOOP_ROUTINE_MODEL
@@ -1680,6 +1762,9 @@ ideation_cycle() { # the ONE launch the ideation timer schedules: while
   fi
   echo "$(ts) routing: todo_rows=$(todo_rows TODO.md) eval_fresh=$(eval_fresh EVALUATION.md && echo yes || echo no) -> $mode cycle on $orch_model" >> "$LOG"
   echo "$(ts) cycle start -> $cycle_log ($mode cycle, orchestrator $orch_model)" >> "$LOG"
+  # T354 — item start: the cycle launch is the supervisor's one "working"
+  # span (the orchestrator owns per-item turns inside it).
+  loopd_osc7501_emit working "cycle start: $mode cycle on $orch_model"
   echo "[loopd $(ts)] T81 routing: $mode cycle — orchestrator model $orch_model" > "$cycle_log"
   # cycle budget: eval ≈45–55 + items ≈28–35 each + wrap ≈10 ⇒ a 5-item eval
   # cycle wants ≈195–240 — 200 fits it with a slim margin (T121). Cycle-61
@@ -1782,6 +1867,8 @@ ideation_cycle() { # the ONE launch the ideation timer schedules: while
     # herestring grep above, never by this extraction.
     summary=$(printf '%s\n' "$chug_out" | grep "^summary:" | head -1 | cut -c1-200 || true)
     echo "$(ts) cycle OK: $summary" >> "$LOG"
+    # T354 — cycle OK = goal complete: the loop is at rest between cycles.
+    loopd_osc7501_emit idle "cycle ok"
     # T98: best-effort site stats sync — one line, failure-tolerant. The
     # script itself never fails a cycle (missing clone / rejected push /
     # marker-less page all warn and exit 0; a nonzero exit here is logged
@@ -1801,9 +1888,20 @@ ideation_cycle() { # the ONE launch the ideation timer schedules: while
   else
     fails=$((fails + 1))
     echo "$(ts) cycle ended WITHOUT goal complete (consecutive failures: $fails)" >> "$LOG"
+    # T354 — a cycle death is a blocked state: the msg channel carries the
+    # ONE-line reason headed by its T340 blocked-reason word — rc 1 is the
+    # budget/abort exit (driver.rs, the T142 verdict mapping), everything
+    # else reads error.
+    case "$chug_rc" in
+      1) osc_word=budget ;;
+      *) osc_word=error ;;
+    esac
+    loopd_osc7501_emit blocked "$osc_word: cycle ended without goal complete (rc=$chug_rc)"
     if [ "$fails" -ge 3 ]; then
       echo "3 consecutive cycles without goal_complete — last: $cycle_log" > "$STATE/HALTED"
       echo "$(ts) HALTED after 3 consecutive failures" >> "$LOG"
+      # T354 — the supervisor is stopping wedged: the last word is blocked.
+      loopd_osc7501_emit blocked "error: HALTED after 3 consecutive cycles without goal complete"
       exit 1
     fi
     sleep "${LOOPD_SLEEP_FAIL:-300}"

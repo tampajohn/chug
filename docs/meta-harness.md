@@ -355,6 +355,75 @@ On all three, a provider that reports none leaves the key out — the
 requested name is never copied into the served slot. Additive optional
 keys: existing consumers parse unchanged.
 
+### T354 — loopd's native OSC 7501 status (the terminal channel)
+
+`loopd.sh` reports its own state to the terminal it runs on with **OSC
+7501** — Mitchell Hashimoto's Program Status Protocol (an
+`ESC ] 7501 ; …` sequence well-behaved terminals ignore and terminal
+harnesses parse). This is the third observation channel of this contract,
+and the terminal-native one: a harness that owns the pty (herdr, cmux,
+Agent Deck — or plain `ssh`) sees the loop's state with zero install and
+zero sockets. Where the fleet previously shipped a per-harness shim that
+parsed `loopd.log` and re-emitted 7501 on the loop's behalf, the supervisor
+now emits natively and that shim retires for every terminal harness at
+once.
+
+Emission points (one record per transition, the supervisor's own legs):
+
+| loopd leg | state | msg channel |
+| --- | --- | --- |
+| cycle start | `working` | `cycle start: <mode> cycle on <model>` |
+| ideation (item) start | `working` | `ideation cycle: proposing outward-facing features` |
+| cycle OK (the accepted goal) | `idle` | `cycle ok` |
+| cheap-exit skip (T258/T259) | `idle` | `cycle skipped: no evaluation needed now` |
+| dormant cheap-exit (T325) | `idle` | `dormant: queue empty` |
+| cycle death | `blocked` | `<reason>: cycle ended without goal complete (rc=N)` |
+| build gate red | `blocked` | `error: build failed (rc=N) — …` |
+| disposition commit failing | `blocked` | `error: disposition commit failed — …` |
+| the 3-strike HALTs | `blocked` | `error: HALTED after 3 consecutive …` |
+
+A `blocked` msg is one line headed by its T340 blocked-reason word —
+`budget` (the child died on the budget/abort exit) or `error` (everything
+else) — so the terminal surface and the daemon surface (T340's
+`blocked_reason`) read the same vocabulary from the same writer. The wire
+is the **id-less root record**:
+`ESC ] 7501 ; state=<s>[:msg=<base64>] ESC \` — `msg` is one base64 line,
+the whole sequence ≤4096 bytes. Records carry no `id`, `app`, or
+`progress` keys: the loop's state is one root record, and optional keys
+staying absent is exactly the additivity this contract promises.
+
+**The gating contract (compat-critical).** The emission happens ONLY when
+(a) stdout is a TTY *and* (b) `CHUG_OSC7501` is unset or `=1`. Every
+redirected context — `nohup`, launchd, a pipe, a log file — receives ZERO
+escape bytes: log parsers must never see one. `CHUG_OSC7501=0` (or any
+non-1 value) disables even on a TTY. Non-harness operation is
+byte-identical to pre-T354.
+
+Probe: `./loopd.sh osc <state> [one-line reason]` emits one record through
+the real gated emitter and exits — the operator's and the tests'
+behavioral surface (the `routing`/`sleep-ok`/`predicate` probe pattern).
+
+Implementation note: the wire follows the published OSC 7501 specification
+(the T354 semantics table plus the protocol's field rules). The fleet
+shim's exact bytes (herdr-fleet-mods `252a6f8`) were not available on the
+build host, so byte-compat is claimed at the spec level — id-less root,
+`state` + optional base64 `msg`, `ESC \` terminator — not at the
+shim-diff level. `tests/loopd_osc7501.rs` parses every emitted byte with a
+spec-derived reference parser and pins the gating contract end to end.
+
+#### Choosing among the three observation channels
+
+| channel | audience | read how | carries |
+| --- | --- | --- | --- |
+| T340 daemon endpoints (`daemon_status`) | harnesses integrated with the host daemon; dashboards | one bounded socket probe | the richest typed view: cycle id, iteration, children, `blocked_reason` |
+| T342 status files (`status_mod`) | harnesses that poll the filesystem; Claude-session supervision; no terminal required | poll `<claude-dir>/meta-status/<session-id>.json` | per-session typed status, atomic single-file overwrite |
+| T354 OSC 7501 (this row) | harnesses that own the pty; ssh/container/tmux-bridged terminals; zero install | watch the terminal stream | loop-level state + a one-line msg; nothing to install, works anywhere a pty does |
+
+The channels are siblings, not competitors: T340 needs the daemon on the
+host, T342 needs the hook pack installed, 7501 needs only a terminal. A
+harness picks by what it already has; all three speak the same typed status
+enum and the same blocked-reason vocabulary.
+
 ## Spawning a loop: the goal rides `--goal`, not the prompt
 
 A harness that spawns a loop (`chug loop init && chug loop run` in a

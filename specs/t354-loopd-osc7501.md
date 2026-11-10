@@ -58,3 +58,5 @@ context. Non-harness operation is byte-identical.
 - herdr-side changes (the shim retires on FP's schedule, not ours).
 - OSC 7501 in the chug binary's one-shot runs (loopd only — one-shot
   `chug run` has its own lifecycle UX).
+
+check: CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-validate-a cargo test --release --test loopd_osc7501
