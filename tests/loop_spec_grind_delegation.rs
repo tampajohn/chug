@@ -470,6 +470,10 @@ fn status_polls_and_collect_results_are_not_launches() {
         tool_result("delegate", STATUS_PREVIEW),
         tool_result("delegate", STATUS_PREVIEW),
         tool_result("delegate", COLLECT_PREVIEW),
+        tool_result(
+            "delegate",
+            "verdict: goal-accepted \u{2014} the child launched: pid 7 internals quoted mid-text by a collect summary must NOT count as a launch",
+        ),
     ];
     let dir = tempfile::Builder::new()
         .prefix("t362-poll-not-launch")
