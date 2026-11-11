@@ -1,6 +1,7 @@
 # T362 — orchestrator grind delegation: fixture/gate iteration moves to glm children; inline bash budget + shape metric
 
 estimate: ~120 changed lines (LOOP-SPEC doctrine + eval-notes shape metric + eval-triage class + fixtures)
+check: CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared cargo test --release --test loop_spec_grind_delegation
 
 ## Why
 
