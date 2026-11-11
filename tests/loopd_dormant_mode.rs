@@ -1086,3 +1086,318 @@ fn a_death_does_not_force_a_dormant_launch() {
     let gate = run_predicate(f.path(), &[("CHUG_ROUTINE_TODAY", FRESH_DAY)]);
     assert_eq!(verb_of(&gate), "launch", "awake: the death forces the launch: {gate}");
 }
+
+// ---------------------------------------------------------------- T361 ----
+// The dormant release flush: the release channel must not freeze behind
+// the T325 cheap exit. Dormancy suppresses EVAL cycles and the T100
+// release recount happens inside EVAL cycles, so a due release waits
+// forever once the queue drains. The flush is the RELEASE-ONLY mechanical
+// cycle: when a dormant cycle's recount (the T269 method against the
+// newest ANCESTOR tag) crossed 3, the gate flips the suspended-valve skip
+// to `dormant=release-flush` (the verb/model stay the skip's — no model
+// is picked, the flush is free) and the run mode cuts + pushes the tag —
+// zero LLM calls. < 3 flips changes nothing; the audit cycle gains the
+// recount as a rider (the flush runs BEFORE the audit child); an
+// anchor-unsafe candidate (a dirty tracked tree) is a NAMED skip.
+
+impl Fixture {
+    /// Write a fixture file (any relative path, dirs created).
+    fn write_file(&self, rel: &str, body: &str) {
+        let p = self.path().join(rel);
+        if let Some(dir) = p.parent() {
+            std::fs::create_dir_all(dir).expect("fixture file dir");
+        }
+        std::fs::write(p, body).expect("write fixture file");
+    }
+
+    /// A bare origin to receive the flush's push. Created AFTER every
+    /// commit on purpose — a later fixture `git add -A` would sweep the
+    /// bare repo's files into a commit, while an untracked dir never reads
+    /// dirty to the flush's `--untracked-files=no` anchor-safety check.
+    fn add_origin(&self) {
+        git(self.path(), &["init", "-q", "--bare", "origin.git"]);
+        git(self.path(), &["remote", "add", "origin", "origin.git"]);
+    }
+}
+
+/// The T361 flush fixture: the dormant battery's shape (the timer stale on
+/// BOTH halves, `streak` wrap-notes NEWEST — the flush commits land BEFORE
+/// the wraps, or the streak walk would reset at the first non-eval commit
+/// and read 0) PLUS a release channel on the books — Cargo.toml/Cargo.lock
+/// at v0.25.0, the pairing/notes scripts, an annotated v0.25.0 tag, one
+/// `t<N>:` feature impl and `n_flips` distinct `todo:` flip commits (whose
+/// trailing prose carries a stray T-token — the T269 leading-anchor keeps
+/// it out of the count), and (by the caller) a bare origin. All commits
+/// land BEFORE `add_origin()`.
+fn flush_fixture(streak: usize, age_secs: u64, n_flips: usize) -> Fixture {
+    let f = fixture();
+    f.backdate_anchor(age_secs);
+    f.write_file(
+        "Cargo.toml",
+        "[package]\nname = \"chug\"\nversion = \"0.25.0\"\nedition = \"2024\"\n",
+    );
+    f.write_file(
+        "Cargo.lock",
+        "version = 4\n\n[[package]]\nname = \"chug\"\nversion = \"0.25.0\"\ndependencies = [\n]\n",
+    );
+    for s in ["check-tag-version.sh", "release-notes.sh"] {
+        std::fs::copy(repo_root().join("scripts").join(s), f.path().join("scripts").join(s))
+            .unwrap_or_else(|e| panic!("copy {s} into the fixture: {e}"));
+    }
+    f.commit_empty("chore: baseline the release channel (T361 fixture)");
+    git(f.path(), &["tag", "-a", "v0.25.0", "-m", "v0.25.0"]);
+    f.commit_empty("t359: implement the dormant wake ledger (T361 fixture)");
+    // T359, T328, T297 — three DISTINCT row ids (the count is distinct
+    // ids, not commits), each flip's tail riding a stray `T361` token the
+    // T269 anchor must keep out of the extraction.
+    for i in 0..n_flips {
+        let id = 359 - i * 31;
+        f.commit_empty(&format!(
+            "todo: T{id} done (merge deadbe{i}) — the T361 flush fixture flip {i}"
+        ));
+    }
+    f.wraps(streak);
+    f.latch(age_secs);
+    f
+}
+
+/// A dormant cycle whose recount crossed 3 is the RELEASE-ONLY cycle: the
+/// gate keeps the skip's verb and no-model placeholder, names
+/// `dormant=release-flush`, and carries the recount on the line.
+#[test]
+fn a_dormant_cycle_with_three_distinct_flips_names_the_flush() {
+    let f = flush_fixture(4, 2 * DAY, 3);
+    let gate = run_predicate(f.path(), &[("CHUG_ROUTINE_TODAY", FRESH_DAY)]);
+    assert_eq!(verb_of(&gate), "skip", "the flush rides the skip class: {gate}");
+    assert_eq!(model_of(&gate), "-", "the flush is mechanical — no model is picked: {gate}");
+    assert_eq!(
+        field_of(&gate, "dormant="),
+        "release-flush",
+        "the decision names the flush cycle (T361): {gate}"
+    );
+    assert_eq!(field_of(&gate, "flips="), "3", "the recount rides the line: {gate}");
+    assert!(gate.contains("laya=none"), "the flush never consults the triage: {gate}");
+}
+
+/// The wake outranks the flush: an OPEN row is real queue work — the loop
+/// exits dormancy FIRST and the recount is never consulted (a flush must
+/// never fire on top of an awake cycle).
+#[test]
+fn an_open_row_exits_dormancy_before_any_flush() {
+    let f = flush_fixture(4, 2 * DAY, 3);
+    f.write_file("TODO.md", TODO_ONE_OPEN);
+    f.commit_empty("eval: cycle-110 wake — the operator flipped a row open (T361 fixture)");
+    let gate = run_predicate(f.path(), &[("CHUG_ROUTINE_TODAY", FRESH_DAY)]);
+    assert_eq!(verb_of(&gate), "launch", "the wake fires before any flush: {gate}");
+    assert_eq!(field_of(&gate, "dormant="), "no", "the loop is awake: {gate}");
+    assert_eq!(field_of(&gate, "rows="), "1", "the open row is the queue: {gate}");
+    assert_eq!(field_of(&gate, "flips="), "0", "the recount is a dormant-arm input only: {gate}");
+}
+
+/// Below the trigger the rule is byte-identical to T325: two distinct
+/// flips stay a plain suspended-valve cheap exit — no tag, no flush line,
+/// the normal disposition, zero model calls.
+#[test]
+fn two_flips_stay_a_plain_suspended_valve_cheap_exit() {
+    let f = flush_fixture(4, 2 * DAY, 2);
+    let gate = run_predicate(f.path(), &[("CHUG_ROUTINE_TODAY", FRESH_DAY)]);
+    assert_eq!(field_of(&gate, "dormant="), "suspended-valve", "< 3 flips: the rule is unchanged: {gate}");
+    assert_eq!(field_of(&gate, "flips="), "2", "the recount still rides the line: {gate}");
+    let child_env = f.install_run_stubs();
+    f.run_one_pass();
+    let log = f.fixture_log();
+    assert!(
+        !git_out(f.path(), &["tag", "-l"]).contains("v0.26.0"),
+        "no tag below the trigger"
+    );
+    assert!(!log.contains("dormant release flush (T361)"), "no flush below the trigger: {log}");
+    assert!(
+        log.contains("dormant cheap-exit (T325): streak=4 suspended-valve"),
+        "the normal dormant cheap exit stands: {log}"
+    );
+    assert!(!child_env.exists(), "zero model calls on the quiet cycle");
+}
+
+/// The flush end to end: dormant + 3 distinct flips → the tag is cut AND
+/// pushed (branch + tag together), the release commit bumps manifest AND
+/// lock (minor: the range carries a `t<N>:` feature), the log line names
+/// the tag and the three flips in the spec's shape — and ZERO model calls
+/// (the stub child never ran, no cycle ever started).
+#[test]
+fn the_flush_cuts_and_pushes_the_release_tag_with_zero_model_calls() {
+    let f = flush_fixture(4, 2 * DAY, 3);
+    f.add_origin();
+    let child_env = f.install_run_stubs();
+    f.run_one_pass();
+    let log = f.fixture_log();
+    assert!(
+        git_out(f.path(), &["tag", "-l", "v0.26.0"]).contains("v0.26.0"),
+        "the tag was cut at HEAD: {log}"
+    );
+    let remote = git_out(f.path(), &["ls-remote", "origin"]);
+    assert!(
+        remote.contains("refs/tags/v0.26.0"),
+        "the tag was PUSHED to the origin: {remote}"
+    );
+    assert_eq!(
+        git_out(f.path(), &["log", "-1", "--format=%s"]).trim(),
+        "chore: release v0.26.0",
+        "the release commit is HEAD (the T100 subject shape): {log}"
+    );
+    let toml = std::fs::read_to_string(f.path().join("Cargo.toml")).expect("read manifest");    assert!(
+        toml.contains("version = \"0.26.0\""),
+        "the manifest was bumped (minor: the range has a feature impl): {toml}"
+    );
+    let lock = std::fs::read_to_string(f.path().join("Cargo.lock")).expect("read lock");
+    let chug = lock.split("name = \"chug\"").nth(1).expect("the chug block");
+    assert!(
+        chug.starts_with("\nversion = \"0.26.0\""),
+        "the lock's chug block was bumped in lockstep (--locked builds stay green): {lock}"
+    );
+    assert!(
+        log.contains("dormant release flush (T361): v0.26.0 (3 flips: T297, T328, T359)"),
+        "the spec's flush line: tag + count + the distinct ids (sorted, the stray tail T-token kept out): {log}"
+    );
+    assert!(
+        !log.contains("dormant release flush (T361): declined"),
+        "nothing declined the flush: {log}"
+    );
+    assert!(!child_env.exists(), "ZERO model calls — the stub child never ran");
+    assert!(!log.contains("cycle start ->"), "no eval cycle ever started: {log}");
+    // The NEXT cycle must not re-fire: the recount anchors on the new tag.
+    let gate = run_predicate(f.path(), &[("CHUG_ROUTINE_TODAY", FRESH_DAY)]);
+    assert_eq!(
+        field_of(&gate, "dormant="),
+        "suspended-valve",
+        "the channel is flushed — the recount reads 0 against v0.26.0: {gate}"
+    );
+    assert_eq!(field_of(&gate, "flips="), "0", "no flips since the new tag: {gate}");
+}
+
+/// ANCHOR SAFETY: a dirty tracked tree means the tag candidate (the
+/// release commit the flush is about to cut) would differ from HEAD's
+/// tree by more than the version bump — the flush declines with a NAMED
+/// skip, cuts nothing, and the normal dormant disposition records the
+/// refusal in the git record.
+#[test]
+fn a_dirty_tree_declines_the_flush_with_a_named_skip() {
+    let f = flush_fixture(4, 2 * DAY, 3);
+    f.add_origin();
+    // Dirty a TRACKED file (uncommitted) — the anchor-unsafe candidate.
+    f.write_file("TODO.md", &format!("{TODO_ONE_DONE}<!-- T361 dirty candidate -->\n"));
+    let child_env = f.install_run_stubs();
+    f.run_one_pass();
+    let log = f.fixture_log();
+    assert!(
+        log.contains(
+            "dormant release flush (T361): declined — dirty tree (HEAD's tree differs from the tag candidate's beyond the version bump)"
+        ),
+        "the named skip: {log}"
+    );
+    assert!(
+        !git_out(f.path(), &["tag", "-l", "v0.26.0"]).contains("v0.26.0"),
+        "no tag on an unsafe candidate"
+    );
+    assert!(
+        !git_out(f.path(), &["ls-remote", "origin"]).contains("v0.26.0"),
+        "nothing was pushed"
+    );
+    assert!(
+        git_out(f.path(), &["log", "-1", "--format=%s"]).contains("T361 flush declined: dirty-tree"),
+        "the disposition names the refusal in the git record: {log}"
+    );
+    assert!(!child_env.exists(), "the declined cycle is still zero-model");
+}
+
+/// The weekly audit gains the recount (belt and suspenders): a due audit
+/// on a flush-eligible queue stays a launch (dormant=audit, the full
+/// orchestrator id) but carries flips=3 — the run mode flushes BEFORE the
+/// audit child launches.
+#[test]
+fn the_audit_cycle_gains_the_flush_recount() {
+    let f = flush_fixture(4, 8 * DAY, 3);
+    let gate = run_predicate(f.path(), &[("CHUG_ROUTINE_TODAY", FRESH_DAY)]);
+    assert_eq!(verb_of(&gate), "launch", "the audit keeps its launch: {gate}");
+    assert_eq!(model_of(&gate), KIMI_ID, "the audit is a real eval: {gate}");
+    assert_eq!(field_of(&gate, "dormant="), "audit", "the audit class stands: {gate}");
+    assert_eq!(field_of(&gate, "flips="), "3", "the recount rides the audit line too: {gate}");
+}
+
+/// The static wiring: the recount is defined once and consulted once in
+/// the gate (inside the dormant arm, after the timer, before the echo);
+/// the flush conversion rides the suspended-valve assignment (the < 3
+/// path byte-identical); the run-mode leg precedes the T325 echo and the
+/// audit rider precedes the audit launch; the flush is cargo-free and
+/// never touches the latch; the undo + never-re-tag guards are on the
+/// books; the declined disposition names the refusal.
+#[test]
+fn the_flush_wiring_is_pinned_in_loopd() {
+    let loopd = read("loopd.sh");
+    count_eq(&loopd, "release_flip_count() {", 1, "the recount, defined once");
+    count_eq(&loopd, "flips=$(release_flip_count)", 1, "the gate's one consult");
+    count_eq(
+        &loopd,
+        r"s/^todo: (file |fix )?(T[0-9]+( *[+,] *T[0-9]+)*).*/\2/",
+        1,
+        "the T269 leading-id-list anchor (the stray trailing-prose T-token stays out)",
+    );
+    count_eq(&loopd, "dormant=release-flush", 4, "the verdict: header + gate docs + probe docs + the gate's conversion");
+    count_eq(
+        &loopd,
+        "verb=skip; model=-; dormant=suspended-valve",
+        1,
+        "the < 3 path byte-identical (the T325 assignment the conversion rides)",
+    );
+    // Ordering: the conversion sits AFTER the suspended-valve assignment
+    // and BEFORE the gate echo; the recount after the timer read.
+    let arm = loopd.find("dts=$(dormant_timer_ts)").expect("the timer read");
+    let convert = loopd.find("dormant=release-flush\n").expect("the conversion");
+    let echo = loopd.find("closed=$closed $laya dormant=$dormant flips=$flips").expect("the gate echo");
+    assert!(arm < convert && convert < echo, "the recount converts inside the dormant arm, before the echo");
+    // The run-mode leg: precedes the T325 echo, carries no chug run.
+    let leg = loopd.find("= \"release-flush\" ] && dormant_release_flush; then").expect("the run-mode leg");
+    let t325 = loopd.find("dormant cheap-exit (T325): streak=$gate_streak suspended-valve").expect("the T325 echo");
+    assert!(leg < t325, "the flush leg precedes the dormant cheap-exit echo");
+    let leg_body = &loopd[leg..t325];
+    assert!(
+        !leg_body.contains("chug run") && !leg_body.contains("./target/release/chug"),
+        "the flush cycle launches NOTHING — the mechanical cycle is zero-model"
+    );
+    // The audit rider precedes the audit launch line.
+    let rider = loopd.find("dormant_release_flush || true").expect("the audit rider");
+    let audit_line = loopd.find("dormant weekly audit (T325): due").expect("the audit launch line");
+    assert!(rider < audit_line, "the flush runs BEFORE the audit child (belt and suspenders)");
+    // The flush body: no cargo invocation, no latch write, the guards on.
+    let flush_at = loopd.find("dormant_release_flush() {").expect("the flush fn");
+    let flush_body = &loopd[flush_at..loopd.find("\n# T326 — ideation mode").expect("the fn end")];
+    assert!(
+        !flush_body.contains("cargo build") && !flush_body.contains("cargo test") && !flush_body.contains("cargo check"),
+        "the flush never runs cargo — the bump is a mechanical rewrite of both files"
+    );
+    assert!(
+        !flush_body.contains("dormant_state_write"),
+        "the flush never touches the dormancy latch (a release is not an eval)"
+    );
+    count_eq(&loopd, "already exists (never re-tag or move a tag)", 1, "an existing tag is never re-tagged");
+    count_eq(&loopd, "t361_undo", 5, "the unpushed-cut undo: defined once, four refusal call sites");
+    count_eq(&loopd, "git reset --hard \"$prev\"", 1, "the guarded reset (only when the release commit is HEAD)");
+    count_eq(
+        &loopd,
+        "dormant release flush (T361): $tagname ($count flips:",
+        1,
+        "the success line, named once",
+    );
+    count_eq(
+        &loopd,
+        "dirty tree (HEAD's tree differs from the tag candidate's beyond the version bump)",
+        1,
+        "the anchor-safety named skip (the refusal composer, named once)",
+    );
+    count_eq(
+        &loopd,
+        "(T361 flush declined: ${T361_FLUSH_DECLINE:-unknown} — the dormant cheap exit stands)",
+        1,
+        "the declined disposition names the refusal word",
+    );
+    count_eq(&loopd, "dormant release flush (T361): declined —", 1, "every refusal is a NAMED skip — one composer, per-reason words");
+}
