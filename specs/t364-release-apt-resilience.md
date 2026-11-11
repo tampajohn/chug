@@ -2,6 +2,8 @@
 
 estimate: ~40 changed lines (.github/workflows/release.yml only)
 
+check: CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-validate-a cargo test --release --test release_workflow
+
 ## Why
 
 Fleet Primary diagnosed 2026-11-11 (run 43045899125): the
