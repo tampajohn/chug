@@ -681,13 +681,13 @@ fn apt_leg_survives_azure_mirror_dns_failures() {
         );
     }
     let s10 = flat_run
-        .find("sleep 10")
+        .find("sleep 10 ;;")
         .expect("the retry must sleep 10 (T364 backoff)");
     let s30 = flat_run
-        .find("sleep 30")
+        .find("sleep 30 ;;")
         .expect("the retry must sleep 30 (T364 backoff)");
     let s90 = flat_run
-        .find("sleep 90")
+        .find("sleep 90 ;;")
         .expect("the retry must sleep 90 (T364 backoff)");
     assert!(
         s10 < s30 && s30 < s90,
