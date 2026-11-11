@@ -2,6 +2,8 @@
 
 estimate: ~80 changed lines (loopd dormant-mode release leg + fixtures)
 
+check: cd /tmp/chug-loop-t361 && sh -n loopd.sh && CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared cargo test --release --test loopd_dormant_mode --test loopd_model_routing --test loopd_laya_triage
+
 ## Why
 
 Live 2026-11-11: T360 (blocked leg) is done in main, T359 and T328 are
