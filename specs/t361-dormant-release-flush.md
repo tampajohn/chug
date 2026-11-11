@@ -2,7 +2,7 @@
 
 estimate: ~80 changed lines (loopd dormant-mode release leg + fixtures)
 
-check: sh -n loopd.sh && CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-validate-a cargo test --release --test loopd_dormant_mode --test loopd_model_routing --test loopd_laya_triage
+check: sh -n loopd.sh && CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared cargo test --release --test loopd_dormant_mode --test loopd_model_routing --test loopd_laya_triage
 
 ## Why
 
