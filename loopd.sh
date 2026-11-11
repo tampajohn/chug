@@ -802,14 +802,37 @@ dormant_state_write() { # (re)arm the latch's timer: last_eval_ts = the git
 # construction — and the anchor-safety rules carry over whole: a dirty
 # tracked tree (the tag candidate would differ from HEAD's tree by more
 # than the version bump) is a named skip, an existing tag is never
-# re-tagged or moved, and a failed push UNDOES the local cut — an unpushed
-# tag is not a published release, and a swallowed local cut would read 0
-# on the next recount and freeze the channel the flush exists to unstick.
+# re-tagged or moved, and a failed push KEEPS the local cut — the next
+# dormant cycle retries the PUSH ONLY (T363, superseding the old
+# undo-on-push-failure rule: the 2026-11-11 v0.26.0 incident — the tag
+# was cut locally and never pushed for ~9h, `git ls-remote origin` empty,
+# the wrap note claiming `tagged` — was a cut+push SPLIT, not a bad cut,
+# and the flush now verifies the push: no ls-remote ref, no success). A
+# local-only tag reads 0 on the recount (git describe anchors on it),
+# which is exactly why the push-state check precedes the trigger check
+# — in the gate's conversion and in the flush itself.
 release_last_tag() { # the newest v* tag reachable from HEAD — an ANCESTOR
   # of HEAD by construction (the T245 sanity for free); empty = no tag on
   # the books (the bootstrap: until the operator's FIRST tag lands, the
   # loop never tags — the recount reads 0 against nothing)
   git describe --tags --abbrev=0 HEAD 2>/dev/null || true
+}
+release_unpushed_tag() { # the newest ancestor tag origin does NOT have —
+  # non-empty output = cut but never published (the T363 incident shape);
+  # empty = pushed, or no tag, or no origin remote to consult (the guard
+  # keeps a remote-less repo OUT of the retry path — nothing to verify
+  # against is not "unpushed", it is "unverifiable"). A local-only tag is
+  # invisible to the recount — git describe anchors on it and the count
+  # reads 0 — so the push state must be consulted BEFORE the trigger
+  # check or the channel freezes behind the phantom tag.
+  local tag
+  tag=$(release_last_tag)
+  [ -n "$tag" ] || return 0
+  git remote get-url origin >/dev/null 2>&1 || return 0
+  if [ -n "$(git ls-remote origin "refs/tags/$tag" 2>/dev/null || true)" ]; then
+    return 0
+  fi
+  echo "$tag"
 }
 release_flip_ids() { # the DISTINCT flipped TODO row-ids in <tag>..HEAD,
   # one per line — the T269 count method's extraction (the leading
@@ -837,16 +860,20 @@ release_range_has_features() { # the release-notes Features class in
     | grep -Eiq '^(feat|t[0-9]+)(\(|:)' && return 0
   return 1
 }
-t361_decline() { # one named refusal: word in $1, human line in $2 — the
-  # declined cycle's disposition subject reads the word back
+t361_decline() { # one named refusal: word in $1, human line in $2, tail in
+  # $3 (default "no tag cut" — the pre-push legs cut nothing; the T363
+  # push legs pass their keep-tail instead, the tag IS cut and stays)
   T361_FLUSH_DECLINE="$1"
-  echo "$(ts) dormant release flush (T361): declined — $2 — no tag cut" >> "$LOG"
+  echo "$(ts) dormant release flush (T361): declined — $2 — ${3:-no tag cut}" >> "$LOG"
 }
 t361_undo() { # drop the local cut ($1 pre-cut HEAD, $2 release commit,
   # $3 tag): an UNPUSHED tag is not a published release, and the doctrine's
   # immutability rule is about PUBLISHED tags — the reset is guarded (only
   # when the release commit is still HEAD, so nothing else can be swept
-  # away) and the delete is ours (never a published tag)
+  # away) and the delete is ours (never a published tag). T363: the PUSH
+  # legs no longer call this — a failed push KEEPS the cut for the
+  # retry-push-only path; only the pre-push legs (version check, notes,
+  # tag cut) still undo.
   local prev=$1 sha=$2 tag=$3
   if [ -n "$sha" ] && [ "$(git rev-parse HEAD 2>/dev/null || true)" = "$sha" ]; then
     git reset --hard "$prev" >>"$LOG" 2>&1 || true
@@ -858,8 +885,11 @@ t361_undo() { # drop the local cut ($1 pre-cut HEAD, $2 release commit,
 T361_FLUSH_DECLINE="" # the last flush refusal's word (empty = none/ok)
 dormant_release_flush() { # the RELEASE-ONLY cycle (run mode only): the
   # T100 tag cut, mechanical end to end — no orchestrator, no LLM call.
-  # Returns 0 when the tag was cut AND pushed; 1 on any named refusal (the
-  # caller then takes the normal dormant cheap-exit disposition).
+  # Returns 0 when the tag was cut AND pushed AND verified on origin
+  # (`git ls-remote origin refs/tags/<tag>` non-empty — T363); 1 on any
+  # named refusal (the caller then takes the normal dormant cheap-exit
+  # disposition). A push failure or an empty verification KEEPS the local
+  # cut — the next cycle's retry-push-only leg finishes it.
   local tag count ids version major rest minor patch next tagname
   local prev_head release_sha="" branch notes tmp rc=0
   T361_FLUSH_DECLINE=""
@@ -867,6 +897,36 @@ dormant_release_flush() { # the RELEASE-ONLY cycle (run mode only): the
   if [ -z "$tag" ]; then
     t361_decline "no-ancestor-tag" "no ancestor v* tag (the bootstrap: the FIRST tag is operator-cut)"
     return 1
+  fi
+  # T363 — the RETRY-PUSH-ONLY path, BEFORE the recount trigger: a tag
+  # origin does not have was never published (the 2026-11-11 v0.26.0
+  # incident — cut at 06:16Z, `git ls-remote origin` empty for ~9h). The
+  # recount cannot even see the problem — git describe anchors on the
+  # local tag, so the count reads 0 and the trigger check below would
+  # decline below-trigger forever — so the push state is consulted FIRST.
+  # The retry NEVER re-bumps, re-commits, or re-tags (no duplicate cut):
+  # the cut already happened, only the push was missing. Re-push branch +
+  # tag, re-verify ls-remote; verified -> the success line and 0; still
+  # failing -> the named refusal, tag kept for the next cycle.
+  if [ -n "$(release_unpushed_tag)" ]; then
+    branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null) || branch=""
+    rc=0
+    if [ -n "$branch" ] && [ "$branch" != "HEAD" ]; then
+      git push origin "$branch" "$tag" >>"$LOG" 2>&1 || rc=$?
+    else
+      git push origin "$tag" >>"$LOG" 2>&1 || rc=$?
+    fi
+    if [ "$rc" -ne 0 ]; then
+      t361_decline "push-retry-failed" "retry push failed (rc=$rc)" "the local tag is KEPT, the next cycle retries again"
+      return 1
+    fi
+    if [ -z "$(git ls-remote origin "refs/tags/$tag" 2>/dev/null || true)" ]; then
+      echo "$(ts) dormant release flush FAILED: push verification empty for $tag" >> "$LOG"
+      t361_decline "push-retry-failed" "retry push verification empty — $tag still absent from origin" "the local tag is KEPT, the next cycle retries again"
+      return 1
+    fi
+    echo "$(ts) dormant release flush (T361): $tag push retry verified on origin (ls-remote non-empty)" >> "$LOG"
+    return 0
   fi
   count=$(release_flip_count)
   ids=$(release_flip_ids)
@@ -991,8 +1051,23 @@ dormant_release_flush() { # the RELEASE-ONLY cycle (run mode only): the
     git push origin "$tagname" >>"$LOG" 2>&1 || rc=$?
   fi
   if [ "$rc" -ne 0 ]; then
-    t361_undo "$prev_head" "$release_sha" "$tagname"
-    t361_decline "push-failed" "push failed (rc=$rc) — the local cut was undone so the recount stays live"
+    # T363 — a push failure KEEPS the local cut (no t361_undo on the push
+    # legs anymore): the tag + release commit are exactly the state the
+    # retry-push-only path above knows how to finish, and undoing them
+    # would discard a good cut over a network hiccup. The next dormant
+    # cycle retries the push only.
+    t361_decline "push-failed" "push failed (rc=$rc)" "the local cut is KEPT, the next cycle retries the push only"
+    return 1
+  fi
+  # T363 — the push is only DONE when origin advertises the ref: a push
+  # that reports success but leaves `git ls-remote origin
+  # refs/tags/<tag>` empty is a FAIL LOUD, not a success — the
+  # 2026-11-11 v0.26.0 incident read `tagged` for ~9h with nothing on the
+  # remote. The local cut stays (the retry finishes it); the disposition
+  # records the named refusal.
+  if [ -z "$(git ls-remote origin "refs/tags/$tagname" 2>/dev/null || true)" ]; then
+    echo "$(ts) dormant release flush FAILED: push verification empty for $tagname" >> "$LOG"
+    t361_decline "push-verify-empty" "push verification empty — $tagname never reached origin" "the local cut is KEPT, the next cycle retries the push only"
     return 1
   fi
   echo "$(ts) dormant release flush (T361): $tagname ($count flips: $(printf '%s' "$ids" | awk '{ printf "%s%s", sep, $0; sep = ", " } END { print "" }'))" >> "$LOG"
@@ -1154,7 +1229,11 @@ eval_gate() { # the T258/T259 decision for a would-be eval cycle, one line:
   #   dormant=release-flush  the dormant skip whose T100 recount crossed 3:
   #                      the RELEASE-ONLY mechanical cycle (bump + tag +
   #                      push, ZERO model calls) — run mode executes it,
-  #                      the predicate probe stays a dry-run (T361)
+  #                      the predicate probe stays a dry-run (T361); a
+  #                      cut-but-never-pushed tag converts the same way —
+  #                      the recount reads 0 against a local-only tag, so
+  #                      the push state is consulted before the trigger
+  #                      (the T363 retry)
   #   dormant=audit      the weekly audit timer is due: the one launch
   #                      dormancy schedules, read-only (DORMANT=1 in env;
   #                      T361: the audit cycle also gains the recount — the
@@ -1203,7 +1282,15 @@ eval_gate() { # the T258/T259 decision for a would-be eval cycle, one line:
     # the run loop reads flips= off the line and flushes BEFORE the
     # audit child (belt and suspenders).
     flips=$(release_flip_count)
-    if [ "$flips" -ge 3 ] && [ "$dormant" = "suspended-valve" ]; then
+    # T363 — the retry rides the same conversion: a cut-but-never-pushed
+    # tag reads 0 on the recount (git describe anchors on it), so the
+    # push state is consulted BEFORE the trigger — a local-only tag
+    # converts the skip to the flush cycle exactly like a crossed trigger
+    # (the T363 incident: v0.26.0 stayed local ~9h behind a recount of
+    # 0). No origin remote leaves the probe empty — the conversion stays
+    # count-driven there.
+    if [ "$dormant" = "suspended-valve" ] \
+       && { [ "$flips" -ge 3 ] || [ -n "$(release_unpushed_tag)" ]; }; then
       dormant=release-flush
     fi
   # the valve FIRST (T247): the 4th consecutive empty cycle runs the real

@@ -1114,9 +1114,70 @@ impl Fixture {
     /// commit on purpose — a later fixture `git add -A` would sweep the
     /// bare repo's files into a commit, while an untracked dir never reads
     /// dirty to the flush's `--untracked-files=no` anchor-safety check.
+    /// The ancestor tag v0.25.0 is PUSHED at setup — the production shape
+    /// (a release that predates the origin is already published), so the
+    /// T363 retry path never hijacks a flush whose trigger is live.
     fn add_origin(&self) {
         git(self.path(), &["init", "-q", "--bare", "origin.git"]);
         git(self.path(), &["remote", "add", "origin", "origin.git"]);
+        git(self.path(), &["push", "-q", "origin", "--tags"]);
+    }
+
+    /// Flip the bare origin's write bits: `a-w` denies the PUSH (write)
+    /// while `git ls-remote` (read) still works — the cut-leg push-failure
+    /// fixture, reachable enough for the gate's and the retry's
+    /// verification probes; `u+w` heals it for the retry pass.
+    fn chmod_origin(&self, mode: &str) {
+        let out = std::process::Command::new("chmod")
+            .args(["-R", mode])
+            .arg(self.path().join("origin.git"))
+            .output()
+            .expect("chmod the fixture origin");
+        assert!(
+            out.status.success(),
+            "chmod -R {mode} origin.git failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    /// A PATH-layer `git` shim that blackholes `ls-remote` for ONE ref
+    /// pattern (exit 0, NO output) while delegating every other
+    /// subcommand — and every other ls-remote — to the real git: the
+    /// T363 verify leg's black hole for the tag the flush is ABOUT to
+    /// cut. The push SUCCEEDS (real git pushes to the bare origin) but
+    /// the `git ls-remote origin refs/tags/<tag>` verification reads
+    /// EMPTY — the 2026-11-11 v0.26.0 incident's impossible shape, which
+    /// this fixture must prove fatal. `run_one_pass` prepends bin/ to the
+    /// child PATH, so this must be installed BEFORE the pass.
+    fn add_ls_remote_blackhole(&self, tag: &str) {
+        let bin = self.path().join("bin");
+        std::fs::create_dir_all(&bin).expect("fixture stub bin dir");
+        let real = String::from_utf8(
+            std::process::Command::new("sh")
+                .arg("-c")
+                .arg("command -v git")
+                .output()
+                .expect("resolve the real git")
+                .stdout,
+        )
+        .expect("utf8 git path")
+        .trim()
+        .to_string();
+        assert!(!real.is_empty(), "the real git must resolve for the shim");
+        write_exec(
+            &bin.join("git"),
+            &format!(
+                "#!/bin/sh\n\
+                 # T363 fixture: blackhole ls-remote for ONE ref pattern —\n\
+                 # ls-remote ONLY (every other git subcommand, and every\n\
+                 # other ls-remote, delegates to the real git).\n\
+                 [ \"$1\" = \"ls-remote\" ] || exec {real} \"$@\"\n\
+                 case \"$*\" in\n\
+                 *\"refs/tags/{tag}\"*) exit 0 ;;\n\
+                 esac\n\
+                 exec {real} \"$@\"\n"
+            ),
+        );
     }
 }
 
@@ -1262,6 +1323,10 @@ fn the_flush_cuts_and_pushes_the_release_tag_with_zero_model_calls() {
         !log.contains("dormant release flush (T361): declined"),
         "nothing declined the flush: {log}"
     );
+    assert!(
+        !log.contains("dormant release flush FAILED"),
+        "no FAIL-LOUD line on a verified push (T363): {log}"
+    );
     assert!(!child_env.exists(), "ZERO model calls — the stub child never ran");
     assert!(!log.contains("cycle start ->"), "no eval cycle ever started: {log}");
     // The NEXT cycle must not re-fire: the recount anchors on the new tag.
@@ -1309,26 +1374,30 @@ fn a_dirty_tree_declines_the_flush_with_a_named_skip() {
     assert!(!child_env.exists(), "the declined cycle is still zero-model");
 }
 
-/// THE T361 UNDO REGRESSION — a FAILED PUSH must UNDO the local cut, tag
-/// delete included. An unpushed tag is not a published release, and a
-/// swallowed local cut would read 0 on the next recount and refreeze the
-/// release channel the flush exists to unstick — so the undo's DELETE leg
-/// is load-bearing exactly like the reset. The fixture's origin is
-/// unreachable (the remote points at a path that does not exist), so the
-/// cut + pairing check + notes + tag all succeed and the PUSH fails: the
-/// tag must be DELETED (a surviving tag orphans the cut — describe only
-/// walks ancestors, so the phantom tag hides from the recount while the
-/// channel stays frozen), HEAD reset off the release commit, the manifest
-/// back at the pre-cut version, the disposition naming push-failed in the
-/// git record, and the recount STILL 3 on the next cycle (the flush
-/// re-fires) — all at zero model calls.
+/// THE T363 KEEP REGRESSION — a FAILED PUSH must KEEP the local cut (tag
+/// AND release commit — no t361_undo on the push legs anymore): the tag +
+/// release commit are exactly the state the retry-push-only path knows
+/// how to finish, and undoing them would discard a good cut over a
+/// network hiccup (the T361 undo-on-push-failure rule is superseded).
+/// The fixture's origin is a reachable bare repo whose push is denied
+/// (add_origin + chmod a-w), so the cut + pairing check + notes + tag all
+/// succeed and the PUSH fails: the tag must SURVIVE, HEAD keeps the
+/// release commit, the manifest stays bumped, and the disposition names
+/// push-failed in the git record — all at zero model calls. The
+/// anti-freeze half: the recount reads 0 against the local tag (git
+/// describe anchors on it), so the GATE must consult the push state —
+/// the local-only tag converts the skip to the flush cycle exactly like
+/// a crossed trigger and the next cycle retries the push only.
 #[test]
-fn a_failed_push_undoes_the_local_cut_so_the_recount_stays_live() {
+fn a_failed_push_keeps_the_local_cut_for_the_retry() {
     let f = flush_fixture(4, 2 * DAY, 3);
-    // The unreachable origin: a remote named origin at a path that does
-    // not exist — everything before the push succeeds, the push cannot.
-    git(f.path(), &["remote", "add", "origin", "no-such-origin.git"]);
-    let pre = git_out(f.path(), &["rev-parse", "HEAD"]);
+    // The reachable-but-push-denied origin: v0.25.0 is PUBLISHED at
+    // add_origin (the retry must not hijack a release that predates the
+    // origin), then the write bits go away — ls-remote (read) still
+    // works, the PUSH (write) is rejected. Everything before the push
+    // succeeds; the push cannot.
+    f.add_origin();
+    f.chmod_origin("a-w");
     let child_env = f.install_run_stubs();
     f.run_one_pass();
     let log = f.fixture_log();
@@ -1337,20 +1406,22 @@ fn a_failed_push_undoes_the_local_cut_so_the_recount_stays_live() {
         "the push failure is a NAMED refusal (not a swallowed one): {log}"
     );
     assert!(
-        !git_out(f.path(), &["tag", "-l"]).contains("v0.26.0"),
-        "the unpushed local tag is DELETED — a surviving tag is an unpublished \
-         release squatting on the name (never re-tag) while the recount reads \
-         past it: {log}"
+        !log.contains("dormant release flush FAILED"),
+        "a rc-failure declines before the verify leg — no verify-empty line here: {log}"
     );
-    let landed = git_out(f.path(), &["log", "--format=%s", &format!("{pre}..HEAD")]);
     assert!(
-        !landed.contains("chore: release v0.26.0"),
-        "HEAD was reset off the release commit — the cut is undone: {landed}"
+        git_out(f.path(), &["tag", "-l", "v0.26.0"]).contains("v0.26.0"),
+        "the local tag is KEPT — the retry-push-only path needs it: {log}"
+    );
+    let landed = git_out(f.path(), &["log", "--format=%s"]);
+    assert!(
+        landed.contains("chore: release v0.26.0"),
+        "the release commit SURVIVES (no reset off the cut): {landed}"
     );
     let toml = std::fs::read_to_string(f.path().join("Cargo.toml")).expect("read manifest");
     assert!(
-        toml.contains("version = \"0.25.0\""),
-        "the manifest bump rolled back with the reset (the tree is pre-cut): {toml}"
+        toml.contains("version = \"0.26.0\""),
+        "the manifest bump STAYS (the tree is the release tree): {toml}"
     );
     let subject = git_out(f.path(), &["log", "-1", "--format=%s"]);
     assert!(
@@ -1361,12 +1432,150 @@ fn a_failed_push_undoes_the_local_cut_so_the_recount_stays_live() {
         !child_env.exists() && !log.contains("cycle start ->"),
         "the declined flush stays zero-model: {log}"
     );
-    // The load-bearing half: the recount is still LIVE — the next cycle
-    // re-fires the flush instead of reading 0 against a phantom tag and
-    // refreezing the channel.
+    // The anti-freeze half: the recount reads 0 against the local tag
+    // (describe anchors on it), so the push state — not the count — is
+    // what converts: the local-only tag re-fires the channel and the
+    // next cycle retries the push only.
     let gate = run_predicate(f.path(), &[("CHUG_ROUTINE_TODAY", FRESH_DAY)]);
-    assert_eq!(field_of(&gate, "dormant="), "release-flush", "the channel re-fires: {gate}");
-    assert_eq!(field_of(&gate, "flips="), "3", "the recount stays at 3: {gate}");
+    assert_eq!(
+        field_of(&gate, "dormant="),
+        "release-flush",
+        "the local-only tag re-fires the channel: {gate}"
+    );
+    assert_eq!(
+        field_of(&gate, "flips="),
+        "0",
+        "the recount reads 0 against the local tag — the push state converts: {gate}"
+    );
+}
+
+/// THE T363 VERIFY-EMPTY REGRESSION — a push that reports SUCCESS but
+/// leaves `git ls-remote origin refs/tags/<tag>` EMPTY must FAIL LOUD,
+/// not claim success: the exact FAIL-LOUD line in the log, NO success
+/// line, the disposition naming push-verify-empty, and the local cut
+/// KEPT (the retry-push-only path finishes it). The fixture pushes
+/// through a PATH-layer git shim that blackholes `ls-remote` (exit 0, no
+/// output) while every other subcommand hits the real git — the push
+/// lands on the bare origin, the verification reads empty, and the flush
+/// must refuse to call that a release (the 2026-11-11 v0.26.0 shape:
+/// `tagged` claimed for ~9h with nothing on the remote).
+#[test]
+fn a_push_that_verifies_empty_fails_loud_and_keeps_the_cut() {
+    let f = flush_fixture(4, 2 * DAY, 3);
+    // v0.25.0 published at add_origin (the retry must not hijack), then
+    // the shim blackholes ls-remote for the tag the flush is ABOUT to
+    // cut (v0.26.0) only — the push lands, the verification reads empty.
+    f.add_origin();
+    f.add_ls_remote_blackhole("v0.26.0");
+    let child_env = f.install_run_stubs();
+    f.run_one_pass();
+    let log = f.fixture_log();
+    assert!(
+        log.contains("dormant release flush FAILED: push verification empty for v0.26.0"),
+        "the exact FAIL-LOUD line: {log}"
+    );
+    assert!(
+        !log.contains("dormant release flush (T361): v0.26.0 (3 flips:"),
+        "NO success claim on an unverified push — a release that does not \
+         publish is a release that did not happen: {log}"
+    );
+    assert!(
+        log.contains("dormant release flush (T361): declined — push verification empty"),
+        "the named refusal: {log}"
+    );
+    assert!(
+        git_out(f.path(), &["tag", "-l", "v0.26.0"]).contains("v0.26.0"),
+        "the local tag is KEPT (the retry-push-only path finishes it): {log}"
+    );
+    let landed = git_out(f.path(), &["log", "--format=%s"]);
+    assert!(
+        landed.contains("chore: release v0.26.0"),
+        "the release commit is KEPT with the tag: {landed}"
+    );
+    let subject = git_out(f.path(), &["log", "-1", "--format=%s"]);
+    assert!(
+        subject.contains("T361 flush declined: push-verify-empty"),
+        "the disposition names the refusal in the git record: {subject}"
+    );
+    assert!(
+        !child_env.exists() && !log.contains("cycle start ->"),
+        "the declined flush stays zero-model: {log}"
+    );
+}
+
+/// THE T363 RETRY REGRESSION — the next flush run after a failed push
+/// pushes ONLY: no duplicate tag, no second release commit, no version
+/// re-bump. Pass 1 pushes at a push-denied origin (the push fails, the
+/// local cut is KEPT); the fixture then points origin at a real bare
+/// repo and runs pass 2 — the recount reads 0 (git describe anchors on
+/// the local tag), so the gate converts on the PUSH STATE and the
+/// flush's retry-push-only path (BEFORE the trigger check) re-pushes
+/// branch + tag, re-verifies ls-remote, and lands the success line —
+/// never re-bumping, re-committing, or re-tagging (the never-re-tag
+/// doctrine: the cut already happened, only the push was missing).
+#[test]
+fn a_failed_push_retries_the_push_only_on_the_next_cycle() {
+    let f = flush_fixture(4, 2 * DAY, 3);
+    // Pass 1: v0.25.0 published at add_origin, then the write bits go
+    // away — the cut happens, the push is rejected, the cut is KEPT.
+    f.add_origin();
+    f.chmod_origin("a-w");
+    let child_env = f.install_run_stubs();
+    f.run_one_pass();
+    let log = f.fixture_log();
+    assert!(
+        log.contains("dormant release flush (T361): declined — push failed"),
+        "pass 1 declined with the kept cut: {log}"
+    );
+    let commits_after_pass1 = git_out(f.path(), &["rev-list", "--count", "HEAD"]);
+    // The remote heals: the write bits come back and pass 2 retries.
+    f.chmod_origin("u+w");
+    f.run_one_pass();
+    let log = f.fixture_log();
+    assert!(
+        log.contains("dormant release flush (T361): v0.26.0 push retry verified on origin"),
+        "pass 2 took the retry-push-only path and verified: {log}"
+    );
+    assert!(
+        !log.contains("push-retry-failed"),
+        "the retry verified — no second refusal: {log}"
+    );
+    assert!(
+        !log.contains("dormant release flush FAILED"),
+        "no FAIL-LOUD line once the retry verifies: {log}"
+    );
+    // Pushed ONLY: no commits added in pass 2 (no second release commit,
+    // no disposition ride-along), one release commit total, no re-bump.
+    assert_eq!(
+        git_out(f.path(), &["rev-list", "--count", "HEAD"]),
+        commits_after_pass1,
+        "pass 2 added NO commits — the retry never re-commits: {log}"
+    );
+    let release_commits = git_out(f.path(), &["log", "--format=%s"])
+        .lines()
+        .filter(|s| *s == "chore: release v0.26.0")
+        .count();
+    assert_eq!(
+        release_commits, 1,
+        "exactly ONE release commit (no duplicate cut): {log}"
+    );
+    let toml = std::fs::read_to_string(f.path().join("Cargo.toml")).expect("read manifest");
+    assert!(
+        toml.contains("version = \"0.26.0\"") && !toml.contains("version = \"0.27.0\""),
+        "no version re-bump on the retry: {toml}"
+    );
+    let tags = git_out(f.path(), &["tag", "-l"]);
+    assert!(tags.contains("v0.26.0"), "the tag survives: {tags}");
+    assert!(!tags.contains("v0.27.0"), "no duplicate/second tag: {tags}");
+    let remote = git_out(f.path(), &["ls-remote", "origin"]);
+    assert!(
+        remote.contains("refs/tags/v0.26.0"),
+        "the retry PUBLISHED the tag: {remote}"
+    );
+    assert!(
+        !child_env.exists() && !log.contains("cycle start ->"),
+        "the retry stays zero-model: {log}"
+    );
 }
 
 /// The weekly audit gains the recount (belt and suspenders): a due audit
@@ -1457,10 +1666,12 @@ fn the_audit_rider_stays_below_the_trigger() {
 /// The static wiring: the recount is defined once and consulted once in
 /// the gate (inside the dormant arm, after the timer, before the echo);
 /// the flush conversion rides the suspended-valve assignment (the < 3
-/// path byte-identical); the run-mode leg precedes the T325 echo and the
-/// audit rider precedes the audit launch; the flush is cargo-free and
-/// never touches the latch; the undo + never-re-tag guards are on the
-/// books; the declined disposition names the refusal.
+/// path byte-identical) and consults the push state beside the count
+/// (T363); the run-mode leg precedes the T325 echo and the audit rider
+/// precedes the audit launch; the flush is cargo-free and never touches
+/// the latch; the undo (pre-push legs only) + never-re-tag guards are on
+/// the books; the push legs keep-and-verify (T363) with the retry path
+/// before the trigger; the declined disposition names the refusal.
 #[test]
 fn the_flush_wiring_is_pinned_in_loopd() {
     let loopd = read("loopd.sh");
@@ -1510,16 +1721,63 @@ fn the_flush_wiring_is_pinned_in_loopd() {
         "the flush never touches the dormancy latch (a release is not an eval)"
     );
     count_eq(&loopd, "already exists (never re-tag or move a tag)", 1, "an existing tag is never re-tagged");
-    count_eq(&loopd, "t361_undo", 5, "the unpushed-cut undo: defined once, four refusal call sites");
+    count_eq(&loopd, "t361_undo() {", 1, "the undo, defined once");
     count_eq(&loopd, "git reset --hard \"$prev\"", 1, "the guarded reset (only when the release commit is HEAD)");
+    count_eq(
+        &loopd,
+        "t361_undo \"$prev_head\"",
+        3,
+        "the undo call sites — the PRE-PUSH legs only (version check, notes, \
+         tag cut); the T363 push legs KEEP the cut for the retry-push-only \
+         path, so no t361_undo may appear on or after the push",
+    );
+    // T363 — the push legs keep-and-verify: the FAIL-LOUD line once per
+    // leg (cut + retry), one word per refusal, the retry success line,
+    // and the retry path BEFORE the recount trigger (the local tag reads
+    // 0 on the recount — describe anchors on it).
+    count_eq(
+        &loopd,
+        "dormant release flush FAILED: push verification empty for",
+        2,
+        "the FAIL-LOUD verify refusal, named once per leg (the cut leg + the retry leg)",
+    );
+    count_eq(&loopd, "\"push-failed\"", 1, "the push-failure word");
+    count_eq(&loopd, "\"push-verify-empty\"", 1, "the empty-verification word");
+    count_eq(
+        &loopd,
+        "\"push-retry-failed\"",
+        2,
+        "one word for both retry failure modes (the retry push and its verification)",
+    );
+    count_eq(
+        &loopd,
+        "push retry verified on origin",
+        1,
+        "the retry's success line, named once",
+    );
+    count_eq(
+        &loopd,
+        "release_unpushed_tag",
+        3,
+        "the push-state probe: defined once, consulted by the gate's \
+         conversion and by the flush's retry check (both must precede \
+         their trigger)",
+    );
+    let retry = loopd.find("RETRY-PUSH-ONLY path").expect("the retry path");
+    let trigger = loopd.find("count=$(release_flip_count)").expect("the recount trigger");
+    assert!(
+        retry < trigger,
+        "the retry check precedes the trigger check — a local-only tag reads \
+         0 on the recount (describe anchors on it), so a trigger-first order \
+         would decline below-trigger forever"
+    );
     count_eq(
         &loopd,
         "git tag -d \"$tag\"",
         1,
-        "the undo's tag-DELETE leg — as load-bearing as the reset: a swallowed \
-         delete leaves an unpushed tag squatting on the name while the next \
-         recount reads past it (describe only walks ancestors) and the \
-         channel refreezes",
+        "the undo's tag-DELETE leg — still load-bearing for the PRE-PUSH \
+         refusals (version check, notes, tag cut), never for the push legs \
+         (T363: a failed push KEEPS the cut)",
     );
     count_eq(
         &loopd,

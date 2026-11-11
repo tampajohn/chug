@@ -1286,7 +1286,18 @@ alike) has been harvested.
   feat/fix/chore/docs since the previous tag), tag `git tag -a vX.Y.Z -F
   <notes-file>`, and push the commit + tag together with the wrap push
   (the tag-triggered release workflow in `.github/workflows/release.yml`
-  picks it up). RECONCILE RULE (T245): when the remote moves after a
+  picks it up). PUSH VERIFICATION (T363 — the 2026-11-11 v0.26.0 incident
+  is the evidence: the tag was cut locally and `git push` ran without the
+  tag refspec, so the tag stayed local for ~9 hours — the wrap note
+  claimed `tagged`, `git ls-remote origin` had no v0.26 ref, the release
+  workflow never fired, and the acceptance suite armed on the carrying
+  tag could not fetch it; a release flush that does not publish is a
+  release that did not happen): after pushing commit + tag, the
+  orchestrator runs `git ls-remote origin refs/tags/<tag>` and the wrap's
+  release line claims `tagged+pushed` ONLY after that check returns the
+  ref; otherwise the line reads `tagged-LOCAL-ONLY (push pending)` and
+  the tag push is retried (fail loud) before `goal_complete`. RECONCILE
+  RULE (T245): when the remote moves after a
   release tag is published, integrate by MERGE, never rebase — a rebase
   orphans the published tag (the cycle-116 v0.17.4 evidence: the launch
   reconcile rebased release commit 47ed9a5 onto the operator's work as

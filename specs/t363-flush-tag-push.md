@@ -2,6 +2,8 @@
 
 estimate: ~40 changed lines (the flush leg's push step + verification + fixtures)
 
+check: sh -n loopd.sh && CARGO_TARGET_DIR=/Users/jadams/workspace/chug/target-shared-validate-a cargo test --release --test loopd_dormant_mode --test loop_spec_tag_doctrine
+
 ## Why
 
 First live exercise of the T361 dormant release flush (2026-11-11):
