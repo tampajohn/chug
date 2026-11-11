@@ -427,6 +427,10 @@ fn a_wired_hook_flips_permission_broker_without_any_socket() {
         .env_remove("CHUG_DELEGATE_BIN")
         .env_remove("CHUG_LAYA_CHECKPOINT")
         .env("CLAUDE_CONFIG_DIR", &claude_dir) // scoped: the probe's seam
+        // T365: scope the socket namespace too — "no daemon here" must mean
+        // no daemon in THIS home, not the operator's box happening to be
+        // quiet (the loop's own live daemon reds an unscoped gate run).
+        .env("CHUG_HOME", home.path())
         .stdin(Stdio::null())
         .output()
         .expect("spawn chug capabilities");
@@ -463,6 +467,10 @@ fn a_wired_usage_hook_flips_usage_events_and_sibling_markers_do_not() {
         .env_remove("CHUG_DELEGATE_BIN")
         .env_remove("CHUG_LAYA_CHECKPOINT")
         .env("CLAUDE_CONFIG_DIR", &claude_dir) // scoped: the probe's seam
+        // T365: scope the socket namespace too — "no daemon here" must mean
+        // no daemon in THIS home, not the operator's box happening to be
+        // quiet (the loop's own live daemon reds an unscoped gate run).
+        .env("CHUG_HOME", home.path())
         .stdin(Stdio::null())
         .output()
         .expect("spawn chug capabilities");
@@ -506,6 +514,10 @@ fn a_wired_status_hook_flips_status_mod_without_any_socket() {
         .env_remove("CHUG_DELEGATE_BIN")
         .env_remove("CHUG_LAYA_CHECKPOINT")
         .env("CLAUDE_CONFIG_DIR", &claude_dir) // scoped: the probe's seam
+        // T365: scope the socket namespace too — "no daemon here" must mean
+        // no daemon in THIS home, not the operator's box happening to be
+        // quiet (the loop's own live daemon reds an unscoped gate run).
+        .env("CHUG_HOME", home.path())
         .stdin(Stdio::null())
         .output()
         .expect("spawn chug capabilities");
