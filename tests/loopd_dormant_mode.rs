@@ -1309,6 +1309,66 @@ fn a_dirty_tree_declines_the_flush_with_a_named_skip() {
     assert!(!child_env.exists(), "the declined cycle is still zero-model");
 }
 
+/// THE T361 UNDO REGRESSION — a FAILED PUSH must UNDO the local cut, tag
+/// delete included. An unpushed tag is not a published release, and a
+/// swallowed local cut would read 0 on the next recount and refreeze the
+/// release channel the flush exists to unstick — so the undo's DELETE leg
+/// is load-bearing exactly like the reset. The fixture's origin is
+/// unreachable (the remote points at a path that does not exist), so the
+/// cut + pairing check + notes + tag all succeed and the PUSH fails: the
+/// tag must be DELETED (a surviving tag orphans the cut — describe only
+/// walks ancestors, so the phantom tag hides from the recount while the
+/// channel stays frozen), HEAD reset off the release commit, the manifest
+/// back at the pre-cut version, the disposition naming push-failed in the
+/// git record, and the recount STILL 3 on the next cycle (the flush
+/// re-fires) — all at zero model calls.
+#[test]
+fn a_failed_push_undoes_the_local_cut_so_the_recount_stays_live() {
+    let f = flush_fixture(4, 2 * DAY, 3);
+    // The unreachable origin: a remote named origin at a path that does
+    // not exist — everything before the push succeeds, the push cannot.
+    git(f.path(), &["remote", "add", "origin", "no-such-origin.git"]);
+    let pre = git_out(f.path(), &["rev-parse", "HEAD"]);
+    let child_env = f.install_run_stubs();
+    f.run_one_pass();
+    let log = f.fixture_log();
+    assert!(
+        log.contains("dormant release flush (T361): declined — push failed"),
+        "the push failure is a NAMED refusal (not a swallowed one): {log}"
+    );
+    assert!(
+        !git_out(f.path(), &["tag", "-l"]).contains("v0.26.0"),
+        "the unpushed local tag is DELETED — a surviving tag is an unpublished \
+         release squatting on the name (never re-tag) while the recount reads \
+         past it: {log}"
+    );
+    let landed = git_out(f.path(), &["log", "--format=%s", &format!("{pre}..HEAD")]);
+    assert!(
+        !landed.contains("chore: release v0.26.0"),
+        "HEAD was reset off the release commit — the cut is undone: {landed}"
+    );
+    let toml = std::fs::read_to_string(f.path().join("Cargo.toml")).expect("read manifest");
+    assert!(
+        toml.contains("version = \"0.25.0\""),
+        "the manifest bump rolled back with the reset (the tree is pre-cut): {toml}"
+    );
+    let subject = git_out(f.path(), &["log", "-1", "--format=%s"]);
+    assert!(
+        subject.contains("T361 flush declined: push-failed"),
+        "the disposition names the refusal in the git record: {subject}"
+    );
+    assert!(
+        !child_env.exists() && !log.contains("cycle start ->"),
+        "the declined flush stays zero-model: {log}"
+    );
+    // The load-bearing half: the recount is still LIVE — the next cycle
+    // re-fires the flush instead of reading 0 against a phantom tag and
+    // refreezing the channel.
+    let gate = run_predicate(f.path(), &[("CHUG_ROUTINE_TODAY", FRESH_DAY)]);
+    assert_eq!(field_of(&gate, "dormant="), "release-flush", "the channel re-fires: {gate}");
+    assert_eq!(field_of(&gate, "flips="), "3", "the recount stays at 3: {gate}");
+}
+
 /// The weekly audit gains the recount (belt and suspenders): a due audit
 /// on a flush-eligible queue stays a launch (dormant=audit, the full
 /// orchestrator id) but carries flips=3 — the run mode flushes BEFORE the
@@ -1321,6 +1381,77 @@ fn the_audit_cycle_gains_the_flush_recount() {
     assert_eq!(model_of(&gate), KIMI_ID, "the audit is a real eval: {gate}");
     assert_eq!(field_of(&gate, "dormant="), "audit", "the audit class stands: {gate}");
     assert_eq!(field_of(&gate, "flips="), "3", "the recount rides the audit line too: {gate}");
+}
+
+/// THE T361 AUDIT-RIDER REGRESSION — the rider's threshold is BEHAVIORAL,
+/// not just a field on the gate line. A due audit on a flush-eligible
+/// queue (flips=3, the T245 trigger) cuts + pushes the tag BEFORE the
+/// read-only child launches: the flush line precedes the audit line in
+/// the log, the tag is on the origin, and the audit child still runs with
+/// DORMANT=1 (a declined flush never blocks the audit — independent
+/// legs). A threshold drift past 3 would leave the channel frozen behind
+/// the audit — the belt-and-suspenders leg silently gone.
+#[test]
+fn the_audit_rider_flushes_before_the_audit_child_at_three_flips() {
+    let f = flush_fixture(4, 8 * DAY, 3);
+    f.add_origin();
+    let child_env = f.install_run_stubs();
+    f.run_one_pass();
+    let log = f.fixture_log();
+    assert!(
+        git_out(f.path(), &["tag", "-l", "v0.26.0"]).contains("v0.26.0"),
+        "the rider flushed the tag on the audit cycle: {log}"
+    );
+    let remote = git_out(f.path(), &["ls-remote", "origin"]);
+    assert!(
+        remote.contains("refs/tags/v0.26.0"),
+        "the rider's tag was pushed: {remote}"
+    );
+    let flush_at = log
+        .find("dormant release flush (T361): v0.26.0")
+        .expect("the flush line is in the log");
+    let audit_at = log
+        .find("dormant weekly audit (T325): due")
+        .expect("the audit line is in the log");
+    assert!(
+        flush_at < audit_at,
+        "the flush runs BEFORE the audit child (belt and suspenders): {log}"
+    );
+    let captured = std::fs::read_to_string(&child_env).expect("the stub child ran");
+    assert_eq!(
+        captured.trim(),
+        "DORMANT=1",
+        "a flushed audit cycle is still an audit — the read-only child launches: {captured}"
+    );
+    // The flush consumed the recount: the next decision reads 0 against
+    // the new tag (the timer may still be due — the stub audit lands no
+    // eval: commit — but the channel is flushed either way).
+    let gate = run_predicate(f.path(), &[("CHUG_ROUTINE_TODAY", FRESH_DAY)]);
+    assert_eq!(field_of(&gate, "flips="), "0", "the recount anchored on the new tag: {gate}");
+}
+
+/// The rider's threshold holds from below too: two flips on a due audit —
+/// the audit launches, the flush does not (the T245 rule is untouched on
+/// the audit arm exactly as on the suspended-valve arm).
+#[test]
+fn the_audit_rider_stays_below_the_trigger() {
+    let f = flush_fixture(4, 8 * DAY, 2);
+    f.add_origin();
+    f.install_run_stubs();
+    f.run_one_pass();
+    let log = f.fixture_log();
+    assert!(
+        !git_out(f.path(), &["tag", "-l"]).contains("v0.26.0"),
+        "no flush below the trigger on an audit cycle: {log}"
+    );
+    assert!(
+        !log.contains("dormant release flush (T361)"),
+        "no flush line below the trigger: {log}"
+    );
+    assert!(
+        log.contains("dormant weekly audit (T325): due"),
+        "the audit still launched: {log}"
+    );
 }
 
 /// The static wiring: the recount is defined once and consulted once in
@@ -1381,6 +1512,22 @@ fn the_flush_wiring_is_pinned_in_loopd() {
     count_eq(&loopd, "already exists (never re-tag or move a tag)", 1, "an existing tag is never re-tagged");
     count_eq(&loopd, "t361_undo", 5, "the unpushed-cut undo: defined once, four refusal call sites");
     count_eq(&loopd, "git reset --hard \"$prev\"", 1, "the guarded reset (only when the release commit is HEAD)");
+    count_eq(
+        &loopd,
+        "git tag -d \"$tag\"",
+        1,
+        "the undo's tag-DELETE leg — as load-bearing as the reset: a swallowed \
+         delete leaves an unpushed tag squatting on the name while the next \
+         recount reads past it (describe only walks ancestors) and the \
+         channel refreezes",
+    );
+    count_eq(
+        &loopd,
+        "if [ \"$(laya_gate_field flips= \"$gate\")\" -ge 3 ]; then",
+        1,
+        "the audit rider's threshold IS the T245 trigger — one byte-pinned \
+         condition, never drifted",
+    );
     count_eq(
         &loopd,
         "dormant release flush (T361): $tagname ($count flips:",
