@@ -191,3 +191,46 @@ fn tag_count_anchors_on_an_ancestor_of_head() {
         );
     }
 }
+
+/// (g) T363 — the push-verification rule: the wrap's release line claims
+/// `tagged+pushed` ONLY after `git ls-remote origin refs/tags/<tag>`
+/// returns the ref; otherwise the line reads `tagged-LOCAL-ONLY (push
+/// pending)` and the tag push is retried (fail loud) before
+/// `goal_complete`. The 2026-11-11 v0.26.0 incident is the named evidence:
+/// the tag was cut locally, `git push` ran without the tag refspec, and
+/// the remote had no v0.26 ref for ~9 hours while the wrap claimed
+/// `tagged` — a release that never publishes is a release that did not
+/// happen.
+#[test]
+fn push_verification_gates_the_wrap_release_claim() {
+    let flat_spec = flat(&loop_spec());
+    for (needle, what) in [
+        (
+            "git ls-remote origin refs/tags/<tag>",
+            "the ls-remote push verification",
+        ),
+        (
+            "the wrap's release line claims `tagged+pushed` ONLY after that check returns the ref",
+            "the tagged+pushed-only-after-verification rule",
+        ),
+        (
+            "the line reads `tagged-LOCAL-ONLY (push pending)`",
+            "the local-only fallback wording",
+        ),
+        (
+            "the tag push is retried (fail loud) before `goal_complete`",
+            "the fail-loud retry before goal_complete",
+        ),
+        (
+            "2026-11-11 v0.26.0 incident",
+            "the incident named as evidence",
+        ),
+    ] {
+        assert_eq!(
+            flat_spec.matches(needle).count(),
+            1,
+            "LOOP-SPEC must state {what} exactly once — zero means it was \
+             dropped or reworded, more than one means it is duplicated"
+        );
+    }
+}
