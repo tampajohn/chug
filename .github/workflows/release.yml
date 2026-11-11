@@ -100,7 +100,33 @@ jobs:
 
       - name: aarch64 cross linker (ubuntu arm64 leg only)
         if: matrix.target == 'aarch64-unknown-linux-gnu'
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends gcc-aarch64-linux-gnu libc6-dev-arm64-cross
+        # T364: azure mirror DNS killed the aarch64 leg twice (run 43045899125) — the run block pins apt to archive.ubuntu.com and retries with backoff so one mirror wobble cannot kill a release.
+        run: |
+          # T364 (run 43045899125): the azure mirror is a speed optimization,
+          # not a correctness dependency — rewrite it away BEFORE any apt call
+          # (jammy runners drive apt through /etc/apt/apt-mirrors.txt; sed
+          # both, tolerate absence).
+          sudo sed -i 's|azure\.archive\.ubuntu\.com|archive.ubuntu.com|g' /etc/apt/sources.list /etc/apt/apt-mirrors.txt 2>/dev/null || true
+          # Retry with backoff: 3 attempts, 10s/30s/90s — a ~2-minute DNS
+          # wobble must not fail the build; the step still fails if all three
+          # attempts do (the recorded rc is consumed below, never swallowed).
+          apt_ok=1
+          for attempt in 1 2 3; do
+            if sudo apt-get update && sudo apt-get install -y --no-install-recommends gcc-aarch64-linux-gnu libc6-dev-arm64-cross; then
+              apt_ok=0
+              break
+            fi
+            echo "apt attempt ${attempt}/3 failed (azure mirror DNS?); backing off"
+            case "${attempt}" in
+              1) sleep 10 ;;
+              2) sleep 30 ;;
+              3) sleep 90 ;;
+            esac
+          done
+          if [ "${apt_ok}" -ne 0 ]; then
+            echo "apt failed after all 3 attempts (10s/30s/90s backoff) — see T364, run 43045899125"
+            exit 1
+          fi
 
       - name: build (release, locked, with the judge daemon)
         # T204/F15: release binaries ship the baked-in judge daemon (metal on

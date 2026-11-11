@@ -89,6 +89,12 @@ fn is_40hex(s: &str) -> bool {
     s.len() == 40 && s.chars().all(|c| c.is_ascii_hexdigit())
 }
 
+/// The flat idiom: whitespace-collapsed text. Needles matched against a flat
+/// string survive a re-wrap of a multi-line `run: |` block or a comment.
+fn flat(s: &str) -> String {
+    s.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 /// (a) The file exists and parses as a YAML mapping with the trigger and two
 /// jobs — the parse leg of the spec's "YAML parse + SHA-pin grep".
 #[test]
@@ -591,5 +597,128 @@ fn concurrency_guard_and_dispatch_backfill() {
         "both jobs (build + release) must honor the backfill ref — a \
          release job still on main would generate notes from the wrong \
          history"
+    );
+}
+
+/// (g) T364 — the apt leg survives azure mirror DNS failures. Run 43045899125
+/// (2026-11-11) failed the aarch64 leg TWICE on the same infrastructure
+/// error — `Temporary failure resolving 'azure.archive.ubuntu.com'` for ~19
+/// minutes across jammy apt loops — while the code was verified good: the
+/// mirror file (/etc/apt/apt-mirrors.txt) prioritizes the azure mirror on
+/// GitHub-hosted runners, so one DNS wobble killed an entire release. Three
+/// guards, pinned here: (1) the mirror is rewritten to archive.ubuntu.com
+/// BEFORE any apt call (sed'ing /etc/apt/sources.list and
+/// /etc/apt/apt-mirrors.txt, absence tolerated) — the azure mirror is a
+/// speed optimization, correctness must not depend on it; (2) the apt
+/// update+install retries 3 attempts with a 10s/30s/90s backoff and still
+/// FAILS the step after all three (the recorded rc is consumed by an
+/// explicit check after the loop — no swallowed rc); (3) the workflow cites
+/// run 43045899125 in a comment so the pin's why survives. Needles match
+/// whitespace-collapsed text so a re-wrap cannot silently evade the pin.
+#[test]
+fn apt_leg_survives_azure_mirror_dns_failures() {
+    let text = workflow_text();
+    let doc = parse(&text);
+
+    // The pin applies wherever apt runs in the file — collect the apt steps
+    // across BOTH jobs.
+    let apt_steps: Vec<String> = ["build", "release"]
+        .iter()
+        .flat_map(|j| steps(job(&doc, j)).to_vec())
+        .map(|s| step_run(&s))
+        .filter(|r| r.contains("apt-get"))
+        .collect();
+    assert_eq!(
+        apt_steps.len(),
+        1,
+        "expected exactly one apt invocation (the aarch64 cross linker \
+         step) — a new apt step must carry the same T364 mirror pin + \
+         retry, or the DNS single point of failure returns"
+    );
+    let run = &apt_steps[0];
+    let flat_run = flat(run);
+
+    // (i) The mirror pin: azure rewritten to archive.ubuntu.com before any
+    // apt call, sed'ing both files, tolerating absence (`|| true`).
+    for needle in [
+        "sudo sed -i 's|azure\\.archive\\.ubuntu\\.com|archive.ubuntu.com|g'",
+        "/etc/apt/sources.list /etc/apt/apt-mirrors.txt",
+        "2>/dev/null || true",
+    ] {
+        assert!(
+            flat_run.contains(needle),
+            "the apt step must pin the mirror away from azure: {needle:?} — \
+             run 43045899125 died on azure.archive.ubuntu.com DNS; the \
+             azure mirror is a speed optimization, correctness must not \
+             depend on it"
+        );
+    }
+    let pin_pos = flat_run
+        .find("archive.ubuntu.com|g")
+        .expect("the pin sed is present (checked above)");
+    let apt_pos = flat_run.find("apt-get").expect("the apt step runs apt-get");
+    assert!(
+        pin_pos < apt_pos,
+        "the mirror pin must run BEFORE any apt invocation (pin at byte \
+         {pin_pos}, apt-get at byte {apt_pos}) — a pin after the first apt \
+         call does not protect it"
+    );
+
+    // (ii) The retry shape: 3 attempts over the SAME package list, a 10s ->
+    // 30s -> 90s backoff ladder, and an explicit failure after all three
+    // attempts — the recorded rc is consumed after the loop, never swallowed
+    // by its trailing sleep.
+    for needle in [
+        "for attempt in 1 2 3",
+        "sudo apt-get update && sudo apt-get install -y \
+         --no-install-recommends gcc-aarch64-linux-gnu libc6-dev-arm64-cross",
+    ] {
+        assert!(
+            flat_run.contains(needle),
+            "the apt retry loop must carry {needle:?} — 3 attempts over the \
+             SAME package list (T364: a ~2-minute DNS wobble must not fail \
+             the build)"
+        );
+    }
+    let s10 = flat_run
+        .find("sleep 10")
+        .expect("the retry must sleep 10 (T364 backoff)");
+    let s30 = flat_run
+        .find("sleep 30")
+        .expect("the retry must sleep 30 (T364 backoff)");
+    let s90 = flat_run
+        .find("sleep 90")
+        .expect("the retry must sleep 90 (T364 backoff)");
+    assert!(
+        s10 < s30 && s30 < s90,
+        "the backoff ladder must be ordered 10s -> 30s -> 90s (T364), got \
+         sleep 10 at {s10}, sleep 30 at {s30}, sleep 90 at {s90}"
+    );
+    for needle in ["\"${apt_ok}\" -ne 0", "exit 1"] {
+        assert!(
+            flat_run.contains(needle),
+            "the step must FAIL after all 3 apt attempts: {needle:?} — the \
+             recorded rc is consumed by an explicit check after the loop \
+             (a swallowed rc would pass the step with a dead mirror)"
+        );
+    }
+
+    // (iii) The incident comment: run 43045899125 is cited on a comment
+    // line. The YAML parse drops comments, so this reads the raw text,
+    // whitespace-collapsed.
+    let flat_text = flat(&text);
+    for needle in ["run 43045899125", "aarch64 leg twice"] {
+        assert!(
+            flat_text.contains(needle),
+            "the workflow must cite the incident: {needle:?} (T364: azure \
+             mirror DNS killed the aarch64 leg twice) — the pin's why must \
+             survive for the next reader"
+        );
+    }
+    assert!(
+        text.lines()
+            .any(|l| l.trim_start().starts_with('#') && l.contains("43045899125")),
+        "the run-id citation must live on a comment line — a bare string \
+         would not explain the pin to the next reader"
     );
 }
