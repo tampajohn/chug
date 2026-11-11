@@ -2403,10 +2403,10 @@ ideation_cycle() { # the ONE launch the ideation timer schedules: while
       # logs its named skip and falls through to the normal dormant
       # disposition below.
       if [ "$gate_dormant" = "release-flush" ] && dormant_release_flush; then
-        skip_secs=$(ok_sleep_seconds)
-        echo "$(ts) release-flush pacing: sleeping ${skip_secs}s (the release commit reset the empty streak)" >> "$LOG"
-        loopd_osc7501_emit idle "dormant release flush" "[loop] dormant release flush (T361) — tag pushed, next probe ${skip_secs}s"
-        sleep "$skip_secs"
+        flush_secs=$(ok_sleep_seconds)
+        echo "$(ts) release-flush pacing: sleeping ${flush_secs}s (the release commit reset the empty streak)" >> "$LOG"
+        loopd_osc7501_emit idle "dormant release flush" "[loop] dormant release flush (T361) — tag pushed, next probe ${flush_secs}s"
+        sleep "$flush_secs"
         continue
       fi
       # T325: the dormant skip names the suspension in its own line BEFORE

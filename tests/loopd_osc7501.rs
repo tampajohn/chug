@@ -2675,8 +2675,8 @@ fn the_emission_counts_are_exact() {
     count_eq(
         &loopd,
         "loopd_osc7501_emit idle",
-        3,
-        "idle: cycle OK + dormant skip + plain skip",
+        4,
+        "idle: cycle OK + dormant skip + plain skip + dormant release flush (T361)",
     );
     count_eq(
         &loopd,
@@ -2684,12 +2684,12 @@ fn the_emission_counts_are_exact() {
         5,
         "blocked: cycle death + build red + disposition failure + both HALTs",
     );
-    // Total call sites: 2 working + 3 idle + 5 blocked + the probe arm = 11
+    // Total call sites: 2 working + 4 idle + 5 blocked + the probe arm = 12
     // (the definition line does not carry the trailing space).
     count_eq(
         &loopd,
         "loopd_osc7501_emit ",
-        11,
+        12,
         "every emission goes through the one gated emitter — no side door",
     );
 
