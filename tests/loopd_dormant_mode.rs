@@ -1379,8 +1379,8 @@ fn a_dirty_tree_declines_the_flush_with_a_named_skip() {
 /// release commit are exactly the state the retry-push-only path knows
 /// how to finish, and undoing them would discard a good cut over a
 /// network hiccup (the T361 undo-on-push-failure rule is superseded).
-/// The fixture's origin is unreachable (a remote named origin at a path
-/// that does not exist), so the cut + pairing check + notes + tag all
+/// The fixture's origin is a reachable bare repo whose push is denied
+/// (add_origin + chmod a-w), so the cut + pairing check + notes + tag all
 /// succeed and the PUSH fails: the tag must SURVIVE, HEAD keeps the
 /// release commit, the manifest stays bumped, and the disposition names
 /// push-failed in the git record — all at zero model calls. The
@@ -1505,7 +1505,7 @@ fn a_push_that_verifies_empty_fails_loud_and_keeps_the_cut() {
 
 /// THE T363 RETRY REGRESSION — the next flush run after a failed push
 /// pushes ONLY: no duplicate tag, no second release commit, no version
-/// re-bump. Pass 1 pushes at an unreachable origin (the push fails, the
+/// re-bump. Pass 1 pushes at a push-denied origin (the push fails, the
 /// local cut is KEPT); the fixture then points origin at a real bare
 /// repo and runs pass 2 — the recount reads 0 (git describe anchors on
 /// the local tag), so the gate converts on the PUSH STATE and the
