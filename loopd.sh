@@ -785,6 +785,220 @@ dormant_state_write() { # (re)arm the latch's timer: last_eval_ts = the git
   printf '{"last_eval_ts": %s, "last_ideation_ts": %s}\n' "$ts" "$ige" > "$STATE/dormant-state.json" || true
 }
 
+# T361 — the dormant release flush. Dormancy suppresses EVAL cycles, and
+# the T100 release recount happens inside EVAL cycles — so a due release
+# waits forever once the queue drains (the 2026-11-11 freeze: v0.25.0 the
+# latest tag while main ran 27 commits ahead, three distinct flips on the
+# books, the fleet's acceptance suite armed on the stale tag). The flush
+# is the mechanical sibling of the T258 cheap exit: when a dormant cycle's
+# recount crossed the 3-flip trigger, the supervisor runs a RELEASE-ONLY
+# cycle instead of the skip — bump the version, commit `chore: release
+# vX.Y.Z`, verify the pairing, generate the notes, cut + push the tag —
+# with ZERO model calls. The gate only DECIDES (the `dormant=release-flush`
+# verdict below); the predicate probe stays a dry-run; only run mode
+# mutates. The recount is the T100 doctrine's own mechanical count (the
+# T269 method) against the newest tag that is an ANCESTOR of HEAD —
+# `git describe` only walks ancestors, so the T245 anchor sanity holds by
+# construction — and the anchor-safety rules carry over whole: a dirty
+# tracked tree (the tag candidate would differ from HEAD's tree by more
+# than the version bump) is a named skip, an existing tag is never
+# re-tagged or moved, and a failed push UNDOES the local cut — an unpushed
+# tag is not a published release, and a swallowed local cut would read 0
+# on the next recount and freeze the channel the flush exists to unstick.
+release_last_tag() { # the newest v* tag reachable from HEAD — an ANCESTOR
+  # of HEAD by construction (the T245 sanity for free); empty = no tag on
+  # the books (the bootstrap: until the operator's FIRST tag lands, the
+  # loop never tags — the recount reads 0 against nothing)
+  git describe --tags --abbrev=0 HEAD 2>/dev/null || true
+}
+release_flip_ids() { # the DISTINCT flipped TODO row-ids in <tag>..HEAD,
+  # one per line — the T269 count method's extraction (the leading
+  # id-list anchor keeps stray trailing-prose T-tokens out; bundled
+  # `T<a> + T<b>` shapes survive) minus the `wc -l`: the flush's log line
+  # names the ids, the count is their number
+  local tag
+  tag=$(release_last_tag)
+  [ -n "$tag" ] || return 0
+  git log "$tag"..HEAD --format='%s' 2>/dev/null | grep -E '^todo:' \
+    | sed -E 's/^todo: (file |fix )?(T[0-9]+( *[+,] *T[0-9]+)*).*/\2/' \
+    | grep -oE 'T[0-9]+' | sort -u || true
+}
+release_flip_count() { # the recount as a clean integer (0 = no tag, none)
+  local ids
+  ids=$(release_flip_ids) || true
+  [ -n "$ids" ] || { echo 0; return 0; }
+  printf '%s\n' "$ids" | grep -c . || true
+}
+release_range_has_features() { # the release-notes Features class in
+  # $1..HEAD — `feat:` conventional commits and `t<N>:` item impls (the
+  # same classification scripts/release-notes.sh groups under
+  # `## Features`): the minor-vs-patch bump rule's mechanical input
+  git log --format='%s' "$1..HEAD" 2>/dev/null \
+    | grep -Eiq '^(feat|t[0-9]+)(\(|:)' && return 0
+  return 1
+}
+t361_decline() { # one named refusal: word in $1, human line in $2 — the
+  # declined cycle's disposition subject reads the word back
+  T361_FLUSH_DECLINE="$1"
+  echo "$(ts) dormant release flush (T361): declined — $2 — no tag cut" >> "$LOG"
+}
+t361_undo() { # drop the local cut ($1 pre-cut HEAD, $2 release commit,
+  # $3 tag): an UNPUSHED tag is not a published release, and the doctrine's
+  # immutability rule is about PUBLISHED tags — the reset is guarded (only
+  # when the release commit is still HEAD, so nothing else can be swept
+  # away) and the delete is ours (never a published tag)
+  local prev=$1 sha=$2 tag=$3
+  if [ -n "$sha" ] && [ "$(git rev-parse HEAD 2>/dev/null || true)" = "$sha" ]; then
+    git reset --hard "$prev" >>"$LOG" 2>&1 || true
+  fi
+  if [ -n "$tag" ] && git rev-parse -q --verify "refs/tags/$tag" >/dev/null 2>&1; then
+    git tag -d "$tag" >>"$LOG" 2>&1 || true
+  fi
+}
+T361_FLUSH_DECLINE="" # the last flush refusal's word (empty = none/ok)
+dormant_release_flush() { # the RELEASE-ONLY cycle (run mode only): the
+  # T100 tag cut, mechanical end to end — no orchestrator, no LLM call.
+  # Returns 0 when the tag was cut AND pushed; 1 on any named refusal (the
+  # caller then takes the normal dormant cheap-exit disposition).
+  local tag count ids version major rest minor patch next tagname
+  local prev_head release_sha="" branch notes tmp rc=0
+  T361_FLUSH_DECLINE=""
+  tag=$(release_last_tag)
+  if [ -z "$tag" ]; then
+    t361_decline "no-ancestor-tag" "no ancestor v* tag (the bootstrap: the FIRST tag is operator-cut)"
+    return 1
+  fi
+  count=$(release_flip_count)
+  ids=$(release_flip_ids)
+  if [ "$count" -lt 3 ]; then
+    t361_decline "below-trigger" "recount $count < 3 (the T100 trigger)"
+    return 1
+  fi
+  # ANCHOR SAFETY: the tag candidate (the release commit the flush is
+  # about to cut) must differ from HEAD's tree by the version bump and
+  # NOTHING else — a dirty tracked file would ride the published release.
+  # Untracked state (loopd's own logs/latch, fixture stubs, scratch) never
+  # enters the commit and never blocks the cut.
+  if [ -n "$(git status --porcelain --untracked-files=no 2>/dev/null || true)" ]; then
+    t361_decline "dirty-tree" "dirty tree (HEAD's tree differs from the tag candidate's beyond the version bump)"
+    return 1
+  fi
+  if [ ! -f Cargo.toml ]; then
+    t361_decline "manifest-missing" "Cargo.toml missing"
+    return 1
+  fi
+  if [ ! -f Cargo.lock ]; then
+    t361_decline "lock-missing" "Cargo.lock missing (the release builds --locked)"
+    return 1
+  fi
+  if [ ! -f scripts/check-tag-version.sh ] || [ ! -f scripts/release-notes.sh ]; then
+    t361_decline "release-scripts-missing" "scripts/check-tag-version.sh / scripts/release-notes.sh missing"
+    return 1
+  fi
+  version=$(awk '
+      /^\[package\]/  { inpkg = 1; next }
+      /^\[/           { inpkg = 0 }
+      inpkg && /^version[[:space:]]*=/ { sub(/^[^=]*=/, ""); gsub(/[[:space:]]*"/, ""); print; exit }
+    ' Cargo.toml 2>/dev/null) || version=""
+  major=${version%%.*}
+  rest=${version#*.}
+  minor=${rest%%.*}
+  patch=${rest#*.}
+  case "$major.$minor.$patch" in
+    ''|*[!0-9.]*|*.*.*.*)
+      t361_decline "manifest-version-unreadable" "Cargo.toml [package] version '$version' is not X.Y.Z"
+      return 1 ;;
+  esac
+  # minor for a feature, patch otherwise (the T100 bump rule, mechanical:
+  # the release-notes Features classification of the range's subjects)
+  if release_range_has_features "$tag"; then
+    minor=$((minor + 1)); patch=0
+  else
+    patch=$((patch + 1))
+  fi
+  next="$major.$minor.$patch"
+  tagname="v$next"
+  if git rev-parse -q --verify "refs/tags/$tagname" >/dev/null 2>&1; then
+    t361_decline "tag-exists" "tag $tagname already exists (never re-tag or move a tag)"
+    return 1
+  fi
+  # The bump: manifest + lock, one mechanical rewrite each (the T100
+  # pairing rule — a manifest-only bump fails --locked builds, the v0.2.0
+  # lesson). cargo is deliberately NOT run: the flush stays free and
+  # deterministic, the lock's chug block is rewritten in place.
+  tmp="$STATE/t361-flush.$$"
+  if ! awk -v v="$next" '
+      /^\[package\]/  { inpkg = 1; print; next }
+      /^\[/           { inpkg = 0 }
+      inpkg && /^version[[:space:]]*=/ { printf "version = \"%s\"\n", v; done = 1; next }
+      { print }
+      END { exit done ? 0 : 1 }
+    ' Cargo.toml > "$tmp.m"; then
+    rm -f "$tmp.m"
+    t361_decline "manifest-version-missing" "no [package] version line in Cargo.toml"
+    return 1
+  fi
+  mv "$tmp.m" Cargo.toml
+  if ! awk -v v="$next" '
+      $0 == "name = \"chug\"" { inchug = 1; print; next }
+      inchug && /^version[[:space:]]*=/ { printf "version = \"%s\"\n", v; done = 1; inchug = 0; next }
+      /^\[\[package\]\]/ { inchug = 0 }
+      { print }
+      END { exit done ? 0 : 1 }
+    ' Cargo.lock > "$tmp.l"; then
+    rm -f "$tmp.l"
+    git checkout -- Cargo.toml 2>/dev/null || true
+    t361_decline "lock-chug-block-missing" "no chug version line in Cargo.lock"
+    return 1
+  fi
+  mv "$tmp.l" Cargo.lock
+  prev_head=$(git rev-parse HEAD 2>/dev/null) || prev_head=""
+  git add Cargo.toml Cargo.lock 2>>"$LOG" || rc=$?
+  if [ "$rc" -eq 0 ]; then
+    git commit -q -m "chore: release $tagname" \
+      -m "dormant release flush (T361): $count distinct flips since $tag" 2>>"$LOG" || rc=$?
+  fi
+  if [ "$rc" -ne 0 ]; then
+    git checkout -- Cargo.toml Cargo.lock 2>>"$LOG" || true
+    t361_decline "release-commit-failed" "release commit failed (rc=$rc)"
+    return 1
+  fi
+  release_sha=$(git rev-parse HEAD 2>/dev/null) || release_sha=""
+  if ! sh scripts/check-tag-version.sh "$tagname" . >>"$LOG" 2>&1; then
+    t361_undo "$prev_head" "$release_sha" "$tagname"
+    t361_decline "version-check-failed" "version check failed — the local cut was undone"
+    return 1
+  fi
+  notes="$STATE/t361-notes.$$"
+  if ! sh scripts/release-notes.sh HEAD "$tag" > "$notes" 2>>"$LOG"; then
+    rm -f "$notes"
+    t361_undo "$prev_head" "$release_sha" "$tagname"
+    t361_decline "notes-failed" "release notes failed — the local cut was undone"
+    return 1
+  fi
+  if ! git tag -a "$tagname" -F "$notes" >>"$LOG" 2>&1; then
+    rm -f "$notes"
+    t361_undo "$prev_head" "$release_sha" "$tagname"
+    t361_decline "tag-cut-failed" "tag cut failed — the local cut was undone"
+    return 1
+  fi
+  rm -f "$notes"
+  branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null) || branch=""
+  rc=0
+  if [ -n "$branch" ] && [ "$branch" != "HEAD" ]; then
+    git push origin "$branch" "$tagname" >>"$LOG" 2>&1 || rc=$?
+  else
+    git push origin "$tagname" >>"$LOG" 2>&1 || rc=$?
+  fi
+  if [ "$rc" -ne 0 ]; then
+    t361_undo "$prev_head" "$release_sha" "$tagname"
+    t361_decline "push-failed" "push failed (rc=$rc) — the local cut was undone so the recount stays live"
+    return 1
+  fi
+  echo "$(ts) dormant release flush (T361): $tagname ($count flips: $(printf '%s' "$ids" | awk '{ printf "%s%s", sep, $0; sep = ", " } END { print "" }'))" >> "$LOG"
+  return 0
+}
+
 # T326 — ideation mode. While DORMANT, the loop proposes outward-facing
 # features instead of only going quiet: when `now - last_ideation_ts` is
 # 7d or more (state in the same .chug/loopd/dormant-state.json latch: one
@@ -927,7 +1141,7 @@ eval_gate() { # the T258/T259 decision for a would-be eval cycle, one line:
   #                              there is no alias layer, so `--model glm`
   #                              would die at the first call)
   # fields: rows= new= deaths= bookkeeping= fresh= base= streak=
-  #         closed= laya= conf= route= dormant=
+  #         closed= laya= conf= route= dormant= flips=
   #   laya=none          the triage layer did not run (the mechanical layer
   #                      settled the cycle, or a stale evaluation is due)
   #   laya=down          fail-open (daemon absent/error/timeout) — T258
@@ -937,8 +1151,18 @@ eval_gate() { # the T258/T259 decision for a would-be eval cycle, one line:
   #   dormant=no         the loop is awake (T325) — the T258/T259 arms below
   #   dormant=suspended-valve   dormant cheap exit: the T247 valve is
   #                      suspended, the skip fires whatever the streak
+  #   dormant=release-flush  the dormant skip whose T100 recount crossed 3:
+  #                      the RELEASE-ONLY mechanical cycle (bump + tag +
+  #                      push, ZERO model calls) — run mode executes it,
+  #                      the predicate probe stays a dry-run (T361)
   #   dormant=audit      the weekly audit timer is due: the one launch
-  #                      dormancy schedules, read-only (DORMANT=1 in env)
+  #                      dormancy schedules, read-only (DORMANT=1 in env;
+  #                      T361: the audit cycle also gains the recount — the
+  #                      run loop flushes before the audit child when
+  #                      flips >= 3)
+  #   flips=<n>          the T269 recount since the newest ancestor tag —
+  #                      consulted only on the dormant arms (0 = awake
+  #                      cycles never read it, or no tag / no flips)
   local base new deaths book fresh streak verb model
   base=$(last_eval_commit)
   new=$(new_todo_rows "$base")
@@ -961,13 +1185,26 @@ eval_gate() { # the T258/T259 decision for a would-be eval cycle, one line:
   # audit's own eval: commit restarts the week for the very next cycle);
   # an unknown half degrades to the due side — the audit — never to a
   # skip.
-  local dormant="no" dts
+  local dormant="no" dts flips=0
   if [ "$(todo_rows TODO.md)" -eq 0 ] && [ -f "$STATE/dormant-state.json" ]; then
     dts=$(dormant_timer_ts)
     if [ -z "$dts" ] || [ "$(( $(date -u +%s) - dts ))" -ge "$DORMANT_AUDIT_SECS" ]; then
       verb=launch; model=$LOOP_ORCH_MODEL; dormant=audit
     else
       verb=skip; model=-; dormant=suspended-valve
+    fi
+    # T361 — the dormant release flush recount: a dormant cycle whose
+    # T100 count (the T269 method against the newest ANCESTOR tag)
+    # crossed 3 converts the suspended-valve skip into the RELEASE-ONLY
+    # cycle — the verb/model stay the skip's (no model is picked, the
+    # flush is mechanical), only the dormant verdict changes. < 3 leaves
+    # every arm byte-identical (the threshold is the T245 doctrine,
+    # never this file's to change), and the audit arm keeps its launch —
+    # the run loop reads flips= off the line and flushes BEFORE the
+    # audit child (belt and suspenders).
+    flips=$(release_flip_count)
+    if [ "$flips" -ge 3 ] && [ "$dormant" = "suspended-valve" ]; then
+      dormant=release-flush
     fi
   # the valve FIRST (T247): the 4th consecutive empty cycle runs the real
   # evaluation whatever the delta says — the chain converts itself. A trip
@@ -1032,7 +1269,7 @@ eval_gate() { # the T258/T259 decision for a would-be eval cycle, one line:
     # are the shapes the T258 routing already decided mechanically.
     verb=launch; model=$LOOP_ORCH_MODEL
   fi
-  echo "$verb $model rows=$(todo_rows TODO.md) new=$new deaths=$deaths bookkeeping=$book fresh=$fresh base=${base:-none} streak=$streak closed=$closed $laya dormant=$dormant"
+  echo "$verb $model rows=$(todo_rows TODO.md) new=$new deaths=$deaths bookkeeping=$book fresh=$fresh base=${base:-none} streak=$streak closed=$closed $laya dormant=$dormant flips=$flips"
 }
 loopd_write_disposition() { # T258 — the supervisor writes the one-line
   # disposition ITSELF (the cheap exit, no LLM): an empty commit whose
@@ -1070,6 +1307,13 @@ loopd_write_disposition() { # T258 — the supervisor writes the one-line
   # the valve from the carried count).
   if [ "$dormant" = "suspended-valve" ]; then
     reason="(T325 dormant: streak=$streak suspended-valve — the weekly audit timer replaces the valve)"
+  fi
+  # T361: a DECLINED flush falls through to the normal disposition — the
+  # subject names the refusal word the flush logged (the anchor-safety
+  # reason), so the git record carries why the release channel stayed
+  # shut this cycle; the T237 token and the streak handoff ride as ever.
+  if [ "$dormant" = "release-flush" ]; then
+    reason="(T361 flush declined: ${T361_FLUSH_DECLINE:-unknown} — the dormant cheap exit stands)"
   fi
   snext=$((streak + 1))
   git commit --allow-empty -m "eval: loopd cheap-exit ${t1} ${t2} ${reason} — TRUE streak ${streak}→${snext}; ${fields}; next cycle re-checks, the T247 valve still binds on the TRUE count" >/dev/null 2>&1 || rc=$?
@@ -1586,7 +1830,10 @@ case "${1:-run}" in
     # launching nothing and writing nothing — the routing/sleep-ok probe
     # pattern and the operator's + tests' behavioral surface for the
     # cheap exit (req 5): "<verb> <model> rows=... new=... deaths=...
-    # bookkeeping=... fresh=... base=... streak=... closed=... laya=...".
+    # bookkeeping=... fresh=... base=... streak=... closed=... laya=...
+    # dormant=... flips=..." — T361: a dormant line's `flips=` is the
+    # release recount (dormant=release-flush names the flush cycle the
+    # run mode would cut; the probe itself stays a dry-run).
     # skip = the launch is skipped and loopd writes the disposition itself;
     # launch names the routed orchestrator model. Meaningful in eval mode
     # (the T81 routing decided eval); routine cycles never reach the gate.
@@ -2148,6 +2395,20 @@ ideation_cycle() { # the ONE launch the ideation timer schedules: while
     # launch the record describes.
     laya_record "$gate"
     if [ "$gate_verb" = skip ]; then
+      # T361 — the dormant release flush: the skip-class cycle whose T100
+      # recount crossed 3 runs the RELEASE-ONLY mechanical cycle instead
+      # of the cheap exit — bump + release commit + pairing check + notes
+      # + tag + push, ZERO model calls (the T258 cheap-exit's sibling,
+      # not a paid eval). A declined flush (the anchor-safety refusals)
+      # logs its named skip and falls through to the normal dormant
+      # disposition below.
+      if [ "$gate_dormant" = "release-flush" ] && dormant_release_flush; then
+        flush_secs=$(ok_sleep_seconds)
+        echo "$(ts) release-flush pacing: sleeping ${flush_secs}s (the release commit reset the empty streak)" >> "$LOG"
+        loopd_osc7501_emit idle "dormant release flush" "[loop] dormant release flush (T361) — tag pushed, next probe ${flush_secs}s"
+        sleep "$flush_secs"
+        continue
+      fi
       # T325: the dormant skip names the suspension in its own line BEFORE
       # the T258 disposition record — the loop went quiet ON PURPOSE (the
       # valve is suspended behind the weekly audit timer), never because
@@ -2214,6 +2475,14 @@ ideation_cycle() { # the ONE launch the ideation timer schedules: while
   # iterations (the T47 lesson; DORMANT affects no build, but the unset
   # keeps every non-audit child env honest).
   if [ "$gate_dormant" = "audit" ]; then
+    # T361 — the audit cycle gains the recount (belt and suspenders): the
+    # flush is mechanical and free, so an audit cycle whose count crossed
+    # the trigger cuts the tag BEFORE the read-only child launches; a
+    # declined flush never blocks the audit (the audit is the eval-side
+    # contract, the flush the release channel — independent legs).
+    if [ "$(laya_gate_field flips= "$gate")" -ge 3 ]; then
+      dormant_release_flush || true
+    fi
     echo "$(ts) dormant weekly audit (T325): due — read-only audit launching, DORMANT=1 (the restart is the audit's own eval: commit)" >> "$LOG"
     export DORMANT=1
   else
