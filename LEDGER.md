@@ -15,9 +15,8 @@
 - LIVE_CTX remedy (4th exercise, cycle-3207 wrap): 411,221 → 3,522 bytes in ONE contiguous edit — [ctx-edit REJECTED] first attempt (turn-pair split: turn 2's tool_result lost its tool_use), remedied with a CONTIGUOUS drop (turns 1..N-7 as one span, head + last 6 kept) — pair-integrity holds by construction (contiguous spans never split a tool_use/tool_result pair)
 
 ## Next
-- merge loop-t362 → main → T242 bg post-merge gates (target-shared-main) → flip T362 (todo_flip.py + guard) → T261 batch → push
-- wrap: Outcomes 3207 (T362 + shape line GENERATED) + compact oldest + decisions-audit + release recount (TRUE count since v0.25.0: T361+T362 = 2 < 3 → NO TAG expected) + eval-state write + token-free wrap-notes + probe + fill + push + goal_complete
-- notes carried: estimate-vs-actual drift ~120 vs 646 (555 = test file) — eval-note material per the convention (the 741st eval's second-same-shape-blowout watch rides; THIS is a candidate sighting)
+- (corridor completed this segment) cycle-3207 books CLOSED: merge cf278d59 + flip bb2a3629 + harvest b1889b23 landed; release v0.26.0 tagged+pushed (TRUE recount 3 >= 3: T360+T361+T362); prep 4ab93f5a + notes d705f635 (probe 60 0) + fill e1fa4d1d pushed; main == origin/main; goal_complete next
+- carried: the T362 corridor-over-budget watch (bash=60 at the prep stamp vs the <20 budget, the corridor-context reason named in the Outcomes entry — a repeat next cycle weighs corridor delegation) + estimate-vs-actual drift ~120-vs-646 (555 = test file) rides the 741st eval's second-same-shape watch
 
 ## Blockers
-- none
+- none (books closed; the next cycle starts cold from TODO.md/EVALUATION.md per the handoff contract)
