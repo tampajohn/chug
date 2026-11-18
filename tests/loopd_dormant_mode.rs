@@ -1179,6 +1179,32 @@ impl Fixture {
             ),
         );
     }
+
+    /// A `scripts/site-sync.sh` stub in the fixture root (the flush
+    /// resolves the script relative to the repo root, exactly like the
+    /// cycle-OK leg): every invocation appends one `invoked` line to the
+    /// gitignored `.chug/loopd/site-sync.invoked` marker — the T366
+    /// observable — then exits `exit` (0 for the verified-success legs,
+    /// 7 for the best-effort failure leg). Untracked, so the flush's
+    /// `--untracked-files=no` anchor-safety check never reads dirty, and
+    /// `printf`-appending into the ignored `.chug/` tree never sweeps
+    /// into any fixture commit.
+    fn add_site_sync_stub(&self, exit: i32) {
+        write_exec(
+            &self.path().join("scripts/site-sync.sh"),
+            &format!(
+                "#!/bin/sh\n\
+                 # T366 fixture stub: record every invocation, then exit.\n\
+                 printf 'invoked\\n' >> \"$PWD/.chug/loopd/site-sync.invoked\"\n\
+                 exit {exit}\n"
+            ),
+        );
+    }
+
+    /// The site-sync invocation marker's content, if the stub ever ran.
+    fn site_sync_invocations(&self) -> Option<String> {
+        std::fs::read_to_string(self.path().join(".chug/loopd/site-sync.invoked")).ok()
+    }
 }
 
 /// The T361 flush fixture: the dormant battery's shape (the timer stale on
@@ -1339,6 +1365,109 @@ fn the_flush_cuts_and_pushes_the_release_tag_with_zero_model_calls() {
     assert_eq!(field_of(&gate, "flips="), "0", "no flips since the new tag: {gate}");
 }
 
+// ---------------------------------------------------------------- T366 ----
+// The flush's publication leg: a VERIFIED push publishes the release to
+// GitHub, so chug.sh's latest-release panel must move the same way. Until
+// this leg the flush bumped, tagged, pushed, slept, and continued — and
+// the site lagged the flush's tag until the next LAUNCHED cycle ran the
+// cycle-OK sync, i.e. up to the audit cadence (the cycle-3212 audit
+// finding: v0.26.1 pushed 2026-11-11, the panel still v0.26.0 on
+// 2026-11-18, the last sync 7 minutes BEFORE the flush). The leg runs
+// best-effort after the T363 ls-remote check: a failing sync never fails
+// the flush, and a declined or unverified flush never syncs — nothing new
+// to publish, the panel stays honestly behind the pushed tag.
+
+/// THE STALE-PANEL REGRESSION — a flush that succeeds (the push verified
+/// by the T363 ls-remote check) syncs the site exactly once, AFTER the
+/// push-verify leg: the stub's invocation marker holds one invocation,
+/// the `site-sync ran (rc=0)` line is logged after the flush's success
+/// line, and the flush cycle still completes with its pacing sleep. Zero
+/// model calls — the flush cycle launches nothing and sleeps.
+#[test]
+fn the_flush_syncs_the_site_once_after_a_verified_push() {
+    let f = flush_fixture(4, 2 * DAY, 3);
+    f.add_origin();
+    f.add_site_sync_stub(0);
+    let child_env = f.install_run_stubs();
+    f.run_one_pass();
+    let log = f.fixture_log();
+    assert!(
+        log.contains("dormant release flush (T361): v0.26.0 (3 flips: T297, T328, T359)"),
+        "the flush succeeded: {log}"
+    );
+    let invoked = f
+        .site_sync_invocations()
+        .expect("the sync stub was invoked — that is the whole point of this leg");
+    assert_eq!(
+        invoked.lines().count(),
+        1,
+        "exactly one site-sync invocation per verified push: {invoked}"
+    );
+    let verified = log
+        .find("dormant release flush (T361): v0.26.0 (3 flips:")
+        .expect("the flush's verified-push success line is logged");
+    let synced = log
+        .find("dormant release flush (T361): site-sync ran (rc=0)")
+        .expect("the sync's rc line is logged");
+    assert!(
+        verified < synced,
+        "the sync rides the verified push — the rc line follows the success line: {log}"
+    );
+    assert!(
+        log.contains("release-flush pacing: sleeping"),
+        "the flush cycle still completed with its pacing sleep: {log}"
+    );
+    assert!(
+        !log.contains("dormant release flush (T361): declined"),
+        "nothing declined the flush: {log}"
+    );
+    assert!(
+        !child_env.exists() && !log.contains("cycle start ->"),
+        "the flush stays zero-model — the sync leg launches no cycle: {log}"
+    );
+}
+
+/// THE BEST-EFFORT HALF — a site-sync that exits nonzero logs the named
+/// warn (the cycle-OK leg's own line, `site-sync: nonzero exit
+/// (best-effort, ignored)`) plus the rc line and NEVER fails the flush:
+/// the tag still verified on the origin, the success line still logs, and
+/// the pacing sleep still runs. Site sync is observability, not a gate —
+/// the tag is already published when the leg runs.
+#[test]
+fn a_failing_site_sync_never_fails_the_flush() {
+    let f = flush_fixture(4, 2 * DAY, 3);
+    f.add_origin();
+    f.add_site_sync_stub(7);
+    let child_env = f.install_run_stubs();
+    f.run_one_pass();
+    let log = f.fixture_log();
+    assert!(
+        log.contains("dormant release flush (T361): site-sync ran (rc=7)"),
+        "the best-effort rc is named on the log line: {log}"
+    );
+    assert!(
+        log.contains("site-sync: nonzero exit (best-effort, ignored)"),
+        "the named warn, exactly the cycle-OK leg's line: {log}"
+    );
+    assert!(
+        !log.contains("dormant release flush (T361): declined"),
+        "a failed sync never fails the flush: {log}"
+    );
+    let remote = git_out(f.path(), &["ls-remote", "origin"]);
+    assert!(
+        remote.contains("refs/tags/v0.26.0"),
+        "the tag was published before the failing sync ever ran: {remote}"
+    );
+    assert!(
+        log.contains("release-flush pacing: sleeping"),
+        "the flush succeeded and still paced: {log}"
+    );
+    assert!(
+        !child_env.exists() && !log.contains("cycle start ->"),
+        "still zero-model on the failing-sync cycle: {log}"
+    );
+}
+
 /// ANCHOR SAFETY: a dirty tracked tree means the tag candidate (the
 /// release commit the flush is about to cut) would differ from HEAD's
 /// tree by more than the version bump — the flush declines with a NAMED
@@ -1370,6 +1499,39 @@ fn a_dirty_tree_declines_the_flush_with_a_named_skip() {
     assert!(
         git_out(f.path(), &["log", "-1", "--format=%s"]).contains("T361 flush declined: dirty-tree"),
         "the disposition names the refusal in the git record: {log}"
+    );
+    assert!(!child_env.exists(), "the declined cycle is still zero-model");
+}
+
+/// THE ORDERING HALF — a DECLINED flush (the anchor-safety dirty-tracked
+/// refusal, nothing cut, nothing pushed, nothing published) never syncs
+/// the site: there is nothing new to publish, so the stub is never
+/// invoked and no site-sync line is logged at all. The sync rides the
+/// verified push and only the verified push.
+#[test]
+fn a_declined_flush_never_syncs_the_site() {
+    let f = flush_fixture(4, 2 * DAY, 3);
+    f.add_origin();
+    f.add_site_sync_stub(0);
+    // Dirty a TRACKED file — the anchor-unsafe candidate, the same
+    // refusal shape the T361 dirty-tree leg proves.
+    f.write_file("TODO.md", &format!("{TODO_ONE_DONE}<!-- T366 dirty candidate -->\n"));
+    let child_env = f.install_run_stubs();
+    f.run_one_pass();
+    let log = f.fixture_log();
+    assert!(
+        log.contains(
+            "dormant release flush (T361): declined — dirty tree (HEAD's tree differs from the tag candidate's beyond the version bump)"
+        ),
+        "the named anchor-safety refusal: {log}"
+    );
+    assert!(
+        f.site_sync_invocations().is_none(),
+        "a declined flush never syncs — nothing was published"
+    );
+    assert!(
+        !log.contains("site-sync"),
+        "no site-sync line of any kind on a declined flush: {log}"
     );
     assert!(!child_env.exists(), "the declined cycle is still zero-model");
 }
@@ -1578,6 +1740,75 @@ fn a_failed_push_retries_the_push_only_on_the_next_cycle() {
     );
 }
 
+/// THE UNVERIFIED-LEG HALF (the T363 shape, one leg down) — an empty
+/// ls-remote verification fails loud, declines, and NEVER syncs on the
+/// unverified leg; the retry that DOES verify (a fresh origin, the real
+/// git back in PATH) syncs exactly once, after the retry's own
+/// verified-push line. An empty verification means the tag never reached
+/// origin — the panel sync on THAT state would publish a release that did
+/// not happen.
+#[test]
+fn the_unverified_leg_never_syncs_and_the_verifying_retry_does() {
+    let f = flush_fixture(4, 2 * DAY, 3);
+    // Pass 1: the push lands (real git), but the shim blackholes ls-remote
+    // for the tag the flush is ABOUT to cut — the verification reads
+    // empty, the flush fails loud and declines, nothing syncs.
+    f.add_origin();
+    f.add_ls_remote_blackhole("v0.26.0");
+    f.add_site_sync_stub(0);
+    let child_env = f.install_run_stubs();
+    f.run_one_pass();
+    let log = f.fixture_log();
+    assert!(
+        log.contains("dormant release flush FAILED: push verification empty for v0.26.0"),
+        "the FAIL-LOUD line: {log}"
+    );
+    assert!(
+        f.site_sync_invocations().is_none(),
+        "an unverified push is not a publication — the site never synced"
+    );
+    assert!(
+        !log.contains("site-sync"),
+        "no site-sync line of any kind on the unverified leg: {log}"
+    );
+    // Pass 2's shape: a FRESH bare origin (pass 1's push DID land on the
+    // old one — the blackhole hid it from ls-remote, not from git), the
+    // real git back in PATH, so the local-only tag converts the gate on
+    // the PUSH STATE (the T363 rule) and the retry-push-only path
+    // verifies on ls-remote and THEN syncs.
+    git(f.path(), &["init", "-q", "--bare", "origin2.git"]);
+    git(f.path(), &["remote", "set-url", "origin", "origin2.git"]);
+    std::fs::remove_file(f.path().join("bin/git")).expect("drop the ls-remote blackhole shim");
+    f.run_one_pass();
+    let log = f.fixture_log();
+    assert!(
+        log.contains("dormant release flush (T361): v0.26.0 push retry verified on origin"),
+        "the retry verified on the fresh origin: {log}"
+    );
+    let invoked = f
+        .site_sync_invocations()
+        .expect("the verifying retry syncs the site");
+    assert_eq!(
+        invoked.lines().count(),
+        1,
+        "exactly one sync — on the verified retry leg, never the unverified one: {invoked}"
+    );
+    let verified = log
+        .rfind("push retry verified on origin")
+        .expect("the retry's verified-push line is in the log");
+    let synced = log
+        .rfind("dormant release flush (T361): site-sync ran (rc=0)")
+        .expect("the retry's sync rc line is in the log");
+    assert!(
+        verified < synced,
+        "the sync runs AFTER the retry's own ls-remote verification: {log}"
+    );
+    assert!(
+        !child_env.exists() && !log.contains("cycle start ->"),
+        "the retry stays zero-model: {log}"
+    );
+}
+
 /// The weekly audit gains the recount (belt and suspenders): a due audit
 /// on a flush-eligible queue stays a launch (dormant=audit, the full
 /// orchestrator id) but carries flips=3 — the run mode flushes BEFORE the
@@ -1671,7 +1902,9 @@ fn the_audit_rider_stays_below_the_trigger() {
 /// precedes the audit launch; the flush is cargo-free and never touches
 /// the latch; the undo (pre-push legs only) + never-re-tag guards are on
 /// the books; the push legs keep-and-verify (T363) with the retry path
-/// before the trigger; the declined disposition names the refusal.
+/// before the trigger; the declined disposition names the refusal; the
+/// publication leg syncs the site on a verified push only, never on a
+/// declined or unverified one (T366).
 #[test]
 fn the_flush_wiring_is_pinned_in_loopd() {
     let loopd = read("loopd.sh");
@@ -1804,5 +2037,65 @@ fn the_flush_wiring_is_pinned_in_loopd() {
         1,
         "the declined disposition names the refusal word",
     );
-    count_eq(&loopd, "dormant release flush (T361): declined —", 1, "every refusal is a NAMED skip — one composer, per-reason words");
+    // T366 — the publication leg: the sync rides a VERIFIED push only.
+    // Defined once, called once per success exit (the retry leg's + the
+    // cut leg's), each call AFTER its leg's T363 ls-remote verification
+    // and past both verify-empty exits; the rc log line is composed once;
+    // the best-effort warn composer is named exactly twice (the cycle-OK
+    // leg keeps its singleton).
+    count_eq(&loopd, "t361_site_sync() {", 1, "the publication leg, defined once");
+    count_eq(
+        &loopd,
+        "\n  t361_site_sync\n",
+        1,
+        "the cut leg's one call (the flush fn's 2-space body)",
+    );
+    count_eq(
+        &loopd,
+        "\n    t361_site_sync\n",
+        1,
+        "the retry leg's one call (inside the retry-push-only if)",
+    );
+    let retry_verified = loopd
+        .find("push retry verified on origin")
+        .expect("the retry's verified-push line");
+    let retry_sync = loopd
+        .find("\n    t361_site_sync")
+        .expect("the retry leg's sync call");
+    assert!(
+        retry_verified < retry_sync,
+        "the retry leg syncs AFTER its push verifies (the T366 ordering)"
+    );
+    let cut_verify_fail = loopd
+        .find("push verification empty — $tagname never reached origin")
+        .expect("the cut leg's verify-empty decline");
+    let cut_success = loopd
+        .find("dormant release flush (T361): $tagname ($count flips:")
+        .expect("the cut leg's success line");
+    let cut_sync = loopd
+        .find("\n  t361_site_sync")
+        .expect("the cut leg's sync call");
+    assert!(
+        cut_verify_fail < cut_success && cut_success < cut_sync,
+        "the cut leg syncs only on the verified-success path (after the \
+         ls-remote check and its FAIL-LOUD decline, after the success line)"
+    );
+    count_eq(
+        &loopd,
+        "site-sync ran (rc=$rc)",
+        1,
+        "the flush's sync line, composed once",
+    );
+    count_eq(
+        &loopd,
+        "site-sync: nonzero exit (best-effort, ignored)",
+        2,
+        "the named warn: the cycle-OK leg + the flush leg (never a gate)",
+    );
+    count_eq(
+        &loopd,
+        "dormant release flush (T361): declined —",
+        1,
+        "every refusal is a NAMED skip — one composer, per-reason words",
+    );
 }

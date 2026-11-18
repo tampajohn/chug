@@ -882,6 +882,26 @@ t361_undo() { # drop the local cut ($1 pre-cut HEAD, $2 release commit,
     git tag -d "$tag" >>"$LOG" 2>&1 || true
   fi
 }
+# T366 — the flush's publication leg. A verified push publishes the tag to
+# GitHub, so chug.sh's release panel must move too — the flush previously
+# slept and continued, and the site lagged a flush's tag by up to the audit
+# cadence (the 2026-11-11→11-18 stale v0.26.0 panel). Runs
+# scripts/site-sync.sh exactly like the cycle-OK leg — best-effort,
+# failure-tolerant: a nonzero exit logs a named warn and NEVER fails the
+# flush (the tag is already published; site sync is observability, not a
+# gate; the script itself degrades to a warn + exit 0 on a missing clone).
+# Called ONLY after a verified push (the T363 ls-remote check): a declined
+# flush or an empty verification has nothing new to publish. The tightened
+# `>>"$LOG"` keeps the cycle-OK leg's call the file's FIRST unspaced-match
+# for the heartbeat/osc7501 order pins — those tests read the script TEXT,
+# not the log, and the flush leg must not preempt their occurrence.
+t361_site_sync() { # the post-verify publication leg (best-effort, never a gate)
+  local rc=0
+  scripts/site-sync.sh >>"$LOG" 2>&1 || rc=$?
+  [ "$rc" -eq 0 ] || echo "$(ts) site-sync: nonzero exit (best-effort, ignored)" >> "$LOG"
+  echo "$(ts) dormant release flush (T361): site-sync ran (rc=$rc)" >> "$LOG"
+  return 0
+}
 T361_FLUSH_DECLINE="" # the last flush refusal's word (empty = none/ok)
 dormant_release_flush() { # the RELEASE-ONLY cycle (run mode only): the
   # T100 tag cut, mechanical end to end — no orchestrator, no LLM call.
@@ -889,7 +909,10 @@ dormant_release_flush() { # the RELEASE-ONLY cycle (run mode only): the
   # (`git ls-remote origin refs/tags/<tag>` non-empty — T363); 1 on any
   # named refusal (the caller then takes the normal dormant cheap-exit
   # disposition). A push failure or an empty verification KEEPS the local
-  # cut — the next cycle's retry-push-only leg finishes it.
+  # cut — the next cycle's retry-push-only leg finishes it. On a verified
+  # success the publication leg runs best-effort (t361_site_sync, T366):
+  # the sync rides the verified push only — a refusal or an empty
+  # verification has nothing new to publish.
   local tag count ids version major rest minor patch next tagname
   local prev_head release_sha="" branch notes tmp rc=0
   T361_FLUSH_DECLINE=""
@@ -926,6 +949,7 @@ dormant_release_flush() { # the RELEASE-ONLY cycle (run mode only): the
       return 1
     fi
     echo "$(ts) dormant release flush (T361): $tag push retry verified on origin (ls-remote non-empty)" >> "$LOG"
+    t361_site_sync
     return 0
   fi
   count=$(release_flip_count)
@@ -1071,6 +1095,10 @@ dormant_release_flush() { # the RELEASE-ONLY cycle (run mode only): the
     return 1
   fi
   echo "$(ts) dormant release flush (T361): $tagname ($count flips: $(printf '%s' "$ids" | awk '{ printf "%s%s", sep, $0; sep = ", " } END { print "" }'))" >> "$LOG"
+  # T366 — the publication leg: the push verified, so the site's
+  # latest-release panel follows now (best-effort, never a gate). A
+  # declined flush or an empty verification never reaches this leg.
+  t361_site_sync
   return 0
 }
 
